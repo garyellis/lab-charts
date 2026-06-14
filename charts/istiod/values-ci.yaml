@@ -1,0 +1,38 @@
+---
+# CI overlay: single-node kind cluster.
+# Override the openstack defaults in values.yaml: drop control-plane node
+# pinning (kind nodes are not labeled/tainted that way), drop tempo zipkin
+# tracing and the oauth2-proxy extAuthz provider (those backends don't
+# exist in a kind smoke test), scale to a single replica, and trim
+# resources. Map keys inherited from values.yaml are set to null so they
+# are removed rather than deep-merged.
+
+istiod:
+  replicaCount: 1
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  nodeSelector: null
+  tolerations: []
+
+  meshConfig:
+    enableTracing: false
+    defaultConfig:
+      tracing: null
+    extensionProviders: []
+
+  global:
+    proxy:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 128Mi

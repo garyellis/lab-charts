@@ -1,0 +1,6 @@
+dependencies:
+- name: pyrra
+  repository: https://rlex.github.io/helm-charts
+  version: 0.14.3
+digest: sha256:24c38da3b5b892644d4832e8c7bba00df4ab7c9e85e59519bd9252dc12bf9995
+generated: "2026-06-13T22:17:08.87302-07:00"

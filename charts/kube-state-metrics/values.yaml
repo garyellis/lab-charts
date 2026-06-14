@@ -1,0 +1,30 @@
+---
+# OpenStack lab deployment values for kube-state-metrics.
+# This chart is a dependency wrapper. Values for the vendored
+# prometheus-community/kube-state-metrics chart must be nested under the
+# dependency name (`kube-state-metrics`) to affect rendered resources.
+kube-state-metrics:
+  replicas: 1
+
+  service:
+    type: ClusterIP
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+  prometheus:
+    monitor:
+      enabled: true
+      interval: 30s
+      scrapeTimeout: 10s
+      additionalLabels:
+        release: alloy
+
+  customLabels:
+    tier: observability
+    app: kube-state-metrics

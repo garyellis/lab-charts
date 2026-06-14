@@ -1,0 +1,46 @@
+---
+# kind overlay for the cilium dependency wrapper chart.
+# Layered on top of values.yaml. Apply with:
+#   helm ... -f values.yaml -f values-ci.yaml
+#
+# Tuned for a single-node kind cluster: distinct cluster identity from dev,
+# L2/externalIP features disabled (kind runs on a Docker bridge, not a real
+# L2 segment -- use `lab-charts kind expose` for ingress instead), and much
+# smaller resource caps so the agent and operator fit comfortably alongside
+# the rest of the test stack.
+cilium:
+  cluster:
+    name: kind-lab-charts
+    # Distinct from dev so a future multi-cluster Hubble setup behaves.
+    id: 2
+
+  # k8sServiceHost / k8sServicePort are intentionally NOT set here:
+  # kind's API server IP is allocated per cluster on the Docker bridge and
+  # changes on every recreate. Install-time tooling injects these values
+  # rather than baking them into the chart.
+
+  # L2 announcements and externalIP support are not meaningful on the
+  # Docker bridge network kind uses. Ingress in CI goes through
+  # `lab-charts kind expose` (port-forward / nodeport), not LoadBalancer.
+  l2announcements:
+    enabled: false
+
+  externalIPs:
+    enabled: false
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  operator:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi

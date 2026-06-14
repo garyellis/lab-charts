@@ -1,0 +1,20 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install cert-manager (controller, webhook, cainjector) with CRDs and exercise a self-signed issuance.
+    namespace: cert-manager
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: selfsign-issuance
+        type: helm-test
+        description: Issue a Certificate via a self-signed Issuer to verify the webhook admits cert-manager.io CRs and the controller signs.
+    timeout: 10m
+
+reverseTests:
+  - chart: istio-gateway
+    profile: minimal

@@ -1,0 +1,24 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install istio-gateway (with starter Gateway + cert-manager ClusterIssuer + wildcard Certificate) on top of istio-base, istiod, and cert-manager.
+    namespace: istio-ingress
+    requires:
+      - chart: cert-manager
+        profile: minimal
+      - chart: istio-base
+        profile: minimal
+      - chart: istiod
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: gateway-ready
+        type: helm-test
+        description: Verify the gateway Deployment is Available and the wildcard Certificate becomes Ready (exercises cert-manager + the lab CA ClusterIssuer chain end-to-end).
+    timeout: 15m
+
+reverseTests: []

@@ -1,0 +1,160 @@
+mimir-distributed:
+  global:
+    storageClass: ""
+
+  mimir:
+    structuredConfig:
+      ingest_storage:
+        enabled: false
+      ingester:
+        push_grpc_method_enabled: true
+        ring:
+          replication_factor: 1
+      ruler:
+        enable_api: true
+        alertmanager_url: http://mimir-distributed-gateway.observability.svc/alertmanager
+        external_url: http://mimir-distributed-gateway.observability.svc/ruler
+
+  rollout_operator:
+    enabled: false
+
+  minio:
+    enabled: true
+    persistence:
+      enabled: false
+      storageClass: ""
+      size: 1Gi
+    nodeSelector: {}
+    tolerations: []
+
+  kafka:
+    enabled: false
+    persistence:
+      enabled: false
+      storageClassName: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+
+  ingester:
+    replicas: 1
+    persistentVolume:
+      enabled: false
+      storageClass: ""
+      size: 2Gi
+    zoneAwareReplication:
+      enabled: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    nodeSelector: {}
+    tolerations: []
+
+  distributor:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+
+  querier:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+
+  query_frontend:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    nodeSelector: {}
+    tolerations: []
+
+  query_scheduler:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    nodeSelector: {}
+    tolerations: []
+
+  compactor:
+    replicas: 1
+    persistentVolume:
+      enabled: false
+      storageClass: ""
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+
+  store_gateway:
+    replicas: 1
+    persistentVolume:
+      enabled: false
+      storageClass: ""
+      size: 2Gi
+    zoneAwareReplication:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+
+  gateway:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    nodeSelector: {}
+    tolerations: []
+
+  alertmanager:
+    enabled: true
+    fallbackConfig: |
+      receivers:
+        - name: default-receiver
+      route:
+        receiver: default-receiver
+    persistentVolume:
+      enabled: false
+      storageClass: ""
+      size: 1Gi
+    nodeSelector: {}
+    tolerations: []
+
+  ruler:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    nodeSelector: {}
+    tolerations: []
+
+  overrides_exporter:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+    nodeSelector: {}
+    tolerations: []

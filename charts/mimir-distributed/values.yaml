@@ -1,0 +1,182 @@
+---
+global:
+  zoneAwareReplication:
+    enabled: false  # ← Disable zones
+  storageClass: "csi-cinder-sc-delete"
+
+# Mimir configuration - DISABLE ingest storage
+mimir:
+  structuredConfig:
+    # Enables Kafka-based ingest storage by default
+    ingest_storage:
+      enabled: true
+
+    ruler:
+      enable_api: true
+      alertmanager_url: http://mimir-gateway.observability.svc/alertmanager
+      external_url: http://mimir-gateway.observability.svc/ruler
+
+    ingester:
+      push_grpc_method_enabled: false
+      ring:
+        replication_factor: 1
+
+    # Basic limits
+    limits:
+      ingestion_rate: 100000
+      ingestion_burst_size: 200000
+      compactor_blocks_retention_period: 30d
+
+minio:
+  persistence:
+    storageClass: "csi-cinder-sc-delete"
+    size: 50Gi
+
+  rootUser: grafana-mimir
+  rootPassword: supersecret
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+# Scale to single replicas
+ingester:
+  replicas: 1
+  persistentVolume:
+    storageClass: "csi-cinder-sc-delete"
+    size: 15Gi
+  zoneAwareReplication:
+    enabled: false
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+distributor:
+  replicas: 1
+  zoneAwareReplication:
+    enabled: false
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+querier:
+  replicas: 1
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+query_frontend:
+  replicas: 1
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+compactor:
+  replicas: 1
+  persistentVolume:
+    storageClass: "csi-cinder-sc-delete"
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+store_gateway:
+  replicas: 1
+  persistentVolume:
+    storageClass: "csi-cinder-sc-delete"
+  zoneAwareReplication:
+    enabled: false
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+nginx:
+  replicas: 1
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+alertmanager:
+  enabled: true
+  fallbackConfig: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: 'ai-agent'
+      group_by: ['alertname', 'cluster']
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+    receivers:
+    - name: 'ai-agent'
+      webhook_configs:
+      - url: 'http://webhook-probe.observability.svc/api/v1/alerts'
+  persistentVolume:
+    enabled: true
+    size: 5Gi
+    storageClass: "csi-cinder-sc-delete"
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+ruler:
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+query_scheduler:
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+overrides_exporter:
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+kafka:
+  logRetentionHours: 12
+  persistence:
+    size: 30Gi
+    storageClassName: "csi-cinder-sc-delete"
+  nodeSelector:
+    node-role.kubernetes.io/data: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/data"
+      operator: "Exists"
+      effect: "NoSchedule"
+

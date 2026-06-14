@@ -1,0 +1,113 @@
+appsDomain: kind.local
+
+grafana:
+  deploymentStrategy:
+    type: Recreate
+    rollingUpdate: null
+
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  persistence:
+    enabled: false
+    storageClassName: ""
+
+  adminUser: admin
+
+  grafana.ini:
+    server:
+      domain: grafana.observability.svc
+      root_url: http://grafana.observability.svc/
+    feature_toggles:
+      enable: "traceqlEditor tempoSearch tempoBackendSearch tempoServiceGraph"
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    log:
+      mode: console
+      level: info
+    security:
+      allow_embedding: true
+    auth.anonymous:
+      enabled: true
+      org_name: "Main Org."
+      org_role: Viewer
+
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Mimir
+          type: prometheus
+          uid: mimir
+          url: http://mimir-distributed-gateway.observability.svc/prometheus
+          access: proxy
+          isDefault: true
+          jsonData:
+            httpMethod: POST
+            prometheusType: Mimir
+          editable: true
+        - name: Loki
+          type: loki
+          uid: loki
+          url: http://loki-gateway.observability.svc
+          access: proxy
+          jsonData:
+            maxLines: 1000
+            derivedFields:
+              - name: TraceID
+                matcherRegex: "traceID=(\\w+)"
+                url: "$${__value.raw}"
+                datasourceUid: tempo
+          editable: true
+        - name: Tempo
+          type: tempo
+          uid: tempo
+          url: http://tempo.observability.svc:3200
+          access: proxy
+          jsonData:
+            tracesToLogsV2:
+              datasourceUid: loki
+              filterByTraceID: true
+            tracesToMetrics:
+              datasourceUid: mimir
+            serviceMap:
+              datasourceUid: mimir
+            nodeGraph:
+              enabled: true
+            lokiSearch:
+              datasourceUid: loki
+          editable: true
+
+  dashboardProviders: null
+  dashboards: null
+
+  sidecar:
+    dashboards:
+      enabled: false
+    datasources:
+      enabled: false
+
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30030
+
+  ingress:
+    enabled: false
+    hosts: []
+    tls: []
+
+  route:
+    main:
+      enabled: false
+
+  serviceMonitor:
+    enabled: false
+
+  plugins: []

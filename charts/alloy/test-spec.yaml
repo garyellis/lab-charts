@@ -1,0 +1,63 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Alloy with Prometheus Operator CRDs available and backend exports disabled or fixture-safe through CI values.
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: alloy-pods-ready
+        type: helm-test
+        description: Validate the Alloy release is healthy without requiring LGTM backends.
+    timeout: 10m
+
+  telemetry:
+    description: Install Alloy with the real metrics, logs, and traces backends it writes to.
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+      - chart: mimir-distributed
+        profile: minimal
+      - chart: loki
+        profile: minimal
+      - chart: tempo
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: metrics-export
+        type: helm-test
+        description: Validate Alloy can run with Mimir available for Prometheus remote write.
+      - name: logs-export
+        type: helm-test
+        description: Validate Alloy can run with Loki available for log delivery.
+      - name: traces-export
+        type: helm-test
+        description: Validate Alloy can run with Tempo available for OTLP traces.
+    timeout: 15m
+
+  ui-e2e:
+    description: Install Alloy with LGTM plus Grafana for full-stack UI-oriented validation.
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+      - chart: grafana
+        profile: with-deps
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: grafana-observability-ui
+        type: helm-test
+        description: Validate data produced through Alloy can be consumed through the Grafana stack.
+    timeout: 20m
+
+reverseTests: []

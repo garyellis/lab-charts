@@ -1,0 +1,189 @@
+# helm/values/grafana.yaml
+# Grafana 12.3 - Visualization
+# ============================================================================
+
+# Apps-tier ingress domain consumed by the wrapper's VirtualService template.
+# Must match the appsDomain configured on the istio-gateway release so the
+# VS host falls under the lab CA leaf cert SANs and the gateway hosts.
+appsDomain: k8s.home.lab.io
+
+replicas: 1
+
+# Use Recreate strategy to avoid PVC mount conflicts during upgrades
+# This ensures old pod terminates before new pod starts
+deploymentStrategy:
+  type: Recreate
+  rollingUpdate: null
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: "csi-cinder-sc-delete"
+  accessModes:
+    - ReadWriteOnce
+
+adminUser: admin
+# Password auto-generated, retrieve with:
+# kubectl -n observability get secret grafana -o jsonpath="{.data.admin-password}" | base64 -d
+
+grafana.ini:
+  server:
+    root_url: "%(protocol)s://%(domain)s/"
+  feature_toggles:
+    enable: "traceqlEditor tempoSearch tempoBackendSearch tempoServiceGraph"
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  log:
+    mode: console
+    level: info
+  security:
+    allow_embedding: true
+  auth.anonymous:
+    enabled: true
+    org_name: "Main Org."
+    org_role: Viewer
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Mimir
+        type: prometheus
+        uid: mimir
+        url: http://mimir-gateway.observability.svc/prometheus
+        access: proxy
+        isDefault: true
+        jsonData:
+          httpMethod: POST
+          prometheusType: Mimir
+        editable: true
+      - name: Loki
+        type: loki
+        uid: loki
+        url: http://loki-gateway.observability.svc
+        access: proxy
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - name: TraceID
+              matcherRegex: "traceID=(\\w+)"
+              url: "$${__value.raw}"
+              datasourceUid: tempo
+        editable: true
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        url: http://tempo.observability.svc:3200
+        access: proxy
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            filterByTraceID: true
+          tracesToMetrics:
+            datasourceUid: mimir
+          serviceMap:
+            datasourceUid: mimir
+          nodeGraph:
+            enabled: true
+          lokiSearch:
+            datasourceUid: loki
+          tracesToProfiles:
+            datasourceUid: pyroscope
+        editable: true
+      - name: Pyroscope
+        type: grafana-pyroscope-datasource
+        uid: pyroscope
+        url: http://pyroscope-read.observability.svc
+        access: proxy
+        jsonData:
+          # Link to Loki for logs -> profiles correlation
+          lokiSearch:
+            datasourceUid: loki
+          # Link to Tempo for traces -> profiles correlation
+          tracesToLogsV2:
+            datasourceUid: loki
+
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    cilium-agent:
+      gnetId: 16611
+      revision: 1
+      datasource: Mimir
+    kubernetes-cluster:
+      gnetId: 7249
+      revision: 1
+      datasource: Mimir
+    node-exporter:
+      gnetId: 1860
+      revision: 37
+      datasource: Mimir
+
+    # Istio Dashboards (for Kiali integration)
+    istio-mesh:
+      gnetId: 7639
+      revision: 16
+      datasource: Mimir
+
+    istio-service:
+      gnetId: 7636
+      revision: 16
+      datasource: Mimir
+
+    istio-workload:
+      gnetId: 7630
+      revision: 16
+      datasource: Mimir
+
+    istio-control-plane:
+      gnetId: 7645
+      revision: 16
+      datasource: Mimir
+    istio-performance: { gnetId: 11829, revision: 1, datasource: Mimir }
+    istio-wasm-extension: { gnetId: 13277, revision: 1, datasource: Mimir }
+
+
+
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    searchNamespace: ALL
+  datasources:
+    enabled: true
+    label: grafana_datasource
+    searchNamespace: ALL
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+
+serviceMonitor:
+  enabled: true
+
+plugins: []
+

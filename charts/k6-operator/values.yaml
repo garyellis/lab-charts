@@ -1,0 +1,46 @@
+---
+# OpenStack lab deployment values for k6-operator.
+# This chart is a dependency wrapper. Values for the vendored
+# grafana/k6-operator chart must be nested under the dependency name
+# (`k6-operator`) to affect rendered resources.
+#
+# k6-operator reconciles TestRun CRs and spawns runner Jobs that execute k6
+# load tests. The manager itself watches all namespaces by default
+# (rbac.namespaced: false upstream).
+k6-operator:
+  # Install CRDs (TestRun, PrivateLoadZone) as part of the release.
+  installCRDs: true
+
+  # Cluster-wide RBAC so the manager can watch TestRuns in any namespace.
+  rbac:
+    namespaced: false
+
+  # Let the chart create the release namespace.
+  namespace:
+    create: true
+
+  manager:
+    replicas: 1
+
+    # Production logging: structured JSON instead of human-readable console.
+    logging:
+      development: false
+
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
+
+  # Manager's own controller-runtime metrics. Scraped by Prometheus via the
+  # prometheus-operator ServiceMonitor; aligned with the `release: alloy`
+  # selector used across this repo (see kube-state-metrics).
+  metrics:
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+      scrapeTimeout: 10s
+      labels:
+        release: alloy

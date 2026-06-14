@@ -1,0 +1,11 @@
+---
+apiVersion: v2
+name: istio-gateway
+description: istio gateway vendor/deployment chart
+type: application
+version: 0.1.0
+appVersion: "1.16.0"
+dependencies:
+  - name: gateway
+    version: 1.28.2
+    repository: https://istio-release.storage.googleapis.com/charts

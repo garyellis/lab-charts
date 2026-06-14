@@ -1,0 +1,25 @@
+---
+# kind / CI overrides for kube-state-metrics. Layered on top of values.yaml.
+# Keys must stay nested under the dependency name (`kube-state-metrics`) since
+# this chart is a pure dependency wrapper.
+kube-state-metrics:
+  replicas: 1
+
+  service:
+    type: ClusterIP
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+  prometheus:
+    monitor:
+      enabled: true
+      interval: 30s
+      scrapeTimeout: 10s
+      additionalLabels:
+        release: alloy

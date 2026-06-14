@@ -1,0 +1,69 @@
+{{- $testName := printf "%s-pods-ready" .Release.Name -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $testName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $testName }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $testName }}
+  restartPolicy: Never
+  containers:
+    - name: kubectl
+      image: registry.k8s.io/kubectl:v1.36.2
+      args:
+        - wait
+        - --for=condition=Ready
+        - --timeout=120s
+        - --namespace={{ .Release.Namespace }}
+        - -l
+        - app.kubernetes.io/name=alloy
+        - pod

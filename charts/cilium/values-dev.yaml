@@ -1,0 +1,31 @@
+---
+# OpenStack lab overlay for the cilium dependency wrapper chart.
+# Layered on top of values.yaml. Apply with:
+#   helm ... -f values.yaml -f values-dev.yaml
+#
+# Everything here is environment-specific to the gary-lab OpenStack cluster
+# (cluster identity, API server endpoint, L2/LB capabilities, prod-sized
+# resources). The base file stays portable; this overlay pins it to the lab.
+cilium:
+  cluster:
+    name: gary-lab
+    id: 1
+
+  # API server endpoint (first control plane in the OpenStack lab).
+  k8sServiceHost: "10.128.0.244"
+  k8sServicePort: "6443"
+
+  # L2 LoadBalancer announcements on the lab's flat L2 network.
+  l2announcements:
+    enabled: true
+
+  externalIPs:
+    enabled: true
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi

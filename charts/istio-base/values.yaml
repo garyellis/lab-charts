@@ -1,0 +1,12 @@
+---
+# values/istio-base.yaml
+# istio-base installs the cluster-scoped CRDs and the istio-system
+# namespace plumbing that istiod / gateways depend on. The chart has no
+# openstack-vs-kind differences worth overlaying; values-ci.yaml exists
+# only for shape parity with the other istio charts.
+
+istio-base:
+  defaultRevision: default
+
+  global:
+    istioNamespace: istio-system

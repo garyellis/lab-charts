@@ -1,0 +1,15 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install kube-state-metrics with ServiceMonitor CRDs available.
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+reverseTests: []

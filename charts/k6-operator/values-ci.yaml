@@ -1,0 +1,12 @@
+---
+# kind / CI overrides for k6-operator. Layered on top of values.yaml.
+# Tightens manager resources for a single-node kind cluster.
+k6-operator:
+  manager:
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 25m
+        memory: 64Mi

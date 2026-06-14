@@ -1,0 +1,22 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install istio-base and verify the istio CRDs land in the cluster.
+    namespace: istio-system
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: crds-installed
+        type: helm-test
+        description: Verify the core istio CRDs (Gateway, VirtualService, etc.) are registered.
+    timeout: 10m
+
+reverseTests:
+  - chart: istiod
+    profile: minimal
+  - chart: istio-gateway
+    profile: minimal

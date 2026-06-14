@@ -1,0 +1,91 @@
+{{- $sa := printf "%s-gateway-ready-test" .Release.Name -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sa }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $sa }}-deployment
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $sa }}
+  restartPolicy: Never
+  containers:
+    - name: kubectl
+      image: registry.k8s.io/kubectl:v1.36.2
+      command:
+        - kubectl
+        - wait
+        - deployment/{{ .Release.Name }}
+        - --namespace={{ .Release.Namespace }}
+        - --for=condition=Available
+        - --timeout=300s
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $sa }}-certificate
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $sa }}
+  restartPolicy: Never
+  containers:
+    - name: kubectl
+      image: registry.k8s.io/kubectl:v1.36.2
+      command:
+        - kubectl
+        - wait
+        - certificate/apps-wildcard
+        - --namespace={{ .Release.Namespace }}
+        - --for=condition=Ready
+        - --timeout=300s

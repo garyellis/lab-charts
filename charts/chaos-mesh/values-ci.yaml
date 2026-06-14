@@ -1,0 +1,47 @@
+---
+# kind / CI overrides for chaos-mesh. Layered on top of values.yaml.
+# Tightens resources so the stack fits a single kind node.
+chaos-mesh:
+  controllerManager:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+  chaosDaemon:
+    # kind nodes run containerd at this socket path (matches values.yaml).
+    runtime: containerd
+    socketPath: /run/containerd/containerd.sock
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 25m
+        memory: 64Mi
+    service:
+      scrape:
+        enabled: true
+
+  dashboard:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+  dnsServer:
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 25m
+        memory: 32Mi

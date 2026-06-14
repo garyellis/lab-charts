@@ -1,0 +1,85 @@
+---
+# Base values for the cilium dependency wrapper chart.
+# This chart vendors the upstream cilium chart; all values MUST be nested
+# under the `cilium:` key so they reach the subchart.
+#
+# This file holds env-agnostic configuration that applies to every cluster.
+# Environment-specific overlays (cluster name/id, API server endpoint,
+# resources, L2 announcements, etc.) live in values-dev.yaml (OpenStack lab)
+# and values-ci.yaml (kind).
+cilium:
+  # Networking
+  ipam:
+    mode: kubernetes
+
+  routingMode: tunnel
+  tunnelProtocol: vxlan
+
+  # Replace kube-proxy
+  kubeProxyReplacement: true
+
+  # Istio Ambient compatibility: BPF masquerading must be disabled so
+  # ztunnel can transparently redirect traffic via iptables.
+  bpf:
+    masquerade: false
+
+  # Istio Ambient compatibility: keep socket-level load balancing scoped to
+  # the host namespace so ztunnel sees pod->service traffic.
+  socketLB:
+    hostNamespaceOnly: true
+
+  # Istio CNI chaining: do not write an exclusive CNI conf; allow istio-cni
+  # to install alongside cilium in the standard CNI directories.
+  cni:
+    exclusive: false
+    binPath: /opt/cni/bin
+    confPath: /etc/cni/net.d
+
+  # Hubble observability
+  hubble:
+    enabled: true
+    relay:
+      enabled: true
+      replicas: 1
+    ui:
+      enabled: true
+      replicas: 1
+    metrics:
+      enabled:
+        - dns
+        - drop
+        - tcp
+        - flow
+        - port-distribution
+        - icmp
+        - httpV2:exemplars=true;labelsContext=source_ip,source_namespace,source_workload,destination_ip,destination_namespace,destination_workload,traffic_direction
+      serviceMonitor:
+        enabled: true
+        # Match the repo-wide convention: scraped by the alloy release.
+        labels:
+          release: alloy
+
+  operator:
+    replicas: 1
+    prometheus:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        # Cilium's agent serviceMonitor exposes trustCRDsExist; the operator
+        # block historically carried the same key in this repo. Upstream may
+        # ignore it on the operator path, but we keep it for parity.
+        trustCRDsExist: true
+        labels:
+          release: alloy
+
+  # cilium-agent metrics + ServiceMonitor
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      trustCRDsExist: true
+      labels:
+        release: alloy
+
+  debug:
+    enabled: false

@@ -1,0 +1,5 @@
+---
+# kind / CI overrides for inspektor-gadget. Layered on top of values.yaml.
+# Defaults already work in kind so this file is intentionally empty; keep it
+# around for parity with other charts and to host future kind-specific tweaks.
+gadget: {}

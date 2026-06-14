@@ -1,0 +1,61 @@
+---
+# CI overlay: single-node kind cluster.
+# Override the openstack defaults in values.yaml: switch the Service from
+# LoadBalancer to ClusterIP (kind has no LB controller), wipe the edge
+# node selector/tolerations (kind nodes are not labeled/tainted that way),
+# drop podAntiAffinity (only one node), scale to a single replica, and
+# trim resources.
+#
+# nodeSelector is wiped via `~` (null) so the subchart's
+# `{{ with .Values.nodeSelector }}` block is skipped entirely. The helm
+# runner applies --skip-schema-validation for wrapper installs (see
+# src/lab_charts/integrations/helm.py) because the gateway subchart's
+# values.schema.json forbids null at these paths.
+#
+# Note: service.annotations stays as `{}` (cannot be null — the upstream
+# template calls deepCopy on it, which panics on null). Helm deep-merges
+# maps, so the loadbalancer.openstack.org/* annotations remain on the
+# Service object, but they are inert metadata on a ClusterIP Service in
+# kind (no openstack cloud-controller-manager exists to interpret them).
+
+# Apps-tier ingress domain for kind: *.kind.local resolves to 127.0.0.1
+# via /etc/resolver/kind.local (dnsmasq) or /etc/hosts entries.
+appsDomain: kind.local
+appsHosts:
+  - "*.kind.local"
+
+gateway:
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    # Required when downgrading from LoadBalancer to ClusterIP: the field is
+    # only valid on externally-accessible Services and must be wiped, not
+    # deep-merged from values.yaml.
+    externalTrafficPolicy: null
+    annotations: {}
+    ports:
+      - name: status-port
+        port: 15021
+        protocol: TCP
+        targetPort: 15021
+      - name: http2
+        port: 80
+        protocol: TCP
+        targetPort: 8080
+      - name: https
+        port: 443
+        protocol: TCP
+        targetPort: 8443
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  nodeSelector: ~
+  tolerations: []
+  affinity: {}

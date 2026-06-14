@@ -1,0 +1,14 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Chaos Mesh (controller-manager, chaos-daemon, dashboard) and verify rollout.
+    namespace: chaos-mesh
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+reverseTests: []

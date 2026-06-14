@@ -1,0 +1,28 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Cilium with base + kind (CI) overlay; ServiceMonitors require prometheus-operator CRDs.
+    namespace: kube-system
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 15m
+
+  dev:
+    description: Install Cilium with base + OpenStack lab overlay; ServiceMonitors require prometheus-operator CRDs.
+    namespace: kube-system
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+    values:
+      - values.yaml
+      - values-dev.yaml
+    helmTest: true
+    timeout: 15m
+
+reverseTests: []

@@ -1,0 +1,6 @@
+cert-manager:
+  serviceAccount:
+    name: cert-manager
+  crds:
+    enabled: true
+    keep: true

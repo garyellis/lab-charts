@@ -1,0 +1,81 @@
+# helm/values/prometheus-operator.yaml
+# Prometheus Operator - CRDs and Operator Only
+# ============================================================================
+# Deploys ONLY the operator and CRDs for ServiceMonitor, PodMonitor, etc.
+# Does NOT deploy Prometheus, Alertmanager, or Grafana.
+#
+# Why: We use Mimir for metrics storage, but need the ServiceMonitor CRDs
+# that kube-prometheus-stack provides so Alloy can auto-discover scrape targets.
+#
+# Subchart values must nest under `prometheus-operator:` because Chart.yaml
+# aliases the kube-prometheus-stack dependency to that name.
+
+prometheus-operator:
+  crds:
+    enabled: true
+
+  prometheus:
+    enabled: false
+
+  alertmanager:
+    enabled: false
+
+  grafana:
+    enabled: false
+
+  thanosRuler:
+    enabled: false
+
+  # Disable exporters (we don't need them without Prometheus).
+  # Note: nodeExporter.enabled is the subchart condition key, not
+  # prometheus-node-exporter.enabled.
+  nodeExporter:
+    enabled: false
+
+  windowsMonitoring:
+    enabled: false
+
+  kubeStateMetrics:
+    enabled: false
+
+  # Keep the operator itself so ServiceMonitor / PodMonitor / PrometheusRule
+  # CRDs are reconciled.
+  prometheusOperator:
+    enabled: true
+
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+  # Disable the default ServiceMonitors for cluster components — without a
+  # Prometheus instance these would only produce noise.
+  kubernetesServiceMonitors:
+    enabled: false
+
+  kubeApiServer:
+    enabled: false
+
+  kubelet:
+    enabled: false
+
+  kubeControllerManager:
+    enabled: false
+
+  coreDns:
+    enabled: false
+
+  kubeDns:
+    enabled: false
+
+  kubeEtcd:
+    enabled: false
+
+  kubeScheduler:
+    enabled: false
+
+  kubeProxy:
+    enabled: false

@@ -1,0 +1,75 @@
+prometheus-operator:
+  crds:
+    enabled: true
+
+  defaultRules:
+    create: false
+
+  alertmanager:
+    enabled: false
+
+  grafana:
+    enabled: false
+
+  prometheus:
+    enabled: false
+
+  thanosRuler:
+    enabled: false
+
+  windowsMonitoring:
+    enabled: false
+
+  kubeStateMetrics:
+    enabled: false
+
+  nodeExporter:
+    enabled: false
+
+  kubernetesServiceMonitors:
+    enabled: false
+
+  kubeApiServer:
+    enabled: false
+
+  kubelet:
+    enabled: false
+
+  kubeControllerManager:
+    enabled: false
+
+  coreDns:
+    enabled: false
+
+  kubeDns:
+    enabled: false
+
+  kubeEtcd:
+    enabled: false
+
+  kubeScheduler:
+    enabled: false
+
+  kubeProxy:
+    enabled: false
+
+  prometheusOperator:
+    enabled: true
+    tls:
+      enabled: false
+    admissionWebhooks:
+      enabled: false
+      patch:
+        enabled: false
+    kubeletService:
+      enabled: false
+    kubeletEndpointsEnabled: false
+    serviceMonitor:
+      selfMonitor: false
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi

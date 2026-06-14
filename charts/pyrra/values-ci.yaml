@@ -1,0 +1,16 @@
+---
+# kind / CI overrides for pyrra. Layered on top of values.yaml.
+# Same nesting rule: keys must live under the `pyrra` dependency name.
+pyrra:
+  # Single shared resources block applies to BOTH containers in the Pod
+  # (pyrra-kubernetes operator + pyrra api/UI). Kept small for kind.
+  resources:
+    limits:
+      cpu: 200m
+      memory: 192Mi
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+  # Same Prometheus URL as production -- Mimir gateway in the observability ns.
+  prometheusUrl: http://mimir-distributed-gateway.observability.svc/prometheus

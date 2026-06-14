@@ -1,0 +1,19 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Prometheus Operator CRDs and operator only.
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+reverseTests:
+  - chart: kube-state-metrics
+    profile: minimal
+  - chart: node-exporter
+    profile: minimal
+  - chart: alloy
+    profile: minimal

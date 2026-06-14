@@ -1,0 +1,28 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Tempo with CI-local values.
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+  with-deps:
+    description: Install Tempo with Mimir available for metrics-generator remote write.
+    requires:
+      - chart: mimir-distributed
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 15m
+
+reverseTests:
+  - chart: grafana
+    profile: with-deps
+  - chart: alloy
+    profile: telemetry

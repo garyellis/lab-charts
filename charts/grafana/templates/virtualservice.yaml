@@ -1,0 +1,19 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - grafana.{{ .Values.appsDomain }}
+  gateways:
+    - istio-ingress/apps-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: grafana.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: 80

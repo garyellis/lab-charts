@@ -1,0 +1,80 @@
+---
+# values/istiod.yaml
+# Openstack-flavored base values for the istiod wrapper chart:
+# HA replicas pinned to control-plane nodes, tempo zipkin tracing through
+# the observability namespace, oauth2-proxy ExtAuthz provider.
+# Apply values-ci.yaml on top to flatten these for a single-node kind
+# cluster (replicas=1, no node pinning, no tracing, no extAuthz).
+
+istiod:
+  replicaCount: 2
+  autoscaleEnabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+
+  meshConfig:
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    enableAutoMtls: true
+    enableTracing: true
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+    defaultConfig:
+      tracing:
+        zipkin:
+          address: tempo.observability.svc.cluster.local:9411
+        sampling: 100.0
+    extensionProviders:
+      - name: zipkin
+        zipkin:
+          service: tempo.observability.svc.cluster.local
+          port: 9411
+      - name: oauth2-proxy
+        envoyExtAuthzHttp:
+          service: oauth2-proxy.auth.svc.cluster.local
+          port: 80
+          includeRequestHeadersInCheck: ["authorization", "cookie", "x-forwarded-proto", "x-auth-request-redirect"]
+          headersToUpstreamOnAllow: ["authorization", "path", "x-auth-request-user", "x-auth-request-email", "x-auth-request-access-token", "x-auth-request-groups"]
+          headersToDownstreamOnDeny: ["content-type", "set-cookie"]
+
+  global:
+    istioNamespace: istio-system
+    hub: docker.io/istio
+    tag: 1.28.2
+    logAsJson: true
+    proxy:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+      logLevel: warning
+    multiCluster:
+      enabled: false
+
+  telemetry:
+    enabled: true
+    v2:
+      enabled: true
+      prometheus:
+        enabled: true
+
+  serviceAccount:
+    create: true
+    name: istiod

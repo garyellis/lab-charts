@@ -1,0 +1,18 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Pyrra (SLO operator + API/UI) and verify it can reach the Mimir-backed Prometheus endpoint.
+    namespace: pyrra
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+      - chart: mimir-distributed
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+reverseTests: []

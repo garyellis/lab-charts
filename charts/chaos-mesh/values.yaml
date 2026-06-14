@@ -1,0 +1,79 @@
+---
+# OpenStack lab deployment values for Chaos Mesh.
+# This chart is a dependency wrapper. Values for the vendored
+# chaos-mesh/chaos-mesh chart must be nested under the dependency name
+# (`chaos-mesh`) to affect rendered resources.
+#
+# NOTE: Upstream chaos-mesh does NOT ship a ServiceMonitor template. It only
+# stamps `prometheus.io/scrape` annotations on the controller-manager and
+# chaos-daemon services. We leave those annotations on (upstream default) and
+# rely on Alloy's annotation-based discovery rather than prometheus-operator's
+# ServiceMonitor. The upstream `prometheus.create` toggle deploys a standalone
+# Prometheus deployment (not a CR), which we do NOT want — leave it false.
+chaos-mesh:
+  # Cluster-wide chaos management is the upstream default and what we want.
+  clusterScoped: true
+
+  # Match the alloy/timezone story used elsewhere in the lab.
+  timezone: "UTC"
+
+  controllerManager:
+    # Single-node-friendly default. Bump in real prod (default upstream is 3).
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
+    service:
+      type: ClusterIP
+
+  chaosDaemon:
+    # Modern container runtime. Most OpenStack lab/prod nodes are containerd;
+    # kind also uses containerd. Override to docker/crio if a node disagrees.
+    # Verified key path against upstream values.yaml (chaosDaemon.runtime /
+    # chaosDaemon.socketPath).
+    runtime: containerd
+    socketPath: /run/containerd/containerd.sock
+    # mTLS between controller-manager and chaos-daemon. Keep on.
+    mtls:
+      enabled: true
+    service:
+      scrape:
+        # Annotation-based scrape discovery (prometheus.io/scrape on the
+        # daemon service). Alloy is configured to pick these up.
+        enabled: true
+
+  dashboard:
+    # Give the user the UI.
+    create: true
+    # LAB ONLY: securityMode=false skips per-user token auth and runs all
+    # dashboard actions as the chaos-dashboard service account. This is
+    # convenient for a single-tenant lab. In real prod set this to `true`
+    # and follow the tokens flow:
+    # https://chaos-mesh.org/docs/manage-user-permissions/
+    securityMode: false
+    replicaCount: 1
+    service:
+      # ClusterIP keeps the dashboard internal; expose via port-forward or an
+      # ingress added separately. Upstream default is NodePort which is noisy.
+      type: ClusterIP
+    persistentVolume:
+      # SQLite + ephemeral storage is fine for the lab. Flip on for prod.
+      enabled: false
+
+  dnsServer:
+    # Required for DNSChaos; cheap to keep on.
+    create: true
+
+  # Do NOT deploy upstream's standalone Prometheus — the lab already has one.
+  prometheus:
+    create: false
+
+  webhook:
+    # cert-manager is installed in the lab, but chaos-mesh's self-signing path
+    # works out of the box and avoids ordering issues. Leave off.
+    certManager:
+      enabled: false

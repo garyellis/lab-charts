@@ -1,0 +1,74 @@
+---
+# values/istio-gateway.yaml
+# Openstack-flavored base values for the istio gateway wrapper chart:
+# LoadBalancer service with Octavia annotations, edge node placement,
+# HA replicas with podAntiAffinity.
+# Apply values-ci.yaml on top to flatten these for a single-node kind
+# cluster (ClusterIP, no LB annotations, no node placement, single replica).
+
+# Apps-tier ingress domain. Drives the lab CA leaf cert (commonName +
+# dnsNames) and the Gateway listener hosts. Per-app VirtualServices in
+# other charts (grafana, etc.) consume the same appsDomain so VS hosts
+# match the cert SANs and the gateway accepts them.
+appsDomain: k8s.home.lab.io
+appsHosts:
+  - "*.home.lab"
+  - "*.k8s.home.lab.io"
+
+gateway:
+  replicaCount: 2
+  labels:
+    istio: gateway-internal
+  autoscaling:
+    enabled: false
+
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Cluster
+    annotations:
+      loadbalancer.openstack.org/keep-floatingip: "true"
+      loadbalancer.openstack.org/enable-health-monitor: "true"
+      loadbalancer.openstack.org/health-monitor-delay: "10"
+      loadbalancer.openstack.org/health-monitor-timeout: "5"
+      loadbalancer.openstack.org/health-monitor-max-retries: "3"
+      loadbalancer.openstack.org/proxy-protocol: "true"
+    ports:
+      - name: status-port
+        port: 15021
+        protocol: TCP
+        targetPort: 15021
+      - name: http2
+        port: 80
+        protocol: TCP
+        targetPort: 8080
+      - name: https
+        port: 443
+        protocol: TCP
+        targetPort: 8443
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 2000m
+      memory: 1024Mi
+
+  nodeSelector:
+    node-role.kubernetes.io/edge: ""
+
+  tolerations:
+    - key: node-role.kubernetes.io/edge
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app: istio-ingressgateway
+            topologyKey: kubernetes.io/hostname

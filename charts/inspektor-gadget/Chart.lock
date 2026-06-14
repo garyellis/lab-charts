@@ -1,0 +1,6 @@
+dependencies:
+- name: gadget
+  repository: https://inspektor-gadget.github.io/charts
+  version: 0.53.1
+digest: sha256:c0e400ac861c5f549f5acda3e329b0d62e3411663a65d44d5bfc85f651ebc5b0
+generated: "2026-06-13T21:21:24.178324-07:00"

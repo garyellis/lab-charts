@@ -1,0 +1,18 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install k6-operator with the manager ServiceMonitor enabled.
+    namespace: k6-operator-system
+    # ServiceMonitor is on by default in values.yaml, so prometheus-operator
+    # must be installed first to provide the monitoring.coreos.com CRDs.
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 10m
+
+reverseTests: []

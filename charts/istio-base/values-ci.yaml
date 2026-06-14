@@ -1,0 +1,9 @@
+---
+# CI overlay: single-node kind cluster.
+# istio-base is mostly CRDs; nothing to tune beyond what values.yaml sets.
+
+istio-base:
+  defaultRevision: default
+
+  global:
+    istioNamespace: istio-system

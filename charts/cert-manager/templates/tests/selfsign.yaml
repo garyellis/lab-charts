@@ -1,0 +1,95 @@
+{{- $testName := printf "%s-selfsign-test" .Release.Name -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $testName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $testName }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-4"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  secretName: {{ $testName }}-tls
+  commonName: cert-manager-test.lab-charts.local
+  dnsNames:
+    - cert-manager-test.lab-charts.local
+  issuerRef:
+    name: {{ $testName }}
+    kind: Issuer
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $testName }}
+  restartPolicy: Never
+  containers:
+    - name: kubectl
+      image: registry.k8s.io/kubectl:v1.36.2
+      command:
+        - kubectl
+        - wait
+        - --for=condition=Ready
+        - --timeout=120s
+        - --namespace={{ .Release.Namespace }}
+        - certificate/{{ $testName }}

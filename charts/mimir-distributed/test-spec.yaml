@@ -1,0 +1,19 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Mimir with CI-local values.
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 20m
+
+reverseTests:
+  - chart: tempo
+    profile: with-deps
+  - chart: grafana
+    profile: with-deps
+  - chart: alloy
+    profile: telemetry

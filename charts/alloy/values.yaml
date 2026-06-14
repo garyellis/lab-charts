@@ -1,0 +1,473 @@
+# helm/values/alloy.yaml
+# Grafana Alloy 1.12 - Telemetry Collection
+# Replaces Grafana Agent (EOL Nov 2025)
+# ============================================================================
+
+controller:
+  type: daemonset
+  # Required for eBPF profiling to see all processes
+  hostPID: true
+  tolerations:
+    - operator: Exists
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+alloy:
+  securityContext:
+    privileged: true
+    runAsUser: 0
+    runAsGroup: 0
+
+  # Enable clustering to distribute scrape load across DaemonSet pods
+  # Prevents duplicate metrics when using ServiceMonitor discovery
+  clustering:
+    enabled: true
+    name: "alloy-cluster"
+
+  extraPorts:
+    - name: "pyroscope-sdk"
+      port: 9999
+      targetPort: 9999
+      protocol: "TCP"
+    - name: "otlp-grpc"
+      port: 4317
+      targetPort: 4317
+      protocol: "TCP"
+    - name: "otlp-http"
+      port: 4318
+      targetPort: 4318
+      protocol: "TCP"
+
+  configMap:
+    create: true
+    content: |
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // ========================================================================
+      // METRICS COLLECTION
+      // ========================================================================
+
+      // ServiceMonitor Discovery
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/prometheus/prometheus.operator.servicemonitors/
+      //
+      // This component discovers ServiceMonitor CRDs in the cluster and converts them
+      // to Prometheus scrape targets. ServiceMonitors are created by Helm charts
+      // (e.g., node-exporter, grafana, tempo) to declare "this service should be scraped".
+      //
+      // Architecture:
+      //   1. Prometheus Operator creates ServiceMonitor CRDs (doesn't scrape)
+      //   2. This component reads ServiceMonitors from K8s API
+      //   3. Generates scrape configs automatically
+      //   4. Scrapes the target endpoints (with clustering: each pod scrapes subset)
+      //   5. Sends metrics to Mimir via remote_write
+      //
+      // Clustering: Uses consistent hashing to distribute targets across Alloy pods.
+      // Each pod scrapes only its assigned targets - no duplicates!
+      //
+      // RBAC: Chart already grants permissions for monitoring.coreos.com/servicemonitors
+      prometheus.operator.servicemonitors "servicemonitors" {
+        forward_to = [prometheus.remote_write.mimir.receiver]
+
+        clustering {
+          enabled = true
+        }
+      }
+
+      // PodMonitor Discovery
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/prometheus/prometheus.operator.podmonitors/
+      //
+      // Similar to ServiceMonitors but targets pods directly instead of services.
+      // Useful for stateful workloads or pods not behind a service.
+      prometheus.operator.podmonitors "podmonitors" {
+        forward_to = [prometheus.remote_write.mimir.receiver]
+
+        clustering {
+          enabled = true
+        }
+      }
+
+      // Additional pod-based discovery for legacy prometheus.io/scrape annotations
+      // This is a fallback for applications that don't have ServiceMonitors
+      // Examples: Inspektor Gadget, custom apps with prometheus.io annotations
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Keep only pods with prometheus.io/scrape=true
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+          action        = "keep"
+          regex         = "true"
+        }
+
+        // Use prometheus.io/port annotation if present
+        // Combines pod IP with custom port (e.g., 10.244.1.5 + 2223 = 10.244.1.5:2223)
+        rule {
+          source_labels = ["__address__", "__meta_kubernetes_pod_annotation_prometheus_io_port"]
+          action        = "replace"
+          target_label  = "__address__"
+          regex         = "([^:]+)(?::\\d+)?;(\\d+)"
+          replacement   = "$1:$2"
+        }
+
+        // Use prometheus.io/path annotation if present, otherwise use /metrics
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+          action        = "replace"
+          target_label  = "__metrics_path__"
+          regex         = "(.+)"
+        }
+
+        // Add namespace label
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        // Add pod label
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+      }
+
+      prometheus.scrape "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [prometheus.remote_write.mimir.receiver]
+      }
+
+      // Scrape kubelet metrics directly from nodes
+      discovery.kubernetes "nodes" {
+        role = "node"
+      }
+
+      // Relabel nodes to add 'node' label from metadata
+      discovery.relabel "nodes" {
+        targets = discovery.kubernetes.nodes.targets
+        rule {
+          source_labels = ["__meta_kubernetes_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      prometheus.scrape "kubelet" {
+        targets = discovery.relabel.nodes.output
+        scheme  = "https"
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tls_config {
+          insecure_skip_verify = true
+        }
+        forward_to = [prometheus.remote_write.mimir.receiver]
+      }
+
+      // Scrape cAdvisor metrics for container resource usage
+      // Docs: https://kubernetes.io/docs/concepts/cluster-administration/system-logs/#cadvisor
+      prometheus.scrape "cadvisor" {
+        targets    = discovery.relabel.nodes.output
+        scheme     = "https"
+        metrics_path = "/metrics/cadvisor"
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tls_config {
+          insecure_skip_verify = true
+        }
+        forward_to = [prometheus.remote_write.mimir.receiver]
+      }
+
+      // Remote write to Mimir
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/prometheus/prometheus.remote_write/
+      //
+      // Sends all collected metrics to Mimir gateway for long-term storage.
+      // Mimir is a distributed Prometheus-compatible metrics backend.
+      prometheus.remote_write "mimir" {
+        endpoint {
+          url = "http://mimir-gateway.observability.svc/api/v1/push"
+        }
+      }
+
+      // ========================================================================
+      // LOGS COLLECTION
+      // ========================================================================
+
+      // Discover pods for log collection
+      // This provides rich metadata for labeling
+      discovery.kubernetes "pods_logs" {
+        role = "pod"
+      }
+
+      // Relabel to extract useful metadata as labels
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.relabel/
+      //
+      // Labels are indexed in Loki and used for filtering/querying.
+      // Keep labels low-cardinality (namespace, workload, container, etc.)
+      // Avoid high-cardinality data (pod name changes on every deployment).
+      discovery.relabel "pods_logs" {
+        targets = discovery.kubernetes.pods_logs.targets
+
+        // Keep only Running pods
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          action        = "keep"
+          regex         = "Running"
+        }
+
+        // Namespace label
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        // Workload name (deployment/statefulset/daemonset)
+        rule {
+          source_labels = ["__meta_kubernetes_pod_controller_name"]
+          target_label  = "workload"
+        }
+
+        // Workload kind
+        rule {
+          source_labels = ["__meta_kubernetes_pod_controller_kind"]
+          target_label  = "workload_kind"
+        }
+
+        // Container name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        // App label
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+
+        // Service name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "service_name"
+        }
+
+        // Component name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component"]
+          target_label  = "component"
+        }
+
+        // Node name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      // Collect logs from discovered pods
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.kubernetes/
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods_logs.output
+        forward_to = [loki.process.add_static_labels.receiver]
+      }
+
+      // Process logs to add cluster-level static labels
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.process/
+      loki.process "add_static_labels" {
+        // Add cluster identifier
+        stage.static_labels {
+          values = {
+            cluster = "home-lab",
+          }
+        }
+
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      // Write logs to Loki
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.write/
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki-gateway.observability.svc/loki/api/v1/push"
+        }
+      }
+
+      // ========================================================================
+      // TRACES COLLECTION
+      // ========================================================================
+
+      // Receive OTLP traces via gRPC and HTTP
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.receiver.otlp/
+      otelcol.receiver.otlp "default" {
+        grpc { endpoint = "0.0.0.0:4317" }
+        http { endpoint = "0.0.0.0:4318" }
+        output {
+          traces = [otelcol.exporter.otlp.tempo.input]
+        }
+      }
+
+      // Export traces to Tempo
+      // Docs: https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.exporter.otlp/
+      otelcol.exporter.otlp "tempo" {
+        client {
+          endpoint = "tempo.observability.svc:4317"
+          tls { insecure = true }
+        }
+      }
+      // ========================================================================
+      // PROFILING COLLECTION (eBPF)
+      // ========================================================================
+
+      // Discover local pods on each node for eBPF profiling
+      // We use the HOSTNAME environment variable to target local pods only (standard Alloy chart behavior)
+      discovery.kubernetes "local_pods" {
+        role = "pod"
+        selectors {
+          role = "pod"
+          field = "spec.nodeName=" + sys.env("HOSTNAME")
+        }
+      }
+
+      // Filter for Opt-in: Only profile pods with profiling annotation
+      // Usage: Add 'profiles.grafana.com/cpu.scrape: "true"' to pod annotations
+      discovery.relabel "profiling_opt_in" {
+        targets = discovery.kubernetes.local_pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_profiles_grafana_com_cpu_scrape"]
+          action = "keep"
+          regex = "true"
+        }
+
+        // Add metadata labels for Pyroscope filtering
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label = "container"
+        }
+        // Extract service name from labels if available
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label = "service_name"
+        }
+      }
+
+      // Collect eBPF-based profiles from discovered targets
+      // This provides the "Process-Zoom" forensics without metric bloat
+      pyroscope.ebpf "instance" {
+        forward_to     = [pyroscope.write.pyroscope.receiver]
+        targets        = discovery.relabel.profiling_opt_in.output
+        python_enabled = true
+        demangle       = "full"
+      }
+
+      // Write profiles to Pyroscope Unified Service
+      pyroscope.write "pyroscope" {
+        endpoint {
+          url = "http://pyroscope-write.observability.svc"
+        }
+        external_labels = {
+          "cluster"  = "k8s-lab",
+          "instance" = sys.env("HOSTNAME"),
+        }
+      }
+
+      // SDK Receiver for push-based profiling
+      // Listen on port 9999 for SDK-pushed profiles (pprof, JFR, etc.)
+      pyroscope.receive_http "sdk" {
+        http {
+          listen_address = "0.0.0.0"
+          listen_port    = 9999
+        }
+        forward_to = [pyroscope.write.pyroscope.receiver]
+      }
+
+      // ========================================================================
+      // RULE SYNCHRONIZATION
+      // ========================================================================
+
+      // Metric Rules (PromQL) -> Mimir
+      // Syncs Kubernetes PrometheusRule objects with Mimir's Ruler API
+      mimir.rules.kubernetes "metric_rules" {
+        address   = "http://mimir-gateway.observability.svc"
+        tenant_id = "anonymous"
+
+        rule_selector {
+          match_labels = {
+            "role" = "alert-rules",
+          }
+        }
+      }
+
+      // Log Rules (LogQL) -> Loki
+      // Syncs Kubernetes PrometheusRule objects with Loki's Ruler API
+      loki.rules.kubernetes "log_rules" {
+        address   = "http://loki-gateway.observability.svc"
+        tenant_id = "anonymous"
+
+        rule_selector {
+          match_labels = {
+            "role" = "loki-rule",
+          }
+        }
+      }
+
+serviceAccount:
+  create: true
+
+rbac:
+  create: true
+  # Add permissions for PrometheusRule objects across the cluster
+  extraRules:
+    - apiGroups: ["monitoring.coreos.com"]
+      resources: ["prometheusrules"]
+      verbs: ["get", "list", "watch"]
+
+extraVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+  - name: sys-kernel-debug
+    hostPath:
+      path: /sys/kernel/debug
+  - name: sys-fs-cgroup
+    hostPath:
+      path: /sys/fs/cgroup
+
+extraVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+    readOnly: true
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+  - name: sys-kernel-debug
+    mountPath: /sys/kernel/debug
+  - name: sys-fs-cgroup
+    mountPath: /sys/fs/cgroup
+
+serviceMonitor:
+  enabled: true
+
+service:
+  enabled: true
+  type: ClusterIP
+  internalTrafficPolicy: Local
+

@@ -1,0 +1,72 @@
+---
+# OpenStack lab deployment values for Pyrra (SLO-as-code: generates Prometheus
+# recording rules + multi-window multi-burn-rate alerting rules from SLO CRs,
+# plus a built-in UI).
+#
+# This chart is a dependency wrapper. Values for the vendored rlex/pyrra chart
+# (the only actively maintained packaging of Pyrra at the time of writing --
+# the project itself does not publish a Helm chart) must be nested under the
+# dependency name (`pyrra`) to affect rendered resources.
+#
+# Upstream packaging note: rlex/helm-charts is a community-maintained Helm
+# chart. The pyrra-dev project ships only raw Kubernetes manifests via jsonnet
+# and does not publish a Helm chart of its own. rhobs/pyrra does not exist as
+# a distinct fork.
+#
+# Component layout note: the upstream chart packs both Pyrra components into a
+# single Deployment with two containers (`pyrra-kubernetes`, the operator that
+# reconciles SLO CRs into PrometheusRule CRs, and `pyrra`, the API+UI). There
+# is no separate replica count or resources block per component, so the brief's
+# "single-replica counts for both" naturally collapses to a single Deployment
+# at replicas=1 (the chart hardcodes one replica -- there is no replicas value).
+pyrra:
+  image:
+    pullPolicy: IfNotPresent
+
+  # Prometheus query endpoint. This lab runs Mimir as its Prometheus backend;
+  # the gateway speaks the Prometheus query API at /prometheus. Mirrors the
+  # Grafana datasource URL configured in charts/grafana/values-ci.yaml.
+  prometheusUrl: http://mimir-distributed-gateway.observability.svc/prometheus
+
+  service:
+    type: ClusterIP
+    port: 9099
+
+  # Pyrra is stateless: it reads ServiceLevelObjective CRs from the API and
+  # emits PrometheusRule CRs. No persistence required.
+
+  # ServiceMonitor for the API+UI container's own metrics. The lab's Alloy
+  # scrape config selects ServiceMonitors with `release: alloy` (see
+  # charts/kube-state-metrics/values.yaml for the same convention).
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: alloy
+
+  # ServiceMonitor for the operator container's reconciliation metrics on
+  # operatorMetricsAddress (default :8080).
+  serviceMonitorOperator:
+    enabled: true
+    labels:
+      release: alloy
+
+  # PrometheusRules to monitor Pyrra itself (PyrraReconciliationError). Off by
+  # default; flip on once SLOs are live and noise budget is understood.
+  prometheusRule:
+    enabled: false
+
+  # Emit Pyrra's "generic" recording rules so every SLO produces the same set
+  # of metric names regardless of indicator type -- useful for cross-SLO
+  # dashboards.
+  genericRules:
+    enabled: true
+
+  # Admission webhook that validates ServiceLevelObjective CRs at apply time.
+  # Requires cert-manager; off here to keep the wrapper self-contained.
+  validatingWebhookConfiguration:
+    enabled: false
+
+  # Grafana dashboards shipped by the chart. Off here because the lab's
+  # Grafana wrapper does not enable the sidecar (see charts/grafana/values-ci.yaml).
+  dashboards:
+    enabled: false

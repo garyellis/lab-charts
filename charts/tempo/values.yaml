@@ -1,0 +1,117 @@
+# helm/values/tempo.yaml
+# Grafana Tempo 2.9 - Distributed Tracing (Monolithic)
+# ============================================================================
+# Chart: grafana/tempo (simple/monolithic chart)
+# Architecture: Single binary with all components embedded
+
+# Tempo container configuration
+tempo:
+  # Docker image settings
+  repository: grafana/tempo
+  tag: ""  # Uses chart appVersion
+  pullPolicy: IfNotPresent
+
+  # Resource limits for the monolithic pod
+  resources:
+    limits:
+      cpu: 1
+      memory: 2Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+
+  # Trace retention period (30 days)
+  retention: 720h
+
+  # Metrics generator - Creates RED metrics (Rate, Errors, Duration) from traces
+  # These metrics are sent to Mimir for visualization
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: "http://mimir-gateway.observability.svc/api/v1/push"
+
+  # Standard overrides to activate the metrics generator processors
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+          - span-metrics
+          - local-blocks
+
+  # Storage backend configuration
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+      block:
+        bloom_filter_false_positive: 0.05
+        v2_encoding: zstd
+
+  # Ingester settings (controls how traces are written to storage)
+  ingester:
+    max_block_duration: 5m
+
+  # Query frontend configuration
+  queryFrontend:
+    search:
+      duration_slo: 5s
+
+  # Trace receivers - How traces are ingested
+  # OTLP (OpenTelemetry Protocol) - Modern standard
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+    # Zipkin - Legacy protocol support
+    zipkin:
+      endpoint: "0.0.0.0:9411"
+    # Jaeger - Legacy protocol support (multiple formats)
+    jaeger:
+      protocols:
+        thrift_compact:
+          endpoint: "0.0.0.0:6831"
+        thrift_binary:
+          endpoint: "0.0.0.0:6832"
+        thrift_http:
+          endpoint: "0.0.0.0:14268"
+        grpc:
+          endpoint: "0.0.0.0:14250"
+
+# Persistent storage for traces
+# Uses OpenStack Cinder CSI for block storage
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClassName: "csi-cinder-sc-delete"
+  accessModes:
+    - ReadWriteOnce
+
+# Prometheus ServiceMonitor for metrics collection
+serviceMonitor:
+  enabled: true
+  interval: ""
+  additionalLabels: {}
+
+# Tempo Query (legacy Jaeger UI)
+# Enabled to provide Jaeger-compatible API for Kiali
+tempoQuery:
+  enabled: true
+
+# Service configuration
+service:
+  type: ClusterIP
+
+nodeSelector:
+  node-role.kubernetes.io/data: ""
+
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/data
+    operator: Exists
+

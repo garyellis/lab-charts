@@ -1,0 +1,52 @@
+---
+# OpenStack lab deployment values for Inspektor Gadget.
+# This chart is a dependency wrapper. Values for the vendored
+# inspektor-gadget/gadget chart must be nested under the dependency name
+# (`gadget`) to affect rendered resources.
+#
+# The upstream daemonset hardcodes hostPID/hostNetwork/securityContext and
+# does not consume `resources`, so those keys are intentionally absent here.
+gadget:
+  image:
+    pullPolicy: IfNotPresent
+
+  # Schedule on every node, including control-plane.
+  tolerations:
+    - operator: Exists
+
+  config:
+    # Hook mode: how to get container start/stop notifications.
+    # "auto" picks the best available (podinformer, nri, fanotify+ebpf).
+    # Inspect with: kubectl logs -n gadget -l k8s-app=gadget | grep "hook mode"
+    operator:
+      kubemanager:
+        hook-mode: "auto"
+        fallback-podinformer: true
+
+      # OCI image verification via cosign/sigstore. Gadget images are signed
+      # by the Inspektor Gadget team; the public key below is the upstream
+      # default and must be kept in sync with the chart version.
+      oci:
+        verify-image: true
+        public-keys:
+          - |
+            -----BEGIN PUBLIC KEY-----
+            MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoDOC0gYSxZTopenGmX3ZFvQ1DSfh
+            Ir4EKRt5jC+mXaJ7c7J+oREskYMn/SfZdRHNSOjLTZUMDm60zpXGhkFecg==
+            -----END PUBLIC KEY-----
+
+      # Inspektor Gadget's own operational metrics. Enable when wiring up
+      # scraping from Alloy on port 2224.
+      otel-metrics:
+        otel-metrics-listen: false
+        otel-metrics-listen-address: "0.0.0.0:2224"
+
+    # eBPF ring buffer size (bytes) for kernel -> userspace events.
+    # Raise if "events lost" warnings appear under heavy tracing.
+    eventsBufferLength: "16384"
+
+    # Daemon log level: trace, debug, info, warning, error, fatal, panic.
+    daemonLogLevel: "info"
+
+    # Experimental gadgets and new eBPF programs. Off by default.
+    experimental: false
