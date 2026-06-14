@@ -59,3 +59,8 @@ gateway:
   nodeSelector: ~
   tolerations: []
   affinity: {}
+
+routes:
+  hubbleUi:
+    hosts:
+      - hubble.kind.local

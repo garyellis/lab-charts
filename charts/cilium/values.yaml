@@ -53,33 +53,25 @@ cilium:
         - port-distribution
         - icmp
         - httpV2:exemplars=true;labelsContext=source_ip,source_namespace,source_workload,destination_ip,destination_namespace,destination_workload,traffic_direction
+      # ServiceMonitor resources for hubble/operator/agent are hand-rolled
+      # in the prometheus-operator chart so cilium can install before the
+      # ServiceMonitor CRD exists. Do not flip this back to true.
       serviceMonitor:
-        enabled: true
-        # Match the repo-wide convention: scraped by the alloy release.
-        labels:
-          release: alloy
+        enabled: false
 
   operator:
     replicas: 1
     prometheus:
       enabled: true
       serviceMonitor:
-        enabled: true
-        # Cilium's agent serviceMonitor exposes trustCRDsExist; the operator
-        # block historically carried the same key in this repo. Upstream may
-        # ignore it on the operator path, but we keep it for parity.
-        trustCRDsExist: true
-        labels:
-          release: alloy
+        enabled: false
 
-  # cilium-agent metrics + ServiceMonitor
+  # cilium-agent metrics endpoint stays enabled; ServiceMonitor lives in
+  # the prometheus-operator chart (see comment above).
   prometheus:
     enabled: true
     serviceMonitor:
-      enabled: true
-      trustCRDsExist: true
-      labels:
-        release: alloy
+      enabled: false
 
   debug:
     enabled: false

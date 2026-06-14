@@ -1,0 +1,27 @@
+{{- if .Values.serviceMonitors.cilium.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cilium-agent
+  namespace: {{ .Values.serviceMonitors.cilium.namespace }}
+  labels:
+    app.kubernetes.io/part-of: cilium
+    app.kubernetes.io/name: cilium-agent
+    {{- with .Values.serviceMonitors.cilium.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cilium-agent
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.serviceMonitors.cilium.namespace }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.serviceMonitors.cilium.interval | quote }}
+      honorLabels: true
+      path: /metrics
+  targetLabels:
+    - k8s-app
+{{- end }}

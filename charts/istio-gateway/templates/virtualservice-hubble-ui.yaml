@@ -1,0 +1,25 @@
+{{- if .Values.routes.hubbleUi.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: hubble-ui
+  namespace: {{ .Values.routes.hubbleUi.namespace }}
+spec:
+  hosts:
+    {{- toYaml .Values.routes.hubbleUi.hosts | nindent 4 }}
+  gateways:
+    - {{ .Values.routes.hubbleUi.gateway }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: hubble-ui.{{ .Values.routes.hubbleUi.namespace }}.svc.cluster.local
+            port:
+              number: 80
+          headers:
+            request:
+              remove:
+                - Authorization
+{{- end }}

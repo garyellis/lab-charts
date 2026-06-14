@@ -72,3 +72,16 @@ gateway:
               matchLabels:
                 app: istio-ingressgateway
             topologyKey: kubernetes.io/hostname
+
+# Cross-cutting VirtualServices for workloads installed before istio
+# (e.g. cilium/hubble-ui). They cannot live in their own chart because
+# the istio CRDs are not yet registered when that chart is applied.
+routes:
+  hubbleUi:
+    enabled: true
+    namespace: kube-system
+    # namespace/name of the istio Gateway this VS binds to.
+    gateway: istio-ingress/apps-gateway
+    hosts:
+      - hubble.k8s.home.lab
+      - hubble.k8s.home.lab.io

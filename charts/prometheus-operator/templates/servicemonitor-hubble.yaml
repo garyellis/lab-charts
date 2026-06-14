@@ -1,0 +1,26 @@
+{{- if .Values.serviceMonitors.cilium.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: hubble
+  namespace: {{ .Values.serviceMonitors.cilium.namespace }}
+  labels:
+    app.kubernetes.io/part-of: cilium
+    app.kubernetes.io/name: hubble
+    {{- with .Values.serviceMonitors.cilium.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      k8s-app: hubble
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.serviceMonitors.cilium.namespace }}
+  endpoints:
+    - port: hubble-metrics
+      interval: {{ .Values.serviceMonitors.cilium.interval | quote }}
+      honorLabels: true
+      path: /metrics
+      scheme: http
+{{- end }}

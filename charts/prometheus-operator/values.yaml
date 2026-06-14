@@ -79,3 +79,17 @@ prometheus-operator:
 
   kubeProxy:
     enabled: false
+
+# Hand-rolled ServiceMonitors for charts that own resources whose CRDs
+# this chart provides. They live here (not in the source chart) so the
+# source chart can install before prometheus-operator without failing
+# on a missing ServiceMonitor CRD. Selectors/ports mirror the upstream
+# cilium 1.18.5 chart's own ServiceMonitor templates.
+serviceMonitors:
+  cilium:
+    enabled: true
+    namespace: kube-system
+    interval: 30s
+    # Scraped by the alloy release; matches repo-wide convention.
+    labels:
+      release: alloy
