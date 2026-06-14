@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from lab_charts.plumbing.charts import ChartRepository
+from chart_manager.plumbing.charts import ChartRepository
 
 
 def test_list_charts_discovers_wrappers() -> None:

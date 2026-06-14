@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from lab_charts.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import SpecError
 
 
 class ChartRef(BaseModel):

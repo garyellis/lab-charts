@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lab_charts.integrations.git import Git
-from lab_charts.integrations.helm import Helm
-from lab_charts.integrations.kubectl import Kubectl
-from lab_charts.plumbing.charts import ChartRepository
+from chart_manager.integrations.git import Git
+from chart_manager.integrations.helm import Helm
+from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.plumbing.charts import ChartRepository
 
 
 class CiService:
@@ -43,6 +43,10 @@ class CiService:
         namespace: str,
         oci_ref: str,
     ) -> None:
+        # Two-phase install to exercise the upgrade path: deploy the
+        # published baseline from OCI, then upgrade to the local source.
+        # Both phases use the same values so the baseline release matches
+        # what's running in production rather than chart defaults.
         chart = self.repository.get(chart_name)
         profile_spec = chart.spec.profile(profile)
         values = self.repository.value_paths(chart, profile)
@@ -51,6 +55,7 @@ class CiService:
             chart.name,
             oci_ref,
             namespace=namespace,
+            values=values,
             timeout=profile_spec.timeout,
         )
         self.helm.dependency_update(chart.path)

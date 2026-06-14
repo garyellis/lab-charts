@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-import signal
-import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Annotated
 
@@ -13,12 +9,19 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from lab_charts.plumbing.errors import LabChartsError
-from lab_charts.plumbing.spec import CheckSpec
-from lab_charts.services.charts import ChartService
-from lab_charts.services.ci import CiService
-from lab_charts.services.dependencies import DependencyService
-from lab_charts.services.kind_test import KindTestOptions, KindTestService
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.spec import CheckSpec
+from chart_manager.services.charts import ChartService
+from chart_manager.services.ci import CiService
+from chart_manager.services.dependencies import DependencyService
+from chart_manager.services.expose import ExposeRequest, ExposeService
+from chart_manager.services.kind_test import (
+    DEFAULT_CLUSTER_NAME,
+    DEFAULT_NAMESPACE,
+    DEFAULT_PROFILE,
+    KindTestOptions,
+    KindTestService,
+)
 
 console = Console()
 
@@ -27,14 +30,20 @@ charts_app = typer.Typer(no_args_is_help=True, help="Inspect charts and test spe
 deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
 kind_app = typer.Typer(no_args_is_help=True, help="Run kind-backed chart tests.")
 ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
+# Grafana-specific subcommands. Anything that knows about Grafana JSON / API
+# conventions lives here, not under the generic `charts` group.
+grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
 
 app.add_typer(charts_app, name="charts")
 app.add_typer(deps_app, name="deps")
 app.add_typer(kind_app, name="kind")
 app.add_typer(ci_app, name="ci")
+app.add_typer(grafana_app, name="grafana")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="test-spec profile.")]
+ClusterNameOption = Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")]
+NamespaceOption = Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")]
 
 
 @charts_app.command("list")
@@ -44,7 +53,7 @@ def list_charts(root: RootOption = Path(".")) -> None:
     for name in service.list_charts():
         try:
             chart = service.get_chart(name)
-        except LabChartsError:
+        except ChartManagerError:
             table.add_row(name, "?", "?", "[red]<no test-spec>[/red]")
             continue
         version = chart.chart_yaml.get("version", "") or ""
@@ -64,11 +73,84 @@ def show_spec(chart: str, root: RootOption = Path(".")) -> None:
     console.print_json(data=model.spec.model_dump(by_alias=True))
 
 
+@grafana_app.command("export-dashboard")
+def grafana_export_dashboard(
+    uid: Annotated[str, typer.Argument(help="Dashboard UID to export.")],
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    release: Annotated[
+        str,
+        typer.Option("--release", help="Grafana Helm release name (drives secret and service name)."),
+    ] = "grafana",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the normalized JSON to this file (default: stdout)."),
+    ] = None,
+) -> None:
+    """Export a dashboard from a kind-deployed Grafana and normalize for git.
+
+    Auth + connectivity are resolved from the cluster: the admin password is
+    read from secret/<release>, then an ephemeral port-forward to svc/<release>
+    carries the HTTP GET. No pre-existing port-forward required.
+    """
+    from chart_manager.services.grafana.dashboard_export import (
+        ExportRequest,
+        GrafanaExporter,
+    )
+
+    dashboard = GrafanaExporter().fetch(
+        ExportRequest(
+            uid=uid,
+            cluster_name=cluster_name,
+            namespace=namespace,
+            release=release,
+        )
+    )
+    payload = json.dumps(dashboard, sort_keys=True, indent=2) + "\n"
+    if output is None:
+        sys.stdout.write(payload)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload)
+        console.print(f"[green]wrote[/green] {output}")
+
+
+@grafana_app.command("lint-dashboards")
+def grafana_lint_dashboards(
+    root: RootOption = Path("."),
+    path: Annotated[
+        list[Path],
+        typer.Option(
+            "--path",
+            help="Specific dashboard JSON file (repeatable). Default: all under charts/grafana-dashboards/dashboards/.",
+        ),
+    ] = [],
+) -> None:
+    """Lint Grafana dashboards for repo-wide quality rules."""
+    from chart_manager.services.grafana.dashboard_lint import discover_dashboards, lint_paths
+
+    targets = list(path) if path else discover_dashboards(root)
+    if not targets:
+        console.print("[yellow]no dashboards found[/yellow]")
+        raise typer.Exit(0)
+
+    findings = lint_paths(targets)
+    for finding in findings:
+        console.print(finding.render())
+
+    n_files = len(targets)
+    n_bad = len({f.path for f in findings})
+    if findings:
+        console.print(f"\n[red]{len(findings)} findings across {n_bad}/{n_files} dashboards[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]ok[/green]: {n_files} dashboards passed")
+
+
 @deps_app.command("plan")
 def dependency_plan(
     chart: str,
     root: RootOption = Path("."),
-    profile: ProfileOption = "minimal",
+    profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
     service = DependencyService(root)
     table = Table("Order", "Chart", "Profile", "Target")
@@ -81,7 +163,7 @@ def dependency_plan(
 def dependency_checks(
     chart: str,
     root: RootOption = Path("."),
-    profile: ProfileOption = "minimal",
+    profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
     service = DependencyService(root)
     repository = service.repository
@@ -124,32 +206,21 @@ def reverse_tests(chart: str, root: RootOption = Path(".")) -> None:
 
 @kind_app.command("ensure")
 def ensure_kind(
-    cluster_name: Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")] = "lab-charts",
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     root: RootOption = Path("."),
 ) -> None:
     service = KindTestService(root)
-    service.kind.ensure_cluster(cluster_name)
+    kind_config = root.resolve() / "kind-config.yaml"
+    service.kind.ensure_cluster(
+        cluster_name,
+        config=kind_config if kind_config.exists() else None,
+    )
     console.print(f"kind cluster ready: {cluster_name}")
-
-
-def _expose_state_dir() -> Path:
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "lab-charts" / "expose"
-
-
-def _expose_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 @kind_app.command("expose")
 def kind_expose(
-    cluster_name: Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")] = "lab-charts",
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     service: Annotated[
         str,
         typer.Option("--service", help="namespace/name of the Service to forward."),
@@ -160,106 +231,38 @@ def kind_expose(
     ] = [],
     stop: Annotated[bool, typer.Option("--stop", help="Stop the running port-forward for this cluster.")] = False,
 ) -> None:
-    state_dir = _expose_state_dir()
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_file = state_dir / f"{cluster_name}.json"
-    log_file = state_dir / f"{cluster_name}.log"
+    expose = ExposeService()
 
     if stop:
-        if not state_file.exists():
+        stopped = expose.stop(cluster_name)
+        if stopped is None:
             console.print(f"no port-forward state for cluster [bold]{cluster_name}[/bold]")
-            return
-        state = json.loads(state_file.read_text())
-        pid = state.get("pid")
-        if pid and _expose_alive(pid):
-            try:
-                os.kill(pid, signal.SIGTERM)
-                console.print(f"stopped port-forward (pid {pid})")
-            except ProcessLookupError:
-                console.print(f"process {pid} already gone")
         else:
-            console.print(f"process {pid} not running; clearing state")
-        state_file.unlink(missing_ok=True)
+            console.print(f"stopped port-forward (pid {stopped})")
         return
 
-    if state_file.exists():
-        existing = json.loads(state_file.read_text())
-        if _expose_alive(existing.get("pid", -1)):
-            console.print(
-                f"[red]port-forward already running[/red] for cluster [bold]{cluster_name}[/bold] "
-                f"(pid {existing['pid']}). Stop it first: "
-                f"lab-charts kind expose --cluster-name {cluster_name} --stop"
-            )
-            raise typer.Exit(1)
-        state_file.unlink()
-
     ports = list(port) if port else ["8443:443", "8080:80"]
-    if "/" not in service:
-        console.print(f"[red]--service must be namespace/name, got: {service}[/red]")
-        raise typer.Exit(2)
-    namespace, name = service.split("/", 1)
-    context = f"kind-{cluster_name}"
+    status = expose.start(ExposeRequest(cluster_name=cluster_name, service=service, ports=ports))
 
-    args = [
-        "kubectl",
-        "--context",
-        context,
-        "port-forward",
-        "-n",
-        namespace,
-        f"svc/{name}",
-        *ports,
-    ]
-
-    log_handle = log_file.open("w")
-    try:
-        proc = subprocess.Popen(
-            args,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except FileNotFoundError:
-        log_handle.close()
-        console.print("[red]kubectl not found on PATH[/red]")
-        raise typer.Exit(127)
-
-    # Give kubectl a moment to bind the ports or fail.
-    time.sleep(1.0)
-    if proc.poll() is not None:
-        log_handle.close()
-        console.print(
-            f"[red]port-forward exited immediately (rc={proc.returncode})[/red]\n"
-            f"{log_file.read_text().strip()}"
-        )
-        raise typer.Exit(1)
-
-    state = {
-        "cluster": cluster_name,
-        "service": service,
-        "ports": ports,
-        "pid": proc.pid,
-        "log": str(log_file),
-    }
-    state_file.write_text(json.dumps(state, indent=2))
-
-    console.print(f"[bold]port-forward running[/bold] (pid {proc.pid})  cluster={cluster_name}  service={service}")
+    console.print(
+        f"[bold]port-forward running[/bold] (pid {status.pid})  "
+        f"cluster={cluster_name}  service={service}"
+    )
     for mapping in ports:
         local, remote = mapping.split(":", 1)
         scheme = "https" if remote in {"443", "8443"} else "http"
         console.print(f"  {scheme}://*.kind.local:{local}/  ->  {service}:{remote}")
-    console.print(f"  log:  {log_file}")
-    console.print(f"  stop: lab-charts kind expose --cluster-name {cluster_name} --stop")
+    console.print(f"  log:  {status.log}")
+    console.print(f"  stop: chart-manager kind expose --cluster-name {cluster_name} --stop")
 
 
 @kind_app.command("test")
 def kind_test(
     chart: str,
     root: RootOption = Path("."),
-    profile: ProfileOption = "minimal",
-    namespace: Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")] = "observability",
-    cluster_name: Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")] = "lab-charts",
+    profile: ProfileOption = DEFAULT_PROFILE,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     reverse: Annotated[bool, typer.Option("--reverse", help="Run reverse dependency tests.")] = False,
     no_ensure_cluster: Annotated[
         bool,
@@ -295,8 +298,8 @@ def ci_changed(
 def ci_install(
     chart: str,
     root: RootOption = Path("."),
-    profile: ProfileOption = "minimal",
-    namespace: Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")] = "observability",
+    profile: ProfileOption = DEFAULT_PROFILE,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
 ) -> None:
     CiService(root).install_source_chart(chart, profile, namespace)
 
@@ -306,8 +309,8 @@ def ci_upgrade(
     chart: str,
     oci_ref: Annotated[str, typer.Option("--from-oci", help="OCI chart ref for the main-branch artifact.")],
     root: RootOption = Path("."),
-    profile: ProfileOption = "minimal",
-    namespace: Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")] = "observability",
+    profile: ProfileOption = DEFAULT_PROFILE,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
 ) -> None:
     CiService(root).upgrade_from_oci(chart, profile, namespace, oci_ref)
 
@@ -315,6 +318,9 @@ def ci_upgrade(
 def main() -> None:
     try:
         app()
-    except LabChartsError as exc:
+    except ChartManagerError as exc:
         console.print(f"[red]error:[/red] {exc}")
         sys.exit(1)
+    except FileNotFoundError as exc:
+        console.print(f"[red]error:[/red] required binary not found: {exc.filename or exc}")
+        sys.exit(127)

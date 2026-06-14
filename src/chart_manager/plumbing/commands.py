@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from lab_charts.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError
 
 
 @dataclass(frozen=True)

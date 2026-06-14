@@ -1,0 +1,17 @@
+---
+# Kind cluster blueprint for the chart-manager test cluster.
+#
+# Shaped by cilium: this repo runs cilium as CNI with full kube-proxy
+# replacement, so the cluster is created with no default CNI and no
+# kube-proxy. Cilium is installed by `chart-manager kind test` before the
+# rest of the install plan runs -- nodes stay NotReady until then,
+# which is expected.
+#
+# Other settings (port mappings, extra mounts, etc.) can grow here as
+# the lab stack adds workloads; this file is the single source of
+# truth for how the test cluster is shaped.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: none

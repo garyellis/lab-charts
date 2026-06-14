@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lab_charts.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandRunner
 
 
 class Helm:
@@ -27,6 +27,7 @@ class Helm:
         *,
         namespace: str,
         values: list[Path] | None = None,
+        sets: dict[str, str] | None = None,
         timeout: str = "10m",
         wait: bool = True,
     ) -> None:
@@ -57,6 +58,7 @@ class Helm:
         if wait:
             args.append("--wait")
         args.extend(_values_args(values or []))
+        args.extend(_set_args(sets or {}))
         self.runner.run(args, capture=False)
 
     def upgrade(
@@ -102,4 +104,11 @@ def _values_args(values: list[Path]) -> list[str]:
     args: list[str] = []
     for value in values:
         args.extend(["--values", str(value)])
+    return args
+
+
+def _set_args(sets: dict[str, str]) -> list[str]:
+    args: list[str] = []
+    for key, value in sets.items():
+        args.extend(["--set", f"{key}={value}"])
     return args

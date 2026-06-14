@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lab_charts.plumbing.commands import CommandRunner
-from lab_charts.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.errors import ExternalCommandError
 
 
 class Git:

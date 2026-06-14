@@ -1,4 +1,4 @@
-# lab-charts
+# chart-manager
 
 Helm wrapper charts and local/CI testing tools for lab observability deployments.
 
@@ -28,7 +28,7 @@ mise run kind-test -- alloy --profile minimal
 The Python CLI is available through `uv`:
 
 ```bash
-uv run lab-charts charts list
-uv run lab-charts deps plan alloy --profile minimal
-uv run lab-charts kind test alloy --profile minimal
+uv run chart-manager charts list
+uv run chart-manager deps plan alloy --profile minimal
+uv run chart-manager kind test alloy --profile minimal
 ```

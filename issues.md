@@ -1,6 +1,6 @@
 # Known Issues & Edge Cases
 
-Race conditions and footguns discovered while bringing up the LGTM stack in a kind cluster via `lab-charts kind test`. Each entry: what you'll see, why it happens, and how it's resolved.
+Race conditions and footguns discovered while bringing up the LGTM stack in a kind cluster via `chart-manager kind test`. Each entry: what you'll see, why it happens, and how it's resolved.
 
 ---
 
@@ -56,7 +56,7 @@ Almost no downstream consumer of this chart uses `--wait`:
 
 Without `--wait`, helm applies manifests, immediately fires post-install hooks, the bucket Job runs, and loki recovers on its own restart loop within ~30s.
 
-**Fix in lab-charts**
+**Fix in chart-manager**
 `services/kind_test.py` calls `upgrade_install(..., wait=False)`. The same bootstrap pattern exists in `mimir-distributed` and any other chart that ships a bundled minio + bucket-creation hook, so this is the right default for kind-based smoke tests.
 
 ---
@@ -73,7 +73,7 @@ Manually re-running `helm test loki` seconds later succeeds.
 **Root cause**
 Solving issue #2 by dropping `--wait` means `helm upgrade --install` returns in seconds — before the release's pods are actually Ready. `helm test` is invoked immediately after install and runs its test pod against a release that's still warming up (still waiting for its bucket Job, still rolling out, etc.).
 
-**Fix in lab-charts**
+**Fix in chart-manager**
 Between install and test, `services/kind_test.py` calls `Kubectl.wait_workloads_ready(namespace, timeout)` (`integrations/kubectl.py`), which runs `kubectl rollout status` for every `deployment`, `statefulset`, and `daemonset` in the namespace.
 
 `rollout status` is used (not `kubectl wait --for=condition=Ready pod --all`) because pods belonging to completed Jobs — like the minio bucket-creation job — never reach `Ready=True` (they're `Succeeded`), and a blanket pod wait would hang on them. `rollout status` operates on the controllers, not the pods, so it cleanly gates on long-lived workloads only.
@@ -96,7 +96,7 @@ Many chart test pods are annotated `helm.sh/hook-delete-policy: hook-succeeded`,
 
 `--logs` is only useful on test *failures* (where pods are typically retained unless `hook-failed` is also in the delete policy), but it breaks success cases unconditionally. Net-negative.
 
-**Fix in lab-charts**
+**Fix in chart-manager**
 `Helm.test` in `integrations/helm.py` no longer passes `--logs`. On test failure, `services/kind_test.py` already calls `Kubectl.diagnostics(namespace)` which dumps pods + events — enough to start debugging.
 
 For deeper investigation when a test fails, run manually:

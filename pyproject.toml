@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lab-charts"
+name = "chart-manager"
 version = "0.1.0"
 description = "Local and CI orchestration for lab Helm wrapper charts."
 readme = "README.md"
@@ -21,10 +21,10 @@ dev = [
 ]
 
 [project.scripts]
-lab-charts = "lab_charts.cli.main:main"
+chart-manager = "chart_manager.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lab_charts"]
+packages = ["src/chart_manager"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

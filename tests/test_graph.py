@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from lab_charts.plumbing.charts import ChartRepository
-from lab_charts.plumbing.errors import DependencyCycleError
-from lab_charts.plumbing.graph import DependencyResolver
+from chart_manager.plumbing.charts import ChartRepository
+from chart_manager.plumbing.errors import DependencyCycleError
+from chart_manager.plumbing.graph import DependencyResolver
 
 
 def test_install_plan_orders_requirements_before_target() -> None:

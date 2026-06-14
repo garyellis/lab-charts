@@ -116,14 +116,32 @@ dashboardProviders:
   dashboardproviders.yaml:
     apiVersion: 1
     providers:
+      # Provisioned dashboards are read-only at provider level: UI writes are
+      # accepted into Grafana's DB but the next reconcile (updateIntervalSeconds)
+      # overwrites them from the file on disk. Treat git as the source of truth.
       - name: 'default'
         orgId: 1
         folder: ''
         type: file
-        disableDeletion: false
-        editable: true
+        disableDeletion: true
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
         options:
           path: /var/lib/grafana/dashboards/default
+          foldersFromFilesStructure: true
+      # Escape hatch: dashboards copied into /var/lib/grafana/dashboards/scratch
+      # are live-editable. Use for iteration only; promote a board by exporting
+      # via `chart-manager grafana export-dashboard <uid> -o
+      # charts/grafana-dashboards/dashboards/<folder>/<name>.json` and committing.
+      - name: 'scratch'
+        orgId: 1
+        folder: 'Scratch'
+        type: file
+        disableDeletion: false
+        allowUiUpdates: true
+        updateIntervalSeconds: 10
+        options:
+          path: /var/lib/grafana/dashboards/scratch
 
 dashboards:
   default:
@@ -169,6 +187,12 @@ sidecar:
   dashboards:
     enabled: true
     label: grafana_dashboard
+    # Read the per-ConfigMap `grafana_folder` label to place each dashboard in
+    # a Grafana folder. Matches the label written by the grafana-dashboards
+    # chart from the parent directory of each JSON file.
+    folderAnnotation: grafana_folder
+    provider:
+      foldersFromFilesStructure: true
     searchNamespace: ALL
   datasources:
     enabled: true

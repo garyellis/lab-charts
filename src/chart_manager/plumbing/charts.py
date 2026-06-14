@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from lab_charts.plumbing.errors import ChartNotFoundError, SpecError
-from lab_charts.plumbing.spec import TestSpec, load_test_spec, load_yaml_file
+from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
+from chart_manager.plumbing.spec import TestSpec, load_test_spec, load_yaml_file
 
 
 @dataclass(frozen=True)

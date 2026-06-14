@@ -6,7 +6,7 @@ kubectl = "1.35.3"
 kind = "latest"
 
 [tasks.setup]
-description = "Install Python dependencies for the lab-charts CLI."
+description = "Install Python dependencies for the chart-manager CLI."
 run = "uv sync --extra dev"
 
 [tasks.test]
@@ -15,12 +15,12 @@ run = "uv run --extra dev pytest"
 
 [tasks.charts]
 description = "List known chart wrappers."
-run = "uv run lab-charts charts list"
+run = "uv run chart-manager charts list"
 
 [tasks.deps]
 description = "Show the install plan for a chart. Usage: mise run deps -- alloy --profile minimal"
-run = "uv run lab-charts deps plan \"$@\""
+run = "uv run chart-manager deps plan \"$@\""
 
 [tasks.kind-test]
 description = "Run a kind-backed chart test. Usage: mise run kind-test -- alloy --profile minimal"
-run = "uv run lab-charts kind test \"$@\""
+run = "uv run chart-manager kind test \"$@\""

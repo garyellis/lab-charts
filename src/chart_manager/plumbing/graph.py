@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lab_charts.plumbing.charts import ChartRepository
-from lab_charts.plumbing.errors import DependencyCycleError
-from lab_charts.plumbing.spec import ChartRef
+from chart_manager.plumbing.charts import ChartRepository
+from chart_manager.plumbing.errors import DependencyCycleError
+from chart_manager.plumbing.spec import ChartRef
 
 
 @dataclass(frozen=True)

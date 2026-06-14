@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_charts.plumbing.spec import SpecError, load_test_spec
+from chart_manager.plumbing.spec import SpecError, load_test_spec
 
 
 def test_load_test_spec_accepts_chart_refs() -> None:

@@ -1,4 +1,4 @@
-from lab_charts.cli.main import main
+from chart_manager.cli.main import main
 
 
 if __name__ == "__main__":

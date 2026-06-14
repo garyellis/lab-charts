@@ -84,12 +84,42 @@ grafana:
               datasourceUid: loki
           editable: true
 
-  dashboardProviders: null
+  # Mirror the production provider shape so CI exercises the read-only flow.
+  # No `dashboards:` block in CI -- everything comes from sidecar-discovered
+  # ConfigMaps shipped by the grafana-dashboards chart.
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: true
+          allowUiUpdates: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/default
+            foldersFromFilesStructure: true
+        - name: 'scratch'
+          orgId: 1
+          folder: 'Scratch'
+          type: file
+          disableDeletion: false
+          allowUiUpdates: true
+          updateIntervalSeconds: 10
+          options:
+            path: /var/lib/grafana/dashboards/scratch
   dashboards: null
 
   sidecar:
     dashboards:
-      enabled: false
+      enabled: true
+      label: grafana_dashboard
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+      searchNamespace: ALL
     datasources:
       enabled: false
 

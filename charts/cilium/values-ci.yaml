@@ -5,12 +5,12 @@
 #
 # Tuned for a single-node kind cluster: distinct cluster identity from dev,
 # L2/externalIP features disabled (kind runs on a Docker bridge, not a real
-# L2 segment -- use `lab-charts kind expose` for ingress instead), and much
+# L2 segment -- use `chart-manager kind expose` for ingress instead), and much
 # smaller resource caps so the agent and operator fit comfortably alongside
 # the rest of the test stack.
 cilium:
   cluster:
-    name: kind-lab-charts
+    name: kind-chart-manager
     # Distinct from dev so a future multi-cluster Hubble setup behaves.
     id: 2
 
@@ -21,7 +21,7 @@ cilium:
 
   # L2 announcements and externalIP support are not meaningful on the
   # Docker bridge network kind uses. Ingress in CI goes through
-  # `lab-charts kind expose` (port-forward / nodeport), not LoadBalancer.
+  # `chart-manager kind expose` (port-forward / nodeport), not LoadBalancer.
   l2announcements:
     enabled: false
 

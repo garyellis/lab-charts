@@ -9,7 +9,7 @@
 # nodeSelector is wiped via `~` (null) so the subchart's
 # `{{ with .Values.nodeSelector }}` block is skipped entirely. The helm
 # runner applies --skip-schema-validation for wrapper installs (see
-# src/lab_charts/integrations/helm.py) because the gateway subchart's
+# src/chart_manager/integrations/helm.py) because the gateway subchart's
 # values.schema.json forbids null at these paths.
 #
 # Note: service.annotations stays as `{}` (cannot be null — the upstream

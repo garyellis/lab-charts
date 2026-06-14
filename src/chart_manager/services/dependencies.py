@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lab_charts.plumbing.charts import ChartRepository
-from lab_charts.plumbing.graph import DependencyResolver, PlanEntry
-from lab_charts.plumbing.spec import ChartRef
+from chart_manager.plumbing.charts import ChartRepository
+from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
+from chart_manager.plumbing.spec import ChartRef
 
 
 class DependencyService:
