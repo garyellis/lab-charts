@@ -1,0 +1,375 @@
+{
+  "title": "Linux Network Stack - Overview",
+  "uid": "linux-network-overview",
+  "description": "Operational overview of the Linux network stack via Cloudflare ebpf_exporter (kfree_skb_reason, tcp retransmits, accept latency, interface bytes). NOTE: ebpf_exporter is not yet deployed in this repo; panels will be empty until that exporter is added.",
+  "tags": ["ebpf", "networking", "overview"],
+  "schemaVersion": 38,
+  "version": 2,
+  "editable": true,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "label": "Datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "Top row: at-a-glance Golden Signals for the kernel network path (drops, retransmits, new connections, interface throughput).\n\nDrops by reason: which kernel hook called `kfree_skb_reason()` -- non-zero `NO_SOCKET` (2) means traffic to closed ports; `SOCKET_BACKLOG` (17) means apps are not draining accept queues fast enough; `TCP_INVALID_SEQUENCE` (35) means reordering or loss.\n\nTCP retransmits + accept latency p99 isolate whether problems are on the wire or in the application.\n\nInterface throughput is sourced from `node_exporter` (`node_network_*`) so it is available even without the eBPF exporter.\n\nData source: Cloudflare `ebpf_exporter` (kfree_skb, tcp_retransmit, tcp_connect_latency probes). Not yet deployed -- ebpf_* panels will be empty until then."
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Network Health Summary",
+      "gridPos": {"x": 0, "y": 4, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Packet Drop Rate",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 5, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 100}
+            ]
+          },
+          "unit": "pps"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_packet_drops[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "TCP Retransmit Rate",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 6, "y": 5, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 50}
+            ]
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_tcp_retransmits[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "New TCP Connections",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 5, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_tcp_connections[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Interface Throughput (RX+TX)",
+      "description": "Sum of received + transmitted bytes across all non-virtual interfaces from node_exporter.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 18, "y": 5, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "Bps"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(node_network_receive_bytes_total{device!~\"lo|docker.*|veth.*|cali.*|cilium.*|cni.*|flannel.*|tunl.*\"}[$__rate_interval])) + sum(rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|veth.*|cali.*|cilium.*|cni.*|flannel.*|tunl.*\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Packet Drops",
+      "gridPos": {"x": 0, "y": 9, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Packet Drops by Reason",
+      "description": "Per-reason drop rate from kfree_skb_reason(). Reason codes are the Linux SKB_DROP_REASON_* enum.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 10, "w": 16, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 30,
+            "stacking": {"mode": "normal"}
+          },
+          "unit": "pps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value", "max", "mean"]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(ebpf_exporter_packet_drops[$__rate_interval]))",
+          "legendFormat": "Reason {{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "piechart",
+      "title": "Drop Distribution (current window)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 16, "y": 10, "w": 8, "h": 8},
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "pieType": "donut"
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(ebpf_exporter_packet_drops[$__range]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "TCP Performance",
+      "gridPos": {"x": 0, "y": 18, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "TCP Retransmits",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 19, "w": 12, "h": 6},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic", "fixedColor": "red"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70
+          },
+          "unit": "cps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_tcp_retransmits[$__rate_interval]))",
+          "legendFormat": "retransmits/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "TCP Connection Rate",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 19, "w": 12, "h": 6},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20
+          },
+          "unit": "cps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_tcp_connections[$__rate_interval]))",
+          "legendFormat": "new connections/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Accept Latency p50 / p99",
+      "description": "Histogram quantiles derived from ebpf_exporter_accept_latency_seconds_bucket. Rising p99 with stable p50 means tail-latency in accept() -- usually a saturated application thread pool.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 25, "w": 24, "h": 7},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          },
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(ebpf_exporter_accept_latency_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(ebpf_exporter_accept_latency_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Interface Throughput",
+      "gridPos": {"x": 0, "y": 32, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "RX Bandwidth by Interface",
+      "description": "node_exporter node_network_receive_bytes_total, excluding loopback and common virtual/CNI interfaces.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 33, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 30
+          },
+          "unit": "Bps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom", "values": ["value", "max"]}
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, device) (rate(node_network_receive_bytes_total{device!~\"lo|docker.*|veth.*|cali.*|cilium.*|cni.*|flannel.*|tunl.*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance}} {{device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "TX Bandwidth by Interface",
+      "description": "node_exporter node_network_transmit_bytes_total, excluding loopback and common virtual/CNI interfaces.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 33, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 30
+          },
+          "unit": "Bps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom", "values": ["value", "max"]}
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, device) (rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|veth.*|cali.*|cilium.*|cni.*|flannel.*|tunl.*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance}} {{device}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+version: 1
+
+# Profiles for the grafana-dashboards chart.
+#
+# This chart is a thin wrapper: every dashboards/*.json gets templated into a
+# ConfigMap with the `grafana_dashboard=1` sidecar label so Grafana picks it
+# up. There are no helm test hooks of its own -- value comes from running it
+# alongside the real observability + mesh + networking stack so dashboards
+# can be exercised against live data during development and prototyping.
+#
+# Three profiles, picked deliberately so the iteration loop matches the
+# task at hand:
+#   - minimal      ConfigMap render sanity. No backends. Seconds, not minutes.
+#   - dev-stack    Full LGTM + Grafana + Pyrra + node/cluster telemetry.
+#                  The daily-driver profile for editing platform / GPU / SLO
+#                  dashboards. Skips service mesh and Cilium to keep cycles
+#                  short (~10m faster than `prototyping`).
+#   - prototyping  Everything in dev-stack PLUS cert-manager, Cilium,
+#                  istio-base/istiod/istio-gateway and inspektor-gadget.
+#                  Use this when iterating on mesh / network / eBPF
+#                  dashboards or wiring up new ones that need traces and
+#                  service-graph data through Istio.
+#
+# Note on missing metrics:
+#   The network-overview / network-drop dashboards reference
+#   `ebpf_exporter_*` series produced by Cloudflare's ebpf_exporter, which
+#   is not yet packaged as a chart in this repo. Those panels will render
+#   empty under any profile until that exporter is added.
+
+profiles:
+  minimal:
+    description: Render dashboard ConfigMaps only; no backends. Fast sanity check that the chart still templates and that JSON files are valid Helm template inputs.
+    namespace: observability
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    timeout: 5m
+
+  dev-stack:
+    description: Install the full LGTM stack + Grafana + Pyrra + cluster/node telemetry so platform, GPU, and SLO dashboards can be developed against real data. Omits service mesh and CNI dashboards to keep iteration fast.
+    namespace: observability
+    requires:
+      - chart: prometheus-operator
+        profile: minimal
+      - chart: kube-state-metrics
+        profile: minimal
+      - chart: node-exporter
+        profile: minimal
+      - chart: mimir-distributed
+        profile: minimal
+      - chart: loki
+        profile: minimal
+      - chart: tempo
+        profile: minimal
+      - chart: alloy
+        profile: telemetry
+      - chart: grafana
+        profile: with-deps
+      - chart: pyrra
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: dashboards-loaded
+        type: helm-test
+        description: Verify each dashboard ConfigMap is created with the sidecar label and that the Grafana sidecar discovers them.
+    timeout: 30m
+
+  prototyping:
+    description: dev-stack plus service mesh (istio-base/istiod/istio-gateway, cert-manager) and L3/L4 observability (cilium, inspektor-gadget). Full-fat profile for iterating on mesh, networking, and eBPF dashboards end-to-end.
+    namespace: observability
+    requires:
+      - chart: cert-manager
+        profile: minimal
+      - chart: cilium
+        profile: minimal
+      - chart: prometheus-operator
+        profile: minimal
+      - chart: kube-state-metrics
+        profile: minimal
+      - chart: node-exporter
+        profile: minimal
+      - chart: istio-base
+        profile: minimal
+      - chart: istiod
+        profile: minimal
+      - chart: istio-gateway
+        profile: minimal
+      - chart: mimir-distributed
+        profile: minimal
+      - chart: loki
+        profile: minimal
+      - chart: tempo
+        profile: minimal
+      - chart: alloy
+        profile: telemetry
+      - chart: grafana
+        profile: with-deps
+      - chart: pyrra
+        profile: minimal
+      - chart: inspektor-gadget
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: dashboards-loaded
+        type: helm-test
+        description: Verify dashboards land in Grafana with the full mesh + CNI + telemetry stack underneath them.
+    timeout: 45m
+
+reverseTests: []

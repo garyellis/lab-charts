@@ -1,0 +1,277 @@
+{
+  "title": "Linux Network Stack - Packet Drops",
+  "uid": "linux-network-drops",
+  "description": "Per-reason packet drop analysis sourced from Cloudflare ebpf_exporter's kfree_skb_reason probe. NOTE: ebpf_exporter is not yet deployed in this repo; panels will be empty until that exporter is added.",
+  "tags": ["ebpf", "networking", "drops"],
+  "schemaVersion": 38,
+  "version": 2,
+  "editable": true,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "label": "Datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "Tracks `kfree_skb_reason()` -- the kernel hook called whenever an SKB is dropped, tagged with a `SKB_DROP_REASON_*` enum code.\n\nCommon reasons: `NO_SOCKET` (2) traffic to a closed port; `SOCKET_BACKLOG` (17) accept queue full / app not draining; `PKT_TOO_SMALL` (33) malformed frame; `TCP_INVALID_SEQUENCE` (35) reordering or loss.\n\nAll rates use `$__rate_interval`. Use the table panel and the per-reason tooltips to drill into individual codes."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Total Packet Drop Rate",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "spanNulls": false
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_packet_drops[$__rate_interval]))",
+          "legendFormat": "total drops/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Current Drop Rate",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 4, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 100}
+            ]
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_packet_drops[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Drops (last 1h)",
+      "description": "Count of drops in the trailing 1h window. Bounded so it is meaningful regardless of exporter uptime.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 18, "y": 4, "w": 6, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(ebpf_exporter_packet_drops[1h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "Drop Distribution by Reason (current window)",
+      "description": "Share of drops attributed to each SKB_DROP_REASON_* code over the dashboard time range.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]},
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"]
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(ebpf_exporter_packet_drops[$__range]))",
+          "legendFormat": "Reason {{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Drop Reasons Over Time (stacked)",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 12, "w": 24, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 50,
+            "spanNulls": false,
+            "stacking": {"mode": "normal"}
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "max"]}
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(ebpf_exporter_packet_drops[$__rate_interval]))",
+          "legendFormat": "Reason {{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Drops by Reason (last 1h)",
+      "description": "Ranked table of drop counts per reason code in the trailing 1h window. Sort descending to find dominant causes.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"align": "auto"}
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Value"},
+            "properties": [
+              {"id": "custom.width", "value": 140}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [{"displayName": "Total Drops (1h)", "desc": true}]
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(ebpf_exporter_packet_drops[1h]))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true},
+            "renameByName": {"reason": "Drop Reason Code", "Value": "Total Drops (1h)"}
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "NO_SOCKET Drops (reason 2)",
+      "description": "Drops from packets destined to a port with no listener. Spikes often indicate a service down, a misrouted client, or a port scan. Check `ss -tuln` and recent service restarts.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 0, "y": 28, "w": 12, "h": 6},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic", "fixedColor": "red"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "single"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_packet_drops{reason=\"2\"}[$__rate_interval]))",
+          "legendFormat": "NO_SOCKET drops/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "PKT_TOO_SMALL Drops (reason 33)",
+      "description": "Drops from packets smaller than the protocol header requires. Usually indicates link-level corruption, broken middleboxes, or hostile traffic.",
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"x": 12, "y": 28, "w": 12, "h": 6},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic", "fixedColor": "orange"},
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80
+          },
+          "unit": "cps"
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "single"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ebpf_exporter_packet_drops{reason=\"33\"}[$__rate_interval]))",
+          "legendFormat": "malformed packets/sec",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

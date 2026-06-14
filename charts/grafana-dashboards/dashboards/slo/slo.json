@@ -1,0 +1,495 @@
+{
+  "title": "Service Level Objectives (SLO) - GPU Inference Service",
+  "uid": "slo-gpu-inference",
+  "description": "Production SLO tracking with error budgets and multi-window burn-rate panels. Availability target: 99.5% non-5xx. Latency target: p95 < 200ms.\n\nReference: Google SRE Workbook ch. 5 (multi-window, multi-burn-rate alerting). SLI = what you measure, SLO = the target, error budget = (1 - SLO) * total events, burn rate = (1 - SLI) / (1 - SLO).\n\nTODO (deferred Pyrra migration): (1) replace inline error-ratio expressions with Pyrra-generated recording rules slo:sli_error:ratio_rate5m / 1h / 6h / 24h / 3d / 30d, (2) externalize the hardcoded 0.995 target via a Pyrra ServiceLevelObjective CR, (3) replace the local burn-rate panel with Pyrra-generated alerts and use this dashboard purely for visualization.",
+  "tags": ["slo", "sli", "reliability", "beyla"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "30s",
+  "editable": true,
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {"selected": false, "text": "Prometheus", "value": "prometheus"},
+        "hide": 0,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "definition": "label_values(http_server_requests_total, service)",
+        "query": {"query": "label_values(http_server_requests_total, service)", "refId": "StandardVariableQuery"},
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "sort": 1,
+        "hide": 0,
+        "skipUrlSync": false,
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read this dashboard",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "**Availability SLO:** 99.5% of requests are non-5xx (rolling 30d). **Latency SLO:** p95 < 200ms.\n\n**Error budget** = (1 - SLO) of total requests. At 99.5% that is 0.5% -- about 3.6h/month of allowed badness.\n\n**Burn rate** = (1 - SLI) / (1 - SLO). 1.0 = on pace, 14.4 = will exhaust 30d budget in 2h.\n\n**Multi-window alerting (Google SRE):** page on (1h burn > 14.4 AND 5m burn > 14.4), ticket on (6h > 6 AND 30m > 6), aware on (24h > 3 AND 2h > 3) and (3d > 1 AND 6h > 1)."
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Current SLO status",
+      "gridPos": {"x": 0, "y": 4, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Availability SLI (target 99.5%)",
+      "gridPos": {"x": 0, "y": 5, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 99.0},
+              {"color": "green", "value": 99.5}
+            ]
+          },
+          "unit": "percent",
+          "min": 98,
+          "max": 100
+        }
+      },
+      "options": {"showThresholdLabels": true, "showThresholdMarkers": true},
+      "targets": [
+        {
+          "expr": "(\n  sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[$__rate_interval]))\n  /\n  sum(rate(http_server_requests_total{service=~\"$service\"}[$__rate_interval]))\n) * 100",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "Latency SLI p95 (target < 200ms)",
+      "gridPos": {"x": 8, "y": 5, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Green up to 150ms (75% of latency budget consumed). Yellow 150-200ms. Red at or above the 200ms SLO target.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.15},
+              {"color": "red", "value": 0.2}
+            ]
+          },
+          "unit": "s",
+          "min": 0,
+          "max": 0.3
+        }
+      },
+      "options": {"showThresholdLabels": true, "showThresholdMarkers": true},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{service=~\"$service\"}[$__rate_interval])))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Request rate",
+      "gridPos": {"x": 16, "y": 5, "w": 8, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}},
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_total{service=~\"$service\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Error budget",
+      "gridPos": {"x": 0, "y": 11, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Error budget remaining (30d)",
+      "gridPos": {"x": 0, "y": 12, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 25},
+              {"color": "green", "value": 50}
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "(\n  1 - (\n    (1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[30d])) / sum(rate(http_server_requests_total{service=~\"$service\"}[30d]))))\n    /\n    (1 - 0.995)\n  )\n) * 100",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Burn rate (1h)",
+      "gridPos": {"x": 6, "y": 12, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 6},
+              {"color": "red", "value": 14.4}
+            ]
+          },
+          "unit": "none",
+          "decimals": 2
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "(\n  (1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[1h])) / sum(rate(http_server_requests_total{service=~\"$service\"}[1h]))))\n  /\n  (1 - 0.995)\n)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Error budget remaining over time (30d window)",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20},
+          "unit": "percent"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Budget remaining"},
+            "properties": [
+              {"id": "custom.fillOpacity", "value": 30},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byRegexp", "options": "Threshold.*"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+              {"id": "custom.fillOpacity", "value": 0}
+            ]
+          }
+        ]
+      },
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "(\n  1 - (\n    (1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[30d])) / sum(rate(http_server_requests_total{service=~\"$service\"}[30d]))))\n    /\n    (1 - 0.995)\n  )\n) * 100",
+          "legendFormat": "Budget remaining",
+          "refId": "A"
+        },
+        {"expr": "50", "legendFormat": "Threshold 50%", "refId": "B"},
+        {"expr": "25", "legendFormat": "Threshold 25%", "refId": "C"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Failed requests (last 1h)",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 100}
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(http_server_requests_total{service=~\"$service\", http_status_code=~\"5..\"}[1h]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Multi-window burn rate",
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Burn rate by window (1h / 6h / 24h / 3d)",
+      "gridPos": {"x": 0, "y": 21, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Burn rate = (1 - SLI) / (1 - 0.995). Reference dashed lines mark the Google SRE multi-burn alert thresholds for a 99.5% SLO: 14.4 (page, 1h), 6 (ticket, 6h), 3 (24h), 1 (3d).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 5},
+          "unit": "none",
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byRegexp", "options": "Threshold.*"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+              {"id": "custom.fillOpacity", "value": 0}
+            ]
+          }
+        ]
+      },
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom", "values": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[1h])) / sum(rate(http_server_requests_total{service=~\"$service\"}[1h])))) / (1 - 0.995)",
+          "legendFormat": "1h",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[6h])) / sum(rate(http_server_requests_total{service=~\"$service\"}[6h])))) / (1 - 0.995)",
+          "legendFormat": "6h",
+          "refId": "B"
+        },
+        {
+          "expr": "(1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[1d])) / sum(rate(http_server_requests_total{service=~\"$service\"}[1d])))) / (1 - 0.995)",
+          "legendFormat": "24h",
+          "refId": "C"
+        },
+        {
+          "expr": "(1 - (sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[3d])) / sum(rate(http_server_requests_total{service=~\"$service\"}[3d])))) / (1 - 0.995)",
+          "legendFormat": "3d",
+          "refId": "D"
+        },
+        {"expr": "14.4", "legendFormat": "Threshold page (14.4)", "refId": "E"},
+        {"expr": "6", "legendFormat": "Threshold ticket (6)", "refId": "F"},
+        {"expr": "3", "legendFormat": "Threshold 24h (3)", "refId": "G"},
+        {"expr": "1", "legendFormat": "Threshold 3d (1)", "refId": "H"}
+      ]
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "SLI detail",
+      "gridPos": {"x": 0, "y": 29, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Availability SLI over time (target 99.5%)",
+      "gridPos": {"x": 0, "y": 30, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20},
+          "unit": "percent",
+          "min": 98,
+          "max": 100
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "SLO target"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
+              {"id": "custom.fillOpacity", "value": 0}
+            ]
+          }
+        ]
+      },
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "(\n  sum(rate(http_server_requests_total{service=~\"$service\", http_status_code!~\"5..\"}[$__rate_interval]))\n  /\n  sum(rate(http_server_requests_total{service=~\"$service\"}[$__rate_interval]))\n) * 100",
+          "legendFormat": "Availability",
+          "refId": "A"
+        },
+        {"expr": "99.5", "legendFormat": "SLO target", "refId": "B"}
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Latency percentiles (target p95 < 200ms)",
+      "gridPos": {"x": 12, "y": 30, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10},
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "SLO target (200ms)"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
+              {"id": "custom.fillOpacity", "value": 0}
+            ]
+          }
+        ]
+      },
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_request_duration_seconds_bucket{service=~\"$service\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{service=~\"$service\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{service=~\"$service\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        },
+        {"expr": "0.2", "legendFormat": "SLO target (200ms)", "refId": "D"}
+      ]
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Error analysis",
+      "gridPos": {"x": 0, "y": 38, "w": 24, "h": 1},
+      "collapsed": false
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Request rate by status code",
+      "gridPos": {"x": 0, "y": 39, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 30, "stacking": {"mode": "normal"}},
+          "unit": "reqps"
+        }
+      },
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom", "values": ["value", "percent"]}},
+      "targets": [
+        {
+          "expr": "sum by (http_status_code) (rate(http_server_requests_total{service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{http_status_code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "5xx error ratio",
+      "gridPos": {"x": 12, "y": 39, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.001},
+              {"color": "red", "value": 0.005}
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_total{service=~\"$service\", http_status_code=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_requests_total{service=~\"$service\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

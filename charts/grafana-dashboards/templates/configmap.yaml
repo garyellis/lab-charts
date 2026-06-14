@@ -1,0 +1,54 @@
+{{- /*
+Render one ConfigMap per dashboard JSON found under dashboards/**.
+The Grafana sidecar (kiwigrid/k8s-sidecar) discovers these via the
+`{{ .Values.sidecar.label }}` label and assigns each dashboard to a
+Grafana folder based on the value of the `grafana_folder` label
+(controlled by sidecar.dashboards.folderAnnotation on the Grafana chart).
+
+Folder precedence (highest first):
+  1. .Values.dashboardFolder           -- global override across ALL dashboards
+  2. parent directory of the JSON file -- e.g. dashboards/platform/foo.json -> "Platform"
+  3. (none)                            -- falls into Grafana's General folder
+
+ConfigMap name is derived from the JSON basename only, so directory
+restructuring does not change resource names (and therefore does not
+trigger churn on existing releases).
+*/}}
+{{- range $path, $_ := $.Files.Glob "dashboards/**/*.json" }}
+{{- $base := base $path | trimSuffix ".json" }}
+{{- $dir := dir $path | base }}
+{{- $folder := "" }}
+{{- if $.Values.dashboardFolder }}
+  {{- $folder = $.Values.dashboardFolder }}
+{{- else if ne $dir "dashboards" }}
+  {{- if eq $dir "slo" }}
+    {{- $folder = "SLO" }}
+  {{- else }}
+    {{- $folder = $dir | title }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "grafana-dashboard-%s" $base }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{ $.Values.sidecar.label }}: {{ $.Values.sidecar.labelValue | quote }}
+    app.kubernetes.io/name: {{ $.Chart.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    {{- if $folder }}
+    grafana_folder: {{ $folder | quote }}
+    {{- end }}
+    {{- with $.Values.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    meta.helm.sh/release-name: {{ $.Release.Name }}
+    meta.helm.sh/release-namespace: {{ $.Release.Namespace }}
+data:
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}

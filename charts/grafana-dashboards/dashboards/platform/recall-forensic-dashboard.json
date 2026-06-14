@@ -1,0 +1,499 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "description": "Per-node USE (Utilization, Saturation, Errors) view with PSI as the leading saturation signal. Designed as a forensic / triage board: top-down read goes CPU -> memory -> I/O -> network -> sockets -> pressure.",
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "panels": [],
+      "title": "CPU & Scheduling",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "1-minute load average per node. Compare against logical CPU count for saturation.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+      "id": 2,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "node_load1{instance=~\"$node\"}",
+          "legendFormat": "load1 - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "System load (1m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Context switches per second. Elevated values often correlate with scheduler contention or excessive thread wakeups.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+      "id": 3,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_context_switches_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "ctx-sw - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Context switches",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+      "id": 4,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_intr_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "intr - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Hardware interrupts",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "id": 5,
+      "panels": [],
+      "title": "Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Major page faults per second. Sustained non-zero values indicate the working set exceeds RAM and the kernel is paging from disk.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "id": 6,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_vmstat_pgmajfault{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "major faults - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Major page faults",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "MemAvailable / MemTotal. The kernel's own estimate of how much memory is reclaimable for new workloads without swapping.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "id": 7,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "node_memory_MemAvailable_bytes{instance=~\"$node\"} / node_memory_MemTotal_bytes{instance=~\"$node\"}",
+          "legendFormat": "available - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory available ratio",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+      "id": 8,
+      "panels": [],
+      "title": "I/O & Storage",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Fraction of CPU time spent waiting on I/O. iowait / total CPU time across all modes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 19},
+      "id": 9,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate(node_cpu_seconds_total{instance=~\"$node\", mode=\"iowait\"}[$__rate_interval])) / sum by (instance) (rate(node_cpu_seconds_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "iowait - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU iowait ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Used / size on the root filesystem (mountpoint=/). Watch for slow climbs that precede ENOSPC events.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 19},
+      "id": 10,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "1 - (node_filesystem_avail_bytes{instance=~\"$node\", mountpoint=\"/\", fstype!=\"tmpfs\"} / node_filesystem_size_bytes{instance=~\"$node\", mountpoint=\"/\", fstype!=\"tmpfs\"})",
+          "legendFormat": "/ used - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Root filesystem used ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 27},
+      "id": 11,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate(node_disk_read_bytes_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "read - {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance) (rate(node_disk_written_bytes_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "write - {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Disk throughput",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "id": 12,
+      "panels": [],
+      "title": "Network",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "id": 13,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate(node_network_receive_bytes_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "rx - {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance) (rate(node_network_transmit_bytes_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "tx - {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Network bandwidth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "NIC-reported drops and errors. Non-zero values indicate a hardware, ring-buffer, or qdisc problem.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "pps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "id": 14,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate(node_network_receive_drop_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "drop - {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance) (rate(node_network_receive_errs_total{instance=~\"$node\"}[$__rate_interval]))",
+          "legendFormat": "err - {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Network drops & errors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "id": 15,
+      "panels": [],
+      "title": "Process & Sockets",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 45},
+      "id": 16,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "node_sockstat_TCP_alloc{instance=~\"$node\"}",
+          "legendFormat": "tcp alloc - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "TCP sockets allocated",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 45},
+      "id": 17,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "node_filefd_allocated{instance=~\"$node\"}",
+          "legendFormat": "fd - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "File descriptors allocated",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Conntrack table fill ratio. Approaching 1.0 produces silent packet drops on connection setup.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 45},
+      "id": 18,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "node_nf_conntrack_entries{instance=~\"$node\"} / node_nf_conntrack_entries_limit{instance=~\"$node\"}",
+          "legendFormat": "conntrack used - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Conntrack table fill",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53},
+      "id": 19,
+      "panels": [],
+      "title": "Pressure (PSI)",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Fraction of wall time at least one task was stalled on CPU. Leading indicator of CPU saturation before runqueue length spikes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 54},
+      "id": 20,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_pressure_cpu_waiting_seconds_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "cpu psi - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU pressure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Fraction of wall time tasks were stalled on memory reclaim. Sustained values predict OOM and major-fault thrashing.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 54},
+      "id": 21,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_pressure_memory_waiting_seconds_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "mem psi - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory pressure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Fraction of wall time tasks were stalled on I/O. Pairs with iowait but catches stalls iowait misses (e.g. single-threaded blocking).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 54},
+      "id": 22,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "expr": "rate(node_pressure_io_waiting_seconds_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "io psi - {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "I/O pressure",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["node", "psi", "kubernetes", "learning", "use"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "Prometheus", "value": "prometheus"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "definition": "label_values(node_uname_info, instance)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": true,
+        "name": "node",
+        "options": [],
+        "query": {"query": "label_values(node_uname_info, instance)", "refId": "StandardVariableQuery"},
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Linux Node - USE/PSI Overview",
+  "uid": "recall-forensic",
+  "version": 3,
+  "weekStart": ""
+}

@@ -1,0 +1,27 @@
+# grafana-dashboards/values.yaml
+# Custom dashboard deployment configuration
+
+# Sidecar label configuration (must match Grafana sidecar settings)
+sidecar:
+  # Label that Grafana sidecar watches for
+  label: grafana_dashboard
+  # Value of the label (typically "1" or empty string)
+  labelValue: "1"
+
+# Folder assignment for dashboards in Grafana.
+#
+# Precedence (highest first):
+#   1. dashboardFolder (this value, when non-empty) -- applies to ALL dashboards
+#   2. Parent directory of the JSON file under dashboards/
+#        dashboards/platform/foo.json   -> "Platform"
+#        dashboards/networking/bar.json -> "Networking"
+#        dashboards/slo/baz.json        -> "SLO"
+#   3. (unset) -- Grafana's General folder
+#
+# Leave empty to use the per-directory mapping.
+dashboardFolder: ""
+
+# Additional labels to apply to all dashboard ConfigMaps
+additionalLabels: {}
+  # team: platform
+  # component: observability

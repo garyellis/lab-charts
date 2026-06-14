@@ -1,0 +1,8 @@
+---
+# kind / CI overrides for grafana-dashboards. Layered on top of values.yaml.
+# This chart only renders ConfigMaps from dashboards/*.json so kind defaults
+# already work; keep this file as a parity placeholder and a home for future
+# kind-specific tweaks (e.g. additionalLabels, dashboardFolder per profile).
+sidecar:
+  label: grafana_dashboard
+  labelValue: "1"
