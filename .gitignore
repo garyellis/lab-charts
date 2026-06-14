@@ -1,0 +1,46 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+
+# Python packaging and coverage output
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv local cache, if configured in the repo
+.uv-cache/
+
+# Helm dependency artifacts
+charts/*/charts/*.tgz
+charts/*/charts/*.tar.gz
+charts/*/charts/*/
+
+# Local/editor artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+*.log
