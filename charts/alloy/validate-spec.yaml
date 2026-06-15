@@ -1,0 +1,31 @@
+version: 1
+release_name: alloy
+namespace_template: "lab-${env}"
+environments:
+  dev:
+    values:
+      - values.yaml
+      - values-dev.yaml
+  test:
+    values:
+      - values.yaml
+      - values-test.yaml
+  uat:
+    values:
+      - values.yaml
+      - values-uat.yaml
+  prod:
+    values:
+      - values.yaml
+      - values-prod.yaml
+  ci:
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "values.yaml":      [dev, test, uat, prod, ci]
+  "values-dev.yaml":  [dev]
+  "values-test.yaml": [test]
+  "values-uat.yaml":  [uat]
+  "values-prod.yaml": [prod]
+  "values-ci.yaml":   [ci]

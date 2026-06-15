@@ -1,0 +1,24 @@
+{
+  "resources": [
+    {
+      "filename": "/tmp/kc-fixtures/violator/schema-violator/templates/deployment.yaml",
+      "kind": "Deployment",
+      "name": "violator",
+      "version": "apps/v1",
+      "status": "statusInvalid",
+      "msg": "problem validating schema. Check JSON formatting: jsonschema validation failed with 'https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/master-standalone-strict/deployment-apps-v1.json#' - at '/spec/replicas': got string, want null or integer",
+      "validationErrors": [
+        {
+          "path": "/spec/replicas",
+          "msg": "got string, want null or integer"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "valid": 0,
+    "invalid": 1,
+    "errors": 0,
+    "skipped": 0
+  }
+}

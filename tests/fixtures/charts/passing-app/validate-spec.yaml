@@ -1,0 +1,9 @@
+version: 1
+release_name: passing-app
+environments:
+  dev:
+    namespace: lab-dev
+    values:
+      - values.yaml
+triggers:
+  "values.yaml": [dev]

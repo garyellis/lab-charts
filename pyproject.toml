@@ -18,6 +18,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-PyYAML>=6.0",
+  "vulture>=2.13",
+  "pip-audit>=2.7",
 ]
 
 [project.scripts]
@@ -29,3 +34,115 @@ packages = ["src/chart_manager"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["integration: requires helm/kubeconform/conftest on PATH"]
+addopts = "-m 'not integration'"
+
+# Line length 100 instead of default 88: the existing codebase has many
+# lines in the 89-100 range that would be high-churn to rewrap during a
+# polish pass. Format-on-save can tighten this later if desired.
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use `assert` (the whole point), frequently bind unused
+# loop variables in parametrize patterns, and embed long fixture-string
+# literals/long stub signatures that don't benefit from rewrapping.
+"tests/**/*.py" = ["S101", "B011", "E501"]
+# Typer CLI modules: `list[X] = []` is the documented typer pattern for
+# repeatable options (B006), and `help=` strings for --options regularly
+# exceed line length (E501). Both are local to argument declarations.
+"src/chart_manager/cli/*.py" = ["B006", "E501"]
+
+[tool.ruff.format]
+# Defaults: double-quote, 4-space indent, LF endings.
+# Configured for future format runs; not auto-applied in this pass.
+
+# Mypy: strict=false to start. Tightens are tracked separately;
+# this is the initial baseline.
+[tool.mypy]
+python_version = "3.12"
+strict = false
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_any_generics = true
+plugins = ["pydantic.mypy"]
+
+# pip-audit: dependency vulnerability scanner (PyPA).
+#
+# pip-audit (as of 2.10) reads configuration ONLY from CLI flags — it does
+# NOT read [tool.pip-audit] from pyproject.toml. Run via the `vuln-scan`
+# mise task (.mise.toml) or directly:
+#
+#   uv run pip-audit --skip-editable
+#
+# Flag rationale:
+#   --skip-editable
+#       The local `chart-manager` package is installed editable and is not
+#       on PyPI, so it cannot be audited. Skipping it is correct; without
+#       this flag pip-audit emits a "Dependency not found on PyPI" skip
+#       row (still exits 0, but noisy).
+#
+# Note on `--strict`: that flag only escalates *collection* failures (e.g.
+# packages missing from PyPI) to a non-zero exit. It does NOT change how
+# vulnerability findings are handled — pip-audit always exits non-zero on
+# any vulnerability regardless of `--strict`. Combining `--strict` with
+# `--skip-editable` is actively wrong here: the skipped editable package
+# is treated as a collection failure under `--strict`.
+#
+# Ignored vulnerabilities: none currently. If a no-fix-available CVE
+# surfaces, add `--ignore-vuln GHSA-xxxx-xxxx-xxxx` to the mise task with
+# a comment naming the upstream tracking issue and a revisit date.
+
+[tool.vulture]
+# Dead-code detection. min_confidence=80 keeps signal high; lower thresholds
+# (60/70) produce many framework/decorator false positives (typer command
+# bodies, pydantic field aliases) that are not worth triaging by hand.
+paths = ["src/chart_manager", "tests"]
+min_confidence = 80
+sort_by_size = true
+ignore_decorators = [
+  "@app.command",
+  "@*_app.command",
+  "@typer.command",
+  "@register",
+  "@pytest.fixture",
+  "@pytest.mark.*",
+  "@model_validator",
+  "@field_validator",
+]
+ignore_names = [
+  # pytest convention
+  "test_*",
+  "fixture_*",
+  "setup_*",
+  "teardown_*",
+  # pydantic / dataclass internals
+  "model_config",
+  "model_validator",
+  "model_validate",
+  # typer entry-point conventions
+  "main",
+  "callback",
+  # pydantic `@field_validator` + `@classmethod` requires `cls` in the
+  # signature; vulture sees the unreferenced local but the descriptor
+  # protocol needs it.
+  "cls",
+]
+
+[[tool.mypy.overrides]]
+# Test code is annotated lightly: many fixtures use bare `dict` and the
+# JSON renderer tests treat the result as `dict[str, Any]`. Relax the
+# stricter checks here rather than forcing exhaustive annotations on
+# tests that are clearer without them. The `test_*` glob targets the
+# pytest module names; `tests.*` covers the integration subpackage.
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+disallow_any_generics = false
+disable_error_code = ["misc", "index", "operator", "arg-type", "unused-ignore"]

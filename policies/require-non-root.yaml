@@ -1,0 +1,92 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-non-root
+  annotations:
+    policies.kyverno.io/title: Require Non-Root Containers
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      All pod containers must set securityContext.runAsNonRoot=true (pod-level
+      or per-container), across Pod, Deployment, StatefulSet, DaemonSet, Job,
+      and CronJob (CronJob handled by a separate rule because its pod template
+      is nested at spec.jobTemplate.spec.template).
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: containers-must-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - Job
+                - ReplicaSet
+      validate:
+        message: >-
+          containers must set securityContext.runAsNonRoot=true (pod-level or
+          per-container)
+        anyPattern:
+          - spec:
+              template:
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+          - spec:
+              template:
+                spec:
+                  containers:
+                    - (name): "*"
+                      securityContext:
+                        runAsNonRoot: true
+    - name: pod-must-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          containers must set securityContext.runAsNonRoot=true (pod-level or
+          per-container)
+        anyPattern:
+          - spec:
+              securityContext:
+                runAsNonRoot: true
+          - spec:
+              containers:
+                - (name): "*"
+                  securityContext:
+                    runAsNonRoot: true
+    - name: cronjob-must-run-as-non-root
+      # CronJob nests the pod template at spec.jobTemplate.spec.template,
+      # requiring a dedicated rule rather than reusing the controller pattern.
+      match:
+        any:
+          - resources:
+              kinds:
+                - CronJob
+      validate:
+        message: >-
+          containers must set securityContext.runAsNonRoot=true (pod-level or
+          per-container)
+        anyPattern:
+          - spec:
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      securityContext:
+                        runAsNonRoot: true
+          - spec:
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      containers:
+                        - (name): "*"
+                          securityContext:
+                            runAsNonRoot: true

@@ -44,3 +44,6 @@ charts/*/charts/*/
 *.orig
 *~
 *.log
+
+# chart-manager validate render output
+.chart-manager/

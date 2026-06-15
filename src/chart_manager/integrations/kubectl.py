@@ -6,8 +6,9 @@ import signal
 import socket
 import subprocess
 import time
-from contextlib import contextmanager
-from typing import IO, Iterator, Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, suppress
+from typing import IO
 
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError
@@ -106,43 +107,13 @@ class Kubectl:
             yield local_port
         finally:
             if proc.poll() is None:
-                try:
+                with suppress(ProcessLookupError):
                     os.kill(proc.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
-
-
-def _pick_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_for_local_port(
-    proc: subprocess.Popen[bytes],
-    port: int,
-    timeout: float,
-    poll_interval: float,
-) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise ChartManagerError(
-                f"kubectl port-forward exited before binding (rc={proc.returncode})"
-            )
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(poll_interval)
-    raise ChartManagerError(
-        f"kubectl port-forward did not bind 127.0.0.1:{port} within {timeout:.0f}s"
-    )
 
     def create_namespace(self, namespace: str) -> None:
         self.runner.run(["kubectl", "create", "namespace", namespace], check=False)
@@ -175,3 +146,31 @@ def _wait_for_local_port(
             result = self.runner.run(args, check=False)
             sections.append(f"## {title}\n{result.stdout}{result.stderr}")
         return "\n\n".join(sections)
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_local_port(
+    proc: subprocess.Popen[bytes],
+    port: int,
+    timeout: float,
+    poll_interval: float,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise ChartManagerError(
+                f"kubectl port-forward exited before binding (rc={proc.returncode})"
+            )
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(poll_interval)
+    raise ChartManagerError(
+        f"kubectl port-forward did not bind 127.0.0.1:{port} within {timeout:.0f}s"
+    )

@@ -1,0 +1,29 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: forbid-load-balancer
+  annotations:
+    policies.kyverno.io/title: Forbid LoadBalancer Services
+    policies.kyverno.io/category: Networking
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Services must not use type LoadBalancer. Lab clusters expose traffic via
+      the shared ingress gateway; LoadBalancer services bypass that path and
+      allocate cloud resources that are not budgeted for here.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: service-type-not-load-balancer
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      validate:
+        message: "Service type LoadBalancer is not allowed"
+        pattern:
+          spec:
+            # `!LoadBalancer` is kyverno's negated-string operator — matches
+            # any value other than the literal "LoadBalancer".
+            type: "!LoadBalancer"

@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -158,10 +159,8 @@ class ExposeService:
             time.sleep(poll_interval)
         else:
             # All ports never bound in time. Kill the child so we don't leak.
-            try:
+            with suppress(ProcessLookupError):
                 os.kill(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
             output = log_file.read_text().strip()
             raise ChartManagerError(
                 f"port-forward did not become ready within {readiness_timeout:.0f}s\n{output}"

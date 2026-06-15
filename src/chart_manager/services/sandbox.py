@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from rich.console import Console
 
@@ -20,7 +20,7 @@ DEFAULT_PROFILE = "minimal"
 
 
 @dataclass(frozen=True)
-class KindTestOptions:
+class SandboxOptions:
     chart: str
     profile: str = DEFAULT_PROFILE
     namespace: str = DEFAULT_NAMESPACE
@@ -41,7 +41,7 @@ CILIUM_BOOTSTRAP_TIMEOUT = "10m"
 KIND_CONFIG_FILENAME = "kind-config.yaml"
 
 
-class KindTestService:
+class SandboxService:
     def __init__(
         self,
         root: Path,
@@ -59,9 +59,9 @@ class KindTestService:
         self.kubectl = kubectl or Kubectl()
         self.console = console or Console()
 
-    def run(self, options: KindTestOptions) -> None:
+    def run(self, options: SandboxOptions) -> None:
         if options.ensure_cluster:
-            self.console.print(f"[bold]Ensuring kind cluster[/bold] {options.cluster_name}")
+            self.console.print(f"[bold]Ensuring sandbox cluster[/bold] {options.cluster_name}")
             kind_config = self.root / KIND_CONFIG_FILENAME
             self.kind.ensure_cluster(
                 options.cluster_name,
@@ -87,7 +87,7 @@ class KindTestService:
 
     def _bootstrap_cilium(
         self,
-        options: KindTestOptions,
+        options: SandboxOptions,
         installed: set[str],
         namespaces_created: set[str],
         *,
@@ -138,7 +138,7 @@ class KindTestService:
     def _install_plan(
         self,
         plan: list[PlanEntry],
-        options: KindTestOptions,
+        options: SandboxOptions,
         installed: set[str],
         namespaces_created: set[str],
         *,

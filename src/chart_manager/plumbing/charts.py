@@ -11,7 +11,7 @@ from chart_manager.plumbing.spec import TestSpec, load_test_spec, load_yaml_file
 class Chart:
     name: str
     path: Path
-    chart_yaml: dict
+    chart_yaml: dict[str, object]
     spec: TestSpec
 
 
@@ -38,7 +38,9 @@ class ChartRepository:
         chart_yaml = load_yaml_file(chart_yaml_path)
         chart_name = chart_yaml.get("name")
         if chart_name != name:
-            raise SpecError(f"{chart_yaml_path} name '{chart_name}' does not match directory '{name}'")
+            raise SpecError(
+                f"{chart_yaml_path} name '{chart_name}' does not match directory '{name}'"
+            )
         return Chart(
             name=name,
             path=path,

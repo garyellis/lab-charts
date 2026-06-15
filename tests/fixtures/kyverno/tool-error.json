@@ -1,0 +1,2 @@
+{not valid json — simulated kyverno crash output
+panic: runtime error: invalid memory address or nil pointer dereference

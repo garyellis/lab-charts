@@ -3,7 +3,7 @@
 #
 # Shaped by cilium: this repo runs cilium as CNI with full kube-proxy
 # replacement, so the cluster is created with no default CNI and no
-# kube-proxy. Cilium is installed by `chart-manager kind test` before the
+# kube-proxy. Cilium is installed by `chart-manager sandbox test` before the
 # rest of the install plan runs -- nodes stay NotReady until then,
 # which is expected.
 #

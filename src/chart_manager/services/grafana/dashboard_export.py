@@ -99,7 +99,7 @@ def _http_get_dashboard(
     local_port: int, uid: str, user: str, password: str
 ) -> dict[str, Any]:
     url = f"http://127.0.0.1:{local_port}/api/dashboards/uid/{uid}"
-    creds = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    creds = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {creds}"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:

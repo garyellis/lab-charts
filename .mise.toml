@@ -4,6 +4,9 @@ uv = "0.11.7"
 helm = "4.1.3"
 kubectl = "1.35.3"
 kind = "latest"
+kubeconform = "0.8.0"
+kyverno = "1.18.1"
+conftest = "latest"
 
 [tasks.setup]
 description = "Install Python dependencies for the chart-manager CLI."
@@ -23,4 +26,32 @@ run = "uv run chart-manager deps plan \"$@\""
 
 [tasks.kind-test]
 description = "Run a kind-backed chart test. Usage: mise run kind-test -- alloy --profile minimal"
-run = "uv run chart-manager kind test \"$@\""
+run = "uv run chart-manager sandbox test \"$@\""
+
+[tasks.validate]
+description = "Run render + schema + policy. Usage: mise run validate -- --chart grafana --env dev"
+run = "uv run chart-manager validate run \"$@\""
+
+[tasks."validate:render"]
+description = "Render one chart x env via helm template. Usage: mise run validate:render -- --chart grafana --env dev"
+run = "uv run chart-manager validate render \"$@\""
+
+[tasks."validate:schema"]
+description = "Render then kubeconform-validate one chart x env."
+run = "uv run chart-manager validate schema \"$@\""
+
+[tasks."validate:policy"]
+description = "Render -> schema -> kyverno policy for one chart x env."
+run = "uv run chart-manager validate policy \"$@\""
+
+[tasks."validate:clean"]
+description = "Remove .chart-manager/rendered/ tree."
+run = "uv run chart-manager validate clean"
+
+[tasks."validate:deps-install"]
+description = "Install helm (default + alternates), kubeconform, kyverno, uv via mise. Per-tool failures downgrade to warnings."
+run = "uv run chart-manager validate deps-install"
+
+[tasks.vuln-scan]
+description = "Scan installed Python deps against PyPI's vulnerability database (pip-audit)."
+run = "uv run pip-audit --skip-editable"

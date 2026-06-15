@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -27,8 +28,8 @@ _SHORT_RATE = re.compile(
 )
 
 
-def _iter_panels(dash: dict) -> Iterable[dict]:
-    def walk(panels):
+def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    def walk(panels: Any) -> Iterable[dict[str, Any]]:
         for p in panels or []:
             yield p
             if p.get("type") == "row" and p.get("panels"):

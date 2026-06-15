@@ -1,0 +1,38 @@
+## validate
+
+| Chart | Env | Release | Render | Schema | Policy |
+|---|---|---|---|---|---|
+| grafana | dev | grafana | ✅ | ✅ | ✅ |
+| schema-violator | dev | schema-violator | ✅ | ❌ | ➖ |
+| future-app | dev | future-app | · | · | · |
+
+**3 rows · 1 passing · 1 failing · 1 skipped**
+
+### Failures
+
+<details><summary>schema-violator/dev — schema</summary>
+
+```
+Deployment/schema-violator (/abs/path/Deployment.yaml): at '/spec/replicas': got string, want null or integer
+```
+
+Artifacts:
+- `/abs/path/Deployment.yaml`
+
+</details>
+
+### Advisories
+
+<details><summary>grafana/dev — policy</summary>
+
+```
+warnings:
+require-non-root/audit: Pod/grafana: container runs as 0
+```
+
+</details>
+
+### Warnings
+
+- 1 spec error(s):
+  - charts/broken/validate-spec.yaml: unknown major version 99

@@ -1,0 +1,11 @@
+version: 1
+release_name: pyrra
+namespace_template: "lab-${env}"
+environments:
+  ci:
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "values.yaml":    [ci]
+  "values-ci.yaml": [ci]

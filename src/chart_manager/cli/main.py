@@ -9,18 +9,19 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from chart_manager.cli import validate as validate_cli
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.spec import CheckSpec
 from chart_manager.services.charts import ChartService
 from chart_manager.services.ci import CiService
 from chart_manager.services.dependencies import DependencyService
 from chart_manager.services.expose import ExposeRequest, ExposeService
-from chart_manager.services.kind_test import (
+from chart_manager.services.sandbox import (
     DEFAULT_CLUSTER_NAME,
     DEFAULT_NAMESPACE,
     DEFAULT_PROFILE,
-    KindTestOptions,
-    KindTestService,
+    SandboxOptions,
+    SandboxService,
 )
 
 console = Console()
@@ -28,17 +29,26 @@ console = Console()
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
 charts_app = typer.Typer(no_args_is_help=True, help="Inspect charts and test specs.")
 deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
-kind_app = typer.Typer(no_args_is_help=True, help="Run kind-backed chart tests.")
+sandbox_app = typer.Typer(
+    no_args_is_help=True,
+    help="Ephemeral sandbox cluster: bring up, deploy, exercise, tear down.",
+)
 ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
 # Grafana-specific subcommands. Anything that knows about Grafana JSON / API
 # conventions lives here, not under the generic `charts` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
+validate_app = typer.Typer(
+    no_args_is_help=True,
+    help="Static chart validation: render -> schema -> policy.",
+)
+validate_cli.register(validate_app)
 
 app.add_typer(charts_app, name="charts")
 app.add_typer(deps_app, name="deps")
-app.add_typer(kind_app, name="kind")
+app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
+app.add_typer(validate_app, name="validate")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="test-spec profile.")]
@@ -57,12 +67,13 @@ def list_charts(root: RootOption = Path(".")) -> None:
             table.add_row(name, "?", "?", "[red]<no test-spec>[/red]")
             continue
         version = chart.chart_yaml.get("version", "") or ""
-        deps = chart.chart_yaml.get("dependencies") or []
+        deps_raw = chart.chart_yaml.get("dependencies") or []
+        deps: list[dict[str, object]] = deps_raw if isinstance(deps_raw, list) else []
         dep_versions = ", ".join(
             f"{dep.get('name', '?')} {dep.get('version', '?')}" for dep in deps
         )
         profiles = ", ".join(chart.spec.profiles)
-        table.add_row(name, version, dep_versions, profiles)
+        table.add_row(name, str(version), dep_versions, profiles)
     console.print(table)
 
 
@@ -204,21 +215,37 @@ def reverse_tests(chart: str, root: RootOption = Path(".")) -> None:
     console.print(table)
 
 
-@kind_app.command("ensure")
+@sandbox_app.command("ensure")
 def ensure_kind(
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     root: RootOption = Path("."),
 ) -> None:
-    service = KindTestService(root)
+    service = SandboxService(root)
     kind_config = root.resolve() / "kind-config.yaml"
     service.kind.ensure_cluster(
         cluster_name,
         config=kind_config if kind_config.exists() else None,
     )
-    console.print(f"kind cluster ready: {cluster_name}")
+    console.print(f"sandbox cluster ready: {cluster_name}")
 
 
-@kind_app.command("expose")
+@sandbox_app.command("delete")
+def delete_kind(
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    root: RootOption = Path("."),
+) -> None:
+    service = SandboxService(root)
+    deleted = service.kind.delete_cluster(cluster_name)
+    stopped = ExposeService().stop(cluster_name)
+    if not deleted:
+        console.print(f"sandbox cluster not present: {cluster_name}")
+    else:
+        console.print(f"sandbox cluster deleted: {cluster_name}")
+    if stopped is not None:
+        console.print(f"stopped port-forward (pid {stopped})")
+
+
+@sandbox_app.command("expose")
 def kind_expose(
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     service: Annotated[
@@ -253,11 +280,11 @@ def kind_expose(
         scheme = "https" if remote in {"443", "8443"} else "http"
         console.print(f"  {scheme}://*.kind.local:{local}/  ->  {service}:{remote}")
     console.print(f"  log:  {status.log}")
-    console.print(f"  stop: chart-manager kind expose --cluster-name {cluster_name} --stop")
+    console.print(f"  stop: chart-manager sandbox expose --cluster-name {cluster_name} --stop")
 
 
-@kind_app.command("test")
-def kind_test(
+@sandbox_app.command("test")
+def sandbox_test(
     chart: str,
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
@@ -266,13 +293,13 @@ def kind_test(
     reverse: Annotated[bool, typer.Option("--reverse", help="Run reverse dependency tests.")] = False,
     no_ensure_cluster: Annotated[
         bool,
-        typer.Option("--no-ensure-cluster", help="Do not create the kind cluster if missing."),
+        typer.Option("--no-ensure-cluster", help="Do not create the sandbox cluster if missing."),
     ] = False,
     lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
 ) -> None:
-    service = KindTestService(root)
+    service = SandboxService(root)
     service.run(
-        KindTestOptions(
+        SandboxOptions(
             chart=chart,
             profile=profile,
             namespace=namespace,

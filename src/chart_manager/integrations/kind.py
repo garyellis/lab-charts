@@ -24,6 +24,12 @@ class Kind:
             args.extend(["--config", str(config)])
         self.runner.run(args, capture=False)
 
+    def delete_cluster(self, name: str) -> bool:
+        if name not in self.clusters():
+            return False
+        self.runner.run(["kind", "delete", "cluster", "--name", name], capture=False)
+        return True
+
     def control_plane_ip(self, name: str) -> str:
         # cilium replaces kube-proxy and needs the API server reachable
         # without a Service VIP. On kind the control-plane container's
