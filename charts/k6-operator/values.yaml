@@ -15,9 +15,11 @@ k6-operator:
   rbac:
     namespaced: false
 
-  # Let the chart create the release namespace.
+  # Don't template the Namespace -- helm's --create-namespace owns it.
+  # If the chart templates one too, helm refuses to adopt the pre-created
+  # namespace (missing app.kubernetes.io/managed-by + meta.helm.sh/* metadata).
   namespace:
-    create: true
+    create: false
 
   manager:
     replicas: 1
