@@ -2,8 +2,10 @@ version: 1
 
 profiles:
   minimal:
-    description: Install Grafana with CI-local values.
-    requires: []
+    description: Install Grafana with CI-local values. Requires istio-base for the VirtualService CRD.
+    requires:
+      - chart: istio-base
+        profile: minimal
     values:
       - values.yaml
       - values-ci.yaml
@@ -13,6 +15,8 @@ profiles:
   with-deps:
     description: Install Grafana with LGTM datasources available.
     requires:
+      - chart: istio-base
+        profile: minimal
       - chart: mimir-distributed
         profile: minimal
       - chart: loki
