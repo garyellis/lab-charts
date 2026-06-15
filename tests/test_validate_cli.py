@@ -114,17 +114,64 @@ def test_emit_all_prints_text_and_writes_summary_md_and_json(tmp_path: Path) -> 
     assert payload["summary"]["rows"] == 1
 
 
-def test_github_step_summary_always_written_even_in_text_mode(
+def test_github_step_summary_written_when_flag_passed_and_env_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     step_summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            github_step_summary=True,
+        )
     )
     assert step_summary.is_file()
     assert step_summary.read_text().startswith("## validate")
+
+
+def test_github_step_summary_not_written_when_flag_not_passed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opt-in semantics: env var alone must not trigger a write.
+
+    Asserts the removal of the previous auto-detect behavior — without
+    the explicit `--github-step-summary` flag the CLI must ignore the
+    env var entirely, so running locally on a runner-like shell never
+    surprise-writes to it.
+    """
+    step_summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+    _capture_stdout(
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            # github_step_summary defaults to False
+        )
+    )
+    assert not step_summary.exists()
+
+
+def test_github_step_summary_warns_when_flag_passed_but_env_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag asserts intent; missing env var should warn but not crash."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    output = _capture_stdout(
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            github_step_summary=True,
+        )
+    )
+    assert "GITHUB_STEP_SUMMARY" in output
+    assert "not set" in output
 
 
 def test_github_step_summary_appends_across_calls(
@@ -135,11 +182,21 @@ def test_github_step_summary_appends_across_calls(
     step_summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            github_step_summary=True,
+        )
     )
     first_len = step_summary.stat().st_size
     _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            github_step_summary=True,
+        )
     )
     assert step_summary.stat().st_size > first_len
 
@@ -156,9 +213,22 @@ def test_github_step_summary_unwritable_does_not_crash(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(bad_target))
     # Must not raise.
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(
+            _result(),
+            fmt="text",
+            out_dir=tmp_path / "out",
+            github_step_summary=True,
+        )
     )
     assert "could not write GITHUB_STEP_SUMMARY" in output
+
+
+@pytest.mark.parametrize("subcommand", ["render", "schema", "policy", "run"])
+def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["validate", subcommand, "--help"])
+    assert result.exit_code == 0
+    assert "--github-step-summary" in result.output
 
 
 def test_validate_format_rejects_unknown_value() -> None:

@@ -59,6 +59,19 @@ FormatOption = Annotated[
         help="Output format: text (default), md, json, or all.",
     ),
 ]
+GithubStepSummaryOption = Annotated[
+    bool,
+    typer.Option(
+        "--github-step-summary",
+        help=(
+            "Append the markdown summary to $GITHUB_STEP_SUMMARY. "
+            "Opt-in: without this flag the env var is ignored. "
+            "If the flag is set but the env var is unset, a warning is "
+            "printed and no file is written (so local invocations with "
+            "the flag don't fail)."
+        ),
+    ),
+]
 
 
 def _default_workers() -> int:
@@ -126,6 +139,7 @@ def render(
         typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
     ] = False,
     fmt: FormatOption = "text",
+    github_step_summary: GithubStepSummaryOption = False,
     root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
 ) -> None:
     """Render one chart x env via `helm template` and print a status row."""
@@ -161,7 +175,12 @@ def render(
 
     result = runner.run(configs)
 
-    _emit_result(result, fmt=fmt, out_dir=out_dir)
+    _emit_result(
+        result,
+        fmt=fmt,
+        out_dir=out_dir,
+        github_step_summary=github_step_summary,
+    )
 
     exit_code = result.exit_code()
     _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
@@ -239,6 +258,7 @@ def schema(
         typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
     ] = False,
     fmt: FormatOption = "text",
+    github_step_summary: GithubStepSummaryOption = False,
     root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
 ) -> None:
     """Render one chart x env then validate manifests with kubeconform."""
@@ -285,7 +305,12 @@ def schema(
 
     result = runner.run(configs)
 
-    _emit_result(result, fmt=fmt, out_dir=out_dir)
+    _emit_result(
+        result,
+        fmt=fmt,
+        out_dir=out_dir,
+        github_step_summary=github_step_summary,
+    )
 
     exit_code = result.exit_code()
     _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
@@ -366,6 +391,7 @@ def policy(
         typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
     ] = False,
     fmt: FormatOption = "text",
+    github_step_summary: GithubStepSummaryOption = False,
     root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
 ) -> None:
     """Render -> schema -> policy for one chart x env via kyverno."""
@@ -423,7 +449,12 @@ def policy(
 
     result = runner.run(configs)
 
-    _emit_result(result, fmt=fmt, out_dir=out_dir)
+    _emit_result(
+        result,
+        fmt=fmt,
+        out_dir=out_dir,
+        github_step_summary=github_step_summary,
+    )
 
     exit_code = result.exit_code()
     _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
@@ -543,6 +574,7 @@ def run(
         ),
     ] = 300.0,
     fmt: FormatOption = "text",
+    github_step_summary: GithubStepSummaryOption = False,
     root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
 ) -> None:
     """Build worklist from validate-spec.yaml + git, then run all phases.
@@ -676,6 +708,7 @@ def run(
         extra_warnings=tuple(build.warnings),
         timings=timings,
         verbose=verbose,
+        github_step_summary=github_step_summary,
     )
 
     if fmt in ("text", "all"):
@@ -737,11 +770,17 @@ def _emit_result(
     extra_warnings: tuple[str, ...] = (),
     timings: bool = False,
     verbose: bool = False,
+    github_step_summary: bool = False,
 ) -> None:
     """Render a RunResult to stdout per `fmt` and side-emit summaries.
 
-    Always writes markdown to $GITHUB_STEP_SUMMARY when set, regardless
-    of `fmt`. For `fmt == "all"`, also writes <out_dir>/summary.md and
+    Writes markdown to $GITHUB_STEP_SUMMARY only when the caller passes
+    `github_step_summary=True` (driven by the `--github-step-summary`
+    CLI flag). The presence of the env var alone is NOT sufficient —
+    callers must opt in explicitly so local debugging on a runner-like
+    shell never triggers a surprise side-channel write.
+
+    For `fmt == "all"`, also writes <out_dir>/summary.md and
     <out_dir>/summary.json so post-job tooling can consume structured
     results without re-parsing markdown.
     """
@@ -773,16 +812,26 @@ def _emit_result(
             except OSError as exc:
                 console.print(f"[yellow]warning: could not write {sidecar}: {exc}[/yellow]")
 
-    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if step_summary_path:
-        try:
-            # GitHub aggregates step summaries: append, do not truncate.
-            with open(step_summary_path, "a", encoding="utf-8") as fh:
-                fh.write(to_markdown(result, include_timings=timings))
-        except OSError as exc:
+    if github_step_summary:
+        step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if not step_summary_path:
+            # Warn rather than error: the flag is meant to assert intent,
+            # but failing here makes local-with-flag debugging awkward and
+            # would turn a side-channel emission into a fatal CLI error.
             console.print(
-                f"[yellow]warning: could not write GITHUB_STEP_SUMMARY ({exc})[/yellow]"
+                "[yellow]warning: --github-step-summary was passed but "
+                "$GITHUB_STEP_SUMMARY is not set; skipping step summary write"
+                "[/yellow]"
             )
+        else:
+            try:
+                # GitHub aggregates step summaries: append, do not truncate.
+                with open(step_summary_path, "a", encoding="utf-8") as fh:
+                    fh.write(to_markdown(result, include_timings=timings))
+            except OSError as exc:
+                console.print(
+                    f"[yellow]warning: could not write GITHUB_STEP_SUMMARY ({exc})[/yellow]"
+                )
 
 
 def _parse_phases(raw: str) -> frozenset[str]:

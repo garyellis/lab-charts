@@ -1,0 +1,323 @@
+name: ci
+
+# Combined PR/main pipeline:
+#   prep         → compute diff + sandbox chart matrix once.
+#   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
+#   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
+#
+# validate and sandbox-test run in parallel after prep — they're independent
+# signals. Validate's worklist fanout (library/policy/CLI edits) is owned by
+# the CLI's build_worklist; sandbox-test's fanout regex lives here in YAML
+# because the trigger set (kind-config, mise pins, the workflow file itself)
+# is a CI concern, not a chart concern.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Validate and sandbox-test every chart (bypass change detection)."
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_files: ${{ steps.diff.outputs.changed_files }}
+      sandbox_matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Required for `git diff <base>...HEAD` (three-dot needs the merge-base).
+          fetch-depth: 0
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v2
+
+      - name: Compute changed files
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ALL: ${{ inputs.all }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+          else
+            base="$PUSH_BEFORE"
+            head="$PUSH_AFTER"
+            # New-branch / empty `before` is all-zeros; fall back to merge-base.
+            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+              git fetch --no-tags --depth=0 origin main >/dev/null 2>&1 || true
+              base="$(git merge-base origin/main HEAD)"
+            fi
+          fi
+
+          tmp="$(mktemp)"
+          # No pathspec filter: validate's worklist builder and the sandbox
+          # fanout heuristic both need to see the unfiltered list.
+          git diff --name-only "${base}...${head}" > "$tmp"
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "changed files:"
+          cat "$tmp"
+
+          # Multi-line output via random delimiter (avoids any chance of a path
+          # collision with the EOF marker).
+          delim="ghadelim_$(openssl rand -hex 8)"
+          {
+            echo "changed_files<<$delim"
+            cat "$tmp"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute sandbox matrix
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ALL: ${{ inputs.all }}
+          BASE_SHA: ${{ steps.diff.outputs.base }}
+          CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
+        run: |
+          set -euo pipefail
+
+          all_charts() {
+            ls -1 charts/ | jq -R -s -c 'split("\n") | map(select(length > 0))'
+          }
+
+          emit() {
+            echo "matrix=$1" >> "$GITHUB_OUTPUT"
+            echo "matrix: $1"
+          }
+
+          # workflow_dispatch with all=true → every chart, no diff lookup.
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_ALL" == "true" ]]; then
+            emit "$(all_charts)"
+            exit 0
+          fi
+
+          # Fanout heuristic: edits to the CLI itself, cilium (installed first
+          # by every test), istio-base (transitive dep), the kind cluster
+          # blueprint, python dep pins, mise pins, or this workflow → every
+          # chart. Kept in YAML so workflow-level concerns don't require a CLI
+          # release to take effect.
+          fanout_re='^(src/chart_manager/|charts/cilium/|charts/istio-base/|kind-config\.yaml$|\.mise\.toml$|pyproject\.toml$|uv\.lock$|\.github/workflows/ci\.yaml$)'
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq "$fanout_re"; then
+            echo "fanout trigger matched — expanding to all charts."
+            emit "$(all_charts)"
+            exit 0
+          fi
+
+          # Otherwise let the CLI compute the per-chart impact set. Fail loud
+          # if the CLI errors — silently emitting `[]` would skip every sandbox
+          # test and look like "nothing changed".
+          if ! changed_charts="$(uv run chart-manager ci changed --base "$BASE_SHA" 2>prep-stderr.txt)"; then
+            {
+              echo "### sandbox matrix prep failed"
+              echo ""
+              echo '`chart-manager ci changed` exited non-zero. stderr:'
+              echo ""
+              echo '```'
+              cat prep-stderr.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat prep-stderr.txt >&2
+            exit 1
+          fi
+          matrix="$(printf '%s\n' "$changed_charts" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+          emit "${matrix:-[]}"
+
+  validate:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v2
+
+      - name: Validate
+        id: validate
+        # Don't fail-fast the job on a non-zero CLI exit: every post-step
+        # (artifact upload, future post-processing) must run to completion
+        # so the PR has full diagnostic context. The final "Gate" step below
+        # converts steps.validate.outcome back into a job-level failure so
+        # branch protection still blocks merge.
+        continue-on-error: true
+        env:
+          CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          printf '%s' "$CHANGED_FILES" > "$tmp"
+          # `mise run validate` is the literal local command — CI parity by
+          # construction. The CLI handles empty input as exit-0 with a notice,
+          # so no skip-gate needed. --github-step-summary opts the CLI in to
+          # appending its markdown summary to $GITHUB_STEP_SUMMARY (which GHA
+          # always sets for each step); without the flag the CLI ignores the
+          # env var, so local invocations don't surprise-write to it.
+          # _emit_result writes the markdown summary BEFORE sys.exit(), so
+          # the PR Checks tab gets the failure detail regardless of exit code.
+          mise run validate -- --changed-files "$tmp" --format all --keep --github-step-summary
+
+      - name: Upload rendered manifests on failure
+        # Use steps.validate.outcome, not `failure()`: with continue-on-error
+        # on the validate step the JOB never enters "failure" state until the
+        # gate fires, so `if: failure()` would never trigger here. `!cancelled()`
+        # skips artifact upload during workflow cancellation (no point keeping
+        # a half-rendered tree from a killed run).
+        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-manifests-${{ github.run_id }}
+          path: .chart-manager/rendered/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Gate — fail job if validate reported failures
+        # Single explicit verdict step. `!cancelled()` runs the gate after any
+        # non-cancellation outcome — including when a prior step (checkout,
+        # mise install) errored, in which case steps.validate.outcome is ''
+        # (skipped), the condition is false, and the job's overall status
+        # reflects the earlier failure via normal GHA semantics. On cancel
+        # we don't want to overwrite the cancel verdict with a "failed" row.
+        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        run: |
+          echo "validate found failures — failing job to block merge."
+          exit 1
+
+  sandbox-test:
+    needs: prep
+    if: needs.prep.outputs.sandbox_matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        chart: ${{ fromJson(needs.prep.outputs.sandbox_matrix) }}
+    env:
+      # Route matrix.chart through env once and refer to $CHART in every shell
+      # block, instead of literal-interpolating ${{ matrix.chart }} into bash.
+      # Chart names come from `ls charts/` (DNS-1123 dirnames) so injection
+      # risk is ~zero today, but routing through env closes the door fully and
+      # mirrors the prep job's discipline.
+      CHART: ${{ matrix.chart }}
+      # kind cluster names are DNS-1123 (≤63 chars). All existing chart names
+      # in this repo are short + DNS-safe, so `lab-<chart>-<run_id>` fits.
+      CLUSTER_NAME: lab-${{ matrix.chart }}-${{ github.run_id }}
+    steps:
+      # No fetch-depth: 0 — sandbox-test doesn't diff, default shallow clone
+      # is enough and saves checkout time.
+      - uses: actions/checkout@v4
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v2
+
+      - name: Sandbox test
+        id: sandbox
+        run: |
+          mise run kind-test -- "$CHART" \
+            --profile minimal \
+            --cluster-name "$CLUSTER_NAME"
+
+      # Capture diagnostics BEFORE teardown — once `kind delete` runs the API
+      # server is gone and kubectl/helm produce nothing useful. The
+      # belt-and-suspenders `steps.sandbox.outcome == 'failure'` gate is
+      # intentional: we want diagnostics only when the sandbox step itself
+      # failed, not when (say) a later teardown command fails.
+      #
+      # Asymmetry with the validate job is deliberate: sandbox is NOT
+      # continue-on-error, so `failure()` correctly fires on a sandbox-step
+      # failure and stays cleanly scoped to the install leg. Mirroring
+      # validate's `!cancelled() && outcome == 'failure'` pattern here would
+      # also fire diagnostics on later-step failures (teardown, summary),
+      # which is the opposite of what we want.
+      - name: Collect cluster diagnostics on failure
+        if: failure() && steps.sandbox.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p sandbox-logs
+
+          # Each network/API-touching command is wrapped in `timeout` so a
+          # wedged kubectl/helm against a dead apiserver can't eat the 25m
+          # job budget. continue-on-error above absorbs timeout's non-zero
+          # exit if it ever fires.
+          timeout 60 kubectl get events -A --sort-by=.lastTimestamp \
+            > sandbox-logs/events.txt 2>&1
+          timeout 60 kubectl get pods -A -o wide \
+            > sandbox-logs/pods.txt 2>&1
+          timeout 60 helm list -A \
+            > sandbox-logs/helm-releases.txt 2>&1
+
+          mkdir -p sandbox-logs/describe
+          timeout 60 kubectl get pods -A \
+            --field-selector=status.phase!=Running,status.phase!=Succeeded \
+            -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
+            2>/dev/null \
+          | while read -r ns name; do
+              [[ -z "$ns" || -z "$name" ]] && continue
+              timeout 30 kubectl describe pod -n "$ns" "$name" \
+                > "sandbox-logs/describe/${ns}_${name}.txt" 2>&1
+            done
+
+          # kind export logs can hang if the docker-in-runner state is wedged.
+          timeout 120 kind export logs sandbox-logs/kind --name "$CLUSTER_NAME" \
+            > sandbox-logs/kind-export.txt 2>&1
+
+          tar -czf "sandbox-logs-${CHART}.tar.gz" sandbox-logs
+
+      - name: Upload diagnostics
+        if: failure() && steps.sandbox.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-logs-${{ matrix.chart }}-${{ github.run_id }}
+          path: sandbox-logs-${{ matrix.chart }}.tar.gz
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Delete kind cluster
+        if: always()
+        continue-on-error: true
+        run: kind delete cluster --name "$CLUSTER_NAME"
+
+      - name: Summary
+        if: always()
+        env:
+          OUTCOME: ${{ steps.sandbox.outcome }}
+        run: |
+          # Default to "unknown" if the sandbox step was skipped (e.g.
+          # checkout/mise install failed earlier) so the row stays readable.
+          status="${OUTCOME:-unknown}"
+          {
+            echo "| chart | result |"
+            echo "| --- | --- |"
+            echo "| \`${CHART}\` | ${status} |"
+          } >> "$GITHUB_STEP_SUMMARY"
