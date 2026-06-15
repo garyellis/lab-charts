@@ -24,10 +24,10 @@ on:
       - "**/*.md"
   workflow_dispatch:
     inputs:
-      all:
-        description: "Validate and sandbox-test every chart (bypass change detection)."
-        type: boolean
-        default: false
+      charts:
+        description: "Charts to run: leave empty for diff-based (default), 'all' for every chart, or a comma/space-separated list (e.g. 'grafana,alloy'). Branch is selected via the 'Use workflow from' dropdown."
+        type: string
+        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -42,20 +42,22 @@ jobs:
     outputs:
       changed_files: ${{ steps.diff.outputs.changed_files }}
       sandbox_matrix: ${{ steps.matrix.outputs.matrix }}
+      mode: ${{ steps.diff.outputs.mode }}
+      chart_list_newline: ${{ steps.diff.outputs.chart_list_newline }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Required for `git diff <base>...HEAD` (three-dot needs the merge-base).
           fetch-depth: 0
 
       - name: Install mise + tools
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
 
       - name: Compute changed files
         id: diff
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_ALL: ${{ inputs.all }}
+          DISPATCH_CHARTS: ${{ inputs.charts }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
@@ -63,6 +65,88 @@ jobs:
         run: |
           set -euo pipefail
 
+          # ---- Resolve dispatch mode --------------------------------------
+          # Three modes the rest of the pipeline branches on:
+          #   diff  → derive worklist from `git diff base...head` (default for
+          #           push/PR, and for workflow_dispatch with empty input).
+          #   all   → every chart under charts/ (workflow_dispatch only).
+          #   list  → explicit chart names from the dispatch input.
+          #
+          # An empty-after-parse list (e.g. `charts: ","`) falls back to diff
+          # rather than emitting an empty list-mode matrix — list-mode with
+          # zero charts would silently no-op, which is worse than running the
+          # default path.
+          mode="diff"
+          chart_list_json="[]"
+          chart_list_newline=""
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            # Trim leading/trailing whitespace once for the all-check and the
+            # empty-check; per-element trimming happens in the awk parser.
+            trimmed="$(printf '%s' "$DISPATCH_CHARTS" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+            # Case-insensitive "all".
+            lower="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$lower" == "all" ]]; then
+              mode="all"
+            elif [[ -n "$trimmed" ]]; then
+              # Split on commas + whitespace, drop empties, dedupe preserving
+              # order. The `tr ',' ' '` + `tr -s '[:space:]' '\n'` chain also
+              # collapses per-element whitespace (any internal space becomes
+              # a record separator), so " grafana " and "grafana" both yield
+              # the same token. awk's `!seen[$0]++` dedupes in first-seen
+              # order, avoiding the non-determinism of `sort -u` across reruns.
+              parsed="$(printf '%s' "$trimmed" \
+                | tr ',' ' ' \
+                | tr -s '[:space:]' '\n' \
+                | awk 'NF && !seen[$0]++')"
+              if [[ -z "$parsed" ]]; then
+                echo "::warning::workflow_dispatch input parsed to an empty list; falling back to diff mode."
+                mode="diff"
+              else
+                mode="list"
+                chart_list_newline="$parsed"
+                chart_list_json="$(printf '%s\n' "$parsed" \
+                  | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+              fi
+            fi
+          fi
+
+          # Job-log only — the authoritative $GITHUB_OUTPUT write is below.
+          echo "resolved dispatch mode: $mode"
+
+          # ---- Validate list-mode chart names against charts/ -------------
+          # Fail loud rather than silently dropping unknown names: a typo in
+          # the dispatch input would otherwise produce a partial matrix and
+          # look like a successful run.
+          if [[ "$mode" == "list" ]]; then
+            unknown=()
+            while IFS= read -r c; do
+              [[ -z "$c" ]] && continue
+              if [[ ! -d "charts/$c" ]]; then
+                unknown+=("$c")
+              fi
+            done <<< "$chart_list_newline"
+            if (( ${#unknown[@]} > 0 )) ; then
+              {
+                echo "### dispatch input rejected"
+                echo ""
+                echo "Unknown chart name(s) in \`charts\` input: \`${unknown[*]}\`"
+                echo ""
+                echo "Available charts:"
+                echo ""
+                echo '```'
+                ls -1 charts/
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "unknown chart name(s): ${unknown[*]}" >&2
+              exit 1
+            fi
+          fi
+
+          # ---- Compute diff (always — list/all also expose changed_files) -
+          # We still run the diff for list/all so downstream steps that read
+          # changed_files don't see an unexpectedly empty string. validate
+          # ignores it in those modes; the value is informational there.
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             base="$PR_BASE_SHA"
             head="$PR_HEAD_SHA"
@@ -70,36 +154,46 @@ jobs:
             base="$PUSH_BEFORE"
             head="$PUSH_AFTER"
             # New-branch / empty `before` is all-zeros; fall back to merge-base.
+            # workflow_dispatch has no `before` at all, so this branch also
+            # covers manual runs.
             if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
-              git fetch --no-tags --depth=0 origin main >/dev/null 2>&1 || true
-              base="$(git merge-base origin/main HEAD)"
+              # checkout above uses fetch-depth: 0 so origin/main is already
+              # present; no extra fetch needed for merge-base resolution.
+              base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
             fi
           fi
 
           tmp="$(mktemp)"
-          # No pathspec filter: validate's worklist builder and the sandbox
-          # fanout heuristic both need to see the unfiltered list.
-          git diff --name-only "${base}...${head}" > "$tmp"
+          if [[ -n "$base" ]]; then
+            # No pathspec filter: validate's worklist builder and the sandbox
+            # fanout heuristic both need to see the unfiltered list.
+            git diff --name-only "${base}...${head}" > "$tmp" || true
+          fi
 
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "chart_list_json=$chart_list_json" >> "$GITHUB_OUTPUT"
           echo "changed files:"
-          cat "$tmp"
+          cat "$tmp" || true
 
-          # Multi-line output via random delimiter (avoids any chance of a path
-          # collision with the EOF marker).
+          # Multi-line outputs via random delimiter (avoids any chance of a
+          # path/name collision with the EOF marker).
           delim="ghadelim_$(openssl rand -hex 8)"
           {
             echo "changed_files<<$delim"
             cat "$tmp"
+            echo "$delim"
+            echo "chart_list_newline<<$delim"
+            printf '%s\n' "$chart_list_newline"
             echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
       - name: Compute sandbox matrix
         id: matrix
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_ALL: ${{ inputs.all }}
+          MODE: ${{ steps.diff.outputs.mode }}
+          CHART_LIST_JSON: ${{ steps.diff.outputs.chart_list_json }}
           BASE_SHA: ${{ steps.diff.outputs.base }}
           CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
         run: |
@@ -114,11 +208,17 @@ jobs:
             echo "matrix: $1"
           }
 
-          # workflow_dispatch with all=true → every chart, no diff lookup.
-          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_ALL" == "true" ]]; then
-            emit "$(all_charts)"
-            exit 0
-          fi
+          # Dispatch-mode short-circuits: skip the diff/fanout logic entirely.
+          case "$MODE" in
+            all)
+              emit "$(all_charts)"
+              exit 0
+              ;;
+            list)
+              emit "$CHART_LIST_JSON"
+              exit 0
+              ;;
+          esac
 
           # Fanout heuristic: edits to the CLI itself, cilium (installed first
           # by every test), istio-base (transitive dep), the kind cluster
@@ -155,12 +255,12 @@ jobs:
     needs: prep
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Install mise + tools
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
 
       - name: Validate
         id: validate
@@ -171,11 +271,11 @@ jobs:
         # branch protection still blocks merge.
         continue-on-error: true
         env:
+          MODE: ${{ needs.prep.outputs.mode }}
           CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
+          CHART_LIST: ${{ needs.prep.outputs.chart_list_newline }}
         run: |
           set -euo pipefail
-          tmp="$(mktemp)"
-          printf '%s' "$CHANGED_FILES" > "$tmp"
           # `mise run validate` is the literal local command — CI parity by
           # construction. The CLI handles empty input as exit-0 with a notice,
           # so no skip-gate needed. --github-step-summary opts the CLI in to
@@ -184,7 +284,28 @@ jobs:
           # env var, so local invocations don't surprise-write to it.
           # _emit_result writes the markdown summary BEFORE sys.exit(), so
           # the PR Checks tab gets the failure detail regardless of exit code.
-          mise run validate -- --changed-files "$tmp" --format all --keep --github-step-summary
+          #
+          # Mode dispatch mirrors prep:
+          #   diff → --changed-files <tmp>   (existing default behavior)
+          #   all  → --all                   (every chart; honors dispatch all)
+          #   list → --chart X --chart Y ... (explicit dispatch list)
+          args=()
+          case "$MODE" in
+            all)
+              args=(--all)
+              ;;
+            list)
+              while IFS= read -r c; do
+                [[ -n "$c" ]] && args+=(--chart "$c")
+              done <<< "$CHART_LIST"
+              ;;
+            *)
+              tmp="$(mktemp)"
+              printf '%s' "$CHANGED_FILES" > "$tmp"
+              args=(--changed-files "$tmp")
+              ;;
+          esac
+          mise run validate -- "${args[@]}" --format all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
@@ -193,7 +314,7 @@ jobs:
         # skips artifact upload during workflow cancellation (no point keeping
         # a half-rendered tree from a killed run).
         if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rendered-manifests-${{ github.run_id }}
           path: .chart-manager/rendered/
@@ -235,10 +356,10 @@ jobs:
     steps:
       # No fetch-depth: 0 — sandbox-test doesn't diff, default shallow clone
       # is enough and saves checkout time.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install mise + tools
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
 
       - name: Sandbox test
         id: sandbox
@@ -296,7 +417,7 @@ jobs:
 
       - name: Upload diagnostics
         if: failure() && steps.sandbox.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sandbox-logs-${{ matrix.chart }}-${{ github.run_id }}
           path: sandbox-logs-${{ matrix.chart }}.tar.gz
