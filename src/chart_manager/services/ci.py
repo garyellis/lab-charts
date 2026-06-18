@@ -6,6 +6,7 @@ from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.charts import ChartRepository
+from chart_manager.plumbing.errors import ExternalCommandError
 
 
 class CiService:
@@ -34,7 +35,12 @@ class CiService:
             timeout=profile_spec.timeout,
         )
         if profile_spec.helm_test:
-            self.helm.test(chart.name, namespace=namespace, timeout=profile_spec.timeout)
+            result = self.helm.test(chart.name, namespace=namespace, timeout=profile_spec.timeout)
+            if result.returncode != 0:
+                raise ExternalCommandError(
+                    f"helm test failed for {chart.name} "
+                    f"({result.returncode}):\n{result.stderr or result.stdout}"
+                )
 
     def upgrade_from_oci(
         self,
@@ -67,4 +73,9 @@ class CiService:
             timeout=profile_spec.timeout,
         )
         if profile_spec.helm_test:
-            self.helm.test(chart.name, namespace=namespace, timeout=profile_spec.timeout)
+            result = self.helm.test(chart.name, namespace=namespace, timeout=profile_spec.timeout)
+            if result.returncode != 0:
+                raise ExternalCommandError(
+                    f"helm test failed for {chart.name} "
+                    f"({result.returncode}):\n{result.stderr or result.stdout}"
+                )

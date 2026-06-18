@@ -18,8 +18,11 @@
 # Service object, but they are inert metadata on a ClusterIP Service in
 # kind (no openstack cloud-controller-manager exists to interpret them).
 
-# Apps-tier ingress domain for kind: *.kind.local resolves to 127.0.0.1
-# via /etc/resolver/kind.local (dnsmasq) or /etc/hosts entries.
+# Apps-tier ingress domain. *.localhost is special-cased by major
+# browsers (Chrome/Safari/Edge) to resolve to 127.0.0.1 per RFC 6761; no
+# /etc/hosts edits needed for the browser path. Firefox needs
+# `network.dns.localDomains = "localhost"` in about:config. For CLI
+# tools (curl/k6) on macOS, add an /etc/hosts entry per service.
 appsDomain: kind.local
 appsHosts:
   - "*.kind.local"
@@ -28,10 +31,14 @@ gateway:
   replicaCount: 1
 
   service:
-    type: ClusterIP
-    # Required when downgrading from LoadBalancer to ClusterIP: the field is
-    # only valid on externally-accessible Services and must be wiped, not
-    # deep-merged from values.yaml.
+    # NodePort so the kind extraPortMappings can punch 30080->80 and
+    # 30443->443 through to the host (see kind-config.yaml). Targets
+    # 8080/8443 are the istio-proxy listener ports fixed by the
+    # upstream subchart.
+    type: NodePort
+    # Required when downgrading from LoadBalancer (values.yaml default):
+    # the field is only valid on externally-accessible Services and must
+    # be wiped, not deep-merged.
     externalTrafficPolicy: null
     annotations: {}
     ports:
@@ -41,10 +48,12 @@ gateway:
         targetPort: 15021
       - name: http2
         port: 80
+        nodePort: 30080
         protocol: TCP
         targetPort: 8080
       - name: https
         port: 443
+        nodePort: 30443
         protocol: TCP
         targetPort: 8443
 
@@ -61,6 +70,10 @@ gateway:
   affinity: {}
 
 routes:
+  # Cross-cutting hubble route's default host is *.kind.local which
+  # doesn't match the *.localhost wildcard cert. Disabled here; add a
+  # hubble.localhost VS later if/when we want it on this path.
   hubbleUi:
     hosts:
       - hubble.kind.local
+    enabled: true

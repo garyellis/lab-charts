@@ -3,15 +3,41 @@
 #
 # Shaped by cilium: this repo runs cilium as CNI with full kube-proxy
 # replacement, so the cluster is created with no default CNI and no
-# kube-proxy. Cilium is installed by `chart-manager sandbox test` before the
-# rest of the install plan runs -- nodes stay NotReady until then,
-# which is expected.
+# kube-proxy. Cilium is installed by `chart-manager sandbox test` and
+# `chart-manager lab up` before the rest of the install plan runs --
+# nodes stay NotReady until then, which is expected.
 #
-# Other settings (port mappings, extra mounts, etc.) can grow here as
-# the lab stack adds workloads; this file is the single source of
-# truth for how the test cluster is shaped.
+# extraPortMappings:
+#   * 30080 -> 80   and  30443 -> 443
+#       Consumed by `lab up`: charts/istio-gateway/values-lab.yaml pins
+#       the istio-gateway Service to type=NodePort with nodePorts 30080
+#       (http) and 30443 (https). The host reaches istio at
+#       http://<app>.localhost and https://<app>.localhost with no
+#       port-forward. VirtualServices on the istio-ingress/apps-gateway
+#       then route to per-app Services (grafana, prometheus, ...).
+#       Adding a new app is a wrapper-chart VirtualService change, not a
+#       port-mapping change.
+#
+# Other settings (extra mounts, etc.) can grow here as the lab stack
+# adds workloads; this file is the single source of truth for how the
+# test cluster is shaped.
+#
+# CAVEAT: changing extraPortMappings requires `sandbox delete` followed
+# by `sandbox up`. Kind bakes these into the node container spec at
+# create time; `sandbox down` + `sandbox up` (docker stop/start)
+# preserves the old container spec and the new mapping does not take
+# effect.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
   disableDefaultCNI: true
   kubeProxyMode: none
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 30443
+        hostPort: 443
+        protocol: TCP

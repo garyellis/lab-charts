@@ -13,6 +13,11 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
+from chart_manager.services import cluster_bootstrap
+from chart_manager.services.cluster_bootstrap import (
+    CILIUM_BOOTSTRAP_CHART,
+    KIND_CONFIG_FILENAME,
+)
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 DEFAULT_NAMESPACE = "observability"
@@ -28,17 +33,6 @@ class SandboxOptions:
     ensure_cluster: bool = True
     include_reverse: bool = False
     lint: bool = False
-
-
-# Cilium runs as the kind cluster CNI (with full kube-proxy replacement),
-# so it must come up before anything else can become Ready. Bootstrap
-# settings here -- not in test-spec.yaml -- because they're a property
-# of the kind environment, not of the cilium chart's test contract.
-CILIUM_BOOTSTRAP_CHART = "cilium"
-CILIUM_BOOTSTRAP_PROFILE = DEFAULT_PROFILE
-CILIUM_BOOTSTRAP_NAMESPACE = "kube-system"
-CILIUM_BOOTSTRAP_TIMEOUT = "10m"
-KIND_CONFIG_FILENAME = "kind-config.yaml"
 
 
 class SandboxService:
@@ -67,11 +61,34 @@ class SandboxService:
                 options.cluster_name,
                 config=kind_config if kind_config.exists() else None,
             )
+            # ensure_cluster may have started stopped node containers
+            # (LabService's `down` path leaves them stopped on disk). On
+            # that path the apiserver isn't reachable for several seconds
+            # even though docker reports the container up, and the very
+            # next thing we do is `helm dependency update` / install,
+            # which races. Gate explicitly.
+            self.console.print("[bold]Waiting for kube-apiserver[/bold]")
+            self.kubectl.wait_apiserver_ready()
 
         installed: set[str] = set()
         namespaces_created: set[str] = set()
 
-        self._bootstrap_cilium(options, installed, namespaces_created, lint=options.lint)
+        # Delegate to the shared bootstrap module so `sandbox test` and
+        # `sandbox up` exercise the exact same CNI install path. The
+        # bootstrap returns the helm status string, or None when the
+        # cilium chart is absent. Either non-None value means "ran".
+        status = cluster_bootstrap.bootstrap(
+            options.cluster_name,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            repository=self.repository,
+            console=self.console,
+            lint=options.lint,
+        )
+        if status is not None:
+            installed.add(CILIUM_BOOTSTRAP_CHART)
+            namespaces_created.add(cluster_bootstrap.CILIUM_BOOTSTRAP_NAMESPACE)
 
         plan = self.resolver.install_plan(options.chart, options.profile)
         self._install_plan(
@@ -84,56 +101,6 @@ class SandboxService:
                 self._install_plan(
                     reverse_plan, options, installed, namespaces_created, lint=options.lint
                 )
-
-    def _bootstrap_cilium(
-        self,
-        options: SandboxOptions,
-        installed: set[str],
-        namespaces_created: set[str],
-        *,
-        lint: bool,
-    ) -> None:
-        try:
-            chart = self.repository.get(CILIUM_BOOTSTRAP_CHART)
-        except ChartManagerError:
-            self.console.print("[yellow]cilium chart not found; skipping CNI bootstrap[/yellow]")
-            return
-
-        api_ip = self.kind.control_plane_ip(options.cluster_name)
-        values = self.repository.value_paths(chart, CILIUM_BOOTSTRAP_PROFILE)
-
-        self.console.print(
-            f"[bold]Bootstrapping cilium CNI[/bold] "
-            f"(k8sServiceHost={api_ip}, namespace={CILIUM_BOOTSTRAP_NAMESPACE})"
-        )
-        self.helm.dependency_update(chart.path)
-        if lint:
-            self.helm.lint(chart.path, values)
-
-        namespaces_created.add(CILIUM_BOOTSTRAP_NAMESPACE)
-        with self._diagnostics_on_failure(CILIUM_BOOTSTRAP_NAMESPACE):
-            self.helm.upgrade_install(
-                CILIUM_BOOTSTRAP_CHART,
-                chart.path,
-                namespace=CILIUM_BOOTSTRAP_NAMESPACE,
-                values=values,
-                sets={
-                    "cilium.k8sServiceHost": api_ip,
-                    "cilium.k8sServicePort": "6443",
-                },
-                timeout=CILIUM_BOOTSTRAP_TIMEOUT,
-                wait=False,
-            )
-
-        # Block until cilium-agent (daemonset) and coredns (deployment) are
-        # rolled out -- coredns can only become Ready once cilium is wiring
-        # pod networking, so this is also our "nodes are usable" gate.
-        self.console.print("[bold]Waiting for kube-system workloads[/bold] (cilium, coredns)")
-        self.kubectl.wait_workloads_ready(
-            CILIUM_BOOTSTRAP_NAMESPACE, timeout=CILIUM_BOOTSTRAP_TIMEOUT
-        )
-
-        installed.add(CILIUM_BOOTSTRAP_CHART)
 
     def _install_plan(
         self,
@@ -157,7 +124,12 @@ class SandboxService:
 
             if release not in installed:
                 self.console.print(f"[bold]Updating dependencies[/bold] {entry.chart}")
-                self.helm.dependency_update(chart.path)
+                # mtime-gated: a CI runner that's just `helm dependency
+                # update`d this chart on the previous step sees the lock
+                # is fresh and skips the redundant subprocess. Per-process
+                # cache also dedupes across the install + reverse-tests
+                # passes when both touch the same chart.
+                self.helm.dependency_update_if_stale(chart.path)
                 if lint:
                     self.console.print(f"[bold]Linting[/bold] {entry.chart}")
                     self.helm.lint(chart.path, values)
@@ -181,7 +153,14 @@ class SandboxService:
                 self.console.print(f"[bold]Running helm test[/bold] {entry.chart}")
                 try:
                     with self._diagnostics_on_failure(namespace):
-                        self.helm.test(release, namespace=namespace, timeout=profile.timeout)
+                        result = self.helm.test(
+                            release, namespace=namespace, timeout=profile.timeout
+                        )
+                        if result.returncode != 0:
+                            raise ExternalCommandError(
+                                f"helm test exited {result.returncode}\n"
+                                f"{result.stderr or result.stdout}"
+                            )
                 except ExternalCommandError as exc:
                     raise ChartManagerError(f"helm test failed for {entry.chart}: {exc}") from exc
 

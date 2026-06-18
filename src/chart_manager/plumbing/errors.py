@@ -16,3 +16,14 @@ class DependencyCycleError(SpecError):
 
 class ExternalCommandError(ChartManagerError):
     """Raised when an external command fails."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        stderr: str = "",
+        returncode: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stderr = stderr
+        self.returncode = returncode

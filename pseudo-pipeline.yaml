@@ -1,0 +1,76 @@
+---
+name: cert-manager
+
+stages:
+  # renovate upgrade/changelog pull requests
+  # any harness delegate
+  upgrade-dependencies:
+    renovate-deps:
+      chart-manager upgrade-container-deps
+      chart-manager upgrade-chart-deps
+
+    # waits for pull requests to be merged
+    pull-requests-merged: # matrix of pull requests
+      cmg github pr wait --merged
+
+  dev:
+    promote:
+      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path dev/ --environment DEV
+
+    pull-requests-merged:
+      cmg github pr wait --merged
+
+    # waits for helmrelease to dev
+    # must run on dev cluster harness delegate
+    monitor-flux-rollout:
+      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+
+    # helmrelease test
+    # must run on dev cluster harness delegate
+    helmrelease-test:
+      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+
+    #  Post-deploy SLO/metric gates
+    soak:
+      datadog or grafana error rate query, alerts query, thresholds, etc
+  
+  test:
+    # promote to next stage
+    promote:
+      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --environment TEST
+
+    pull-requests-merged:
+      cmg github pr wait --merged
+
+    # must run on test cluster harness delegate
+    montior-flux-rollout:
+      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+
+    # must run on test cluster harness delegate
+    helmrelease-test:
+      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+
+    #  Post-deploy SLO/metric gates
+    soak:
+      datadog or grafana error rate query, alerts query, thresholds, etc
+
+  prod:
+    # promote to next stage
+    promote:
+      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --environment TEST
+
+    pull-requests-merged:
+      cmg github pr wait --merged
+
+    # must run on prod cluster harness delegate
+    montior-flux-rollout:
+      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+
+    #must run on prod cluster harness delegate
+    helmrelease-test:
+      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+
+    #  Post-deploy SLO/metric gates
+    soak:
+      datadog or grafana error rate query, alerts query, thresholds, etc
+

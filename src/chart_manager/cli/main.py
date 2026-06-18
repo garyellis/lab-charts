@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Annotated
 
@@ -9,13 +10,26 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import validate as validate_cli
+from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.spec import CheckSpec
 from chart_manager.services.charts import ChartService
 from chart_manager.services.ci import CiService
 from chart_manager.services.dependencies import DependencyService
 from chart_manager.services.expose import ExposeRequest, ExposeService
+from chart_manager.services.lab import (
+    DEFAULT_CHART as LAB_DEFAULT_CHART,
+)
+from chart_manager.services.lab import (
+    DEFAULT_PROFILE as LAB_DEFAULT_PROFILE,
+)
+from chart_manager.services.lab import (
+    LabService,
+    LabSyncOptions,
+    LabUpOptions,
+)
 from chart_manager.services.sandbox import (
     DEFAULT_CLUSTER_NAME,
     DEFAULT_NAMESPACE,
@@ -31,9 +45,17 @@ charts_app = typer.Typer(no_args_is_help=True, help="Inspect charts and test spe
 deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
 sandbox_app = typer.Typer(
     no_args_is_help=True,
-    help="Ephemeral sandbox cluster: bring up, deploy, exercise, tear down.",
+    help=(
+        "Local development cluster lifecycle. "
+        "Bring up the full stack, exercise individual charts, expose services, "
+        "stop, or delete."
+    ),
 )
 ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
+helmrelease_app = typer.Typer(
+    no_args_is_help=True,
+    help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
+)
 # Grafana-specific subcommands. Anything that knows about Grafana JSON / API
 # conventions lives here, not under the generic `charts` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
@@ -42,6 +64,7 @@ validate_app = typer.Typer(
     help="Static chart validation: render -> schema -> policy.",
 )
 validate_cli.register(validate_app)
+helmrelease_cli.register(helmrelease_app)
 
 app.add_typer(charts_app, name="charts")
 app.add_typer(deps_app, name="deps")
@@ -49,6 +72,7 @@ app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(validate_app, name="validate")
+app.add_typer(helmrelease_app, name="helmrelease")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="test-spec profile.")]
@@ -229,20 +253,171 @@ def ensure_kind(
     console.print(f"sandbox cluster ready: {cluster_name}")
 
 
-@sandbox_app.command("delete")
-def delete_kind(
+@sandbox_app.command("up")
+def sandbox_up(
+    chart: Annotated[
+        str,
+        typer.Option(
+            "--chart",
+            help="Entry chart whose profile is the install plan source.",
+        ),
+    ] = LAB_DEFAULT_CHART,
+    profile: Annotated[
+        str,
+        typer.Option(
+            "--profile",
+            help="Profile on --chart to resolve into the install plan.",
+        ),
+    ] = LAB_DEFAULT_PROFILE,
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    skip_installed: Annotated[
+        bool,
+        typer.Option(
+            "--skip-installed",
+            help=(
+                "Skip charts already present in `helm list -A`. Faster, "
+                "but won't pick up values changes."
+            ),
+        ),
+    ] = False,
+    root: RootOption = Path("."),
+) -> None:
+    """Bring up the sandbox cluster and install the full stack.
+
+    Works whether the cluster is missing, stopped, or already running:
+    `kind ensure_cluster` handles all three. Continue-on-error: a failing
+    chart is reported in the summary but does not abort the run.
+
+    Default: converge -- every chart in the install plan runs `helm
+    upgrade --install`, helm itself no-ops the ones whose rendered
+    manifests haven't changed. This is the helmfile/Argo workflow and
+    picks up values-file edits on re-run. Pass `--skip-installed` to
+    restore the prior fast-skip behavior (don't even invoke helm for
+    releases already in `helm list -A`).
+    """
+    service = LabService(root)
+    service.up(
+        LabUpOptions(
+            chart=chart,
+            profile=profile,
+            cluster_name=cluster_name,
+            namespace=namespace,
+            skip_installed=skip_installed,
+        )
+    )
+
+
+@sandbox_app.command("sync")
+def sandbox_sync(
+    chart_names: Annotated[
+        list[str],
+        typer.Argument(
+            min=1,
+            help="Chart names to re-apply (must be members of the install plan).",
+        ),
+    ],
+    chart: Annotated[
+        str,
+        typer.Option(
+            "--chart",
+            help="Entry chart whose profile is the install plan source.",
+        ),
+    ] = LAB_DEFAULT_CHART,
+    profile: Annotated[
+        str,
+        typer.Option(
+            "--profile",
+            help="Profile on --chart to resolve into the install plan.",
+        ),
+    ] = LAB_DEFAULT_PROFILE,
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    root: RootOption = Path("."),
+) -> None:
+    """Re-apply specific charts (pick up values edits without a full up).
+
+    Runs `helm upgrade --install` for ONLY the named charts. Charts not
+    named are not visited. Useful after editing a values file on one chart
+    when the rest of the stack is already converged.
+
+    Errors if any named chart is not a member of the configured install
+    plan, so a typo can't quietly do nothing.
+    """
+    service = LabService(root)
+    service.sync(
+        LabSyncOptions(
+            chart_names=tuple(chart_names),
+            chart=chart,
+            profile=profile,
+            cluster_name=cluster_name,
+            namespace=namespace,
+        )
+    )
+
+
+@sandbox_app.command("down")
+def sandbox_down(
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     root: RootOption = Path("."),
 ) -> None:
-    service = SandboxService(root)
-    deleted = service.kind.delete_cluster(cluster_name)
-    stopped = ExposeService().stop(cluster_name)
-    if not deleted:
-        console.print(f"sandbox cluster not present: {cluster_name}")
-    else:
-        console.print(f"sandbox cluster deleted: {cluster_name}")
-    if stopped is not None:
-        console.print(f"stopped port-forward (pid {stopped})")
+    """Stop the sandbox cluster's containers; preserve all state.
+
+    `docker stop` on the kind node containers. Installed Helm releases,
+    PVCs, etcd, and the containerd image cache survive. Use `sandbox up`
+    to bring it back. Any active port-forward for this cluster is also
+    stopped, since its kubectl process will lose the apiserver anyway.
+    """
+    LabService(root).down(cluster_name)
+
+
+@sandbox_app.command("delete")
+def sandbox_delete(
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    root: RootOption = Path("."),
+) -> None:
+    """Tear down the sandbox cluster entirely.
+
+    `kind delete cluster`: destructive, the image cache goes with it and
+    the next `sandbox up` will re-pull. Use `sandbox down` if you just
+    want to stop the cluster.
+    """
+    LabService(root).delete(cluster_name)
+
+
+_APPS_DOMAIN_FALLBACK = "localhost"
+
+
+def _detect_apps_domain(kubectl: Kubectl) -> str:
+    """Best-effort apps-domain detection from installed Gateways.
+
+    Reads `kubectl get gateway -A`, harvests `.spec.servers[].hosts[]`,
+    strips the wildcard `*.` prefix, and returns the most-common host
+    suffix. Ties break on alphabetical order so output is reproducible.
+    Falls back to `localhost` when no Gateway is installed yet (pre-lab,
+    or a single-chart sandbox test) -- consistent with the appsDomain
+    default in charts/istio-gateway/values-ci.yaml.
+
+    Pure function over `kubectl.list_gateway_hosts()` so tests can mock
+    a single call and assert the derived domain.
+    """
+    try:
+        hosts = kubectl.list_gateway_hosts()
+    except ChartManagerError:
+        return _APPS_DOMAIN_FALLBACK
+    suffixes: list[str] = []
+    for host in hosts:
+        stripped = host[2:] if host.startswith("*.") else host
+        if stripped:
+            suffixes.append(stripped)
+    if not suffixes:
+        return _APPS_DOMAIN_FALLBACK
+    counts = Counter(suffixes)
+    # Counter.most_common is insertion-stable on ties; pick the
+    # alphabetically smallest suffix in the top-frequency band so the
+    # output is deterministic regardless of host iteration order.
+    top_freq = max(counts.values())
+    return min(s for s, c in counts.items() if c == top_freq)
 
 
 @sandbox_app.command("expose")
@@ -271,6 +446,10 @@ def kind_expose(
     ports = list(port) if port else ["8443:443", "8080:80"]
     status = expose.start(ExposeRequest(cluster_name=cluster_name, service=service, ports=ports))
 
+    # Apps-domain is per-CLI-invocation: cache the kubectl result so the
+    # per-mapping print loop doesn't re-list Gateways on every iteration.
+    apps_domain = _detect_apps_domain(Kubectl())
+
     console.print(
         f"[bold]port-forward running[/bold] (pid {status.pid})  "
         f"cluster={cluster_name}  service={service}"
@@ -278,7 +457,7 @@ def kind_expose(
     for mapping in ports:
         local, remote = mapping.split(":", 1)
         scheme = "https" if remote in {"443", "8443"} else "http"
-        console.print(f"  {scheme}://*.kind.local:{local}/  ->  {service}:{remote}")
+        console.print(f"  {scheme}://*.{apps_domain}:{local}/  ->  {service}:{remote}")
     console.print(f"  log:  {status.log}")
     console.print(f"  stop: chart-manager sandbox expose --cluster-name {cluster_name} --stop")
 

@@ -28,6 +28,18 @@ run = "uv run chart-manager deps plan \"$@\""
 description = "Run a kind-backed chart test. Usage: mise run kind-test -- alloy --profile minimal"
 run = "uv run chart-manager sandbox test \"$@\""
 
+[tasks.sandbox-up]
+description = "Bring up the long-lived sandbox cluster with the full observability stack (creates or starts the kind cluster)."
+run = "uv run chart-manager sandbox up \"$@\""
+
+[tasks.sandbox-down]
+description = "Stop the sandbox kind cluster's containers. Preserves state; image cache and installed releases survive."
+run = "uv run chart-manager sandbox down \"$@\""
+
+[tasks.sandbox-delete]
+description = "Delete the sandbox kind cluster entirely (full teardown; image cache and release state are lost)."
+run = "uv run chart-manager sandbox delete \"$@\""
+
 [tasks.validate]
 description = "Run render + schema + policy. Usage: mise run validate -- --chart grafana --env dev"
 run = "uv run chart-manager validate run \"$@\""
