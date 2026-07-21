@@ -1,0 +1,36 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install DynamoDB Local with the Istio VirtualService CRD available and verify list-tables through the in-cluster service.
+    namespace: aws-dev
+    requires:
+      - chart: istio-base
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: dynamodb-list-tables
+        type: helm-test
+        description: Run aws dynamodb list-tables against the in-cluster service endpoint.
+    timeout: 10m
+
+  routed:
+    description: Install DynamoDB Local behind the shared apps gateway so it is callable through its VirtualService host.
+    namespace: aws-dev
+    requires:
+      - chart: istio-gateway
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: dynamodb-list-tables
+        type: helm-test
+        description: Run aws dynamodb list-tables against the in-cluster service endpoint.
+    timeout: 15m
+
+reverseTests: []

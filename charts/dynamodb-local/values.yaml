@@ -1,0 +1,78 @@
+---
+# Amazon DynamoDB Local for local development.
+# The container listens on HTTP port 8000 and accepts dummy AWS credentials.
+
+appsDomain: k8s.home.lab.io
+
+replicaCount: 1
+
+image:
+  repository: amazon/dynamodb-local
+  tag: latest
+  pullPolicy: IfNotPresent
+
+awsCliImage:
+  repository: amazon/aws-cli
+  tag: latest
+  pullPolicy: IfNotPresent
+
+dynamodb:
+  port: 8000
+  sharedDb: true
+  dbPath: ./data
+  workingDir: /home/dynamodblocal
+  accessKeyId: DUMMYIDEXAMPLE
+  secretAccessKey: DUMMYEXAMPLEKEY
+  region: us-west-2
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+istio:
+  enabled: true
+  gateway: istio-ingress/apps-gateway
+  externalScheme: https
+  api:
+    hostPrefix: dynamodb
+    hosts: []
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 2Gi
+  storageClassName: csi-cinder-sc-delete
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []

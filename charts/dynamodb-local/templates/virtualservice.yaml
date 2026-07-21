@@ -1,0 +1,29 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "dynamodb-local.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dynamodb-local.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- if .Values.istio.api.hosts }}
+    {{- range .Values.istio.api.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    - {{ include "dynamodb-local.apiHost" . | quote }}
+    {{- end }}
+  gateways:
+    - {{ .Values.istio.gateway | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: {{ include "dynamodb-local.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.dynamodb.port }}
+{{- end }}

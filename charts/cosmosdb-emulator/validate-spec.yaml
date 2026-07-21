@@ -1,0 +1,17 @@
+version: 1
+release_name: cosmosdb-emulator
+namespace_template: "lab-${env}"
+environments:
+  dev:
+    namespace: azure-dev
+    values:
+      - values.yaml
+      - values-dev.yaml
+  ci:
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "values.yaml":     [dev, ci]
+  "values-dev.yaml": [dev]
+  "values-ci.yaml":  [ci]

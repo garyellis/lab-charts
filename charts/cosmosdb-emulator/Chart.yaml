@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: cosmosdb-emulator
+description: Azure Cosmos DB Linux emulator for local development
+type: application
+version: 0.1.0
+appVersion: "vnext-latest"

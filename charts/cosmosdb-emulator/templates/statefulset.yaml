@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cosmosdb-emulator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cosmosdb-emulator.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "cosmosdb-emulator.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cosmosdb-emulator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cosmosdb-emulator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: emulator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: cosmos
+              containerPort: {{ .Values.emulator.port }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.emulator.healthPort }}
+              protocol: TCP
+            {{- if .Values.emulator.explorer.enabled }}
+            - name: explorer
+              containerPort: {{ .Values.emulator.explorer.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: PORT
+              value: {{ .Values.emulator.port | quote }}
+            - name: PROTOCOL
+              value: {{ .Values.emulator.protocol | quote }}
+            - name: ENABLE_EXPLORER
+              value: {{ .Values.emulator.explorer.enabled | quote }}
+            - name: EXPLORER_PORT
+              value: {{ .Values.emulator.explorer.port | quote }}
+            - name: EXPLORER_PROTOCOL
+              value: {{ .Values.emulator.explorer.protocol | quote }}
+            - name: GATEWAY_PUBLIC_ENDPOINT
+              value: {{ include "cosmosdb-emulator.gatewayEndpoint" . | quote }}
+            - name: DATA_PATH
+              value: /data
+            - name: ENABLE_INIT_DATA
+              value: {{ .Values.initData.enabled | quote }}
+            - name: INIT_PATH
+              value: {{ .Values.initData.mountPath | quote }}
+            - name: ENABLE_TELEMETRY
+              value: {{ .Values.emulator.enableTelemetry | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.emulator.logLevel | quote }}
+            {{- range .Values.extraEnv }}
+            - name: {{ .name | quote }}
+              value: {{ .value | quote }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /alive
+              port: health
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 5
+            failureThreshold: 12
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if and .Values.initData.enabled .Values.initData.configMapName }}
+            - name: init
+              mountPath: {{ .Values.initData.mountPath }}
+              readOnly: true
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or (not .Values.persistence.enabled) (and .Values.initData.enabled .Values.initData.configMapName) }}
+      volumes:
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if and .Values.initData.enabled .Values.initData.configMapName }}
+        - name: init
+          configMap:
+            name: {{ .Values.initData.configMapName }}
+        {{- end }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "cosmosdb-emulator.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClassName }}
+        storageClassName: {{ .Values.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- end }}

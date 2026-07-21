@@ -1,0 +1,44 @@
+{{- if .Values.kafkaCluster.enabled }}
+{{- $cluster := .Values.kafkaCluster -}}
+{{- $clusterName := required "kafkaCluster.name is required" $cluster.name -}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: {{ required "kafkaCluster.nodePool.name is required" $cluster.nodePool.name | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $clusterName | quote }}
+spec:
+  replicas: {{ required "kafkaCluster.nodePool.replicas is required" $cluster.nodePool.replicas }}
+  roles:
+{{ toYaml $cluster.nodePool.roles | indent 4 }}
+  storage:
+{{ toYaml $cluster.nodePool.storage | indent 4 }}
+{{- with $cluster.jvmOptions }}
+  jvmOptions:
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- with $cluster.resources }}
+  resources:
+{{ toYaml . | indent 4 }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ $clusterName | quote }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  kafka:
+    version: {{ required "kafkaCluster.version is required" $cluster.version | quote }}
+    listeners:
+{{ toYaml $cluster.listeners | indent 6 }}
+{{- with $cluster.config }}
+    config:
+{{ toYaml . | indent 6 }}
+{{- end }}
+{{- with $cluster.entityOperator }}
+  entityOperator:
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- end }}

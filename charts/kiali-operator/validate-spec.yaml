@@ -1,0 +1,24 @@
+version: 1
+release_name: kiali-operator
+namespace_template: "lab-${env}"
+# The Kiali CR (kiali.io/v1alpha1) is not in the datreeio CRDs catalog, so
+# kubeconform has no schema for it. Add a local permissive schema alongside
+# the defaults (default in-tree schemas + the datreeio catalog for the istio
+# CRDs). schema_locations replaces the built-in defaults, so all three are
+# listed here.
+schema_locations:
+  - default
+  - "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+  - "charts/kiali-operator/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+environments:
+  ci:
+    namespace: kiali-operator
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "Chart.yaml":     [ci]
+  "values.yaml":    [ci]
+  "values-ci.yaml": [ci]
+  "templates/**":   [ci]
+  "schemas/**":     [ci]

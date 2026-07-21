@@ -1,0 +1,23 @@
+{{- if .Values.virtualService.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Values.kiali.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ printf "%s.%s" .Values.virtualService.hostPrefix .Values.appsDomain | quote }}
+  gateways:
+    - {{ .Values.virtualService.gateway | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        # The Kiali server Service is created by the operator in the Kiali CR
+        # namespace (kiali.namespace) on the port from kiali.spec.server.port.
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" .Values.kiali.name .Values.kiali.namespace | quote }}
+            port:
+              number: {{ .Values.virtualService.servicePort }}
+{{- end }}

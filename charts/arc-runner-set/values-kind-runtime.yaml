@@ -1,0 +1,22 @@
+---
+# Runtime overlay for a local kind smoke test.
+# Replace githubConfigUrl if testing against a different repository,
+# organization, or enterprise URL. Create the referenced Secret in
+# arc-runners before installing.
+gha-runner-scale-set:
+  githubConfigUrl: "https://github.com/garyellis/lab-charts"
+  # Must reference a Secret that already exists in arc-runners. The cluster
+  # currently has arc-github-pat; switch to arc-github-app only after creating
+  # the corresponding GitHub App Secret.
+  githubConfigSecret: "arc-github-pat"
+
+  # Keep one idle runner registered while proving the setup. Switch to 0 after
+  # registration and workflow pickup are understood.
+  minRunners: 1
+  maxRunners: 1
+
+  # dind mode injects a privileged docker:dind sidecar so jobs can build/run
+  # containers. Requires the dind-compatible pod securityContext in values.yaml
+  # (no pod-level runAsNonRoot/runAsUser). Use {} for plain shell jobs.
+  containerMode:
+    type: dind

@@ -1,0 +1,18 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install the GitHub ARC controller CRDs and manager in arc-systems.
+    namespace: arc-systems
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: arc-controller-release
+        type: helm-test
+        description: Verify the controller HelmRelease is ready; the upstream controller chart has no functional runner test without a runner scale set.
+    timeout: 10m
+
+reverseTests: []

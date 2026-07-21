@@ -50,3 +50,5 @@ charts/*/charts/*/
 
 # chart-manager validate render output
 .chart-manager/
+
+*.env

@@ -1,0 +1,37 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install an ephemeral Harbor on kind and verify its API through the in-cluster service.
+    namespace: harbor
+    requires:
+      - chart: istio-base
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: api-ready
+        type: helm-test
+        description: Verify the Harbor v2 API ping endpoint through the ClusterIP service.
+    timeout: 15m
+
+  routed:
+    description: Install Harbor behind the shared apps gateway and verify its API through the VirtualService.
+    namespace: harbor
+    requires:
+      - chart: istio-gateway
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+      - values-routed.yaml
+    helmTest: true
+    checks:
+      - name: api-ready
+        type: helm-test
+        description: Verify the Harbor v2 API ping endpoint through the Istio gateway and VirtualService.
+    timeout: 20m
+
+reverseTests: []

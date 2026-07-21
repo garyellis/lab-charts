@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Minimal schema for the Kiali CR (kiali.io/v1alpha1). The upstream CRD ships no published JSON schema in the datreeio catalog, so this permissive stub lets kubeconform validate structure (a spec object) without rejecting operator-specific fields.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "type": "string" },
+    "kind": { "type": "string" },
+    "metadata": { "type": "object" },
+    "spec": { "type": "object" }
+  },
+  "required": ["apiVersion", "kind", "spec"],
+  "additionalProperties": true
+}

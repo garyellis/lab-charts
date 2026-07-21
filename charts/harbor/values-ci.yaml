@@ -1,0 +1,95 @@
+---
+# CI overlay: use ephemeral storage and a smaller footprint on kind.
+appsDomain: kind.local
+
+harbor:
+  externalURL: https://harbor.kind.local
+
+  persistence:
+    enabled: false
+
+  existingSecretAdminPassword: ""
+  harborAdminPassword: Harbor12345
+  existingSecretSecretKey: ""
+  secretKey: 0123456789abcdef
+
+  ipFamily:
+    ipv6:
+      enabled: false
+
+  trivy:
+    enabled: false
+
+  nginx:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
+
+  portal:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
+
+  core:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  jobservice:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  registry:
+    registry:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+    controller:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: 250m
+          memory: 128Mi
+
+  database:
+    internal:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+
+  redis:
+    internal:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi

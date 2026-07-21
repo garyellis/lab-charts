@@ -1,0 +1,148 @@
+---
+# Wrapper-owned routing values. Keep harbor.externalURL aligned with the host.
+appsDomain: k8s.home.lab.io
+
+istio:
+  enabled: true
+  gateway: istio-ingress/apps-gateway
+  hostPrefix: harbor
+  hosts: []
+
+tests:
+  gatewayRoute:
+    enabled: false
+    host: harbor.k8s.home.lab.io
+    service: istio-gateway.istio-ingress.svc.cluster.local
+    port: 443
+
+# Upstream Harbor values are nested under the dependency name.
+harbor:
+  expose:
+    type: clusterIP
+    tls:
+      enabled: false
+    clusterIP:
+      name: harbor
+      ports:
+        httpPort: 80
+
+  # TLS terminates at the shared Istio gateway.
+  externalURL: https://harbor.k8s.home.lab.io
+
+  persistence:
+    enabled: true
+    resourcePolicy: keep
+    persistentVolumeClaim:
+      registry:
+        storageClass: csi-cinder-sc-delete
+        size: 20Gi
+      jobservice:
+        jobLog:
+          storageClass: csi-cinder-sc-delete
+          size: 1Gi
+      database:
+        storageClass: csi-cinder-sc-delete
+        size: 2Gi
+      redis:
+        storageClass: csi-cinder-sc-delete
+        size: 1Gi
+      trivy:
+        storageClass: csi-cinder-sc-delete
+        size: 5Gi
+
+  # These Secrets must exist before a non-CI install. See README.md.
+  existingSecretAdminPassword: harbor-admin
+  existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
+  existingSecretSecretKey: harbor-secret-key
+
+  updateStrategy:
+    type: Recreate
+
+  metrics:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+
+  nginx:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+  portal:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+  core:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  jobservice:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  registry:
+    registry:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+    controller:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
+  trivy:
+    enabled: true
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  database:
+    internal:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+
+  redis:
+    internal:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi

@@ -1,0 +1,41 @@
+---
+external-secrets:
+  installCRDs: true
+
+  replicaCount: 1
+  leaderElect: true
+
+  serviceAccount:
+    create: true
+    automount: true
+
+  rbac:
+    create: true
+    servicebindings:
+      create: true
+    aggregateToView: true
+    aggregateToEdit: true
+
+  serviceMonitor:
+    enabled: false
+
+  grafanaDashboard:
+    enabled: false
+
+  metrics:
+    service:
+      enabled: false
+
+  webhook:
+    create: true
+    replicaCount: 1
+    service:
+      enabled: true
+      type: ClusterIP
+
+  certController:
+    create: true
+    replicaCount: 1
+
+  bitwarden-sdk-server:
+    enabled: false

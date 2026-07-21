@@ -1,0 +1,58 @@
+{{- $testName := printf "%s-list-tables" (include "dynamodb-local.fullname" .) -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dynamodb-local.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: aws-cli
+      image: "{{ .Values.awsCliImage.repository }}:{{ .Values.awsCliImage.tag }}"
+      imagePullPolicy: {{ .Values.awsCliImage.pullPolicy }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "dynamodb-local.fullname" . }}
+              key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "dynamodb-local.fullname" . }}
+              key: aws-secret-access-key
+        - name: AWS_DEFAULT_REGION
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "dynamodb-local.fullname" . }}
+              key: aws-default-region
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "true"
+        - name: HOME
+          value: /tmp
+      command:
+        - /bin/sh
+        - -ec
+      args:
+        - >-
+          until aws dynamodb list-tables
+          --endpoint-url {{ include "dynamodb-local.internalEndpoint" . }}
+          --output json;
+          do sleep 5; done

@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: dynamodb-local
+description: Amazon DynamoDB Local for local development
+type: application
+version: 0.1.0
+appVersion: "latest"

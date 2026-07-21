@@ -1,0 +1,59 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "cosmosdb-emulator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cosmosdb-emulator.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- if .Values.istio.api.hosts }}
+    {{- range .Values.istio.api.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    - {{ include "cosmosdb-emulator.apiHost" . | quote }}
+    {{- end }}
+  gateways:
+    - {{ .Values.istio.gateway | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: {{ include "cosmosdb-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.emulator.port }}
+{{- if and .Values.emulator.explorer.enabled .Values.istio.explorer.enabled }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "cosmosdb-emulator.fullname" . }}-explorer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cosmosdb-emulator.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- if .Values.istio.explorer.hosts }}
+    {{- range .Values.istio.explorer.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    - {{ include "cosmosdb-emulator.explorerHost" . | quote }}
+    {{- end }}
+  gateways:
+    - {{ .Values.istio.gateway | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: {{ include "cosmosdb-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.emulator.explorer.port }}
+{{- end }}
+{{- end }}

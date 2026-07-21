@@ -93,3 +93,13 @@ serviceMonitors:
     # Scraped by the alloy release; matches repo-wide convention.
     labels:
       release: alloy
+  # istiod control-plane metrics (istio_build, pilot_*). The Envoy data plane
+  # (istio_requests_total, which draws the Kiali graph) is scraped separately
+  # via each sidecar's prometheus.io/scrape annotation, so it is intentionally
+  # not covered here.
+  istio:
+    enabled: true
+    namespace: istio-system
+    interval: 30s
+    labels:
+      release: alloy

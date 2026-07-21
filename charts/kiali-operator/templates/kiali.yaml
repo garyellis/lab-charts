@@ -1,0 +1,9 @@
+{{- if .Values.kiali.enabled }}
+apiVersion: kiali.io/v1alpha1
+kind: Kiali
+metadata:
+  name: {{ .Values.kiali.name }}
+  namespace: {{ .Values.kiali.namespace }}
+spec:
+{{- toYaml .Values.kiali.spec | nindent 2 }}
+{{- end }}

@@ -1,0 +1,52 @@
+---
+# kind / CI overrides for Strimzi Kafka Operator. Layered on values.yaml.
+strimzi-kafka-operator:
+  resources:
+    limits:
+      cpu: 300m
+      memory: 384Mi
+    requests:
+      cpu: 50m
+      memory: 192Mi
+
+kafkaCluster:
+  listeners:
+    - name: plain
+      port: 9092
+      type: internal
+      tls: false
+    # kind-only listener for Mac-native Kafka clients.
+    #
+    # kind-config.yaml maps localhost:32092 -> nodePort 32092 and
+    # localhost:32093 -> nodePort 32093. Kafka clients bootstrap through
+    # localhost:32092, then use the broker's advertised localhost:32093
+    # endpoint from Kafka metadata.
+    - name: local
+      port: 9094
+      type: nodeport
+      tls: false
+      configuration:
+        bootstrap:
+          nodePort: 32092
+        brokers:
+          - broker: 0
+            nodePort: 32093
+            advertisedHost: localhost
+            advertisedPort: 32093
+
+  nodePool:
+    storage:
+      volumes:
+        - id: 0
+          type: persistent-claim
+          kraftMetadata: shared
+          size: 2Gi
+          deleteClaim: true
+
+  resources:
+    limits:
+      cpu: 750m
+      memory: 768Mi
+    requests:
+      cpu: 100m
+      memory: 512Mi

@@ -1,0 +1,21 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install External Secrets Operator with bundled CRDs and verify the control-plane deployments and CRDs are available.
+    namespace: external-secrets
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: control-plane-ready
+        type: helm-test
+        description: Wait for the controller, webhook, and certificate controller deployments.
+      - name: crds-installed
+        type: helm-test
+        description: Verify the core external-secrets.io CRDs exist.
+    timeout: 10m
+
+reverseTests: []

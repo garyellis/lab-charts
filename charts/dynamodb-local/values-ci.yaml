@@ -1,0 +1,15 @@
+---
+appsDomain: kind.local
+
+persistence:
+  enabled: false
+  storageClassName: ""
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi

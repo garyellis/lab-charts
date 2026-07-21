@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cosmosdb-emulator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cosmosdb-emulator.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "cosmosdb-emulator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ ternary "https-cosmos" "http-cosmos" (eq .Values.emulator.protocol "https") }}
+      port: {{ .Values.emulator.port }}
+      targetPort: cosmos
+      protocol: TCP
+    - name: http-health
+      port: {{ .Values.emulator.healthPort }}
+      targetPort: health
+      protocol: TCP
+    {{- if .Values.emulator.explorer.enabled }}
+    - name: {{ ternary "https-explorer" "http-explorer" (eq .Values.emulator.explorer.protocol "https") }}
+      port: {{ .Values.emulator.explorer.port }}
+      targetPort: explorer
+      protocol: TCP
+    {{- end }}

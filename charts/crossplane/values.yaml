@@ -1,0 +1,38 @@
+---
+crossplane:
+  replicas: 1
+
+  rbacManager:
+    deploy: true
+    replicas: 1
+
+  webhooks:
+    enabled: true
+
+  securityContextCrossplane:
+    runAsUser: 65532
+    runAsGroup: 65532
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+
+  securityContextRBACManager:
+    runAsUser: 65532
+    runAsGroup: 65532
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+
+  metrics:
+    enabled: false
+
+  provider:
+    packages: []
+    defaultActivations:
+      - "*"
+
+  configuration:
+    packages: []
+
+  function:
+    packages: []

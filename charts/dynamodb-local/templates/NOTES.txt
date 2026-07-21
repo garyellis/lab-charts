@@ -1,0 +1,19 @@
+DynamoDB Local is installing in namespace {{ .Release.Namespace }}.
+
+In-cluster endpoint URL:
+  {{ include "dynamodb-local.internalEndpoint" . }}
+
+AWS CLI from inside the cluster:
+  aws dynamodb list-tables --endpoint-url {{ include "dynamodb-local.internalEndpoint" . }} --region {{ .Values.dynamodb.region }}
+
+{{- if .Values.istio.enabled }}
+Istio endpoint URL:
+  {{ include "dynamodb-local.externalEndpoint" . }}
+
+AWS CLI from your workstation:
+  AWS_ACCESS_KEY_ID={{ .Values.dynamodb.accessKeyId }} AWS_SECRET_ACCESS_KEY={{ .Values.dynamodb.secretAccessKey }} aws dynamodb list-tables --endpoint-url {{ include "dynamodb-local.externalEndpoint" . }} --region {{ .Values.dynamodb.region }}
+{{- end }}
+
+Port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dynamodb-local.fullname" . }} {{ .Values.dynamodb.port }}:{{ .Values.dynamodb.port }}
+  aws dynamodb list-tables --endpoint-url http://localhost:{{ .Values.dynamodb.port }} --region {{ .Values.dynamodb.region }}

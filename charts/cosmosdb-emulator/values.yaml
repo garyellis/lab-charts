@@ -1,0 +1,90 @@
+---
+# Azure Cosmos DB Linux emulator for local development.
+# The vNext emulator supports the API for NoSQL in gateway mode.
+
+appsDomain: k8s.home.lab.io
+
+replicaCount: 1
+
+image:
+  repository: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
+  tag: vnext-latest
+  pullPolicy: IfNotPresent
+
+emulator:
+  # The emulator defaults to HTTP. Microsoft documents that .NET and Java SDKs
+  # currently require HTTPS mode; set this to "https" if your clients need it
+  # and configure matching Istio TLS origination/passthrough for the gateway path.
+  protocol: http
+  port: 8081
+  healthPort: 8080
+  explorer:
+    enabled: true
+    port: 1234
+    protocol: http
+  gatewayEndpoint: ""
+  logLevel: info
+  enableTelemetry: false
+  accountKey: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
+
+initData:
+  enabled: false
+  # Mount a ConfigMap containing .csh files if you want deterministic local seed data.
+  configMapName: ""
+  mountPath: /init
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+istio:
+  enabled: true
+  gateway: istio-ingress/apps-gateway
+  externalScheme: https
+  api:
+    hostPrefix: cosmos
+    hosts: []
+  explorer:
+    enabled: true
+    hostPrefix: cosmos-explorer
+    hosts: []
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  storageClassName: csi-cinder-sc-delete
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []

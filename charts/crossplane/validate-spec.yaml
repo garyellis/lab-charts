@@ -1,0 +1,14 @@
+version: 1
+release_name: crossplane
+namespace_template: "lab-${env}"
+environments:
+  ci:
+    namespace: crossplane-system
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "Chart.yaml":     [ci]
+  "values.yaml":    [ci]
+  "values-ci.yaml": [ci]
+  "templates/**":   [ci]

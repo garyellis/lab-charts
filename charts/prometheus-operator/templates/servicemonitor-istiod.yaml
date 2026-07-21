@@ -1,0 +1,25 @@
+{{- if .Values.serviceMonitors.istio.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istiod
+  namespace: {{ .Values.serviceMonitors.istio.namespace }}
+  labels:
+    app.kubernetes.io/part-of: istio
+    app.kubernetes.io/name: istiod
+    {{- with .Values.serviceMonitors.istio.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: istiod
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.serviceMonitors.istio.namespace }}
+  endpoints:
+    - port: http-monitoring
+      interval: {{ .Values.serviceMonitors.istio.interval | quote }}
+      honorLabels: true
+      path: /metrics
+{{- end }}

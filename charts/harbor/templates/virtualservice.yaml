@@ -1,0 +1,31 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: harbor
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  hosts:
+    {{- if .Values.istio.hosts }}
+    {{- range .Values.istio.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    - {{ printf "%s.%s" .Values.istio.hostPrefix .Values.appsDomain | quote }}
+    {{- end }}
+  gateways:
+    - {{ .Values.istio.gateway | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: harbor.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: 80
+{{- end }}

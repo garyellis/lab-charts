@@ -1,0 +1,19 @@
+{{- if .Values.authorizationPolicy.enabled }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .Values.kiali.name }}-auth
+  namespace: {{ .Values.authorizationPolicy.namespace }}
+spec:
+  selector:
+    matchLabels:
+      istio: {{ .Values.authorizationPolicy.gatewaySelector }}
+  action: CUSTOM
+  provider:
+    name: {{ .Values.authorizationPolicy.provider }}
+  rules:
+    - to:
+        - operation:
+            hosts:
+              - {{ printf "%s.%s" .Values.authorizationPolicy.hostPrefix .Values.appsDomain | quote }}
+{{- end }}

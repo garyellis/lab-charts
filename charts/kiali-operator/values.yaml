@@ -1,0 +1,125 @@
+---
+# Lab deployment values for the Kiali operator.
+#
+# This is an umbrella chart. It vendors the upstream `kiali-operator` chart
+# (values nested under `kiali-operator:`) and additionally owns three
+# integration resources of its own:
+#
+#   * kiali               -> the Kiali CR the operator reconciles into a
+#                            Kiali server Deployment.
+#   * virtualService      -> routes the shared Istio apps gateway to Kiali.
+#   * authorizationPolicy -> fronts Kiali with oauth2-proxy at the gateway.
+#
+# Each is toggleable so the kind/CI environment can install the operator
+# alone (see values-ci.yaml), where no Istio mesh or observability stack
+# exists to back these resources.
+
+# Apps-tier ingress domain. Must match the appsDomain on the istio-gateway
+# release so the VirtualService host falls under the gateway hosts and the
+# lab CA leaf certificate SANs.
+appsDomain: k8s.home.lab.io
+
+# ----------------------------------------------------------------------------
+# Kiali CR (kiali.io/v1alpha1)
+# ----------------------------------------------------------------------------
+# The operator watches all namespaces and reconciles this CR into a Kiali
+# server. `spec` is passed through verbatim, so any field from the Kiali CR
+# reference can be set here without a template change.
+kiali:
+  enabled: true
+  name: kiali
+  namespace: istio-system
+  spec:
+    deployment:
+      view_only_mode: false
+
+    # Auth is enforced by oauth2-proxy at the Istio gateway (see
+    # authorizationPolicy below). Kiali itself runs anonymous to avoid
+    # forwarding tokens through the mesh.
+    auth:
+      strategy: anonymous
+
+    external_services:
+      prometheus:
+        url: http://mimir-gateway.observability.svc/prometheus
+        # Mimir serves the Prometheus query API under /prometheus but does not
+        # expose Prometheus's /-/healthy there. Kiali defaults its health probe
+        # to <url>/-/healthy (404 against Mimir), so point it at Mimir's own
+        # /ready endpoint instead.
+        health_check_url: http://mimir-gateway.observability.svc/ready
+        thanos_proxy:
+          enabled: true
+      grafana:
+        enabled: true
+        url: https://grafana.k8s.home.lab.io
+        internal_url: http://grafana.observability.svc
+      tracing:
+        enabled: true
+        provider: tempo
+        internal_url: http://tempo.observability.svc:3200
+        external_url: https://grafana.k8s.home.lab.io/explore
+        use_grpc: false
+        tempo_config:
+          datasource_uid: tempo
+        namespace_selector: false
+
+    server:
+      port: 20001
+      web_root: /
+
+# ----------------------------------------------------------------------------
+# VirtualService (networking.istio.io/v1)
+# ----------------------------------------------------------------------------
+# The VirtualService is created in the release namespace and routes the
+# shared apps gateway to the Kiali server Service, which the operator creates
+# in the Kiali CR namespace (kiali.namespace). Ingress reaches it at
+# https://<hostPrefix>.<appsDomain> on the gateway's 443 listener; the
+# destination below is the Kiali server's own Service port.
+virtualService:
+  enabled: true
+  gateway: istio-ingress/apps-gateway
+  hostPrefix: kiali
+  # Port of the Kiali server Service. Keep aligned with kiali.spec.server.port.
+  servicePort: 20001
+
+# ----------------------------------------------------------------------------
+# AuthorizationPolicy (security.istio.io/v1)
+# ----------------------------------------------------------------------------
+# Delegates authn for the Kiali host to the oauth2-proxy ext_authz provider
+# registered on the gateway's istiod meshConfig.
+authorizationPolicy:
+  enabled: false
+  namespace: istio-ingress
+  gatewaySelector: gateway-internal
+  provider: oauth2-proxy
+  hostPrefix: kiali
+
+# ----------------------------------------------------------------------------
+# Upstream kiali-operator chart values (nested under the dependency name).
+# ----------------------------------------------------------------------------
+kiali-operator:
+  # The umbrella chart owns the Kiali CR (see `kiali` above), so the operator
+  # chart must not create its own.
+  cr:
+    create: false
+
+  # Cluster-wide install: let the operator create ClusterRoles for Kiali and
+  # allow Kiali to see all namespaces in the mesh.
+  clusterRoleCreator: true
+  allowAllAccessibleNamespaces: true
+
+  # Scrape annotations on the operator pod. Only adds prometheus.io/* pod
+  # annotations; it does not create a Service or ServiceMonitor.
+  metrics:
+    enabled: true
+
+  # The operator is ansible-based and spikes memory during reconcile;
+  # upstream ships no memory limit. Keep the limit generous (512Mi) so the
+  # reconcile is never OOMKilled mid-run, which would loop the Kiali install.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi

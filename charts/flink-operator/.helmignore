@@ -1,0 +1,8 @@
+.DS_Store
+.git/
+.gitignore
+.helmignore
+README.md
+test-spec.yaml
+validate-spec.yaml
+values-ci.yaml

@@ -1,0 +1,63 @@
+---
+# Lab deployment values for the Apache Flink Kubernetes Operator.
+# This chart is a dependency wrapper. Values for the vendored Flink operator
+# chart must be nested under `flink-kubernetes-operator` to affect rendered
+# resources.
+flink-kubernetes-operator:
+  replicas: 1
+
+  # Empty list means the operator reconciles FlinkDeployment / FlinkSessionJob
+  # resources cluster-wide. Lab jobs commonly live outside this namespace.
+  watchNamespaces: []
+
+  # The admission webhook is optional (it validates FlinkDeployment specs). The
+  # upstream chart wires it to cert-manager (Certificate/Issuer + CA injection),
+  # so enabling it requires cert-manager in the cluster. Disabled by default to
+  # keep this chart self-contained; the operator reconciles Flink CRs without
+  # it. Set create: true (and install charts/cert-manager first) to enable.
+  webhook:
+    create: false
+
+  operatorPod:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 768Mi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+
+  podSecurityContext:
+    runAsUser: 9999
+    runAsGroup: 9999
+
+# Sample FlinkDeployment managed by this release. Defaults to the built-in
+# StateMachine streaming example so the install is self-verifying without any
+# external dependency (no Kafka, no artifact storage). Point `job.jarURI` at
+# your own jar, or set enabled: false and submit FlinkSessionJobs separately.
+flinkDeployment:
+  enabled: true
+  name: lab-flink
+  image: flink:1.20
+  flinkVersion: v1_20
+
+  serviceAccount: flink
+
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+
+  jobManager:
+    replicas: 1
+    resource:
+      cpu: 0.5
+      memory: "1024m"
+
+  taskManager:
+    resource:
+      cpu: 0.5
+      memory: "1024m"
+
+  job:
+    jarURI: local:///opt/flink/examples/streaming/StateMachine.jar
+    parallelism: 2
+    upgradeMode: stateless

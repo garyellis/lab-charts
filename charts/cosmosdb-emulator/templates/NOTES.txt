@@ -1,0 +1,24 @@
+Cosmos DB emulator is installing in namespace {{ .Release.Namespace }}.
+
+In-cluster endpoint:
+  {{ include "cosmosdb-emulator.internalEndpoint" . }}
+
+In-cluster connection string:
+  AccountEndpoint={{ include "cosmosdb-emulator.internalEndpoint" . }};AccountKey={{ .Values.emulator.accountKey }};
+
+{{- if .Values.istio.enabled }}
+Istio endpoint:
+  {{ include "cosmosdb-emulator.externalEndpoint" . }}
+
+Istio connection string:
+  AccountEndpoint={{ include "cosmosdb-emulator.externalEndpoint" . }};AccountKey={{ .Values.emulator.accountKey }};
+
+{{- if and .Values.emulator.explorer.enabled .Values.istio.explorer.enabled }}
+Data Explorer:
+  {{ .Values.istio.externalScheme }}://{{ include "cosmosdb-emulator.explorerHost" . }}/
+{{- end }}
+{{- end }}
+
+Readiness:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "cosmosdb-emulator.fullname" . }} {{ .Values.emulator.healthPort }}:{{ .Values.emulator.healthPort }}
+  curl http://localhost:{{ .Values.emulator.healthPort }}/ready

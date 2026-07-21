@@ -1,0 +1,92 @@
+---
+# Lab deployment values for Strimzi Kafka Operator.
+# This chart is a dependency wrapper. Values for the vendored Strimzi chart
+# must be nested under `strimzi-kafka-operator` to affect rendered resources.
+strimzi-kafka-operator:
+  replicas: 1
+
+  # Lab clusters commonly host Kafka CRs outside the operator namespace.
+  watchAnyNamespace: true
+
+  # Keep the Strimzi CRDs and global RBAC in this release. Strimzi operators
+  # need these cluster-scoped resources to reconcile Kafka resources safely.
+  createGlobalResources: true
+  createAggregateRoles: true
+
+  leaderElection:
+    enable: true
+
+  dashboards:
+    enabled: false
+
+  operatorNetworkPolicy:
+    enabled: false
+
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 384Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+kafkaCluster:
+  enabled: true
+  name: lab-kafka
+  version: "4.2.0"
+
+  nodePool:
+    name: pool
+    replicas: 1
+    roles:
+      - controller
+      - broker
+    storage:
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 5Gi
+          deleteClaim: true
+          kraftMetadata: shared
+
+  listeners:
+    - name: plain
+      port: 9092
+      type: internal
+      tls: false
+
+  config:
+    offsets.topic.replication.factor: 1
+    transaction.state.log.replication.factor: 1
+    transaction.state.log.min.isr: 1
+    default.replication.factor: 1
+    min.insync.replicas: 1
+
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+
+  jvmOptions:
+    "-Xms": 256m
+    "-Xmx": 256m
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi

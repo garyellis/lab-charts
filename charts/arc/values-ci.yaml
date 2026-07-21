@@ -1,0 +1,5 @@
+---
+# kind / CI overrides for the ARC controller. Layered on top of values.yaml.
+# The controller chart installs CRDs and a single manager pod; no GitHub
+# credentials are needed until a gha-runner-scale-set release is installed.
+gha-runner-scale-set-controller: {}

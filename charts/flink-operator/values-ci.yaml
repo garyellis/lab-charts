@@ -1,0 +1,29 @@
+---
+# kind / CI overrides for the Flink operator. Layered on values.yaml.
+flink-kubernetes-operator:
+  operatorPod:
+    resources:
+      limits:
+        cpu: 300m
+        memory: 512Mi
+      requests:
+        cpu: 50m
+        memory: 384Mi
+
+flinkDeployment:
+  # Single task slot keeps the example job schedulable on a small kind node.
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "1"
+
+  jobManager:
+    resource:
+      cpu: 0.25
+      memory: "1024m"
+
+  taskManager:
+    resource:
+      cpu: 0.25
+      memory: "1024m"
+
+  job:
+    parallelism: 1

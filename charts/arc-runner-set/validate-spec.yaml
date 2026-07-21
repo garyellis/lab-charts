@@ -1,0 +1,13 @@
+version: 1
+release_name: arc-runner-set
+environments:
+  ci:
+    namespace: arc-runners
+    values:
+      - values.yaml
+      - values-ci.yaml
+triggers:
+  "Chart.yaml":     [ci]
+  "values.yaml":    [ci]
+  "values-ci.yaml": [ci]
+triggers_strict: true

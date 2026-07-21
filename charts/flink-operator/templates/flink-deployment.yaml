@@ -1,0 +1,24 @@
+{{- if .Values.flinkDeployment.enabled }}
+{{- $fd := .Values.flinkDeployment -}}
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: {{ required "flinkDeployment.name is required" $fd.name | quote }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  image: {{ required "flinkDeployment.image is required" $fd.image | quote }}
+  flinkVersion: {{ required "flinkDeployment.flinkVersion is required" $fd.flinkVersion }}
+  serviceAccount: {{ $fd.serviceAccount | quote }}
+{{- with $fd.flinkConfiguration }}
+  flinkConfiguration:
+{{ toYaml . | indent 4 }}
+{{- end }}
+  jobManager:
+{{ toYaml $fd.jobManager | indent 4 }}
+  taskManager:
+{{ toYaml $fd.taskManager | indent 4 }}
+{{- with $fd.job }}
+  job:
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- end }}

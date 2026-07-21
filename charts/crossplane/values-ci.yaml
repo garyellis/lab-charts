@@ -1,0 +1,24 @@
+---
+# CI overlay: keep the local kind install lean and deterministic.
+crossplane:
+  # The upstream webhook Service relies on Kubernetes' implicit ClusterIP type.
+  # The local policy requires explicit service types, so CI disables webhooks
+  # instead of carrying a patched copy of the upstream chart.
+  webhooks:
+    enabled: false
+
+  resourcesCrossplane:
+    limits:
+      cpu: 500m
+      memory: 768Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  resourcesRBACManager:
+    limits:
+      cpu: 100m
+      memory: 384Mi
+    requests:
+      cpu: 100m
+      memory: 192Mi

@@ -1,0 +1,18 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install Crossplane core and RBAC manager into crossplane-system and verify both deployments are ready.
+    namespace: crossplane-system
+    requires: []
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: control-plane-ready
+        type: helm-test
+        description: Wait for the Crossplane and Crossplane RBAC manager deployments to become available.
+    timeout: 10m
+
+reverseTests: []

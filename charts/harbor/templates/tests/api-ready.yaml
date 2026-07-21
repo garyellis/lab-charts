@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-api-ready
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+  containers:
+    - name: curl
+      image: curlimages/curl:8.12.1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        seccompProfile:
+          type: RuntimeDefault
+      command:
+        - sh
+        - -ec
+        - |
+          attempts=0
+          {{- if .Values.tests.gatewayRoute.enabled }}
+          until curl --fail --silent --show-error --insecure \
+            --connect-to "{{ .Values.tests.gatewayRoute.host }}:443:{{ .Values.tests.gatewayRoute.service }}:{{ .Values.tests.gatewayRoute.port }}" \
+            "https://{{ .Values.tests.gatewayRoute.host }}/api/v2.0/ping"; do
+          {{- else }}
+          until curl --fail --silent --show-error http://harbor.{{ .Release.Namespace }}.svc.cluster.local/api/v2.0/ping; do
+          {{- end }}
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge 60 ]; then
+              exit 1
+            fi
+            sleep 5
+          done

@@ -1,0 +1,26 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install the operator behind the shared apps gateway (Kiali CR + VirtualService) and verify the operator, CRD, and route.
+    namespace: kiali-operator
+    requires:
+      - chart: istio-gateway
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: true
+    checks:
+      - name: control-plane-ready
+        type: helm-test
+        description: Wait for the kiali-operator Deployment to become Available.
+      - name: crds-installed
+        type: helm-test
+        description: Verify the Kiali CRD (kialis.kiali.io) is registered.
+      - name: route-configured
+        type: helm-test
+        description: Verify the Kiali VirtualService exists on the apps gateway.
+    timeout: 15m
+
+reverseTests: []

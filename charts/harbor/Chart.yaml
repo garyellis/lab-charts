@@ -1,0 +1,10 @@
+apiVersion: v2
+name: harbor
+description: Harbor vendor/deployment chart
+type: application
+version: 0.1.0
+appVersion: "2.15.1"
+dependencies:
+  - name: harbor
+    version: 1.19.1
+    repository: https://helm.goharbor.io

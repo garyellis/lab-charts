@@ -1,0 +1,37 @@
+{{- $testName := printf "%s-ready" (include "cosmosdb-emulator.fullname" .) -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cosmosdb-emulator.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: curl
+      image: curlimages/curl:8.17.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      command:
+        - sh
+        - -ec
+      args:
+        - >-
+          until curl --fail --silent --show-error
+          http://{{ include "cosmosdb-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.emulator.healthPort }}/ready;
+          do sleep 5; done

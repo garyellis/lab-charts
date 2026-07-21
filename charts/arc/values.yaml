@@ -1,0 +1,38 @@
+---
+# Values for the vendored GitHub ARC controller chart must be nested under
+# the dependency name.
+gha-runner-scale-set-controller:
+  replicaCount: 1
+
+  image:
+    pullPolicy: IfNotPresent
+
+  serviceAccount:
+    create: true
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  flags:
+    logLevel: info
+    logFormat: text
+    runnerMaxConcurrentReconciles: 2

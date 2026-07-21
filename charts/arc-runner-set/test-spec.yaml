@@ -1,0 +1,32 @@
+version: 1
+
+profiles:
+  minimal:
+    description: Install the ARC runner scale set using an existing GitHub auth Secret.
+    namespace: arc-runners
+    requires:
+      - chart: arc
+        profile: minimal
+    values:
+      - values.yaml
+      - values-ci.yaml
+    helmTest: false
+    checks:
+      - name: existing-github-auth-secret
+        type: manual
+        description: Pre-create Secret arc-runners/arc-github-app or override gha-runner-scale-set.githubConfigSecret before install.
+    timeout: 10m
+
+  kind-runtime:
+    description: Install a one-runner kind smoke profile that expects a real GitHub auth secret.
+    namespace: arc-runners
+    requires:
+      - chart: arc
+        profile: minimal
+    values:
+      - values.yaml
+      - values-kind-runtime.yaml
+    helmTest: true
+    timeout: 15m
+
+reverseTests: []

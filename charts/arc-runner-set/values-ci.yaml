@@ -1,0 +1,25 @@
+---
+# Runtime overlay for a local kind smoke test.
+# Replace githubConfigUrl if testing against a different repository,
+# organization, or enterprise URL. Create the referenced Secret in
+# arc-runners before installing.
+gha-runner-scale-set:
+  githubConfigUrl: "https://github.com/garyellis/lab-charts"
+  # Must reference a Secret that already exists in arc-runners. The cluster
+  # currently has arc-github-pat; switch to arc-github-app only after creating
+  # the corresponding GitHub App Secret.
+  githubConfigSecret: "arc-github-pat"
+
+  scaleSetLabels:
+    - "kind"
+    - "runner-scale-set"
+
+  # Keep one idle runner registered while proving the setup. Switch to 0 after
+  # registration and workflow pickup are understood.
+  minRunners: 1
+  maxRunners: 1
+
+  # Leave containerMode unset for plain shell jobs. Container jobs, service
+  # containers, Docker builds, and Docker-based actions need explicit mode.
+  containerMode:
+    type: dind

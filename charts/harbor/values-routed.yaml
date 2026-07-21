@@ -1,0 +1,6 @@
+---
+# Exercise TLS termination and routing through the kind Istio gateway.
+tests:
+  gatewayRoute:
+    enabled: true
+    host: harbor.kind.local

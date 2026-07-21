@@ -1,0 +1,48 @@
+---
+# kind / CI overrides for the Kiali operator. Layered on values.yaml.
+#
+# CI is the deployment environment for this chart, and routing is always on:
+# the operator, Kiali CR, and VirtualService are all installed so Kiali is
+# reachable through the shared apps gateway at https://kiali.kind.local.
+# Requires the istio-gateway stack (see the test-spec `minimal` profile).
+#
+# The AuthorizationPolicy stays disabled on kind: it delegates to the
+# oauth2-proxy ext_authz provider, which is not registered in the kind istiod
+# meshConfig, and a CUSTOM policy with an unknown provider fails closed
+# (denies all traffic to the host).
+#
+# NOTE: kind has no observability stack, so the Kiali server cannot reach
+# Prometheus and will not report healthy. The VirtualService, Kiali CR, and
+# Kiali server Deployment are all created; full functionality needs Mimir /
+# Grafana / Tempo from the observability charts.
+appsDomain: kind.local
+
+kiali:
+  enabled: true
+  # Point the Kiali CR at the kind service names. Only Prometheus differs from
+  # values.yaml: Alloy remote-writes to (and the kind Service is named)
+  # mimir-distributed-gateway, not the home-lab mimir-gateway. Deep-merged, so
+  # thanos_proxy and the tracing/grafana wiring from values.yaml are preserved
+  # (tempo.observability.svc:3200 and grafana.observability.svc already match).
+  spec:
+    external_services:
+      prometheus:
+        url: http://mimir-distributed-gateway.observability.svc/prometheus
+        health_check_url: http://mimir-distributed-gateway.observability.svc/ready
+
+virtualService:
+  enabled: true
+
+authorizationPolicy:
+  enabled: false
+
+kiali-operator:
+  # Memory can't be trimmed below the ansible reconcile's peak without
+  # OOMKilling the operator mid-install; keep 512Mi. CPU can stay small.
+  resources:
+    limits:
+      cpu: 300m
+      memory: 512Mi
+    requests:
+      cpu: 25m
+      memory: 128Mi

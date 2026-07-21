@@ -1,0 +1,71 @@
+---
+# Values for the vendored GitHub ARC runner scale set chart must be nested
+# under the dependency name. These defaults render and validate locally;
+# ensure githubConfigSecret exists before installing into a live cluster.
+gha-runner-scale-set:
+  githubConfigUrl: "https://github.com/garyellis/lab-charts"
+  # Must match a Secret that exists in the release namespace (arc-runners).
+  # Use arc-github-app for a GitHub App; arc-github-pat for a classic PAT.
+  githubConfigSecret: "arc-github-pat"
+
+  minRunners: 0
+  maxRunners: 1
+
+  controllerServiceAccount:
+    namespace: arc-systems
+    name: arc-gha-rs-controller
+
+  listenerTemplate:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: listener
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+  template:
+    spec:
+      # Pod-level context must stay dind-compatible. When containerMode.type is
+      # dind, ARC injects a privileged `dind` sidecar (docker:dind) that only
+      # sets privileged:true and inherits everything else from here. dockerd
+      # must run as root, so runAsNonRoot / runAsUser must NOT live at pod level
+      # — that would propagate to dind and dockerd exits 1 on startup. Keep only
+      # settings that are safe for a privileged root sidecar; harden per-runner.
+      securityContext:
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          # Pin the runner image. An unpinned :latest tag lets the resolved
+          # digest drift between reconciles, churning the AutoscalingRunnerSet
+          # spec and orphaning the listener. Bump deliberately.
+          image: ghcr.io/actions/actions-runner:2.335.1
+          command:
+            - /home/runner/run.sh
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            # actions-runner ships the `runner` user as uid/gid 1001 and owns
+            # /home/runner with it; any other uid fails on _work/_diag.
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
