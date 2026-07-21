@@ -1,3 +1,6 @@
+"""
+Scan file for FluxCD HelmRelease resources
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

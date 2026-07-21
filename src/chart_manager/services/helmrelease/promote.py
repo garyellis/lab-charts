@@ -7,9 +7,11 @@ from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
 
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.events.lifecycle import PromotionPhase
+from chart_manager.services.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
@@ -56,6 +58,7 @@ class PromoteService:
         github_factory: Callable[[Path], Github] = Github,
         clone_fn: CloneFn = _default_clone,
         confirm_downgrade: DowngradeConfirmFn | None = None,
+        events: EventWriter | None = None,
     ) -> None:
         self._git_factory = git_factory
         self._github_factory = github_factory
@@ -65,11 +68,37 @@ class PromoteService:
         # The CLI wires a typer.confirm; a FastAPI handler wires a force-flag check.
         self._confirm_downgrade = confirm_downgrade
 
+        # lazy store
+        self._events = events or EventWriter()
+
     def promote(self, request: PromoteRequest) -> PromoteResult:
         with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
             workdir = Path(tmp) / "flux"
             self._clone_fn(request.flux_repo, workdir, request.base_branch)
-            return self._promote_in_workdir(request, workdir)
+            result = self._promote_in_workdir(request, workdir)
+        self._emit_promotion(request, result)
+        return result
+
+    def _emit_promotion(self, request: PromoteRequest, result: PromoteResult) -> None:
+        if result.dry_run or result.no_changes:
+            return # no real state transition to record
+        if result.aborted:
+            phase = PromotionPhase.ABANDONED
+        elif result.already_open:
+            phase = PromotionPhase.AWAITING_MERGE
+        elif result.pull_request is not None:
+            phase = PromotionPhase.FLUX_PR_OPEN
+        else:
+            return # nothing actionable
+        pr = result.pull_request
+        self._events.promote(
+            chart_name=request.chart_name,
+            chart_version=request.version,
+            environment=request.environment,
+            phase=phase,
+            pr_url=pr.url if pr else None,
+            promotion_correlation_id=pr.url if pr else None,
+        )
 
     def _promote_in_workdir(
         self, request: PromoteRequest, workdir: Path
@@ -173,6 +202,7 @@ class PromoteService:
             pull_request=pr,
             downgrades=downgrades,
         )
+        
 
 
 def _is_downgrade(current: str | None, target: str) -> bool:

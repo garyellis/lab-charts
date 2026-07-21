@@ -29,6 +29,9 @@ ENV/
 # uv local cache, if configured in the repo
 .uv-cache/
 
+# Local generated trust bundles
+.certs/
+
 # Helm dependency artifacts
 charts/*/charts/*.tgz
 charts/*/charts/*.tar.gz

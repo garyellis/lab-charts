@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.integrations.kubectl import Kubectl
@@ -63,9 +64,15 @@ validate_app = typer.Typer(
     no_args_is_help=True,
     help="Static chart validation: render -> schema -> policy.",
 )
+
+# setup the events command interface
+events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
+
+events_cli.register(events_app)
 validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
 
+app.add_typer(events_app, name="events")
 app.add_typer(charts_app, name="charts")
 app.add_typer(deps_app, name="deps")
 app.add_typer(sandbox_app, name="sandbox")

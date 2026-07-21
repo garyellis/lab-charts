@@ -9,6 +9,9 @@ description = "Local and CI orchestration for lab Helm wrapper charts."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "azure-cosmos>=4.16.1",
+  "azure-identity>=1.25.3",
+  "boto3>=1.43.33",
   "packaging>=24",
   "pydantic>=2.10",
   "pyyaml>=6.0",
@@ -135,6 +138,11 @@ ignore_names = [
   # signature; vulture sees the unreferenced local but the descriptor
   # protocol needs it.
   "cls",
+]
+
+[dependency-groups]
+dev = [
+    "boto3-stubs[dynamodb]>=1.43.36",
 ]
 
 [[tool.mypy.overrides]]
