@@ -24,6 +24,6 @@ spec:
         message: "Service type LoadBalancer is not allowed"
         pattern:
           spec:
-            # `!LoadBalancer` is kyverno's negated-string operator — matches
-            # any value other than the literal "LoadBalancer".
-            type: "!LoadBalancer"
+            # Service.type is optional and defaults to ClusterIP. The equality
+            # anchor validates it only when the manifest sets it explicitly.
+            =(type): "!LoadBalancer"
