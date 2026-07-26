@@ -13,7 +13,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.plumbing.validate_models import PhaseResult, WorklistRow
+from chart_manager.services.validate.domain.models import PhaseResult, WorklistRow
 
 
 def render(

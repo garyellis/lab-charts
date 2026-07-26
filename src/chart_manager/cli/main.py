@@ -159,11 +159,9 @@ def list_charts(root: RootOption = Path(".")) -> None:
         except ChartManagerError:
             table.add_row(name, "?", "?", "[red]<no test-spec>[/red]")
             continue
-        version = chart.chart_yaml.get("version", "") or ""
-        deps_raw = chart.chart_yaml.get("dependencies") or []
-        deps: list[dict[str, object]] = deps_raw if isinstance(deps_raw, list) else []
+        version = chart.metadata.version or ""
         dep_versions = ", ".join(
-            f"{dep.get('name', '?')} {dep.get('version', '?')}" for dep in deps
+            f"{dep.name} {dep.version or '?'}" for dep in chart.metadata.dependencies
         )
         profiles = ", ".join(chart.spec.profiles)
         table.add_row(name, str(version), dep_versions, profiles)

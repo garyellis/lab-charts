@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.validate_models import ALL_PHASES, RunResult
+from chart_manager.services.validate.domain.models import ALL_PHASES, RunResult
 
 __all__ = [
     "RunOutcome",

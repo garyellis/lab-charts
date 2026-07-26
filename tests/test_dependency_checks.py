@@ -12,17 +12,23 @@ from pathlib import Path
 import pytest
 
 from chart_manager.services.dependencies import DependencyService
-from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    HelmChart,
+    ManagedChart,
+)
 from chart_manager.services.domain.graph import PlanEntry
 from chart_manager.services.domain.spec import CheckSpec, ProfileSpec
 from chart_manager.services.domain.spec import TestSpec as _TestSpec
 
 
-def _chart(name: str, profile: ProfileSpec) -> Chart:
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
+def _chart(name: str, profile: ProfileSpec) -> ManagedChart:
+    return ManagedChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
         spec=_TestSpec(profiles={"minimal": profile}, reverse_tests=[]),
     )
 
@@ -44,7 +50,7 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DependencyServic
             ),
         ),
     }
-    monkeypatch.setattr(svc.repository, "get", lambda name: charts[name])
+    monkeypatch.setattr(svc.repository, "get_managed", lambda name: charts[name])
     monkeypatch.setattr(
         svc.resolver,
         "install_plan",

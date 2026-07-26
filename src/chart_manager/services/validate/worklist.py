@@ -28,15 +28,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
-from chart_manager.plumbing.validate_models import WorklistRow
-from chart_manager.plumbing.validate_spec import (
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.graph import build_helm_dependency_index
+from chart_manager.services.validate.domain.models import WorklistRow
+from chart_manager.services.validate.domain.spec import (
     MATCH_BY_BASENAME,
     ValidateSpec,
     load_validate_spec,
     resolve_namespace,
 )
-from chart_manager.services.domain.charts import ChartRepository
-from chart_manager.services.domain.graph import build_helm_dependency_index
 from chart_manager.services.validate.runner import RowConfig
 
 
@@ -124,8 +124,7 @@ def build_worklist(
          resolved the git fallback chain).
     """
     root = root.resolve()
-    charts_dir = root / "charts"
-    all_chart_names = _list_chart_dirs(charts_dir)
+    all_chart_names = ChartRepository(root).list_names()
     loaded = load_chart_specs(root, all_chart_names)
     by_chart: dict[str, LoadedSpec] = {ls.chart: ls for ls in loaded}
 
@@ -401,16 +400,6 @@ def _cross_product(specs: dict[str, ValidateSpec]) -> tuple[WorklistRow, ...]:
         for env in sorted(specs[chart].environments):
             pairs.append((chart, env))
     return _materialize(specs, pairs)
-
-
-def _list_chart_dirs(charts_dir: Path) -> list[str]:
-    """List chart directory names (those containing a Chart.yaml), sorted."""
-    if not charts_dir.is_dir():
-        return []
-    return sorted(
-        p.name for p in charts_dir.iterdir()
-        if p.is_dir() and (p / "Chart.yaml").is_file()
-    )
 
 
 _VALIDATE_CODE_PREFIXES = (

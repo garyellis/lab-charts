@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.validate_spec import (
+from chart_manager.services.validate.domain.spec import (
     MATCH_BY_BASENAME,
     ValidateSpec,
     load_validate_spec,

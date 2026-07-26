@@ -1,4 +1,4 @@
-"""Per-chart `validate-spec.yaml` schema + loader.
+"""Per-chart `validate-spec.yaml` schema and loader.
 
 Uses pydantic at the IO boundary and raises `SpecError`
 on any parse/shape failure. `services/validate/worklist.py` is the only

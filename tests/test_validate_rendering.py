@@ -14,7 +14,7 @@ from chart_manager.cli.validate_render import (
     failure_details,
     to_text_table,
 )
-from chart_manager.plumbing.validate_models import (
+from chart_manager.services.validate.domain.models import (
     PhaseResult,
     RowResult,
     RunResult,

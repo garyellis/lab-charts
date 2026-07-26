@@ -25,7 +25,7 @@ from rich.table import Table
 from rich.text import Text
 
 from chart_manager.cli.validate_render import STATUS_STYLE
-from chart_manager.plumbing.validate_models import WorklistRow
+from chart_manager.services.validate.domain.models import WorklistRow
 from chart_manager.services.validate.progress import ProgressDisplay
 
 __all__ = ["LiveTableDisplay", "PlainNarrationDisplay"]

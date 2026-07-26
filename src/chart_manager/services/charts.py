@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.services.domain.charts import Chart, ChartRepository
+from chart_manager.services.domain.charts import ChartRepository, ManagedChart
 
 
 class ChartService:
@@ -17,6 +17,6 @@ class ChartService:
         """Return all chart names."""
         return self.repository.list_names()
 
-    def get_chart(self, name: str) -> Chart:
-        """Return the chart named `name`."""
-        return self.repository.get(name)
+    def get_chart(self, name: str) -> ManagedChart:
+        """Return the managed chart named ``name``."""
+        return self.repository.get_managed(name)

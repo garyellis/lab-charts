@@ -37,7 +37,7 @@ class CiService:
 
         Raises ExternalCommandError on a nonzero `helm test`.
         """
-        chart = self.repository.get(chart_name)
+        chart = self.repository.get_managed(chart_name)
         profile_spec = chart.spec.profile(profile)
         values = self.repository.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)
@@ -70,7 +70,7 @@ class CiService:
         what's running in production rather than chart defaults. Runs
         `helm test` after the upgrade if the profile enables it.
         """
-        chart = self.repository.get(chart_name)
+        chart = self.repository.get_managed(chart_name)
         profile_spec = chart.spec.profile(profile)
         values = self.repository.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)

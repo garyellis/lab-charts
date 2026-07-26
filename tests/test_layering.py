@@ -80,6 +80,59 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
     assert expected <= actual
 
 
+def test_validation_domain_modules_stay_out_of_plumbing() -> None:
+    """Keep validation models and schema parsing with the validation service."""
+    misplaced = sorted(
+        path.name
+        for path in (
+            _PLUMBING / "validate_models.py",
+            _PLUMBING / "validate_spec.py",
+        )
+        if path.exists()
+    )
+    assert not misplaced, (
+        "validation-domain modules belong in "
+        "chart_manager/services/validate/domain, not plumbing: "
+        f"{', '.join(misplaced)}"
+    )
+
+    validation_domain = _SERVICES / "validate" / "domain"
+    expected = {"models.py", "spec.py"}
+    actual = {
+        path.name
+        for path in validation_domain.glob("*.py")
+        if path.name != "__init__.py"
+    }
+    assert expected <= actual
+
+
+def test_plumbing_does_not_import_service_domains() -> None:
+    """Generic plumbing may not depend on chart or validation service policy."""
+    forbidden_prefixes = (
+        "chart_manager.services.domain",
+        "chart_manager.services.validate.domain",
+    )
+    offenders: list[str] = []
+
+    for path in sorted(_PLUMBING.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            imported: tuple[str, ...] = ()
+            if isinstance(node, ast.Import):
+                imported = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = (node.module,)
+            for module in imported:
+                if module.startswith(forbidden_prefixes):
+                    rel = path.relative_to(_SRC)
+                    offenders.append(f"{rel}:{node.lineno}: {module}")
+
+    assert not offenders, (
+        "generic plumbing must not import service-domain modules:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 # --------------------------------------------------------------------------
 # (b) services/ must stay Rich- and Typer-free
 # --------------------------------------------------------------------------

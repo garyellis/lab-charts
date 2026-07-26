@@ -9,8 +9,8 @@ from chart_manager.integrations.kubeconform import (
 )
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.plumbing.validate_models import WorklistRow
 from chart_manager.services.validate import phases
+from chart_manager.services.validate.domain.models import WorklistRow
 
 
 class _StubKubeconform(Kubeconform):

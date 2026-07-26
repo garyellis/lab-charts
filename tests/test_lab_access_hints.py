@@ -19,7 +19,11 @@ import pytest
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services import lab as lab_module
-from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    HelmChart,
+    ManagedChart,
+)
 from chart_manager.services.domain.graph import PlanEntry
 from chart_manager.services.domain.spec import ProfileSpec
 from chart_manager.services.domain.spec import TestSpec as _TestSpec
@@ -183,7 +187,7 @@ def _service(
     )
 
 
-def _stub_chart(name: str, *, namespace: str = "observability") -> Chart:
+def _stub_chart(name: str, *, namespace: str = "observability") -> ManagedChart:
     profile = ProfileSpec(
         description="stub",
         namespace=namespace,
@@ -194,10 +198,12 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> Chart:
         checks=[],
     )
     spec = _TestSpec(profiles={"minimal": profile}, reverse_tests=[])
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
+    return ManagedChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
         spec=spec,
     )
 
@@ -207,16 +213,16 @@ def _wire_repo(
     service: LabService,
     *,
     plan: list[PlanEntry],
-    charts: dict[str, Chart],
+    charts: dict[str, ManagedChart],
 ) -> None:
     monkeypatch.setattr(
         service.resolver, "install_plan", lambda _c, _p: list(plan)
     )
 
-    def _get(name: str) -> Chart:
+    def _get(name: str) -> ManagedChart:
         return charts[name]
 
-    monkeypatch.setattr(service.repository, "get", _get)
+    monkeypatch.setattr(service.repository, "get_managed", _get)
     monkeypatch.setattr(service.repository, "value_paths", lambda _c, _p: [])
 
 

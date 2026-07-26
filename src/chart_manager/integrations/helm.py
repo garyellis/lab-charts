@@ -15,7 +15,6 @@ from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.services.domain.chart_deps import (
     chart_has_dependencies,
     deps_are_fresh,
-    is_local_chart,
 )
 
 
@@ -113,11 +112,11 @@ class Helm:
     ) -> bool:
         """Run `helm dependency update` only when the lock is stale.
 
-        Cheap mtime gate that elides the (5-15s) subprocess in the common
-        re-run case where Chart.lock and charts/ are already up-to-date
-        with Chart.yaml. The expensive `helm dependency update` call is the
-        single biggest tax on a lab `up` re-run (~18 charts in the install
-        plan), so this is a meaningful win for converge-on-rerun.
+        A conservative metadata gate elides the (5-15s) subprocess in the
+        common re-run case where Chart.lock and charts/ are up-to-date with
+        Chart.yaml. The expensive `helm dependency update` call is the single
+        biggest tax on a lab `up` re-run (~18 charts in the install plan), so
+        this is a meaningful win for converge-on-rerun.
 
         Returns True if the update actually ran (or was forced by missing
         artifacts), False if it was skipped because the lock looks fresh.
@@ -126,8 +125,8 @@ class Helm:
 
         Freshness is decided by `deps_are_fresh` (see its docstring): lock
         and charts/ must exist, the lock must be no older than Chart.yaml,
-        and the lock's dependency count must match the artifacts materialized
-        under charts/. Any other shape falls through to running the update.
+        and every locked name/version identity must match a valid materialized
+        chart. Any other shape falls through to running the update.
         """
         resolved = chart_path.resolve()
         with self._deps_updated_lock:
@@ -300,7 +299,7 @@ class Helm:
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if is_local_chart(chart_ref) and chart_has_dependencies(Path(chart_ref)):
+        if _is_local_chart_ref(chart_ref) and chart_has_dependencies(Path(chart_ref)):
             self.dependency_update(Path(chart_ref))
 
         base_args = [
@@ -496,6 +495,20 @@ def _resolve(
     if version is None:
         return "helm"
     return _resolve_via_mise(runner, version)
+
+
+def _is_local_chart_ref(chart_ref: str | Path) -> bool:
+    """Whether a Helm CLI chart argument names an existing local path.
+
+    Resolving a command argument is adapter policy, not chart-domain policy:
+    remote references are passed through untouched, while relative paths are
+    interpreted against the process working directory just as Helm interprets
+    them.
+    """
+    ref = str(chart_ref)
+    if ref.startswith(("oci://", "http://", "https://")):
+        return False
+    return Path(ref).exists()
 
 
 #: Memo for `mise where helm@<version>`, keyed by the runner that resolved

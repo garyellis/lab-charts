@@ -22,7 +22,7 @@ from __future__ import annotations
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.plumbing.validate_models import PhaseResult, RunResult
+from chart_manager.services.validate.domain.models import PhaseResult, RunResult
 from chart_manager.services.validate.wire import row_elapsed_text
 
 #: Rich style per terminal phase status. Shared with `cli/validate_progress.py`

@@ -182,7 +182,7 @@ class SandboxService:
         tests).
         """
         for entry in plan:
-            chart = self.repository.get(entry.chart)
+            chart = self.repository.get_managed(entry.chart)
             profile = chart.spec.profile(entry.profile)
             values = self.repository.value_paths(chart, entry.profile)
             release = entry.chart

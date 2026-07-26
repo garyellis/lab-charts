@@ -19,7 +19,11 @@ import pytest
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services import lab as lab_module
-from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    HelmChart,
+    ManagedChart,
+)
 from chart_manager.services.domain.graph import PlanEntry
 from chart_manager.services.domain.spec import ProfileSpec
 from chart_manager.services.domain.spec import TestSpec as _TestSpec
@@ -173,7 +177,7 @@ def _service(
     )
 
 
-def _stub_chart(name: str, *, namespace: str = "observability") -> Chart:
+def _stub_chart(name: str, *, namespace: str = "observability") -> ManagedChart:
     """Synthesize an in-memory Chart with a minimal `minimal` profile.
 
     Skips disk I/O so LabService tests don't need a chart tree on tmp_path.
@@ -191,10 +195,12 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> Chart:
         checks=[],
     )
     spec = _TestSpec(profiles={"minimal": profile}, reverse_tests=[])
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
+    return ManagedChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
         spec=spec,
     )
 
@@ -204,7 +210,7 @@ def _stub_plan_and_repo(
     service: LabService,
     *,
     plan: list[PlanEntry],
-    charts: dict[str, Chart],
+    charts: dict[str, ManagedChart],
 ) -> None:
     """Replace the resolver + repository so tests don't need a chart tree.
 
@@ -217,12 +223,12 @@ def _stub_plan_and_repo(
         service.resolver, "install_plan", lambda _chart, _profile: list(plan)
     )
 
-    def _get(name: str) -> Chart:
+    def _get(name: str) -> ManagedChart:
         if name not in charts:
             raise ChartManagerError(f"chart not found: {name}")
         return charts[name]
 
-    monkeypatch.setattr(service.repository, "get", _get)
+    monkeypatch.setattr(service.repository, "get_managed", _get)
     monkeypatch.setattr(service.repository, "value_paths", lambda _c, _p: [])
 
 

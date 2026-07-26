@@ -16,7 +16,7 @@ from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
     PlainNarrationDisplay,
 )
-from chart_manager.plumbing.validate_models import WorklistRow
+from chart_manager.services.validate.domain.models import WorklistRow
 from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
 
 

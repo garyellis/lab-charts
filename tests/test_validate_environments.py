@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.validate_spec import ValidateSpec, resolve_namespace
+from chart_manager.services.validate.domain.spec import ValidateSpec, resolve_namespace
 
 
 def _spec(**kwargs) -> ValidateSpec:

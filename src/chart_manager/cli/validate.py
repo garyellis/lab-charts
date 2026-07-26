@@ -35,7 +35,6 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.plumbing.validate_models import PHASE_ORDER, RunResult
 from chart_manager.services.validate.app import (
     ALL_PHASES,
     RunOutcome,
@@ -45,6 +44,7 @@ from chart_manager.services.validate.app import (
     ValidateInputError,
     resolve_workers,
 )
+from chart_manager.services.validate.domain.models import PHASE_ORDER, RunResult
 from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
 from chart_manager.services.validate.wire import to_json, to_markdown
 

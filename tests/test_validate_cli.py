@@ -20,13 +20,13 @@ from typer.testing import CliRunner
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.main import app
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.plumbing.validate_models import (
+from chart_manager.services.validate.app import RunOutcome, ValidateInputError
+from chart_manager.services.validate.domain.models import (
     PhaseResult,
     RowResult,
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.validate.app import RunOutcome, ValidateInputError
 
 
 def _result() -> RunResult:
@@ -256,7 +256,7 @@ def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
 
 
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
-    from chart_manager.plumbing.validate_models import (
+    from chart_manager.services.validate.domain.models import (
         PhaseResult,
         RowResult,
         RunResult,

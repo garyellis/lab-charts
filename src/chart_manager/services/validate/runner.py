@@ -24,14 +24,14 @@ from pathlib import Path
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
-from chart_manager.plumbing.validate_models import (
+from chart_manager.services.validate import phases
+from chart_manager.services.validate.domain.models import (
     ALL_PHASES,
     PhaseResult,
     RowResult,
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.validate import phases
 
 EventCallback = Callable[[WorklistRow, str, str, float | None], None]
 

@@ -15,7 +15,11 @@ import pytest
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.services import sandbox as sandbox_module
-from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    HelmChart,
+    ManagedChart,
+)
 from chart_manager.services.domain.graph import PlanEntry
 from chart_manager.services.domain.spec import ProfileSpec
 from chart_manager.services.domain.spec import TestSpec as _TestSpec
@@ -78,7 +82,7 @@ class _Recorder:
         return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
 
 
-def _stub_chart(name: str, *, helm_test: bool = True) -> Chart:
+def _stub_chart(name: str, *, helm_test: bool = True) -> ManagedChart:
     profile = ProfileSpec(
         namespace="observability",
         values=[],
@@ -87,10 +91,12 @@ def _stub_chart(name: str, *, helm_test: bool = True) -> Chart:
         helm_test=helm_test,
         checks=[],
     )
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
+    return ManagedChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
         spec=_TestSpec(profiles={"minimal": profile}, reverse_tests=[]),
     )
 
@@ -143,7 +149,7 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SandboxServi
     helm = _Helm()
     svc = _service(tmp_path, kind=_Kind(), helm=helm)
     charts = {"grafana": _stub_chart("grafana"), "loki": _stub_chart("loki")}
-    monkeypatch.setattr(svc.repository, "get", lambda name: charts[name])
+    monkeypatch.setattr(svc.repository, "get_managed", lambda name: charts[name])
     monkeypatch.setattr(svc.repository, "value_paths", lambda _c, _p: [])
     monkeypatch.setattr(
         svc.resolver,
@@ -181,7 +187,7 @@ def test_run_omits_charts_whose_profile_disables_helm_test(
     helm = _Helm()
     svc = _service(tmp_path, kind=_Kind(), helm=helm)
     monkeypatch.setattr(
-        svc.repository, "get", lambda name: _stub_chart(name, helm_test=False)
+        svc.repository, "get_managed", lambda name: _stub_chart(name, helm_test=False)
     )
     monkeypatch.setattr(svc.repository, "value_paths", lambda _c, _p: [])
     monkeypatch.setattr(

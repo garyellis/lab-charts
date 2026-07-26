@@ -61,10 +61,10 @@ def test_handles_cycle_without_crashing(tmp_path: Path) -> None:
     assert index == {"beta": {"alpha"}, "alpha": {"beta"}}
 
 
-def test_skips_dependency_entries_without_name(tmp_path: Path) -> None:
-    # An OCI ref without an explicit `name:` (legal in Chart.yaml when
-    # `alias` is used, or just authoring sloppiness) is dropped silently
-    # rather than crashing the index build.
+def test_skips_chart_with_invalid_dependency_entry(tmp_path: Path) -> None:
+    # The shared metadata loader is strict: one structurally invalid
+    # dependency makes the chart unusable. This best-effort index skips that
+    # chart instead of partially interpreting different metadata rules.
     _chart(
         tmp_path,
         "alpha",
@@ -80,7 +80,7 @@ def test_skips_dependency_entries_without_name(tmp_path: Path) -> None:
 
     index = build_helm_dependency_index(tmp_path)
 
-    assert index == {"common": {"alpha"}}
+    assert index == {}
 
 
 def test_unknown_dependency_name_still_indexed(tmp_path: Path) -> None:

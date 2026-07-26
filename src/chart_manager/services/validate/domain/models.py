@@ -21,7 +21,7 @@ ErrorType = Literal["tool", "spec"]
 #: models, the runner's default, the wire projector's column order and the
 #: CLI's error text — and `runner.py` re-hardcoded it specifically because
 #: it cannot import from `app.py` (app imports runner). Owning it here, in
-#: plumbing, is what makes "add a fourth phase" a tractable edit.
+#: the validation domain, which makes "add a fourth phase" a tractable edit.
 PHASE_ORDER: tuple[PhaseName, ...] = get_args(PhaseName)
 ALL_PHASES: frozenset[str] = frozenset(PHASE_ORDER)
 

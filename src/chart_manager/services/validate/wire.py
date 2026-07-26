@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.validate_models import (
+from chart_manager.services.validate.domain.models import (
     PHASE_ORDER,
     PhaseResult,
     RunResult,

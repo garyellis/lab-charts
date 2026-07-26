@@ -418,7 +418,7 @@ class LabService:
         """
         for entry in plan:
             try:
-                chart = self.repository.get(entry.chart)
+                chart = self.repository.get_managed(entry.chart)
             except ChartManagerError as exc:
                 self._progress(
                     failure("chart resolution failed:", f"{entry.chart}: {exc}")

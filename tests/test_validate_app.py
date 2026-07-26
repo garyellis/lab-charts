@@ -14,12 +14,6 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
-from chart_manager.plumbing.validate_models import (
-    PhaseResult,
-    RowResult,
-    RunResult,
-    WorklistRow,
-)
 from chart_manager.services.validate.app import (
     ALL_PHASES,
     RunnerSpec,
@@ -30,6 +24,12 @@ from chart_manager.services.validate.app import (
     default_namespace,
     default_workers,
     resolve_workers,
+)
+from chart_manager.services.validate.domain.models import (
+    PhaseResult,
+    RowResult,
+    RunResult,
+    WorklistRow,
 )
 from chart_manager.services.validate.runner import RowConfig
 

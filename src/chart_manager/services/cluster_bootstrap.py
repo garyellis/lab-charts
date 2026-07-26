@@ -67,7 +67,7 @@ def bootstrap(
     rollout-status gate on kube-system.
     """
     try:
-        chart = repository.get(CILIUM_BOOTSTRAP_CHART)
+        chart = repository.get_managed(CILIUM_BOOTSTRAP_CHART)
     except ChartManagerError:
         emit(progress, warn("cilium chart not found; skipping CNI bootstrap", label=None))
         return None

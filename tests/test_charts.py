@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.domain.charts import ChartRepository
 
 from .conftest import REPO_ROOT, MakeChart
@@ -44,12 +47,51 @@ def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart)
         profiles={"minimal": {"values": ["values.yaml", "values-ci.yaml"]}},
     )
     repository = ChartRepository(chart_root)
-    chart = repository.get("prometheus-operator")
+    chart = repository.get_managed("prometheus-operator")
 
     paths = repository.value_paths(chart, "minimal")
 
     chart_dir = (chart_root / "charts" / "prometheus-operator").resolve()
     assert paths == [chart_dir / "values.yaml", chart_dir / "values-ci.yaml"]
+
+
+def test_get_loads_library_chart_without_test_spec(chart_root: Path) -> None:
+    chart_dir = chart_root / "charts" / "common"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: common\nversion: 1.2.3\ntype: library\n",
+        encoding="utf-8",
+    )
+
+    chart = ChartRepository(chart_root).get("common")
+
+    assert chart.name == "common"
+    assert chart.metadata.version == "1.2.3"
+    assert chart.metadata.chart_type == "library"
+
+
+def test_get_managed_requires_test_spec(chart_root: Path) -> None:
+    chart_dir = chart_root / "charts" / "common"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: common\nversion: 1.2.3\ntype: library\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError, match=r"test-spec\.yaml"):
+        ChartRepository(chart_root).get_managed("common")
+
+
+def test_get_rejects_invalid_dependency_shape(chart_root: Path) -> None:
+    chart_dir = chart_root / "charts" / "broken"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: broken\nversion: 1.2.3\ndependencies: wrong\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError, match="'dependencies' must be a list"):
+        ChartRepository(chart_root).get("broken")
 
 
 def test_the_repo_chart_tree_loads() -> None:

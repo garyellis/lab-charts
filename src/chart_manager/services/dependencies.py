@@ -36,7 +36,7 @@ class DependencyService:
 
     def checks_for(self, chart: str, profile: str) -> list[CheckSpec]:
         """Return the checks one chart:profile actually runs (declared + implicit)."""
-        return self.repository.get(chart).spec.profile(profile).effective_checks()
+        return self.repository.get_managed(chart).spec.profile(profile).effective_checks()
 
     def plan_checks(self, chart: str, profile: str) -> list[PlanChecks]:
         """Return the effective checks for every entry in chart:profile's install plan.

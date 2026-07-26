@@ -14,7 +14,7 @@ import pytest
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.commands import SubprocessRunner
-from chart_manager.plumbing.validate_models import WorklistRow
+from chart_manager.services.validate.domain.models import WorklistRow
 from chart_manager.services.validate.runner import RowConfig, ValidateRunner
 
 pytestmark = pytest.mark.integration

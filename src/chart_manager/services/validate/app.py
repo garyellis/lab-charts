@@ -41,7 +41,7 @@ from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.validate_models import ALL_PHASES, RowResult, RunResult
+from chart_manager.services.validate.domain.models import ALL_PHASES, RowResult, RunResult
 from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
 from chart_manager.services.validate.requests import (
     RunOutcome,
@@ -65,7 +65,7 @@ from chart_manager.services.validate.worklist import (
 )
 
 # Re-exports, so a surface needs one import for "drive the validate
-# capability": `ALL_PHASES` is defined in `plumbing.validate_models`, and
+# capability": `ALL_PHASES` is defined in `services.validate.domain.models`, and
 # the request/result vocabulary in `.requests`. Those two modules are the
 # definitions; this list only spares callers a second import line.
 __all__ = [
