@@ -13,14 +13,14 @@ from pathlib import Path
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
 from chart_manager.services import cluster_bootstrap
 from chart_manager.services.cluster_bootstrap import (
     CILIUM_BOOTSTRAP_CHART,
     kind_config_path,
 )
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.graph import DependencyResolver, PlanEntry
 from chart_manager.services.progress import ProgressCallback, info, step
 
 DEFAULT_CLUSTER_NAME = "chart-manager"

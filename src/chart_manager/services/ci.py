@@ -6,8 +6,8 @@ from pathlib import Path
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.services.domain.charts import ChartRepository
 
 
 class CiService:

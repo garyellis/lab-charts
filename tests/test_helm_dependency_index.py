@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.graph import build_helm_dependency_index
+from chart_manager.services.domain.graph import build_helm_dependency_index
 
 
 def _chart(root: Path, name: str, *, chart_yaml: str) -> None:

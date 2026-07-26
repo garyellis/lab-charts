@@ -27,9 +27,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
-from chart_manager.plumbing.graph import build_helm_dependency_index
 from chart_manager.plumbing.validate_models import WorklistRow
 from chart_manager.plumbing.validate_spec import (
     MATCH_BY_BASENAME,
@@ -37,6 +35,8 @@ from chart_manager.plumbing.validate_spec import (
     load_validate_spec,
     resolve_namespace,
 )
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.graph import build_helm_dependency_index
 from chart_manager.services.validate.runner import RowConfig
 
 

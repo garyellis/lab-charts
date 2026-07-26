@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.charts import ChartRepository
+from chart_manager.services.domain.charts import ChartRepository
 
 from .conftest import REPO_ROOT, MakeChart
 

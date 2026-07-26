@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.charts import Chart
-from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import CheckSpec, ProfileSpec
-from chart_manager.plumbing.spec import TestSpec as _TestSpec
 from chart_manager.services.dependencies import DependencyService
+from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.graph import PlanEntry
+from chart_manager.services.domain.spec import CheckSpec, ProfileSpec
+from chart_manager.services.domain.spec import TestSpec as _TestSpec
 
 
 def _chart(name: str, profile: ProfileSpec) -> Chart:

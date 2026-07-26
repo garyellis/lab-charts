@@ -1,6 +1,6 @@
 """Per-chart `validate-spec.yaml` schema + loader.
 
-Mirrors `plumbing/spec.py` style: pydantic at the IO boundary, `SpecError`
+Uses pydantic at the IO boundary and raises `SpecError`
 on any parse/shape failure. `services/validate/worklist.py` is the only
 consumer: it loads each chart's spec and turns it into the (chart, env)
 rows a run fans out over, along with the chart path, values files and
@@ -20,7 +20,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.spec import ensure_chart_relative, load_yaml_file
+from chart_manager.plumbing.paths import ensure_relative
+from chart_manager.plumbing.yaml_files import load_yaml_file
 
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
@@ -42,7 +43,7 @@ class EnvironmentSpec(BaseModel):
     @classmethod
     def values_must_be_relative(cls, values: list[str]) -> list[str]:
         """Reject absolute or parent-escaping values paths (as ProfileSpec does)."""
-        return ensure_chart_relative(values, label="value file")
+        return ensure_relative(values, label="value file", relation="chart-relative")
 
 
 class PoliciesSpec(BaseModel):
@@ -56,7 +57,7 @@ class PoliciesSpec(BaseModel):
     @classmethod
     def extra_must_be_relative(cls, extra: list[str]) -> list[str]:
         """Reject absolute or parent-escaping policy paths."""
-        return ensure_chart_relative(extra, label="policy path")
+        return ensure_relative(extra, label="policy path", relation="chart-relative")
 
 
 class ValidateSpec(BaseModel):

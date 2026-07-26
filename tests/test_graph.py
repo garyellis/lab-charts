@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import DependencyCycleError
-from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.graph import DependencyResolver, PlanEntry
 
 from .conftest import REPO_ROOT, MakeChart
 

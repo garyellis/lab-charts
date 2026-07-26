@@ -19,8 +19,8 @@ from typing import Literal
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.progress import ProgressCallback, emit, info, step, warn
 
 CILIUM_BOOTSTRAP_CHART = "cilium"

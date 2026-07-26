@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any, Literal
 from weakref import WeakKeyDictionary
 
-from chart_manager.plumbing.chart_deps import (
+from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
+from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.services.domain.chart_deps import (
     chart_has_dependencies,
     deps_are_fresh,
     is_local_chart,
 )
-from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ExternalCommandError
 
 
 @dataclass(frozen=True)

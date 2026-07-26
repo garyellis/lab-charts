@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.charts import Chart, ChartRepository
+from chart_manager.services.domain.charts import Chart, ChartRepository
 
 
 class ChartService:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.spec import (
+from chart_manager.services.domain.spec import (
     CheckSpec,
     ProfileSpec,
     SpecError,

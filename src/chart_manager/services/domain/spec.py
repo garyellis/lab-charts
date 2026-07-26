@@ -2,28 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from chart_manager.plumbing.errors import SpecError
-
-
-def ensure_chart_relative(values: list[str], *, label: str = "path") -> list[str]:
-    """Reject absolute or parent-escaping paths declared in a chart spec.
-
-    Shared by test-spec.yaml and validate-spec.yaml. Both resolve their
-    entries against the chart directory, and `chart_dir / "/etc/passwd"` is
-    `/etc/passwd` while `../..` walks out of the tree entirely -- so the
-    same rule has to hold at both IO boundaries, not just the one that
-    happened to implement it.
-    """
-    for value in values:
-        path = Path(value)
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"{label} must be chart-relative: {value}")
-    return values
+from chart_manager.plumbing.paths import ensure_relative
+from chart_manager.plumbing.yaml_files import load_yaml_file
 
 
 class ChartRef(BaseModel):
@@ -82,7 +66,7 @@ class ProfileSpec(BaseModel):
     @classmethod
     def values_must_be_relative(cls, values: list[str]) -> list[str]:
         """Reject absolute or parent-escaping values paths."""
-        return ensure_chart_relative(values, label="value file")
+        return ensure_relative(values, label="value file", relation="chart-relative")
 
 
 class TestSpec(BaseModel):
@@ -101,18 +85,6 @@ class TestSpec(BaseModel):
         except KeyError as exc:
             profiles = ", ".join(sorted(self.profiles))
             raise SpecError(f"unknown profile '{name}'. available profiles: {profiles}") from exc
-
-
-def load_yaml_file(path: Path) -> dict[str, Any]:
-    """Read a YAML file that must contain a mapping; empty file -> {}."""
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-    except OSError as exc:
-        raise SpecError(f"failed to read {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise SpecError(f"{path} must contain a YAML mapping")
-    return data
 
 
 def load_test_spec(path: Path) -> TestSpec:

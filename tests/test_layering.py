@@ -37,12 +37,47 @@ import pytest
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _PKG = _SRC / "chart_manager"
 _SERVICES = _PKG / "services"
+_PLUMBING = _PKG / "plumbing"
 
 #: Only the surface layer may terminate the process.
 _EXIT_ALLOWED_DIRS = (_PKG / "cli",)
 
 #: Import either of these and a headless surface has a TUI in its address space.
 _FORBIDDEN_ROOTS = ("rich", "typer")
+
+# Chart concepts are service-domain policy, not generic plumbing.
+_DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
+    "chart_deps.py",
+    "charts.py",
+    "graph.py",
+    "spec.py",
+}
+
+
+def test_chart_domain_modules_stay_out_of_plumbing() -> None:
+    """Keep chart models and policy in services/domain, not generic utilities."""
+    misplaced = sorted(
+        path.name
+        for path in _PLUMBING.glob("*.py")
+        if path.name in _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING
+    )
+    assert not misplaced, (
+        "chart-domain modules belong in chart_manager/services/domain, "
+        f"not plumbing: {', '.join(misplaced)}"
+    )
+
+    expected = {
+        "chart_deps.py",
+        "charts.py",
+        "graph.py",
+        "spec.py",
+    }
+    actual = {
+        path.name
+        for path in (_SERVICES / "domain").glob("*.py")
+        if path.name != "__init__.py"
+    }
+    assert expected <= actual
 
 
 # --------------------------------------------------------------------------

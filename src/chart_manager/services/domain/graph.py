@@ -6,9 +6,9 @@ from pathlib import Path
 
 import yaml
 
-from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import DependencyCycleError
-from chart_manager.plumbing.spec import ChartRef
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.spec import ChartRef
 
 
 @dataclass(frozen=True)

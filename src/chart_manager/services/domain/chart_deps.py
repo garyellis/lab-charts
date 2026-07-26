@@ -1,20 +1,20 @@
 """Filesystem predicates over one chart directory's declared/materialized deps.
 
-These are chart-repository knowledge, not helm-CLI knowledge: they read
+These are Helm chart-domain knowledge, not helm-CLI knowledge: they read
 `Chart.yaml`, `Chart.lock` and `charts/`, and touch no helm binary, no
 `CommandRunner` and no adapter state. They lived in `integrations/helm.py`
 purely because `dependency_update_if_stale` was their first caller, which
 made the adapter the place a reader had to look for "what does this repo
 consider a fresh chart".
 
-Deliberately separate from `plumbing/charts.py`: that module is the repo
+Deliberately separate from `services/domain/charts.py`: that module is the repo
 index (`ChartRepository`, test-spec loading, `SpecError`/`ChartNotFoundError`
 semantics). Nothing here raises -- every function answers a yes/no/how-many
 question and degrades to the conservative answer, because each one gates a
 *skip*, and being wrong must cost a redundant `helm dependency update`
 rather than a missing dependency.
 
-`plumbing/graph.py` re-parses `Chart.yaml` for dependencies with its own
+`services/domain/graph.py` re-parses `Chart.yaml` for dependencies with its own
 duplicate try/except. This is the home those can converge on; that
 convergence has not been done.
 """

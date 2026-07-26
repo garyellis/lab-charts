@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.plumbing.charts import ChartRepository
-from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
-from chart_manager.plumbing.spec import ChartRef, CheckSpec
+from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.domain.graph import DependencyResolver, PlanEntry
+from chart_manager.services.domain.spec import ChartRef, CheckSpec
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
-from chart_manager.plumbing.spec import TestSpec, load_test_spec, load_yaml_file
+from chart_manager.plumbing.yaml_files import load_yaml_file
+from chart_manager.services.domain.spec import TestSpec, load_test_spec
 
 
 @dataclass(frozen=True)

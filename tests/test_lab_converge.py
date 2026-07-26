@@ -17,12 +17,12 @@ from typing import Any, Literal
 import pytest
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
-from chart_manager.plumbing.charts import Chart
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import ProfileSpec
-from chart_manager.plumbing.spec import TestSpec as _TestSpec
 from chart_manager.services import lab as lab_module
+from chart_manager.services.domain.charts import Chart
+from chart_manager.services.domain.graph import PlanEntry
+from chart_manager.services.domain.spec import ProfileSpec
+from chart_manager.services.domain.spec import TestSpec as _TestSpec
 from chart_manager.services.lab import (
     LabService,
     LabSyncOptions,
