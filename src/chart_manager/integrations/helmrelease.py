@@ -14,6 +14,7 @@ timeout and JSON-parse conventions.
 """
 from __future__ import annotations
 
+import builtins
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -124,7 +125,7 @@ class HelmReleaseClient:
         *,
         namespace: str | None = None,
         timeout: float | None = None,
-    ) -> list[HelmReleaseRef]:
+    ) -> builtins.list[HelmReleaseRef]:
         """List HelmReleases (all namespaces by default); unparseable items are skipped."""
         args = ["kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io"]
         if namespace is None:
@@ -133,7 +134,7 @@ class HelmReleaseClient:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
         payload = self._kubectl.get_json(args, timeout=timeout)
-        refs: list[HelmReleaseRef] = []
+        refs: builtins.list[HelmReleaseRef] = []
         for item in payload.get("items", []) or []:
             ref = _ref_from_item(item)
             if ref is not None:
@@ -160,7 +161,7 @@ class HelmReleaseClient:
         ref: HelmReleaseRef,
         *,
         timeout: float | None = None,
-    ) -> list[WorkloadRollout]:
+    ) -> builtins.list[WorkloadRollout]:
         """List workloads labeled as owned by this release, with rollout convergence."""
         selector = (
             f"helm.toolkit.fluxcd.io/name={ref.name},"
@@ -171,7 +172,7 @@ class HelmReleaseClient:
             "-A", "-l", selector, "-o", "json",
         ]
         payload = self._kubectl.get_json(args, timeout=timeout)
-        rollouts: list[WorkloadRollout] = []
+        rollouts: builtins.list[WorkloadRollout] = []
         for item in payload.get("items", []) or []:
             rollout = _rollout_from_item(item)
             if rollout is not None:
@@ -183,7 +184,7 @@ class HelmReleaseClient:
         ref: HelmReleaseRef,
         *,
         timeout: float | None = None,
-    ) -> list[tuple[str, str, str]]:
+    ) -> builtins.list[tuple[str, str, str]]:
         """Return (namespace, name, phase) for this release's helm test hook pods.
 
         Queries the target namespace for both `helm.sh/hook=test` and the
@@ -194,7 +195,7 @@ class HelmReleaseClient:
             f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
         )
         seen: set[tuple[str, str]] = set()
-        pods: list[tuple[str, str, str]] = []
+        pods: builtins.list[tuple[str, str, str]] = []
         for hook in ("test", "test-success"):
             args = [
                 "kubectl", "-n", ref.target_namespace, "get", "pods",
@@ -228,12 +229,12 @@ def _ref_from_item(item: Any) -> HelmReleaseRef | None:
     # Match by group prefix so v2beta1/v2beta2/v2 all flow through one path.
     if not (isinstance(api_version, str) and api_version.startswith(_FLUX_GROUP_PREFIX)):
         return None
-    metadata = item.get("metadata") or {}
+    metadata = _dict(item.get("metadata"))
     name = str(metadata.get("name") or "")
     namespace = str(metadata.get("namespace") or "")
     if not name or not namespace:
         return None
-    spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
+    spec = _dict(item.get("spec"))
     spec_release_name = spec.get("releaseName")
     target_ns_raw = spec.get("targetNamespace")
     target_ns = str(target_ns_raw) if target_ns_raw else None
@@ -270,14 +271,13 @@ def _status_from_item(
     observed_at: datetime,
 ) -> HelmReleaseStatus:
     """Extract the fields we track from a HelmRelease object into a status snapshot."""
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else {}
-    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    metadata = _dict(payload.get("metadata"))
+    spec = _dict(payload.get("spec"))
+    status = _dict(payload.get("status"))
 
     chart_spec: dict[str, Any] = {}
-    spec_chart = spec.get("chart") if isinstance(spec.get("chart"), dict) else {}
-    if isinstance(spec_chart.get("spec"), dict):
-        chart_spec = spec_chart["spec"]
+    spec_chart = _dict(spec.get("chart"))
+    chart_spec = _dict(spec_chart.get("spec"))
 
     history = status.get("history") if isinstance(status.get("history"), list) else []
     history_chart_version: str | None = None
@@ -345,13 +345,13 @@ def _rollout_from_item(item: Any) -> WorkloadRollout | None:
     if not isinstance(item, dict):
         return None
     kind = str(item.get("kind") or "")
-    metadata = item.get("metadata") or {}
+    metadata = _dict(item.get("metadata"))
     namespace = str(metadata.get("namespace") or "")
     name = str(metadata.get("name") or "")
     if not name or not namespace:
         return None
-    spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
-    status = item.get("status") if isinstance(item.get("status"), dict) else {}
+    spec = _dict(item.get("spec"))
+    status = _dict(item.get("status"))
 
     if kind == "Deployment":
         desired = int(spec.get("replicas", 1))
@@ -398,3 +398,10 @@ def _opt_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    """Return a string-keyed mapping for a decoded JSON object, else an empty one."""
+    if not isinstance(value, dict):
+        return {}
+    return value
