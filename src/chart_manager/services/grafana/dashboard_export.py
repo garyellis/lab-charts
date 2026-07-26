@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from chart_manager.integrations.kind import kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
 
@@ -36,6 +37,8 @@ _CHURN_KEYS = ("id", "version", "iteration")
 
 @dataclass(frozen=True)
 class ExportRequest:
+    """Inputs for one dashboard export: which dashboard, which cluster/release."""
+
     uid: str
     cluster_name: str
     namespace: str
@@ -45,14 +48,37 @@ class ExportRequest:
 
 
 class GrafanaExporter:
-    def __init__(self, *, kubectl: Kubectl | None = None) -> None:
-        self.kubectl = kubectl or Kubectl()
+    """Fetch a dashboard from a cluster's Grafana over a port-forward and normalize it."""
+
+    def __init__(self, *, kubectl: Kubectl) -> None:
+        """Bind the Kubectl this exporter addresses the cluster through.
+
+        Required rather than defaulted so the adapter's configured context
+        is the only cluster address in play; see `ExposeService.__init__`.
+        """
+        self.kubectl = kubectl
+
+    def export(self, request: ExportRequest) -> str:
+        """Fetch the dashboard and render it as the canonical, git-ready payload.
+
+        This is the verb a surface wants: the caller only chooses whether
+        the returned string goes to stdout or to a file. Use `fetch` when
+        you need the object rather than the bytes.
+        """
+        return canonical_json(self.fetch(request))
 
     def fetch(self, request: ExportRequest) -> dict[str, Any]:
+        """Port-forward to Grafana, GET the dashboard, and return it normalized.
+
+        Reads the admin password from the release's Secret. Raises
+        ChartManagerError if the API response lacks a .dashboard object.
+        """
         password = self.kubectl.get_secret_value(
             request.release, SECRET_PASSWORD_KEY, namespace=request.namespace
         )
-        context = f"kind-{request.cluster_name}"
+        # See ExposeService.start: configured context wins, else the kind
+        # naming convention for the cluster the request names.
+        context = self.kubectl.context or kind_context(request.cluster_name)
 
         with self.kubectl.port_forward_session(
             context=context,
@@ -72,6 +98,17 @@ class GrafanaExporter:
         return normalize_dashboard(dashboard)
 
 
+def canonical_json(dashboard: dict[str, Any]) -> str:
+    """Serialize a dashboard the way it must appear on disk.
+
+    Sorted keys, two-space indent, trailing newline. This is the git
+    normalization contract: a committed dashboard and a fresh export of the
+    same dashboard must be byte-identical, so every writer -- CLI, API,
+    future bulk-export job -- has to go through this one function.
+    """
+    return json.dumps(dashboard, sort_keys=True, indent=2) + "\n"
+
+
 def normalize_dashboard(dashboard: dict[str, Any]) -> dict[str, Any]:
     """Strip churn, force editable, rewrite datasource UIDs to template form.
 
@@ -83,6 +120,7 @@ def normalize_dashboard(dashboard: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rewrite_datasource_uids(node: Any) -> Any:
+    """Recursively replace live datasource {type,uid} pairs with template-var form."""
     if isinstance(node, dict):
         uid = node.get("uid")
         type_ = node.get("type")
@@ -98,6 +136,7 @@ def _rewrite_datasource_uids(node: Any) -> Any:
 def _http_get_dashboard(
     local_port: int, uid: str, user: str, password: str
 ) -> dict[str, Any]:
+    """GET one dashboard from Grafana's API over basic auth; raise on HTTP/URL errors."""
     url = f"http://127.0.0.1:{local_port}/api/dashboards/uid/{uid}"
     creds = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {creds}"})

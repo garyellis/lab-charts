@@ -1,8 +1,12 @@
 """CLI tests for `chart-manager helmrelease monitor|test|promote`."""
 from __future__ import annotations
 
+import io
 import json
+import os
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,20 +14,31 @@ import typer
 from typer.testing import CliRunner
 
 from chart_manager.cli import helmrelease as helmrelease_cli
-from chart_manager.cli.helmrelease_render import _PrettyProgressDriver
-from chart_manager.integrations.flux import (
+from chart_manager.cli.helmrelease_render import (
+    _PrettyProgressDriver,
+    render_monitor_json,
+    render_test_json,
+)
+from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
     HelmReleaseStatus,
+    OwnedWorkload,
+    WorkloadRollout,
 )
 from chart_manager.services.helmrelease import (
     NO_MATCH_REF,
     MonitorOutcome,
     MonitorResult,
     TestOutcome,
+    TestPodSnapshot,
     TestResult,
     Transition,
 )
+
+GOLDEN_DIR = Path(__file__).parent / "fixtures" / "golden"
+MONITOR_JSON_GOLDEN = GOLDEN_DIR / "helmrelease-monitor.json.golden"
+TEST_JSON_GOLDEN = GOLDEN_DIR / "helmrelease-test.json.golden"
 
 # ----- helpers ------------------------------------------------------------
 
@@ -471,7 +486,7 @@ def test_pretty_progress_driver_thread_safety() -> None:
 
     from rich.console import Console as _Console
 
-    driver = _PrettyProgressDriver(_Console(quiet=True), is_test=False)
+    driver = _PrettyProgressDriver(_Console(quiet=True))
     errors: list[BaseException] = []
 
     def fire(i: int) -> None:
@@ -527,3 +542,194 @@ def test_no_match_outcome_pretty_message(
     res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
     assert res.exit_code == 1
     assert "no helmreleases matched" in res.stdout
+
+
+# ----- wire-contract byte goldens ------------------------------------------
+#
+# These lock the exact bytes emitted by `helmrelease monitor|test --output
+# json`. They are the acceptance criterion for any refactor that moves the
+# serializers: the payload is a versioned wire contract, so a diff here is a
+# breaking change for every downstream consumer, not a cosmetic churn.
+#
+# Regenerate with:
+#   REGEN_GOLDEN=1 uv run pytest tests/test_cli_helmrelease.py
+
+
+_FIXED_TS = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+
+
+def _golden_status(ref: HelmReleaseRef) -> HelmReleaseStatus:
+    """A fully-populated status with fixed timestamps (deterministic bytes)."""
+    return HelmReleaseStatus(
+        ref=ref,
+        observed_at=_FIXED_TS,
+        generation=4,
+        observed_generation=4,
+        resource_version="9182",
+        suspended=False,
+        desired_chart_name="loki",
+        desired_chart_version="0.2.0",
+        last_applied_revision="0.2.0",
+        history_chart_version="0.2.0",
+        conditions=(
+            ConditionSnapshot(
+                type="Ready",
+                status="True",
+                reason="ReconciliationSucceeded",
+                message="Helm upgrade succeeded for release loki/loki.v4",
+                last_transition_time=_FIXED_TS,
+            ),
+            ConditionSnapshot(
+                type="Released",
+                status="True",
+                reason="UpgradeSucceeded",
+                message="Helm upgrade succeeded",
+                last_transition_time=None,
+            ),
+        ),
+    )
+
+
+def _golden_monitor_result() -> MonitorResult:
+    """Exercise every branch of the monitor payload: workloads, transitions, no-status."""
+    ref = _ref()
+    rollout = WorkloadRollout(
+        workload=OwnedWorkload(
+            kind="Deployment",
+            namespace="loki",
+            name="loki-gateway",
+            desired=2,
+            ready=2,
+            available=2,
+        ),
+        converged=True,
+        generation=4,
+        observed_generation=4,
+    )
+    ready = MonitorOutcome(
+        ref=ref,
+        verdict="ready",
+        reason="ReconciliationSucceeded",
+        last_status=_golden_status(ref),
+        last_workloads=(rollout,),
+        recent_transitions=(
+            Transition(at=_FIXED_TS, phase="reconciling", detail="upgrade in progress"),
+            Transition(at=_FIXED_TS, phase="ready", detail="all workloads converged"),
+        ),
+        diagnostics=None,
+        duration_seconds=12.25,
+    )
+    # last_status=None exercises the `if status else` fallbacks.
+    timed_out = MonitorOutcome(
+        ref=_ref("mimir", "mimir"),
+        verdict="timed-out",
+        reason="PerHRBudgetExhausted",
+        last_status=None,
+        last_workloads=(),
+        recent_transitions=(),
+        diagnostics="## mimir/mimir - timed-out: PerHRBudgetExhausted",
+        duration_seconds=300.0,
+    )
+    return MonitorResult(
+        outcomes=(ready, timed_out),
+        total_duration_seconds=312.5,
+        total_timed_out=True,
+    )
+
+
+def _golden_test_result() -> TestResult:
+    """Exercise every branch of the test payload: pods, phase log, diagnostics."""
+    ref = _ref()
+    failed = TestOutcome(
+        ref=ref,
+        verdict="failed",
+        reason="TestPodFailed",
+        helm_test_returncode=1,
+        helm_test_stdout="Phase: Failed",
+        helm_test_stderr="error: pod loki-test failed",
+        test_pods=(
+            TestPodSnapshot(
+                namespace="loki",
+                name="loki-test",
+                phase="Failed",
+                logs="connection refused",
+                previous_logs=None,
+            ),
+            TestPodSnapshot(
+                namespace="loki",
+                name="loki-test-retry",
+                phase="Succeeded",
+                logs="ok",
+                previous_logs="connection refused",
+            ),
+        ),
+        last_status=_golden_status(ref),
+        phase_log=(
+            Transition(at=_FIXED_TS, phase="running", detail="helm test started"),
+            Transition(at=_FIXED_TS, phase="failed", detail="pod loki-test failed"),
+        ),
+        diagnostics="## loki/loki - failed: TestPodFailed\nconnection refused",
+        duration_seconds=7.5,
+    )
+    return TestResult(
+        outcomes=(failed, _passed_test_outcome(_ref("mimir", "mimir"))),
+        total_duration_seconds=9.5,
+        total_timed_out=False,
+    )
+
+
+def _assert_golden(actual: str, path: Path) -> None:
+    if os.environ.get("REGEN_GOLDEN"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(actual)
+        pytest.fail(f"regenerated golden at {path}")
+    assert actual == path.read_text()
+
+
+def test_monitor_json_bytes_match_golden() -> None:
+    buf = io.StringIO()
+    render_monitor_json(_golden_monitor_result(), buf, chart="loki", version="0.2.0")
+    _assert_golden(buf.getvalue(), MONITOR_JSON_GOLDEN)
+
+
+def test_test_json_bytes_match_golden() -> None:
+    result = _golden_test_result()
+    # `_passed_test_outcome` embeds a now() timestamp in last_status, but
+    # last_status is not part of the test payload — pin it out of the way so
+    # the golden stays deterministic.
+    buf = io.StringIO()
+    render_test_json(result, buf, chart="loki", version="0.2.0")
+    _assert_golden(buf.getvalue(), TEST_JSON_GOLDEN)
+
+
+def test_wire_module_does_not_import_rich() -> None:
+    """A non-terminal surface must be able to import the payload projections.
+
+    Subprocess because this test module already imports rich.
+    """
+    import subprocess
+    import sys as _sys
+
+    probe = (
+        "import sys; import chart_manager.services.helmrelease.wire as w; "
+        "assert w.monitor_to_dict and w.test_to_dict and w.SCHEMA_VERSION == 1; "
+        "print(','.join(sorted(m for m in sys.modules "
+        "if m == 'rich' or m.startswith('rich.'))))"
+    )
+    proc = subprocess.run(
+        [_sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert proc.stdout.strip() == "", f"wire module leaked rich: {proc.stdout.strip()}"
+
+
+def test_monitor_json_is_single_line_compact_and_flushed() -> None:
+    """Encoder options are part of the contract: compact, sorted, one trailing \\n."""
+    buf = io.StringIO()
+    render_monitor_json(_golden_monitor_result(), buf, chart="loki", version="0.2.0")
+    raw = buf.getvalue()
+    assert raw.endswith("\n")
+    assert raw.count("\n") == 1
+    assert ", " not in raw.split('"diagnostics"')[0]  # separators=(",", ":")
+    body = raw[:-1]
+    keys = list(json.loads(body).keys())
+    assert keys == sorted(keys)  # sort_keys=True

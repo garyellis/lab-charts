@@ -15,11 +15,14 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Finding:
+    """One lint violation: file, rule id, and message."""
+
     path: Path
     rule: str
     message: str
 
     def render(self) -> str:
+        """Format as a single greppable `path: [rule] message` line."""
         return f"{self.path}: [{self.rule}] {self.message}"
 
 
@@ -29,7 +32,9 @@ _SHORT_RATE = re.compile(
 
 
 def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    """Yield every panel, descending into row panels' nested `panels`."""
     def walk(panels: Any) -> Iterable[dict[str, Any]]:
+        """Recurse one panel list, recursing again into row containers."""
         for p in panels or []:
             yield p
             if p.get("type") == "row" and p.get("panels"):
@@ -39,6 +44,7 @@ def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
 
 def lint_dashboard(path: Path) -> list[Finding]:
+    """Lint one dashboard JSON file against rules R001-R007; invalid JSON is R000."""
     try:
         dash = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
@@ -47,6 +53,7 @@ def lint_dashboard(path: Path) -> list[Finding]:
     findings: list[Finding] = []
 
     def add(rule: str, msg: str) -> None:
+        """Append a Finding for this dashboard."""
         findings.append(Finding(path, rule, msg))
 
     if not dash.get("title"):
@@ -91,14 +98,40 @@ def lint_dashboard(path: Path) -> list[Finding]:
     return findings
 
 
-def lint_paths(paths: Iterable[Path]) -> list[Finding]:
-    out: list[Finding] = []
-    for p in paths:
-        out.extend(lint_dashboard(p))
-    return out
+@dataclass(frozen=True)
+class LintResult:
+    """Outcome of one lint run: the findings plus the pass/fail rule itself.
+
+    `ok` is the rule -- a run passes iff nothing was found. Surfaces must
+    read it rather than re-deriving `if findings:`, so a future rule (e.g.
+    warn-level findings that don't fail) changes in exactly one place.
+    """
+
+    findings: tuple[Finding, ...]
+    files_scanned: int
+
+    @property
+    def ok(self) -> bool:
+        """True when the scanned dashboards produced no findings."""
+        return not self.findings
+
+    @property
+    def files_with_findings(self) -> int:
+        """How many distinct files contributed at least one finding."""
+        return len({f.path for f in self.findings})
+
+
+def lint_paths(paths: Iterable[Path]) -> LintResult:
+    """Lint every given dashboard file and aggregate the findings into a result."""
+    targets = list(paths)
+    findings: list[Finding] = []
+    for p in targets:
+        findings.extend(lint_dashboard(p))
+    return LintResult(findings=tuple(findings), files_scanned=len(targets))
 
 
 def discover_dashboards(root: Path) -> list[Path]:
+    """Return all dashboard JSON files under the grafana-dashboards chart, sorted."""
     base = root / "charts" / "grafana-dashboards" / "dashboards"
     if not base.exists():
         return []

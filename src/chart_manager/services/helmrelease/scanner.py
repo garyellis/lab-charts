@@ -1,6 +1,4 @@
-"""
-Scan file for FluxCD HelmRelease resources
-"""
+"""Scan YAML files (or trees) for FluxCD HelmRelease resources."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,6 +25,7 @@ class HelmReleaseMatch:
 
 
 def _yaml_loader() -> YAML:
+    """Build a comment-preserving round-trip YAML loader."""
     # `rt` (round-trip) preserves comments, key order, and quoting style —
     # essential for in-place edits on GitOps repos humans also review.
     yaml = YAML(typ="rt")
@@ -35,6 +34,7 @@ def _yaml_loader() -> YAML:
 
 
 def is_helmrelease(doc: Any) -> bool:
+    """Return True if `doc` is a Flux HelmRelease (any helm.toolkit API version)."""
     if not isinstance(doc, dict):
         return False
     kind = doc.get("kind")
@@ -48,6 +48,7 @@ def is_helmrelease(doc: Any) -> bool:
 
 
 def _chart_fields(doc: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Extract (chart_name, version) from `.spec.chart.spec`; None for absent fields."""
     spec = doc.get("spec")
     if not isinstance(spec, dict):
         return None, None
@@ -66,6 +67,7 @@ def _chart_fields(doc: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def _iter_yaml_files(root: Path) -> list[Path]:
+    """Return sorted YAML files under `root` (or `root` itself if it is a file)."""
     if root.is_file():
         return [root] if root.suffix.lower() in _YAML_SUFFIXES else []
     files: list[Path] = []

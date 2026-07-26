@@ -9,15 +9,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]
 ErrorType = Literal["tool", "spec"]
 
+#: The phases, in dependency order (render feeds schema feeds policy).
+#: Derived from `PhaseName` rather than restated so the two cannot drift.
+#: This list used to be written out longhand in five places — the request
+#: models, the runner's default, the wire projector's column order and the
+#: CLI's error text — and `runner.py` re-hardcoded it specifically because
+#: it cannot import from `app.py` (app imports runner). Owning it here, in
+#: plumbing, is what makes "add a fourth phase" a tractable edit.
+PHASE_ORDER: tuple[PhaseName, ...] = get_args(PhaseName)
+ALL_PHASES: frozenset[str] = frozenset(PHASE_ORDER)
+
 
 @dataclass(frozen=True)
 class WorklistRow:
+    """One chart+env unit of validation work."""
+
     chart: str
     env: str
     release: str
@@ -26,6 +38,8 @@ class WorklistRow:
 
 @dataclass(frozen=True)
 class PhaseResult:
+    """Outcome of a single phase (render/schema/policy) for one row."""
+
     phase: PhaseName
     status: PhaseStatus
     detail: str | None = None
@@ -41,12 +55,16 @@ class PhaseResult:
 
 @dataclass(frozen=True)
 class RowResult:
+    """All phase results for one worklist row, keyed by phase name."""
+
     row: WorklistRow
     phases: Mapping[str, PhaseResult]
 
 
 @dataclass(frozen=True)
 class RunResult:
+    """Aggregate result of a validate run across all rows."""
+
     rows: tuple[RowResult, ...]
     rendered_root: Path
     # Spec-level errors (corrupt validate-spec.yaml, unknown version envelope)
@@ -54,6 +72,7 @@ class RunResult:
     spec_errors: tuple[str, ...] = field(default_factory=tuple)
 
     def exit_code(self) -> int:
+        """Fold all results into the process exit code."""
         # Precedence: spec error (3) > tool error (2) > validation failure (1) > pass (0).
         if self.spec_errors:
             return 3

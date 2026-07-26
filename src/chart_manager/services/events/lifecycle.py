@@ -1,9 +1,13 @@
-from dataclasses import dataclass, field, asdict
+"""The PlatformLifecycleEvent schema and its build/promotion phase enums."""
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
+
 class BuildPhase(str, Enum):
+    """Phases of the charts-repo build lifecycle (PR open through published)."""
+
     PR_OPEN         = "pr_open"
     VALIDATING      = "validating"
     VALIDATION_OK   = "validation_ok"
@@ -12,6 +16,8 @@ class BuildPhase(str, Enum):
     PUBLISHED       = "published"
 
 class PromotionPhase(str, Enum):
+    """Phases of the flux-repo promotion lifecycle (detected through reached-prod)."""
+
     DETECTED         = "detected"
     FLUX_PR_OPEN     = "flux_pr_open"
     AWAITING_MERGE   = "awaiting_merge"
@@ -26,6 +32,8 @@ class PromotionPhase(str, Enum):
 
 @dataclass(frozen=True,kw_only=True)
 class PlatformLifecycleEvent:
+    """One immutable lifecycle event; exactly one of build_phase/promotion_phase is set."""
+
     # identity
     uuid: UUID = field(default_factory=uuid4)
     correlation_id: str | None     # f"{chart_name}@{chart_version}"
@@ -49,6 +57,7 @@ class PlatformLifecycleEvent:
     detail: dict | None
 
     def to_dict(self) -> dict:
+        """Serialize to a plain dict with uuid and timestamp as strings (store-ready)."""
         d = asdict(self)
         d["uuid"] = str(self.uuid)
         d["timestamp"] = self.timestamp.isoformat()

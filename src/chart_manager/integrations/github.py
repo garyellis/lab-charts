@@ -1,15 +1,19 @@
+"""GitHub PR operations via the `gh` CLI."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
 @dataclass(frozen=True)
 class PullRequest:
+    """A PR's URL and number; `number` is None when gh didn't report one."""
+
     url: str
     number: int | None
 
@@ -24,13 +28,15 @@ class Github:
         *,
         binary: str = "gh",
     ) -> None:
+        """Bind the repo root, a CommandRunner, and the gh binary name."""
         self.repo_root = repo_root
-        self.runner = runner or CommandRunner()
+        self.runner = runner or SubprocessRunner()
         self.binary = binary
 
     def find_open_pr_for_branch(
         self, branch: str, *, base: str | None = None
     ) -> PullRequest | None:
+        """Return the first open PR from `branch` (optionally into `base`), or None."""
         # `gh pr list` exits 0 with an empty array when no PRs match; treat
         # any other non-zero (auth, network) as fatal via the check=True
         # default — callers should not silently proceed if gh is broken.
@@ -78,6 +84,11 @@ class Github:
         base: str,
         draft: bool = False,
     ) -> PullRequest:
+        """Create a PR via `gh pr create`.
+
+        Returns PullRequest with number=None (gh doesn't print it); callers
+        needing the number should re-query via `find_open_pr_for_branch`.
+        """
         args = [
             self.binary,
             "pr",

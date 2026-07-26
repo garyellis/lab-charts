@@ -18,41 +18,16 @@ crash; it never needs regeneration.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations.kyverno import Kyverno
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from tests.conftest import FakeCommandRunner
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kyverno"
 
-
-class StubRunner(CommandRunner):
-    def __init__(self, *, returncode: int, stdout: str, stderr: str = "") -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._returncode = returncode
-        self._stdout = stdout
-        self._stderr = stderr
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        return CommandResult(
-            args=tuple(args),
-            returncode=self._returncode,
-            stdout=self._stdout,
-            stderr=self._stderr,
-        )
 
 
 def _load(name: str) -> str:
@@ -68,7 +43,7 @@ def _seed_manifest(dir_: Path, name: str = "deploy.yaml") -> Path:
 
 def test_apply_args_include_policy_report_json_and_per_file_resources(tmp_path: Path) -> None:
     manifest = _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/policies/a"), Path("/policies/b.yaml")])
@@ -95,7 +70,7 @@ def test_apply_recurses_into_subdirectories(tmp_path: Path) -> None:
     nested = tmp_path / "myapp" / "templates"
     a = _seed_manifest(nested, "deployment.yaml")
     b = _seed_manifest(nested, "service.yml")
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -108,7 +83,7 @@ def test_apply_recurses_into_subdirectories(tmp_path: Path) -> None:
 def test_apply_empty_manifests_dir_short_circuits_without_invoking_kyverno(tmp_path: Path) -> None:
     # An empty rendered tree must not shell out — kyverno without
     # --resource args would otherwise hang or error confusingly.
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -118,15 +93,16 @@ def test_apply_empty_manifests_dir_short_circuits_without_invoking_kyverno(tmp_p
     assert report.has_failures() is False
 
 
-def test_apply_empty_policy_paths_raises_value_error(tmp_path: Path) -> None:
-    ky = Kyverno(runner=StubRunner(returncode=0, stdout=""))
-    with pytest.raises(ValueError):
+def test_apply_empty_policy_paths_raises_chart_manager_error(tmp_path: Path) -> None:
+    """Inside the hierarchy, so the CLI prints a message instead of a traceback."""
+    ky = Kyverno(runner=FakeCommandRunner(returncode=0, stdout=""))
+    with pytest.raises(ChartManagerError):
         ky.apply(tmp_path, policy_paths=[])
 
 
 def test_pass_fixture_parses_to_zero_failures(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -144,7 +120,7 @@ def test_pass_fixture_parses_to_zero_failures(tmp_path: Path) -> None:
 
 def test_fail_fixture_populates_failures_with_expected_policy(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=1, stdout=_load("fail.json"))
+    runner = FakeCommandRunner(returncode=1, stdout=_load("fail.json"))
     ky = Kyverno(runner=runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -163,7 +139,7 @@ def test_fail_fixture_populates_failures_with_expected_policy(tmp_path: Path) ->
 
 def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
-    runner = StubRunner(
+    runner = FakeCommandRunner(
         returncode=2, stdout=_load("tool-error.json"), stderr="kyverno: panic"
     )
     ky = Kyverno(runner=runner)
@@ -182,7 +158,7 @@ def test_empty_stdout_returns_empty_report_without_raising(tmp_path: Path) -> No
     # The phase function decides what to do; the integration must not
     # treat this as a parse failure.
     _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=0, stdout="")
+    runner = FakeCommandRunner(returncode=0, stdout="")
     ky = Kyverno(runner=runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -197,7 +173,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
     # a well-formed JSON report. The integration must NOT confuse this
     # with a tool crash — only unparseable output should raise.
     _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=1, stdout=_load("fail.json"), stderr="")
+    runner = FakeCommandRunner(returncode=1, stdout=_load("fail.json"), stderr="")
     ky = Kyverno(runner=runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -208,7 +184,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
 
 def test_unknown_result_string_maps_to_error(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
-    runner = StubRunner(
+    runner = FakeCommandRunner(
         returncode=1,
         stdout=(
             '{"results": [{"policy": "p", "rule": "r", '
@@ -225,7 +201,7 @@ def test_unknown_result_string_maps_to_error(tmp_path: Path) -> None:
     assert report.failures() == report.results
 
 
-def test_argv_length_guard_raises_value_error(tmp_path: Path) -> None:
+def test_argv_length_guard_raises_chart_manager_error(tmp_path: Path) -> None:
     # Seed enough manifests that the rendered argv exceeds the 512KB cap.
     # Filenames must stay under the OS NAME_MAX (~255), so use ~200-char
     # stems and lots of files (~3500). With pytest's tmp_path prefix
@@ -236,10 +212,12 @@ def test_argv_length_guard_raises_value_error(tmp_path: Path) -> None:
     long_stem = "x" * 200
     for i in range(3500):
         (nested / f"{long_stem}-{i}.yaml").write_text("kind: Pod\n")
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
-    with pytest.raises(ValueError) as exc:
+    # Operator-actionable (a legitimately large chart hits this), so it must
+    # reach the CLI as a message, not a traceback.
+    with pytest.raises(ChartManagerError) as exc:
         ky.apply(tmp_path, policy_paths=[Path("/p")])
 
     assert "argv exceeds" in str(exc.value)
@@ -248,7 +226,7 @@ def test_argv_length_guard_raises_value_error(tmp_path: Path) -> None:
 
 def test_extra_args_passed_through(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
-    runner = StubRunner(returncode=0, stdout=_load("pass.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
     ky = Kyverno(runner=runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/p")], extra_args=["--cluster-wide-resources"])

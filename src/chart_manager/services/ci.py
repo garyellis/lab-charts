@@ -1,3 +1,4 @@
+"""CiService -- per-chart CI verbs: change detection, source install, OCI upgrade path."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,18 +11,32 @@ from chart_manager.plumbing.errors import ExternalCommandError
 
 
 class CiService:
-    def __init__(self, root: Path) -> None:
+    """CI pipeline verbs for a single chart against an already-provisioned cluster."""
+
+    def __init__(self, root: Path, *, helm: Helm, kubectl: Kubectl) -> None:
+        """Wire repository/git against `root`; take cluster adapters injected.
+
+        `helm`/`kubectl` were constructed inline here, which meant CI ran
+        against the ambient kubeconfig no matter what the composition root
+        was configured with. `Git` stays inline: it is addressed by `root`,
+        which this service already owns.
+        """
         self.root = root
         self.repository = ChartRepository(root)
         self.git = Git(root)
-        self.helm = Helm()
-        self.kubectl = Kubectl()
+        self.helm = helm
+        self.kubectl = kubectl
 
     def changed_charts(self, base: str = "origin/main") -> list[str]:
+        """Chart names changed vs `base`, filtered to charts the repository knows."""
         known = set(self.repository.list_names())
         return [chart for chart in self.git.changed_charts(base) if chart in known]
 
     def install_source_chart(self, chart_name: str, profile: str, namespace: str) -> None:
+        """Install the chart from local source, then run `helm test` if the profile enables it.
+
+        Raises ExternalCommandError on a nonzero `helm test`.
+        """
         chart = self.repository.get(chart_name)
         profile_spec = chart.spec.profile(profile)
         values = self.repository.value_paths(chart, profile)
@@ -49,10 +64,12 @@ class CiService:
         namespace: str,
         oci_ref: str,
     ) -> None:
-        # Two-phase install to exercise the upgrade path: deploy the
-        # published baseline from OCI, then upgrade to the local source.
-        # Both phases use the same values so the baseline release matches
-        # what's running in production rather than chart defaults.
+        """Exercise the upgrade path: published OCI baseline, then local source.
+
+        Both phases use the same values so the baseline release matches
+        what's running in production rather than chart defaults. Runs
+        `helm test` after the upgrade if the profile enables it.
+        """
         chart = self.repository.get(chart_name)
         profile_spec = chart.spec.profile(profile)
         values = self.repository.value_paths(chart, profile)

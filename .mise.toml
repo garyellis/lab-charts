@@ -16,6 +16,13 @@ run = "uv sync --extra dev"
 description = "Run the Python unit test suite."
 run = "uv run --extra dev pytest"
 
+[tasks.lint-layering]
+description = "Enforce the cli/ -> services/ -> integrations/ layer contract (same commands as the CI `layering` job)."
+run = [
+  "uv run --extra dev ruff check --select TID251 src/",
+  "uv run --extra dev pytest -q tests/test_layering.py",
+]
+
 [tasks.charts]
 description = "List known chart wrappers."
 run = "uv run chart-manager charts list"

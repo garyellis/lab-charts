@@ -1,18 +1,24 @@
+"""git wrapper: clone, branch, add/commit/push, and changed-file detection."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
 class Git:
+    """Run git subcommands rooted at one working tree."""
+
     def __init__(self, root: Path, runner: CommandRunner | None = None) -> None:
+        """Bind the working-tree root and a CommandRunner."""
         self.root = root
-        self.runner = runner or CommandRunner()
+        self.runner = runner or SubprocessRunner()
 
     def is_repository(self) -> bool:
+        """True if `root` is inside a git work tree."""
         result = self.runner.run(
             ["git", "rev-parse", "--show-toplevel"], cwd=self.root, check=False
         )
@@ -27,7 +33,8 @@ class Git:
         depth: int | None = 1,
         runner: CommandRunner | None = None,
     ) -> None:
-        runner = runner or CommandRunner()
+        """Clone `url` into `target`; shallow (depth=1) by default."""
+        runner = runner or SubprocessRunner()
         args = ["git", "clone"]
         if depth is not None:
             args.extend(["--depth", str(depth)])
@@ -37,6 +44,7 @@ class Git:
         runner.run(args)
 
     def checkout_new_branch(self, branch: str, *, base: str | None = None) -> None:
+        """Create-or-reset `branch` (optionally from `base`) and switch to it."""
         # `git checkout -B` creates-or-resets: callers re-running promote with
         # an aborted/leftover branch get a clean slate instead of an opaque
         # "branch already exists" failure mid-flow.
@@ -46,6 +54,7 @@ class Git:
         self.runner.run(args, cwd=self.root)
 
     def add(self, paths: Sequence[Path | str]) -> None:
+        """Stage the given paths; no-op on an empty list."""
         if not paths:
             return
         self.runner.run(["git", "add", "--", *[str(p) for p in paths]], cwd=self.root)
@@ -53,6 +62,7 @@ class Git:
     def commit(
         self, message: str, *, body: str | None = None, allow_empty: bool = False
     ) -> None:
+        """Commit staged changes; `body` becomes a second -m paragraph."""
         args = ["git", "commit", "-m", message]
         if body:
             args.extend(["-m", body])
@@ -61,6 +71,7 @@ class Git:
         self.runner.run(args, cwd=self.root)
 
     def push(self, branch: str, *, remote: str = "origin", set_upstream: bool = True) -> None:
+        """Push `branch` to `remote`, setting upstream by default."""
         args = ["git", "push"]
         if set_upstream:
             args.append("-u")
@@ -68,6 +79,10 @@ class Git:
         self.runner.run(args, cwd=self.root)
 
     def changed_charts(self, base: str = "origin/main") -> list[str]:
+        """Return chart names with committed changes vs `base` (merge-base diff).
+
+        A "chart" is the first directory under charts/ in any changed path.
+        """
         if not self.is_repository():
             raise ExternalCommandError(
                 "not a git repository; changed chart detection requires git metadata"

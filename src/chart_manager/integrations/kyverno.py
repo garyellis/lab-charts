@@ -27,8 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 
 _log = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ PolicyStatus = Literal["pass", "fail", "warn", "skip", "error"]
 
 # Conservative cap on the rendered exec argv length. Linux ARG_MAX is
 # typically 2MB and macOS is 1MB; we cap well below the lower bound so
-# the failure mode is a clear ValueError rather than an opaque
+# the failure mode is a clear ChartManagerError rather than an opaque
 # `OSError: [Errno 7] Argument list too long` from execve(). If a chart
 # legitimately needs more, the right answer is to switch to a single
 # `--resource <dir>` plus a flat tmp tree (kyverno's non-recursive
@@ -46,6 +46,8 @@ _MAX_ARGV_BYTES = 512 * 1024
 
 @dataclass(frozen=True)
 class PolicyResult:
+    """One (policy, rule, resource) verdict from the kyverno ClusterReport."""
+
     policy: str
     rule: str
     resource_kind: str
@@ -57,20 +59,27 @@ class PolicyResult:
 
 @dataclass(frozen=True)
 class KyvernoReport:
+    """Full kyverno run: per-rule results plus the summary counters."""
+
     results: tuple[PolicyResult, ...]
     summary: Mapping[str, int]
 
     def failures(self) -> tuple[PolicyResult, ...]:
+        """Results with status fail or error."""
         return tuple(r for r in self.results if r.status in ("fail", "error"))
 
     def warnings(self) -> tuple[PolicyResult, ...]:
+        """Results with status warn."""
         return tuple(r for r in self.results if r.status == "warn")
 
     def has_failures(self) -> bool:
+        """True if any rule failed or errored."""
         return bool(self.failures())
 
 
 class Kyverno:
+    """Run `kyverno apply` over rendered manifests and parse the policy report."""
+
     def __init__(
         self,
         runner: CommandRunner | None = None,
@@ -78,7 +87,8 @@ class Kyverno:
         binary: str | Path | None = None,
         timeout: float | None = None,
     ) -> None:
-        self.runner = runner or CommandRunner()
+        """Bind a CommandRunner, binary path (default `kyverno`), and timeout."""
+        self.runner = runner or SubprocessRunner()
         self._bin = str(binary) if binary is not None else "kyverno"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --row-timeout so a hung kyverno doesn't pin a worker.
@@ -91,11 +101,17 @@ class Kyverno:
         policy_paths: list[Path],
         extra_args: list[str] | None = None,
     ) -> KyvernoReport:
+        """Apply the given policies to every manifest under `manifests_dir`.
+
+        Manifests are passed as individual --resource flags (kyverno's dir
+        loader doesn't recurse). Policy failures land in the report, not as
+        exceptions; raises ChartManagerError on empty policies or oversized argv.
+        """
         # The phase function owns the "no policies discovered" SKIP decision.
         # Reaching here with an empty list is a programmer error, not a
         # runtime condition we should silently absorb.
         if not policy_paths:
-            raise ValueError("policy_paths must be non-empty")
+            raise ChartManagerError("policy_paths must be non-empty")
 
         # kyverno apply takes policies as positional args (path to file or
         # directory; repeated freely). `-p / --policy-report` switches
@@ -127,7 +143,7 @@ class Kyverno:
         # opaque execve E2BIG. See _MAX_ARGV_BYTES comment for the cap rationale.
         argv_bytes = sum(len(a.encode()) for a in args) + len(args)
         if argv_bytes > _MAX_ARGV_BYTES:
-            raise ValueError(
+            raise ChartManagerError(
                 f"kyverno argv exceeds {_MAX_ARGV_BYTES} bytes "
                 f"({argv_bytes} bytes, {len(manifests)} manifests). "
                 "Render a smaller subtree or pre-flatten manifests into a single dir."
@@ -161,6 +177,7 @@ def _parse(
     returncode: int,
     stderr: str,
 ) -> KyvernoReport:
+    """Parse kyverno's ClusterReport JSON; empty stdout yields an empty report."""
     # kyverno exits 0 with empty stdout when --resource targets a directory
     # that contains no kyverno-recognized resources. Treat that as an empty
     # report rather than a parse failure; the phase function decides whether
@@ -207,6 +224,7 @@ def _parse(
 
 
 def _normalize_status(raw: str) -> PolicyStatus:
+    """Pass through known kyverno result values; unknowns become 'error'."""
     # kyverno result values are pass/fail/warn/error/skip. Anything else
     # gets bucketed to "error" and logged so an upstream output-format
     # change is visible rather than silently misclassified — mirrors the

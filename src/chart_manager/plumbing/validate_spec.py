@@ -1,8 +1,11 @@
 """Per-chart `validate-spec.yaml` schema + loader.
 
 Mirrors `plumbing/spec.py` style: pydantic at the IO boundary, `SpecError`
-on any parse/shape failure. Internal callers (worklist construction in
-M4, schema/policy phases) consume the validated `ValidateSpec` directly.
+on any parse/shape failure. `services/validate/worklist.py` is the only
+consumer: it loads each chart's spec and turns it into the (chart, env)
+rows a run fans out over, along with the chart path, values files and
+policy dirs each row runs with. Everything downstream sees `RowConfig`,
+not this model.
 
 `version: 1` is the only accepted envelope. Bumping the major signals a
 breaking shape change; minor additions stay additive within the major.
@@ -14,10 +17,10 @@ from pathlib import Path
 from string import Template
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.spec import load_yaml_file
+from chart_manager.plumbing.spec import ensure_chart_relative, load_yaml_file
 
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
@@ -28,19 +31,37 @@ TriggerValue = list[str] | Literal["match-by-basename"]
 
 
 class EnvironmentSpec(BaseModel):
+    """Per-environment overrides: namespace and extra values files."""
+
     model_config = ConfigDict(extra="forbid")
 
     namespace: str | None = None
     values: list[str] = Field(default_factory=list)
 
+    @field_validator("values")
+    @classmethod
+    def values_must_be_relative(cls, values: list[str]) -> list[str]:
+        """Reject absolute or parent-escaping values paths (as ProfileSpec does)."""
+        return ensure_chart_relative(values, label="value file")
+
 
 class PoliciesSpec(BaseModel):
+    """Extra policy paths to run beyond the repo-wide defaults."""
+
     model_config = ConfigDict(extra="forbid")
 
     extra: list[str] = Field(default_factory=list)
 
+    @field_validator("extra")
+    @classmethod
+    def extra_must_be_relative(cls, extra: list[str]) -> list[str]:
+        """Reject absolute or parent-escaping policy paths."""
+        return ensure_chart_relative(extra, label="policy path")
+
 
 class ValidateSpec(BaseModel):
+    """Root of a chart's validate-spec.yaml."""
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     version: int = 1
@@ -66,6 +87,7 @@ class ValidateSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check_version(self) -> ValidateSpec:
+        """Reject any version envelope other than 1."""
         if self.version != 1:
             raise ValueError(
                 f"unsupported validate-spec version: {self.version} (only version 1 is supported)"
@@ -74,12 +96,14 @@ class ValidateSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check_helm_exclusive(self) -> ValidateSpec:
+        """Forbid setting both helm_version and helm_bin."""
         if self.helm_version is not None and self.helm_bin is not None:
             raise ValueError("helm_version and helm_bin are mutually exclusive")
         return self
 
     @model_validator(mode="after")
     def _check_environments(self) -> ValidateSpec:
+        """Require >=1 environment; each needs a namespace unless a template exists."""
         if not self.environments:
             raise ValueError("environments must declare at least one entry")
         if self.namespace_template is None:
@@ -93,6 +117,7 @@ class ValidateSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check_triggers(self) -> ValidateSpec:
+        """Each trigger must be MATCH_BY_BASENAME or a list of known envs."""
         known = set(self.environments)
         for pattern, value in self.triggers.items():
             if isinstance(value, str):
@@ -132,6 +157,7 @@ def resolve_namespace(spec: ValidateSpec, env: str) -> str:
 
 
 def load_validate_spec(path: Path) -> ValidateSpec:
+    """Load and validate a validate-spec.yaml, wrapping failures in SpecError."""
     if not path.exists():
         raise SpecError(f"missing validate spec: {path}")
     try:

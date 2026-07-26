@@ -1,12 +1,20 @@
+"""Cosmos DB access: cached client and container handles, env-var configured."""
+
 import functools
 import os
 
 import azure.identity
-from azure.cosmos import CosmosClient, ContainerProxy, PartitionKey, exceptions
+from azure.cosmos import ContainerProxy, CosmosClient, PartitionKey, exceptions
 
 
 @functools.lru_cache(maxsize=1)
 def get_cosmos_client() -> CosmosClient:
+    """Build (once) the CosmosClient.
+
+    Auth precedence: COSMOS_CONNECTION_STRING > COSMOS_KEY > DefaultAzureCredential
+    against COSMOS_ENDPOINT. COSMOS_CA_BUNDLE / COSMOS_VERIFY_TLS tune TLS
+    verification for the emulator.
+    """
     options = {
         "enable_endpoint_discovery": False,
         "connection_timeout": 10,
@@ -29,8 +37,13 @@ def get_cosmos_client() -> CosmosClient:
     return CosmosClient(endpoint, credential=credential, **options)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def get_container(database: str, container: str, partition_key: str) -> ContainerProxy:
+    """Return a (cached) container handle, creating database/container if allowed.
+
+    On 403 (AAD data-plane auth can't create resources) falls back to plain
+    get-client handles, assuming the resources were pre-provisioned.
+    """
     client = get_cosmos_client()
     try:
         db = client.create_database_if_not_exists(id=database)

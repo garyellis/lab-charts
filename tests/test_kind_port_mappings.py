@@ -14,47 +14,23 @@ control-plane cluster.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from pathlib import Path
 
 from chart_manager.integrations.kind import Kind
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
+from tests.conftest import FakeCommandRunner
 
 
-class _Runner(CommandRunner):
-    """Scriptable fake runner.
+def _runner(
+    responses: dict[tuple[str, ...], tuple[int, str]] | None = None,
+) -> FakeCommandRunner:
+    """Answer the given argvs with `(returncode, stdout)`.
 
-    `responses` maps the argv tuple to a `(returncode, stdout)` pair. Any
-    argv not in the map yields a successful empty response, which keeps
-    each test focused on the calls it actually cares about.
+    Any argv not in the map succeeds with empty stdout, which keeps each
+    test focused on the calls it actually cares about.
     """
-
-    def __init__(
-        self,
-        responses: dict[tuple[str, ...], tuple[int, str]] | None = None,
-    ) -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._responses = responses or {}
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        argv = tuple(args)
-        self.calls.append(argv)
-        returncode, stdout = self._responses.get(argv, (0, ""))
-        return CommandResult(
-            args=argv,
-            returncode=returncode,
-            stdout=stdout,
-            stderr="",
-        )
-
+    runner = FakeCommandRunner()
+    for argv, (returncode, stdout) in (responses or {}).items():
+        runner.respond(argv, returncode=returncode, stdout=stdout)
+    return runner
 
 def _inspect_payload(ports: dict[str, list[dict[str, str]] | None]) -> str:
     return json.dumps([{"NetworkSettings": {"Ports": ports}}])
@@ -79,7 +55,7 @@ def _inspect_argv(container: str) -> tuple[str, ...]:
 def test_container_host_ports_matches_expected() -> None:
     cluster = "chart-manager"
     control_plane = f"{cluster}-control-plane"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, control_plane + "\n"),
             _inspect_argv(control_plane): (
@@ -108,7 +84,7 @@ def test_container_host_ports_unions_across_multi_node_cluster() -> None:
     cluster = "multinode"
     cp = f"{cluster}-control-plane"
     worker = f"{cluster}-worker"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, f"{cp}\n{worker}\n"),
             _inspect_argv(cp): (
@@ -140,13 +116,13 @@ def test_container_host_ports_unions_across_multi_node_cluster() -> None:
 def test_container_host_ports_empty_when_no_node_containers() -> None:
     # Cluster absent (label query returns no containers) -> empty set so
     # the caller can warn rather than crash.
-    runner = _Runner({_ps_argv("missing"): (0, "")})
+    runner = _runner({_ps_argv("missing"): (0, "")})
     assert Kind(runner=runner).container_host_ports("missing") == set()
 
 
 def test_container_host_ports_empty_when_docker_ps_fails() -> None:
     # docker daemon glitch on the discovery call -> empty set.
-    runner = _Runner({_ps_argv("missing"): (1, "")})
+    runner = _runner({_ps_argv("missing"): (1, "")})
     assert Kind(runner=runner).container_host_ports("missing") == set()
 
 
@@ -155,7 +131,7 @@ def test_container_host_ports_handles_null_bindings() -> None:
     # containerd internal ports with no host bindings).
     cluster = "chart-manager"
     cp = f"{cluster}-control-plane"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, cp + "\n"),
             _inspect_argv(cp): (
@@ -177,7 +153,7 @@ def test_container_host_ports_skips_non_integer_host_port() -> None:
     # tolerates partial data.
     cluster = "chart-manager"
     cp = f"{cluster}-control-plane"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, cp + "\n"),
             _inspect_argv(cp): (
@@ -197,7 +173,7 @@ def test_container_host_ports_skips_non_integer_host_port() -> None:
 def test_container_host_ports_empty_when_payload_malformed() -> None:
     cluster = "x"
     cp = f"{cluster}-control-plane"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, cp + "\n"),
             _inspect_argv(cp): (0, "not json"),
@@ -213,7 +189,7 @@ def test_container_host_ports_skips_node_when_inspect_fails() -> None:
     cluster = "partial"
     cp = f"{cluster}-control-plane"
     worker = f"{cluster}-worker"
-    runner = _Runner(
+    runner = _runner(
         {
             _ps_argv(cluster): (0, f"{cp}\n{worker}\n"),
             _inspect_argv(cp): (1, ""),

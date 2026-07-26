@@ -9,53 +9,33 @@ returned `UpgradeResult` is what drives the rollout-wait skip downstream.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm, UpgradeResult
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
+from tests.conftest import FakeCommandRunner, Reply
 
 
 @pytest.fixture(autouse=True)
 def _clear_mise_cache() -> None:
-    helm_module._resolve_via_mise.cache_clear()
+    helm_module._clear_mise_cache()
 
 
-class ScriptedRunner(CommandRunner):
-    """Runner whose stdout per call is driven by an ordered script.
 
-    Each entry is `(predicate, stdout)`: the first predicate that matches
-    the invocation's argv decides the response. Lets a single test set up
-    distinct outputs for `helm list` vs `helm upgrade` without coupling
-    to call order beyond what the scenario actually requires.
+def _scripted(*, list_responses: list[str], upgrade_response: str = "") -> FakeCommandRunner:
+    """Answer `helm list` from an ordered script; anything else is the upgrade.
+
+    Keyed on the subcommand rather than on call order so a scenario only
+    couples to the sequence of *listings* it actually cares about. Listings
+    past the script return `[]`, i.e. "no such release".
     """
-
-    def __init__(self, *, list_responses: list[str], upgrade_response: str = "") -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._list_responses = list(list_responses)
-        self._upgrade_response = upgrade_response
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        argv = list(args)
-        if "list" in argv:
-            stdout = self._list_responses.pop(0) if self._list_responses else "[]"
-            return CommandResult(args=tuple(args), returncode=0, stdout=stdout, stderr="")
-        return CommandResult(
-            args=tuple(args), returncode=0, stdout=self._upgrade_response, stderr=""
-        )
-
+    return FakeCommandRunner(stdout=upgrade_response).respond_each(
+        lambda argv: "list" in argv,
+        *(Reply(stdout=response) for response in list_responses),
+        Reply(stdout="[]"),
+    )
 
 def _release(revision: int) -> str:
     return json.dumps(
@@ -72,7 +52,7 @@ def _release(revision: int) -> str:
 
 def test_upgrade_install_classifies_no_change_when_revision_steady(tmp_path: Path) -> None:
     # helm list returns revision=3 both before and after -> nothing rolled.
-    runner = ScriptedRunner(list_responses=[_release(3), _release(3)])
+    runner = _scripted(list_responses=[_release(3), _release(3)])
     helm = Helm(runner=runner)
 
     result = helm.upgrade_install(
@@ -91,7 +71,7 @@ def test_upgrade_install_classifies_no_change_when_revision_steady(tmp_path: Pat
 
 def test_upgrade_install_classifies_applied_on_first_install(tmp_path: Path) -> None:
     # Before: release not present (empty list). After: revision=1.
-    runner = ScriptedRunner(list_responses=["[]", _release(1)])
+    runner = _scripted(list_responses=["[]", _release(1)])
     helm = Helm(runner=runner)
 
     result = helm.upgrade_install(
@@ -107,7 +87,7 @@ def test_upgrade_install_classifies_applied_on_first_install(tmp_path: Path) -> 
 
 
 def test_upgrade_install_classifies_applied_on_revision_bump(tmp_path: Path) -> None:
-    runner = ScriptedRunner(list_responses=[_release(2), _release(3)])
+    runner = _scripted(list_responses=[_release(2), _release(3)])
     helm = Helm(runner=runner)
 
     result = helm.upgrade_install(

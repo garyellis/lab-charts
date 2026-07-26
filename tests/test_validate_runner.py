@@ -302,6 +302,38 @@ def test_phases_subset_marks_disabled_as_not_run(tmp_path: Path) -> None:
     assert result.exit_code() == 0
 
 
+def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
+    """A subset that leaves out `render` must still render.
+
+    Schema and policy read the rendered tree, so "disable render" cannot
+    mean "skip render" — the runner docstring states this, but nothing
+    covered the case: the existing subset test keeps render enabled.
+    Without this, the runner's dead "downgrade later phases to SKIP when
+    render was NOT_RUN" branch looked load-bearing.
+    """
+    helm = _StubHelm(succeed=True)
+    kc = _StubKubeconform(_ok_report())
+    ky = _StubKyverno(report=_kyverno_pass())
+    runner = ValidateRunner(
+        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
+    )
+
+    result = runner.run(
+        [_cfg(_row(), tmp_path / "chart", policy_paths=[tmp_path / "p"])],
+        enabled_phases=frozenset({"schema"}),
+    )
+
+    row_result = result.rows[0]
+    # Render ran and PASSed even though the caller did not ask for it.
+    assert row_result.phases["render"].status == "PASS"
+    assert len(helm.calls) == 1
+    assert row_result.phases["schema"].status == "PASS"
+    assert kc.calls != []
+    assert row_result.phases["policy"].status == "NOT_RUN"
+    assert ky.calls == []
+    assert result.exit_code() == 0
+
+
 def test_phases_subset_multi_row_batch(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=True)
     kc = _StubKubeconform(_ok_report())

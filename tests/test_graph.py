@@ -1,16 +1,38 @@
+"""DependencyResolver install ordering.
+
+Asserted against synthetic chart trees, not the repo's own `charts/` -- see
+tests/conftest.py. The real tree is exercised by a structural smoke test at
+the bottom that survives new charts and new dependency edges.
+"""
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
 
 from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import DependencyCycleError
-from chart_manager.plumbing.graph import DependencyResolver
+from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
+
+from .conftest import REPO_ROOT, MakeChart
 
 
-def test_install_plan_orders_requirements_before_target() -> None:
-    resolver = DependencyResolver(ChartRepository(Path(".")))
+def _requires(*refs: str) -> dict[str, list[dict[str, str]]]:
+    """Build a `requires:` list from "chart" or "chart:profile" shorthand."""
+    parsed = []
+    for ref in refs:
+        chart, _, profile = ref.partition(":")
+        parsed.append({"chart": chart, "profile": profile or "minimal"})
+    return {"requires": parsed}
 
-    plan = resolver.install_plan("alloy", "minimal")
+
+def test_install_plan_orders_requirements_before_target(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("prometheus-operator")
+    make_chart("alloy", profiles={"minimal": _requires("prometheus-operator")})
+
+    plan = DependencyResolver(ChartRepository(chart_root)).install_plan("alloy", "minimal")
 
     assert [(entry.chart, entry.target) for entry in plan] == [
         ("prometheus-operator", False),
@@ -18,12 +40,21 @@ def test_install_plan_orders_requirements_before_target() -> None:
     ]
 
 
-def test_install_plan_expands_nested_profiles() -> None:
-    resolver = DependencyResolver(ChartRepository(Path(".")))
+def test_install_plan_expands_nested_profiles(chart_root: Path, make_chart: MakeChart) -> None:
+    for name in ("istio-base", "mimir-distributed", "loki", "tempo"):
+        make_chart(name)
+    make_chart(
+        "grafana",
+        profiles={
+            "with-deps": _requires("istio-base", "mimir-distributed", "loki", "tempo"),
+        },
+    )
 
-    plan = resolver.install_plan("grafana", "with-deps")
+    plan = DependencyResolver(ChartRepository(chart_root)).install_plan("grafana", "with-deps")
 
+    # Requirements are planned in declaration order, target last.
     assert [entry.chart for entry in plan] == [
+        "istio-base",
         "mimir-distributed",
         "loki",
         "tempo",
@@ -32,13 +63,27 @@ def test_install_plan_expands_nested_profiles() -> None:
     assert plan[-1].target is True
 
 
-def test_alloy_ui_e2e_installs_grafana_stack_then_alloy() -> None:
-    resolver = DependencyResolver(ChartRepository(Path(".")))
+def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    for name in ("prometheus-operator", "istio-base", "mimir-distributed", "loki", "tempo"):
+        make_chart(name)
+    make_chart(
+        "grafana",
+        profiles={
+            "with-deps": _requires("istio-base", "mimir-distributed", "loki", "tempo"),
+        },
+    )
+    make_chart(
+        "alloy",
+        profiles={"ui-e2e": _requires("prometheus-operator", "grafana:with-deps")},
+    )
 
-    plan = resolver.install_plan("alloy", "ui-e2e")
+    plan = DependencyResolver(ChartRepository(chart_root)).install_plan("alloy", "ui-e2e")
 
     assert [entry.chart for entry in plan] == [
         "prometheus-operator",
+        "istio-base",
         "mimir-distributed",
         "loki",
         "tempo",
@@ -49,30 +94,50 @@ def test_alloy_ui_e2e_installs_grafana_stack_then_alloy() -> None:
     assert plan[-1].target is True
 
 
-def test_cycle_detection(tmp_path: Path) -> None:
-    charts = tmp_path / "charts"
-    for name, required in [("a", "b"), ("b", "a")]:
-        chart = charts / name
-        chart.mkdir(parents=True)
-        (chart / "Chart.yaml").write_text(f"apiVersion: v2\nname: {name}\n", encoding="utf-8")
-        (chart / "values.yaml").write_text("", encoding="utf-8")
-        (chart / "test-spec.yaml").write_text(
-            f"""
-version: 1
-profiles:
-  minimal:
-    requires:
-      - chart: {required}
-        profile: minimal
-    values:
-      - values.yaml
-    helmTest: false
-reverseTests: []
-""",
-            encoding="utf-8",
-        )
+def test_a_shared_dependency_is_planned_once_before_both_dependents(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """Diamond: both branches require `base`, which must appear exactly once."""
+    make_chart("base")
+    make_chart("left", profiles={"minimal": _requires("base")})
+    make_chart("right", profiles={"minimal": _requires("base")})
+    make_chart("app", profiles={"minimal": _requires("left", "right")})
 
-    resolver = DependencyResolver(ChartRepository(tmp_path))
+    plan = DependencyResolver(ChartRepository(chart_root)).install_plan("app", "minimal")
+
+    assert [entry.chart for entry in plan] == ["base", "left", "right", "app"]
+
+
+def test_the_same_chart_under_two_profiles_is_not_deduped(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """Dedupe keys on (chart, profile), so two profiles of one chart both install."""
+    make_chart("base", profiles={"minimal": {}, "full": {}})
+    make_chart("app", profiles={"minimal": _requires("base:minimal", "base:full")})
+
+    plan = DependencyResolver(ChartRepository(chart_root)).install_plan("app", "minimal")
+
+    assert [(entry.chart, entry.profile) for entry in plan] == [
+        ("base", "minimal"),
+        ("base", "full"),
+        ("app", "minimal"),
+    ]
+
+
+def test_cycle_detection(chart_root: Path, make_chart: MakeChart) -> None:
+    make_chart("a", profiles={"minimal": _requires("b")})
+    make_chart("b", profiles={"minimal": _requires("a")})
+
+    resolver = DependencyResolver(ChartRepository(chart_root))
 
     with pytest.raises(DependencyCycleError):
         resolver.install_plan("a", "minimal")
+
+
+def test_the_repo_dependency_graph_resolves() -> None:
+    """Smoke test over the real charts/ tree: structure, not inventory."""
+    plan = DependencyResolver(ChartRepository(REPO_ROOT)).install_plan("alloy", "ui-e2e")
+
+    assert plan[-1] == PlanEntry("alloy", "ui-e2e", target=True)
+    keys = [(entry.chart, entry.profile) for entry in plan]
+    assert len(keys) == len(set(keys)), "install plan must not repeat a chart:profile"

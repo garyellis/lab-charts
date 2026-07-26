@@ -13,21 +13,33 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Literal
-
-from rich.console import Console
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.progress import ProgressCallback, emit, info, step, warn
 
 CILIUM_BOOTSTRAP_CHART = "cilium"
 CILIUM_BOOTSTRAP_PROFILE = "minimal"
 CILIUM_BOOTSTRAP_NAMESPACE = "kube-system"
 CILIUM_BOOTSTRAP_TIMEOUT = "10m"
 KIND_CONFIG_FILENAME = "kind-config.yaml"
+
+
+def kind_config_path(root: Path) -> Path | None:
+    """The repo-root kind-config.yaml, or None when it is absent.
+
+    Single owner of the "use kind-config.yaml if the repo has one, else let
+    kind use its own defaults" rule. Both `sandbox up` (LabService) and
+    `sandbox test`/`sandbox ensure` (SandboxService) create the same cluster,
+    so they must agree on which config file it was created from.
+    """
+    config = root / KIND_CONFIG_FILENAME
+    return config if config.exists() else None
 
 
 def bootstrap(
@@ -37,7 +49,7 @@ def bootstrap(
     kind: Kind,
     kubectl: Kubectl,
     repository: ChartRepository,
-    console: Console,
+    progress: ProgressCallback | None = None,
     lint: bool = False,
 ) -> Literal["applied", "no-change"] | None:
     """Install / converge cilium as the kind cluster CNI.
@@ -57,15 +69,18 @@ def bootstrap(
     try:
         chart = repository.get(CILIUM_BOOTSTRAP_CHART)
     except ChartManagerError:
-        console.print("[yellow]cilium chart not found; skipping CNI bootstrap[/yellow]")
+        emit(progress, warn("cilium chart not found; skipping CNI bootstrap", label=None))
         return None
 
     api_ip = kind.control_plane_ip(cluster_name)
     values = repository.value_paths(chart, CILIUM_BOOTSTRAP_PROFILE)
 
-    console.print(
-        f"[bold]Bootstrapping cilium CNI[/bold] "
-        f"(k8sServiceHost={api_ip}, namespace={CILIUM_BOOTSTRAP_NAMESPACE})"
+    emit(
+        progress,
+        step(
+            "Bootstrapping cilium CNI",
+            f"(k8sServiceHost={api_ip}, namespace={CILIUM_BOOTSTRAP_NAMESPACE})",
+        ),
     )
     # mtime-gated to skip the dep update when Chart.lock is fresh; same
     # cache as the lab install loop, so a single process never updates
@@ -74,7 +89,7 @@ def bootstrap(
     if lint:
         helm.lint(chart.path, values)
 
-    with _diagnostics_on_failure(kubectl, console, CILIUM_BOOTSTRAP_NAMESPACE):
+    with _diagnostics_on_failure(kubectl, progress, CILIUM_BOOTSTRAP_NAMESPACE):
         result = helm.upgrade_install(
             CILIUM_BOOTSTRAP_CHART,
             chart.path,
@@ -93,7 +108,7 @@ def bootstrap(
     # pod networking, so this is also our "nodes are usable" gate. Skip
     # on no-change: nothing rolled, the wait would be a no-op anyway.
     if result.status == "applied":
-        console.print("[bold]Waiting for kube-system workloads[/bold] (cilium, coredns)")
+        emit(progress, step("Waiting for kube-system workloads", "(cilium, coredns)"))
         kubectl.wait_workloads_ready(
             CILIUM_BOOTSTRAP_NAMESPACE, timeout=CILIUM_BOOTSTRAP_TIMEOUT
         )
@@ -102,12 +117,13 @@ def bootstrap(
 
 @contextmanager
 def _diagnostics_on_failure(
-    kubectl: Kubectl, console: Console, namespace: str
+    kubectl: Kubectl, progress: ProgressCallback | None, namespace: str
 ) -> Iterator[None]:
+    """Emit pod/event diagnostics on ExternalCommandError, then re-raise."""
     try:
         yield
     except ExternalCommandError:
         diagnostics = kubectl.diagnostics(namespace)
         if diagnostics.strip():
-            console.print(diagnostics)
+            emit(progress, info(diagnostics))
         raise

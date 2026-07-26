@@ -1,11 +1,12 @@
 """Coverage for the helmrelease TestService.
 
 Drives concurrent helm-test execution across matched Flux HelmReleases.
-All Flux/Helm interactions are faked; sleep/clock/now are injected so the
+All cluster/helm interactions are faked; clock/now are injected so the
 suite is fast and deterministic.
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,14 +15,14 @@ from typing import Any
 
 import pytest
 
-from chart_manager.integrations.flux import (
+from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
     HelmReleaseStatus,
 )
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease._common import Transition
+from chart_manager.services.helmrelease.state import Transition
 from chart_manager.services.helmrelease.test import (
     TestRequest,
     TestService,
@@ -91,7 +92,7 @@ def _bad_result(stderr: str, *, returncode: int = 1, stdout: str = "") -> Comman
 
 
 @dataclass
-class _FakeFlux:
+class _FakeCluster:
     list_result: list[HelmReleaseRef] = field(default_factory=list)
     statuses: dict[tuple[str, str], HelmReleaseStatus | BaseException] = field(
         default_factory=dict
@@ -227,18 +228,21 @@ class _Clock:
 
 
 def _make_service(
-    flux: _FakeFlux,
+    cluster: _FakeCluster,
     helm: _FakeHelm | None = None,
     *,
     clock: Callable[[], float] | None = None,
     now: Callable[[], datetime] | None = None,
     progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
-    sleep: Callable[[float], None] | None = None,
 ) -> TestService:
     return TestService(
-        flux,  # type: ignore[arg-type]
+        cluster,  # type: ignore[arg-type]
         helm or _FakeHelm(),  # type: ignore[arg-type]
-        sleep=sleep or (lambda _t: None),
+        # Passed as *both* collaborators: the pod/event operations moved
+        # from the HelmRelease client onto `Kubectl`, and one double
+        # standing in for both keeps every `calls` assertion below on a
+        # single recorder instead of splitting it across two fakes.
+        kubectl=cluster,  # type: ignore[arg-type]
         clock=clock or _Clock(),
         now=now or (lambda: WALL_BASE),
         progress=progress,
@@ -310,14 +314,14 @@ def test_request_rejects_stdout_max_bytes_below_minimum() -> None:
 def test_zero_match_returns_synthetic_no_match_outcome() -> None:
     a = _ref("a", "ns1")
     b = _ref("b", "ns2")
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[a, b],
         statuses={
             ("ns1", "a"): _released_status(a, chart_name="other"),
             ("ns2", "b"): _released_status(b, version="9.9.9"),
         },
     )
-    result = _make_service(flux).test(_req())
+    result = _make_service(cluster).test(_req())
     assert len(result.outcomes) == 1
     [o] = result.outcomes
     assert o.verdict == "no-match"
@@ -331,14 +335,14 @@ def test_zero_match_returns_synthetic_no_match_outcome() -> None:
 def test_suspended_short_circuits_no_helm_no_delete_no_events() -> None:
     ref = _ref()
     s = _released_status(ref, suspended=True)
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): s})
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): s})
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "skipped-suspended"
     assert helm.calls == []
-    assert not any(c[0] == "delete_pod" for c in flux.calls)
-    assert not any(c[0] == "namespace_events" for c in flux.calls)
+    assert not any(c[0] == "delete_pod" for c in cluster.calls)
+    assert not any(c[0] == "namespace_events" for c in cluster.calls)
 
 
 def test_not_released_skips_without_helm() -> None:
@@ -356,9 +360,9 @@ def test_not_released_skips_without_helm() -> None:
         history_chart_version=VERSION,
         conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): s})
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): s})
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "skipped-not-ready"
     assert o.reason == "NotReleased"
@@ -368,9 +372,9 @@ def test_not_released_skips_without_helm() -> None:
 def test_generation_lag_skips_without_helm() -> None:
     ref = _ref()
     s = _released_status(ref, generation=2, observed_generation=1)
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): s})
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): s})
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "skipped-not-ready"
     assert o.reason == "GenerationLag"
@@ -382,7 +386,7 @@ def test_generation_lag_skips_without_helm() -> None:
 
 def test_reap_succeeded_pods_then_run_helm() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={
@@ -390,10 +394,10 @@ def test_reap_succeeded_pods_then_run_helm() -> None:
         },
     )
     helm = _FakeHelm(result=_ok_result())
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "passed"
-    delete_calls = [c for c in flux.calls if c[0] == "delete_pod"]
+    delete_calls = [c for c in cluster.calls if c[0] == "delete_pod"]
     assert len(delete_calls) == 1
     assert delete_calls[0][1] == ("loki", "loki-test-old")
     assert len(helm.calls) == 1
@@ -401,30 +405,30 @@ def test_reap_succeeded_pods_then_run_helm() -> None:
 
 def test_running_pod_refuses_run() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "loki-test-live", "Running")]},
     )
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestPodInFlight"
     assert "loki-test-live" in (o.diagnostics or "")
     assert helm.calls == []
-    assert not any(c[0] == "delete_pod" for c in flux.calls)
+    assert not any(c[0] == "delete_pod" for c in cluster.calls)
 
 
 def test_unknown_phase_refuses_run() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "loki-test-x", "Unknown")]},
     )
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestPodInFlight"
@@ -433,13 +437,13 @@ def test_unknown_phase_refuses_run() -> None:
 
 def test_empty_phase_refuses_run() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "loki-test-y", "")]},
     )
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestPodInFlight"
@@ -448,7 +452,7 @@ def test_empty_phase_refuses_run() -> None:
 
 def test_mixed_running_and_succeeded_refuses_no_delete() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={
@@ -459,17 +463,17 @@ def test_mixed_running_and_succeeded_refuses_no_delete() -> None:
         },
     )
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestPodInFlight"
-    assert not any(c[0] == "delete_pod" for c in flux.calls)
+    assert not any(c[0] == "delete_pod" for c in cluster.calls)
     assert helm.calls == []
 
 
 def test_partial_reap_failure_yields_reap_incomplete() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={
@@ -481,7 +485,7 @@ def test_partial_reap_failure_yields_reap_incomplete() -> None:
         delete_failures={("loki", "loki-test-old2")},
     )
     helm = _FakeHelm()
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "ReapIncomplete"
@@ -494,23 +498,23 @@ def test_partial_reap_failure_yields_reap_incomplete() -> None:
 
 def test_helm_rc0_passes_without_namespace_events() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         namespace_events_exc=ExternalCommandError("would blow up", stderr="x"),
     )
     helm = _FakeHelm(result=_ok_result())
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "passed"
     assert o.reason == "AllTestsPassed"
     assert o.diagnostics is None
-    assert not any(c[0] == "namespace_events" for c in flux.calls)
+    assert not any(c[0] == "namespace_events" for c in cluster.calls)
 
 
 def test_helm_no_tests_to_run_classified_as_passed_no_diagnostics() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         namespace_events_exc=ExternalCommandError("nope", stderr="nope"),
@@ -518,24 +522,24 @@ def test_helm_no_tests_to_run_classified_as_passed_no_diagnostics() -> None:
     helm = _FakeHelm(
         result=_bad_result("Error: no tests to run for chart loki")
     )
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "passed"
     assert o.reason == "NoTestsDefined"
     assert o.diagnostics is None
-    assert not any(c[0] == "namespace_events" for c in flux.calls)
+    assert not any(c[0] == "namespace_events" for c in cluster.calls)
 
 
 def test_helm_already_exists_classified_as_test_pod_conflict() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(
         result=_bad_result("Error: pod cert-manager-test already exists")
     )
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestPodConflict"
@@ -544,12 +548,12 @@ def test_helm_already_exists_classified_as_test_pod_conflict() -> None:
 
 def test_helm_cluster_unreachable_classified_as_helm_unavailable() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=_bad_result("Error: cluster unreachable"))
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "HelmUnavailable"
@@ -557,7 +561,7 @@ def test_helm_cluster_unreachable_classified_as_helm_unavailable() -> None:
 
 def test_helm_generic_failure_includes_pod_logs_in_diagnostics() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         # Reaping returns no pods; refresh after failure returns one pod.
@@ -565,14 +569,14 @@ def test_helm_generic_failure_includes_pod_logs_in_diagnostics() -> None:
         pod_logs_map={("loki", "loki-test-fresh", False): "log content"},
     )
     helm = _FakeHelm(result=_bad_result("Error: bare failure"))
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestFailed"
     assert o.diagnostics is not None
     assert "log content" in o.diagnostics
     # First list_test_pods is the reap; second is from diagnostics composition.
-    assert flux.list_test_pods_count == 2
+    assert cluster.list_test_pods_count == 2
 
 
 # ----- pod log fallback semantics ------------------------------------------
@@ -580,7 +584,7 @@ def test_helm_generic_failure_includes_pod_logs_in_diagnostics() -> None:
 
 def test_previous_logs_fallback_fires_for_terminal_phase_empty_logs() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "loki-test", "Failed")]},
@@ -590,9 +594,9 @@ def test_previous_logs_fallback_fires_for_terminal_phase_empty_logs() -> None:
         },
     )
     helm = _FakeHelm(result=_bad_result("Error: bare failure"))
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
-    pod_log_calls = [c for c in flux.calls if c[0] == "pod_logs"]
+    pod_log_calls = [c for c in cluster.calls if c[0] == "pod_logs"]
     previous_calls = [c for c in pod_log_calls if c[2]["previous"]]
     assert len(previous_calls) == 1
     assert "previous boom" in (o.diagnostics or "")
@@ -604,7 +608,7 @@ def test_previous_logs_fallback_does_not_fire_for_running_pod() -> None:
     # different from reap-time; we only refresh after helm has failed).
     # Reap sees empty so we proceed; helm fails; diagnostics snapshot sees
     # the Running pod with empty logs.
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "loki-test", "Running")]},
@@ -619,13 +623,13 @@ def test_previous_logs_fallback_does_not_fire_for_running_pod() -> None:
     ]
 
     def list_pods(_ref: HelmReleaseRef, *, timeout: float | None = None) -> list[tuple[str, str, str]]:
-        flux.calls.append(("list_test_pods", (_ref,), {"timeout": timeout}))
+        cluster.calls.append(("list_test_pods", (_ref,), {"timeout": timeout}))
         return seq.pop(0)
 
-    flux.list_test_pods = list_pods  # type: ignore[assignment]
+    cluster.list_test_pods = list_pods  # type: ignore[assignment]
     helm = _FakeHelm(result=_bad_result("Error: bare failure"))
-    _make_service(flux, helm).test(_req())
-    previous_calls = [c for c in flux.calls if c[0] == "pod_logs" and c[2]["previous"]]
+    _make_service(cluster, helm).test(_req())
+    previous_calls = [c for c in cluster.calls if c[0] == "pod_logs" and c[2]["previous"]]
     assert previous_calls == []
 
 
@@ -634,13 +638,13 @@ def test_previous_logs_fallback_does_not_fire_for_running_pod() -> None:
 
 def test_helm_timeout_raises_yields_per_hr_budget_exhausted() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=ExternalCommandError("command timed out after 30s\nblah"))
     # Clock stays low so total deadline isn't tripped.
-    result = _make_service(flux, helm, clock=_Clock()).test(_req())
+    result = _make_service(cluster, helm, clock=_Clock()).test(_req())
     [o] = result.outcomes
     assert o.verdict == "timed-out"
     assert o.reason == "PerHRBudgetExhausted"
@@ -648,7 +652,7 @@ def test_helm_timeout_raises_yields_per_hr_budget_exhausted() -> None:
 
 def test_total_timeout_cancels_remaining_outcomes() -> None:
     refs = [_ref(f"a{i}", "ns") for i in range(3)]
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=refs,
         statuses={(r.namespace, r.name): _released_status(r) for r in refs},
     )
@@ -674,7 +678,7 @@ def test_total_timeout_cancels_remaining_outcomes() -> None:
     # so total deadline (300) is exceeded within a couple of as_completed
     # iterations.
     clock = _Clock(start=0.0, step=250.0)
-    result = _make_service(flux, helm, clock=clock).test(_req(concurrency=3))
+    result = _make_service(cluster, helm, clock=clock).test(_req(concurrency=3))
     assert result.total_timed_out is True
 
 
@@ -683,7 +687,7 @@ def test_total_timeout_cancels_remaining_outcomes() -> None:
 
 def test_concurrency_fan_out_runs_in_parallel() -> None:
     refs = [_ref(f"a{i}", "ns") for i in range(3)]
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=refs,
         statuses={(r.namespace, r.name): _released_status(r) for r in refs},
     )
@@ -695,7 +699,7 @@ def test_concurrency_fan_out_runs_in_parallel() -> None:
 
     helm = _FakeHelm()
     helm.result_fn = helm_test
-    _make_service(flux, helm).test(_req(concurrency=3))
+    _make_service(cluster, helm).test(_req(concurrency=3))
     assert len(set(helm.threads)) >= 2
 
 
@@ -704,14 +708,14 @@ def test_concurrency_fan_out_runs_in_parallel() -> None:
 
 def test_progress_callback_phase_sequence_passed() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=_ok_result())
     seen: list[tuple[str, str]] = []
     _make_service(
-        flux, helm, progress=lambda _ref, t: seen.append((_ref.name, t.phase))
+        cluster, helm, progress=lambda _ref, t: seen.append((_ref.name, t.phase))
     ).test(_req())
     phases = [p for _, p in seen]
     assert phases == ["Preflight", "Reaping", "Running", "Finished"]
@@ -719,48 +723,48 @@ def test_progress_callback_phase_sequence_passed() -> None:
 
 def test_progress_callback_phase_sequence_suspended() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref, suspended=True)},
     )
     seen: list[str] = []
     _make_service(
-        flux, _FakeHelm(), progress=lambda _ref, t: seen.append(t.phase)
+        cluster, _FakeHelm(), progress=lambda _ref, t: seen.append(t.phase)
     ).test(_req())
     assert seen == ["Preflight"]
 
 
 def test_progress_callback_phase_sequence_in_flight() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         test_pods={("loki", "loki"): [("loki", "x", "Running")]},
     )
     seen: list[str] = []
     _make_service(
-        flux, _FakeHelm(), progress=lambda _ref, t: seen.append(t.phase)
+        cluster, _FakeHelm(), progress=lambda _ref, t: seen.append(t.phase)
     ).test(_req())
     assert seen == ["Preflight", "Reaping"]
 
 
 def test_progress_callback_phase_sequence_test_failed() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=_bad_result("Error: bare failure"))
     seen: list[str] = []
     _make_service(
-        flux, helm, progress=lambda _ref, t: seen.append(t.phase)
+        cluster, helm, progress=lambda _ref, t: seen.append(t.phase)
     ).test(_req())
     assert seen == ["Preflight", "Reaping", "Running", "Finished"]
 
 
 def test_progress_callback_that_raises_does_not_break_service() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
@@ -769,7 +773,7 @@ def test_progress_callback_that_raises_does_not_break_service() -> None:
     def explode(_ref: HelmReleaseRef, _t: Transition) -> None:
         raise RuntimeError("callback boom")
 
-    result = _make_service(flux, helm, progress=explode).test(_req())
+    result = _make_service(cluster, helm, progress=explode).test(_req())
     [o] = result.outcomes
     assert o.verdict == "passed"
 
@@ -789,19 +793,19 @@ def test_rerun_reaps_round_one_succeeded_pods() -> None:
     def list_pods(_ref: HelmReleaseRef, *, timeout: float | None = None) -> list[tuple[str, str, str]]:
         return seq.pop(0)
 
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
-    flux.list_test_pods = list_pods  # type: ignore[assignment]
+    cluster.list_test_pods = list_pods  # type: ignore[assignment]
     helm = _FakeHelm(result=_ok_result())
-    service = _make_service(flux, helm)
+    service = _make_service(cluster, helm)
 
     first = service.test(_req())
     second = service.test(_req())
     assert [o.verdict for o in first.outcomes] == ["passed"]
     assert [o.verdict for o in second.outcomes] == ["passed"]
-    deletes = [c for c in flux.calls if c[0] == "delete_pod"]
+    deletes = [c for c in cluster.calls if c[0] == "delete_pod"]
     assert deletes == [("delete_pod", ("loki", "loki-test-round1"), {"timeout": 10.0})]
 
 
@@ -810,13 +814,13 @@ def test_rerun_reaps_round_one_succeeded_pods() -> None:
 
 def test_namespace_events_failure_does_not_break_outcome() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
         namespace_events_exc=ExternalCommandError("events boom", stderr="boom"),
     )
     helm = _FakeHelm(result=_bad_result("Error: bare failure"))
-    result = _make_service(flux, helm).test(_req())
+    result = _make_service(cluster, helm).test(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert "<events unavailable" in (o.diagnostics or "")
@@ -827,7 +831,7 @@ def test_namespace_events_failure_does_not_break_outcome() -> None:
 
 def test_total_deadline_trips_between_reap_and_helm_skips_helm() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
@@ -836,7 +840,7 @@ def test_total_deadline_trips_between_reap_and_helm_skips_helm() -> None:
     # of get_status/list_test_pods calls the clock exceeds 300s before
     # _run_helm sees the deadline check.
     clock = _Clock(start=0.0, step=200.0)
-    result = _make_service(flux, helm, clock=clock).test(_req())
+    result = _make_service(cluster, helm, clock=clock).test(_req())
     [o] = result.outcomes
     assert o.verdict == "timed-out"
     assert o.reason == "TotalBudgetExhausted"
@@ -848,12 +852,12 @@ def test_total_deadline_trips_between_reap_and_helm_skips_helm() -> None:
 
 def test_helm_test_called_with_logs_and_subprocess_timeout() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=_ok_result())
-    _make_service(flux, helm).test(_req())
+    _make_service(cluster, helm).test(_req())
     assert len(helm.calls) == 1
     (release,), kwargs = helm.calls[0]
     assert release == "loki"
@@ -862,3 +866,64 @@ def test_helm_test_called_with_logs_and_subprocess_timeout() -> None:
     assert kwargs["logs"] is True
     assert isinstance(kwargs["subprocess_timeout"], float)
     assert kwargs["subprocess_timeout"] > 0
+
+
+# ----- last_status is post-run, not pre-run ---------------------------------
+
+
+class _SequencedCluster(_FakeCluster):
+    """Serves a different status on each get_status call."""
+
+    def __init__(self, sequence: list[HelmReleaseStatus], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._sequence = list(sequence)
+
+    def get_status(
+        self, ref: HelmReleaseRef, *, timeout: float | None = None
+    ) -> HelmReleaseStatus:
+        self._record("get_status", (ref,), {"timeout": timeout})
+        return self._sequence.pop(0) if len(self._sequence) > 1 else self._sequence[0]
+
+
+def test_last_status_is_refreshed_after_helm_test_on_the_failure_path() -> None:
+    """`last_status` must describe the release *after* the test ran.
+
+    Every _finalize call site passes ctx.initial_status, and nothing
+    re-read the status once `helm test` returned -- so a TestFailed report
+    printed the TestSuccess condition from the previous reconcile. The
+    default fake cannot catch this: it serves one status per ref forever.
+    """
+    ref = _ref()
+    before = _released_status(ref)
+    after = dataclasses.replace(
+        before,
+        conditions=(
+            _cond("Ready", "True", reason="ReconciliationSucceeded"),
+            _cond("Released", "True", reason="InstallSucceeded"),
+            _cond("TestSuccess", "False", reason="TestFailed", message="probe died"),
+        ),
+    )
+    cluster = _SequencedCluster(
+        [before, after],
+        list_result=[ref],
+        statuses={("loki", "loki"): before},
+    )
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+
+    assert o.verdict == "failed"
+    assert o.last_status is after
+    assert o.diagnostics is not None
+    assert "probe died" in o.diagnostics
+
+
+def test_a_passing_run_does_not_pay_for_a_status_refresh() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): _released_status(ref)})
+
+    [o] = _make_service(cluster).test(_req()).outcomes
+
+    assert o.verdict == "passed"
+    # One status read for matching; the failure-path refresh must not fire.
+    assert len([c for c in cluster.calls if c[0] == "get_status"]) == 1

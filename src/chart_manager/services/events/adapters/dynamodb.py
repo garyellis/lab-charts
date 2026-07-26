@@ -1,3 +1,4 @@
+"""DynamoDB-backed EventStore adapter."""
 from typing import TYPE_CHECKING
 
 from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
@@ -6,11 +7,15 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
 
 class DynamoDBEventStore:
+    """Write lifecycle events to DynamoDB (correlation_id HASH + synthesized sort key)."""
+
     def __init__(self, table: "Table", *, sort_key: str = "event_id") -> None:
+        """Bind the boto3 Table and the range-key attribute name."""
         self._table = table
         self._sort_key = sort_key
 
     def write(self, event: PlatformLifecycleEvent) -> None:
+        """Persist one event; requires correlation_id (the partition key)."""
         if event.correlation_id is None:
             raise ValueError("correlation_id is required (it is the partition key)")
         item = event.to_dict()

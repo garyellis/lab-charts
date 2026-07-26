@@ -1,43 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
-
-
-class FakeRunner(CommandRunner):
-    def __init__(self, *, returncodes: list[int] | None = None, stdout: str = "", stderr: str = "") -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._returncodes = list(returncodes) if returncodes else []
-        self._stdout = stdout
-        self._stderr = stderr
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        rc = self._returncodes.pop(0) if self._returncodes else 0
-        result = CommandResult(args=tuple(args), returncode=rc, stdout=self._stdout, stderr=self._stderr)
-        if check and rc != 0:
-            raise ExternalCommandError(f"command failed: {' '.join(args)}")
-        return result
+from tests.conftest import FakeCommandRunner, Reply
 
 
 @pytest.fixture(autouse=True)
 def _clear_mise_cache() -> None:
-    helm_module._resolve_via_mise.cache_clear()
+    helm_module._clear_mise_cache()
 
 
 def _write_chart(path: Path, *, with_deps: bool) -> None:
@@ -60,7 +35,7 @@ def test_template_emits_expected_args_without_deps(tmp_path: Path) -> None:
     values = [tmp_path / "values.yaml"]
     values[0].write_text("key: value\n")
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     result_path = helm.template(
@@ -91,7 +66,7 @@ def test_template_runs_dependency_update_when_chart_has_deps(tmp_path: Path) -> 
     _write_chart(chart, with_deps=True)
     out_dir = tmp_path / "out"
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart, namespace="ns", output_dir=out_dir)
@@ -103,7 +78,7 @@ def test_template_runs_dependency_update_when_chart_has_deps(tmp_path: Path) -> 
 
 
 def test_template_skips_dependency_update_for_oci_ref(tmp_path: Path) -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", "oci://registry.example/charts/demo", namespace="ns", output_dir=tmp_path / "out")
@@ -117,7 +92,9 @@ def test_template_failure_reruns_with_debug_and_raises(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
     out_dir = tmp_path / "out"
 
-    runner = FakeRunner(returncodes=[1, 1], stderr="boom")
+    runner = FakeCommandRunner().script(
+        Reply(returncode=1, stderr="boom"), Reply(returncode=1, stderr="boom")
+    )
     helm = Helm(runner=runner)
 
     with pytest.raises(ExternalCommandError) as exc:
@@ -134,7 +111,7 @@ def test_template_passes_api_versions_and_kube_version(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=False)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template(
@@ -157,7 +134,7 @@ def test_template_skips_dependency_update_for_malformed_chart_yaml(tmp_path: Pat
     chart = tmp_path / "chart"
     chart.mkdir()
     (chart / "Chart.yaml").write_text("not: : valid: yaml:\n  - [\n")
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
@@ -176,7 +153,7 @@ def test_template_skips_dependency_update_when_dependencies_is_non_list(tmp_path
     (chart / "Chart.yaml").write_text(
         "apiVersion: v2\nname: demo\nversion: 0.1.0\ndependencies: not-a-list\n"
     )
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
@@ -189,38 +166,13 @@ def test_template_with_skip_tests_false_omits_flag(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=False)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out", skip_tests=False)
 
     assert "--skip-tests" not in runner.calls[0]
 
-
-class _CaptureRunner(CommandRunner):
-    """FakeRunner variant that remembers capture= and timeout= per call."""
-
-    def __init__(self, *, returncodes: list[int] | None = None) -> None:
-        self.calls: list[tuple[tuple[str, ...], bool]] = []
-        self.timeouts: list[float | None] = []
-        self._returncodes = list(returncodes) if returncodes else []
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append((tuple(args), capture))
-        self.timeouts.append(timeout)
-        rc = self._returncodes.pop(0) if self._returncodes else 0
-        result = CommandResult(args=tuple(args), returncode=rc, stdout="", stderr="")
-        if check and rc != 0:
-            raise ExternalCommandError("command failed")
-        return result
 
 
 def test_dependency_update_deduped_per_chart_path(tmp_path: Path) -> None:
@@ -230,7 +182,7 @@ def test_dependency_update_deduped_per_chart_path(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=True)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out-a")
@@ -248,7 +200,7 @@ def test_dependency_update_runs_per_distinct_chart(tmp_path: Path) -> None:
     _write_chart(chart_a, with_deps=True)
     _write_chart(chart_b, with_deps=True)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     helm.template("r", chart_a, namespace="ns", output_dir=tmp_path / "out-a")
@@ -263,29 +215,29 @@ def test_verbose_false_passes_capture_true_to_dependency_update(tmp_path: Path) 
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=True)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner, verbose=False)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
-    dep_calls = [c for c in runner.calls if c[0][1] == "dependency"]
+    dep_calls = [r for r in runner.records if r.args[1] == "dependency"]
     assert dep_calls
     # capture=True == not streamed under concurrency.
-    assert dep_calls[0][1] is True
+    assert dep_calls[0].capture is True
 
 
 def test_verbose_true_streams_dependency_update(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=True)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner, verbose=True)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
-    dep_calls = [c for c in runner.calls if c[0][1] == "dependency"]
+    dep_calls = [r for r in runner.records if r.args[1] == "dependency"]
     assert dep_calls
-    assert dep_calls[0][1] is False  # streamed, preserving legacy behavior
+    assert dep_calls[0].capture is False  # streamed, preserving legacy behavior
 
 
 def test_template_honors_verbose_for_streaming(tmp_path: Path) -> None:
@@ -294,53 +246,49 @@ def test_template_honors_verbose_for_streaming(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=False)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner, verbose=True)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
-    template_calls = [c for c in runner.calls if c[0][1] == "template"]
+    template_calls = [r for r in runner.records if r.args[1] == "template"]
     assert template_calls
-    assert template_calls[0][1] is False  # capture=False -> stream
+    assert template_calls[0].capture is False  # capture=False -> stream
 
 
 def test_template_captures_when_not_verbose(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=False)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner, verbose=False)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
-    template_calls = [c for c in runner.calls if c[0][1] == "template"]
+    template_calls = [r for r in runner.records if r.args[1] == "template"]
     assert template_calls
-    assert template_calls[0][1] is True  # capture=True -> parallel-safe
+    assert template_calls[0].capture is True  # capture=True -> parallel-safe
 
 
 def test_template_threads_timeout_to_runner(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=False)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner, timeout=42.0)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
-    template_idx = next(
-        i for i, (args, _) in enumerate(runner.calls) if args[1] == "template"
-    )
-    assert runner.timeouts[template_idx] == 42.0
+    template_call = next(r for r in runner.records if r.args[1] == "template")
+    assert template_call.timeout == 42.0
 
 
 def test_dependency_update_explicit_timeout_kwarg_wins(tmp_path: Path) -> None:
     chart = tmp_path / "chart"
     _write_chart(chart, with_deps=True)
 
-    runner = _CaptureRunner()
+    runner = FakeCommandRunner()
     # Instance-level timeout would be passed by .timeout; the explicit
     # `timeout=` kwarg on dependency_update is what the prefetch pass uses.
     helm = Helm(runner=runner, timeout=999.0)
     helm.dependency_update(chart, timeout=10.0)
 
-    dep_idx = next(
-        i for i, (args, _) in enumerate(runner.calls) if args[1] == "dependency"
-    )
-    assert runner.timeouts[dep_idx] == 10.0
+    dep_call = next(r for r in runner.records if r.args[1] == "dependency")
+    assert dep_call.timeout == 10.0

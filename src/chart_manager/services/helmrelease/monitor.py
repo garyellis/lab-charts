@@ -15,45 +15,46 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from functools import partial
 
-from chart_manager.integrations.flux import (
-    Flux,
+from chart_manager.integrations.helmrelease import (
+    HelmReleaseClient,
     HelmReleaseRef,
     HelmReleaseStatus,
     WorkloadRollout,
 )
+from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease._common import (
+from chart_manager.services.events.writer import EventWriter
+from chart_manager.services.helmrelease import report
+from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
+from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
+from chart_manager.services.helmrelease.matching import filter_matched_statuses
+from chart_manager.services.helmrelease.state import (
+    DETAIL_MAX,
     NO_MATCH_REF,
+    PASSING_VERDICTS,
+    Reason,
+    ReasonLike,
+    Stage,
     Transition,
-    filter_matched_statuses,
-    truncate_lines,
+    Verdict,
+    run_verdict,
 )
+from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
 _LOG = logging.getLogger(__name__)
 
-Verdict = Literal["ready", "failed", "timed-out", "skipped-suspended", "no-match"]
-
-_TERMINAL_READY_REASONS = frozenset({
-    "InstallFailed",
-    "UpgradeFailed",
-    "ReconciliationFailed",
-    "ArtifactFailed",
-    "RetryExhausted",
-})
-
-_DETAIL_MAX = 200
 _DIAGNOSTICS_WORKLOAD_CAP = 5
-_EVENTS_LINE_CAP = 80
 
 
 @dataclass(frozen=True)
 class MonitorRequest:
+    """Parameters for one monitor run; validates timeout ordering on init."""
+
     chart_name: str
     version: str
     namespace: str | None = None
@@ -66,8 +67,13 @@ class MonitorRequest:
     # When True, the first failed/timed-out outcome triggers cancellation of
     # remaining in-flight watchers; their outcomes carry `TotalBudgetExhausted`.
     fail_fast: bool = False
+    # Which promotion target this rollout belongs to. None (the default, and
+    # what an ad-hoc `helmrelease monitor` passes) means the run emits no
+    # lifecycle events at all -- see services/helmrelease/telemetry.py.
+    environment: str | None = None
 
     def __post_init__(self) -> None:
+        """Reject empty identifiers and inconsistent timeout/interval bounds."""
         if not self.chart_name:
             raise ChartManagerError("chart_name must be non-empty")
         if not self.version:
@@ -96,9 +102,13 @@ class MonitorRequest:
 
 @dataclass(frozen=True)
 class MonitorOutcome:
+    """Terminal state of one watched HelmRelease."""
+
     ref: HelmReleaseRef
     verdict: Verdict
-    reason: str
+    # `ReasonLike`, not `Reason`: the terminal-Ready path hands back whatever
+    # Flux wrote into the CRD condition, which we do not own and cannot close.
+    reason: ReasonLike
     last_status: HelmReleaseStatus | None
     last_workloads: tuple[WorkloadRollout, ...]
     recent_transitions: tuple[Transition, ...]
@@ -108,46 +118,99 @@ class MonitorOutcome:
 
 @dataclass(frozen=True)
 class MonitorResult:
+    """Aggregate of all watcher outcomes for a monitor run."""
+
     outcomes: tuple[MonitorOutcome, ...]
     total_duration_seconds: float
     total_timed_out: bool
 
     @property
     def ok(self) -> bool:
+        """True when every outcome carries a passing verdict."""
         return bool(self.outcomes) and all(
-            o.verdict in ("ready", "skipped-suspended") for o in self.outcomes
+            o.verdict in PASSING_VERDICTS for o in self.outcomes
         )
 
     @property
     def failures(self) -> tuple[MonitorOutcome, ...]:
-        return tuple(
-            o for o in self.outcomes if o.verdict not in ("ready", "skipped-suspended")
-        )
+        """Outcomes whose verdict is not a passing one."""
+        return tuple(o for o in self.outcomes if o.verdict not in PASSING_VERDICTS)
+
+
+@dataclass
+class _WatchState:
+    """Mutable per-HelmRelease state threaded through one watcher's phases.
+
+    Mirrors `TestService._RunContext`: the polling loop, the classifier
+    plumbing and the finalizer all need the same five values, and passing
+    them positionally is how `_finalize` acquired an eight-keyword call
+    repeated at eleven sites.
+    """
+
+    ref: HelmReleaseRef
+    ring: deque[Transition]
+    last_status: HelmReleaseStatus | None
+    last_workloads: tuple[WorkloadRollout, ...] = ()
+    #: Dedupe key of the last recorded waiting/transport transition.
+    prev_signature: object = None
+
+
+def _fail_fast_predicate(request: MonitorRequest) -> Callable[[MonitorOutcome], bool]:
+    """Build the `cancel_on` predicate for `run_fanout` from `request.fail_fast`.
+
+    A skip or a no-match is not a reason to abandon the peers: fail-fast
+    exists to stop burning the budget once a release has genuinely failed.
+    """
+    if not request.fail_fast:
+        return lambda _outcome: False
+    return lambda outcome: outcome.verdict in (Verdict.FAILED, Verdict.TIMED_OUT)
 
 
 class MonitorService:
+    """Fans out one polling watcher per matched HelmRelease."""
+
     def __init__(
         self,
-        flux: Flux | None = None,
+        client: HelmReleaseClient | None = None,
         *,
+        kubectl: Kubectl | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         rand: Callable[[float, float], float] = random.uniform,
         progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+        events: EventWriter | None = None,
+        strict_events: bool = False,
     ) -> None:
-        self._flux = flux or Flux()
+        """Wire dependencies; sleep/clock/now/rand are injectable for tests."""
+        self._client = client or HelmReleaseClient()
+        # Two cluster adapters, not one: the HelmRelease queries are Flux
+        # domain knowledge, the diagnostics events are plain kubectl. Both
+        # must address the same cluster -- `Container` builds them from one
+        # `Settings.kube_context`.
+        self._kubectl = kubectl or Kubectl()
         self._sleep = sleep
         self._clock = clock
         self._now = now
         self._rand = rand
         self._progress = progress
+        # Same non-fatal policy as PromoteService: the rollout has already
+        # happened by the time these are written, so an unconfigured events
+        # backend must not turn a converged run into a traceback. `strict`
+        # is for callers where the event is the deliverable.
+        self._events = events or EventWriter()
+        self._strict_events = strict_events
 
     def monitor(self, request: MonitorRequest) -> MonitorResult:
+        """Watch all matching HelmReleases concurrently and aggregate outcomes.
+
+        Per-HR failures come back as outcomes; only infrastructure errors
+        (kubectl/watcher crashes) raise, after cancelling peer watchers.
+        """
         start = self._clock()
         per_poll = parse_duration(request.per_poll_timeout)
         matched = filter_matched_statuses(
-            self._flux,
+            self._client,
             namespace=request.namespace,
             chart_name=request.chart_name,
             version=request.version,
@@ -160,8 +223,8 @@ class MonitorService:
                 outcomes=(
                     MonitorOutcome(
                         ref=NO_MATCH_REF,
-                        verdict="no-match",
-                        reason="NoHelmReleasesMatched",
+                        verdict=Verdict.NO_MATCH,
+                        reason=Reason.NO_HELMRELEASES_MATCHED,
                         last_status=None,
                         last_workloads=(),
                         recent_transitions=(),
@@ -173,332 +236,261 @@ class MonitorService:
                 total_timed_out=False,
             )
 
+        # Emitted after the zero-match return: a run with nothing to watch
+        # opened no interval, so bracketing it would put a WAITING_ROLLOUT on
+        # the timeline that nothing will ever close.
+        telemetry = PromotionTelemetry(
+            writer=self._events,
+            chart_name=request.chart_name,
+            version=request.version,
+            environment=request.environment,
+            strict=self._strict_events,
+        )
+        telemetry.started(Stage.ROLLOUT, matched=len(matched))
+
         total_deadline = start + parse_duration(request.total_timeout)
         cancel_event = threading.Event()
         outcomes: list[MonitorOutcome] = []
 
-        with ThreadPoolExecutor(max_workers=request.concurrency) as ex:
-            futures = [
-                ex.submit(self._watch_one, status, request, total_deadline, cancel_event)
-                for status in matched
-            ]
-            for fut in as_completed(futures):
-                try:
-                    outcome = fut.result()
-                except ExternalCommandError:
-                    cancel_event.set()
-                    raise
-                except ChartManagerError:
-                    cancel_event.set()
-                    raise
-                except BaseException as exc:
-                    cancel_event.set()
-                    raise ChartManagerError(
-                        f"monitor watcher crashed: {exc!r}"
-                    ) from exc
-                outcomes.append(outcome)
-                if request.fail_fast and outcome.verdict in ("failed", "timed-out"):
-                    cancel_event.set()
-                if self._clock() >= total_deadline:
-                    cancel_event.set()
+        try:
+            run_fanout(
+                matched,
+                concurrency=request.concurrency,
+                clock=self._clock,
+                total_deadline=total_deadline,
+                cancel_event=cancel_event,
+                outcomes=outcomes,
+                work=lambda status: self._watch_one(
+                    status, request, per_poll, total_deadline, cancel_event
+                ),
+                crash_label="monitor watcher",
+                cancel_on=_fail_fast_predicate(request),
+            )
+        except Exception:
+            # An infrastructure failure still ends the interval opened above.
+            # Without this the timeline keeps a WAITING_ROLLOUT that nothing
+            # ever closes -- the exact defect this wiring exists to remove.
+            #
+            # `Exception`, not `BaseException`: Ctrl-C must kill a long
+            # parallel run immediately, and this handler would put a network
+            # write in front of the exit. An interrupted run genuinely has no
+            # terminal state to report.
+            telemetry.finished(
+                Stage.ROLLOUT,
+                Verdict.FAILED,
+                total=len(matched),
+                failures=len(matched) - len(outcomes),
+            )
+            raise
 
-        outcomes.sort(key=lambda o: (o.ref.namespace, o.ref.name))
         elapsed = self._clock() - start
-        return MonitorResult(
-            outcomes=tuple(outcomes),
+        result = MonitorResult(
+            outcomes=sorted_by_ref(outcomes),
             total_duration_seconds=elapsed,
             total_timed_out=cancel_event.is_set(),
         )
+        telemetry.finished(
+            Stage.ROLLOUT,
+            run_verdict((o.verdict for o in result.outcomes), success=Verdict.READY),
+            total=len(result.outcomes),
+            failures=len(result.failures),
+        )
+        return result
 
     def _watch_one(
         self,
         initial_status: HelmReleaseStatus,
         request: MonitorRequest,
+        per_poll: float,
         total_deadline: float,
         cancel_event: threading.Event,
     ) -> MonitorOutcome:
-        ref = initial_status.ref
-        per_poll = parse_duration(request.per_poll_timeout)
-        wait_start_mono = self._clock()
-        hr_deadline = min(
-            wait_start_mono + parse_duration(request.per_hr_timeout), total_deadline
+        """Poll one HR until ready/failed/suspended or a deadline expires."""
+        started_mono = self._clock()
+        state = _WatchState(
+            ref=initial_status.ref,
+            ring=deque(maxlen=request.recent_transitions_size),
+            last_status=initial_status,
         )
-        ring: deque[Transition] = deque(maxlen=request.recent_transitions_size)
-        last_status: HelmReleaseStatus = initial_status
-        last_workloads: tuple[WorkloadRollout, ...] = ()
-        prev_signature: object = None
+        verdict, reason = self._poll_until_terminal(
+            initial_status,
+            request,
+            state,
+            per_poll=per_poll,
+            hr_deadline=min(
+                started_mono + parse_duration(request.per_hr_timeout), total_deadline
+            ),
+            total_deadline=total_deadline,
+            cancel_event=cancel_event,
+        )
+        return self._finalize(
+            state,
+            verdict=verdict,
+            reason=reason,
+            per_poll=per_poll,
+            started_mono=started_mono,
+        )
 
-        if initial_status.suspended:
-            self._record(
-                ring, ref, "Suspended", "HR spec.suspend=true", wait_start_mono
-            )
-            return self._finalize(
-                ref=ref,
-                verdict="skipped-suspended",
-                reason="Suspended",
-                last_status=last_status,
-                last_workloads=last_workloads,
-                ring=ring,
-                request=request,
-                started_mono=wait_start_mono,
-            )
+    def _poll_until_terminal(
+        self,
+        initial_status: HelmReleaseStatus,
+        request: MonitorRequest,
+        state: _WatchState,
+        *,
+        per_poll: float,
+        hr_deadline: float,
+        total_deadline: float,
+        cancel_event: threading.Event,
+    ) -> tuple[Verdict, ReasonLike]:
+        """Poll -> classify -> record -> budget-check, until something is terminal.
 
+        The whole loop has exactly one job: decide *when* to stop. *Why* we
+        stop is `classify`'s, and turning a stop into an outcome is
+        `_finalize`'s. Keeping the three apart is what removed the eleven
+        near-identical `_finalize` call sites this function used to carry.
+        """
+        # Suspended releases short-circuit ahead of the jitter sleep: there is
+        # nothing to poll for, and paying up to a poll interval to learn that
+        # would delay the peers sharing this pool for no reason.
+        first = classify(
+            initial_status, requested_version=request.version, workloads=None
+        )
+        if isinstance(first, Terminal) and first.verdict is Verdict.SKIPPED_SUSPENDED:
+            self._record(state, first.phase, first.detail)
+            return first.verdict, first.reason
+
+        # Jittered start desynchronizes the pollers so N watchers don't hit
+        # the apiserver in lockstep.
         self._sleep(self._rand(0.0, request.poll_interval))
         if cancel_event.is_set():
-            return self._finalize(
-                ref=ref,
-                verdict="timed-out",
-                reason="TotalBudgetExhausted",
-                last_status=last_status,
-                last_workloads=last_workloads,
-                ring=ring,
-                request=request,
-                started_mono=wait_start_mono,
-            )
+            return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
 
-        first_iteration = True
+        # First pass reuses the status fetched during matching, saving one
+        # kubectl call per HR.
+        status: HelmReleaseStatus | None = initial_status
         while True:
-            status: HelmReleaseStatus | None
-            if first_iteration:
-                status = initial_status
-                first_iteration = False
-            else:
-                try:
-                    status = self._flux.get_status(ref, timeout=per_poll)
-                except ExternalCommandError as exc:
-                    stderr = (exc.stderr or str(exc)).strip()
-                    if "NotFound" in stderr or "not found" in stderr:
-                        self._record(
-                            ring, ref, "Disappeared", stderr[:_DETAIL_MAX], wait_start_mono
-                        )
-                        return self._finalize(
-                            ref=ref,
-                            verdict="failed",
-                            reason="Disappeared",
-                            last_status=last_status,
-                            last_workloads=last_workloads,
-                            ring=ring,
-                            request=request,
-                            started_mono=wait_start_mono,
-                        )
-                    sig = ("poll-error", stderr[:80])
-                    if sig != prev_signature:
-                        self._record(
-                            ring, ref, "PollError", stderr[:_DETAIL_MAX], wait_start_mono
-                        )
-                        prev_signature = sig
-                    status = None
-
             if status is not None:
-                last_status = status
-                if status.suspended:
-                    self._record(
-                        ring, ref, "Suspended", "HR spec.suspend=true", wait_start_mono
-                    )
-                    return self._finalize(
-                        ref=ref,
-                        verdict="skipped-suspended",
-                        reason="Suspended",
-                        last_status=last_status,
-                        last_workloads=last_workloads,
-                        ring=ring,
-                        request=request,
-                        started_mono=wait_start_mono,
-                    )
-
-                stalled = status.condition("Stalled")
-                if stalled is not None and stalled.status == "True":
-                    self._record(
-                        ring, ref, "Stalled", stalled.message[:_DETAIL_MAX], wait_start_mono
-                    )
-                    return self._finalize(
-                        ref=ref,
-                        verdict="failed",
-                        reason="Stalled",
-                        last_status=last_status,
-                        last_workloads=last_workloads,
-                        ring=ring,
-                        request=request,
-                        started_mono=wait_start_mono,
-                    )
-
-                ready_cond = status.ready
-                if (
-                    ready_cond is not None
-                    and ready_cond.status == "False"
-                    and ready_cond.reason in _TERMINAL_READY_REASONS
-                ):
-                    self._record(
-                        ring,
-                        ref,
-                        f"Ready=False:{ready_cond.reason}",
-                        ready_cond.message[:_DETAIL_MAX],
-                        wait_start_mono,
-                    )
-                    return self._finalize(
-                        ref=ref,
-                        verdict="failed",
-                        reason=ready_cond.reason,
-                        last_status=last_status,
-                        last_workloads=last_workloads,
-                        ring=ring,
-                        request=request,
-                        started_mono=wait_start_mono,
-                    )
-
-                # TestSuccess=False is only terminal once Released=True; before
-                # that it just reflects the pre-run state of the test hook.
-                test_cond = status.test_success
-                released_cond = status.released
-                if (
-                    test_cond is not None
-                    and test_cond.status == "False"
-                    and released_cond is not None
-                    and released_cond.status == "True"
-                ):
-                    self._record(
-                        ring,
-                        ref,
-                        "TestSuccess=False",
-                        test_cond.message[:_DETAIL_MAX],
-                        wait_start_mono,
-                    )
-                    return self._finalize(
-                        ref=ref,
-                        verdict="failed",
-                        reason=test_cond.reason or "TestFailed",
-                        last_status=last_status,
-                        last_workloads=last_workloads,
-                        ring=ring,
-                        request=request,
-                        started_mono=wait_start_mono,
-                    )
-
-                ready_status = ready_cond.status if ready_cond else "Unknown"
-                ready_reason = ready_cond.reason if ready_cond else ""
-                gen_caught_up = status.observed_generation == status.generation
-                history_matches = status.history_chart_version == request.version
-                ready_true = ready_cond is not None and ready_cond.status == "True"
-
-                not_converged_names: tuple[str, ...] = ()
-                if gen_caught_up and history_matches and ready_true:
-                    try:
-                        workloads = tuple(
-                            self._flux.list_owned_workloads(ref, timeout=per_poll)
-                        )
-                    except ExternalCommandError as exc:
-                        stderr = (exc.stderr or str(exc)).strip()
-                        sig = ("poll-error-workloads", stderr[:80])
-                        if sig != prev_signature:
-                            self._record(
-                                ring,
-                                ref,
-                                "WorkloadsPollError",
-                                stderr[:_DETAIL_MAX],
-                                wait_start_mono,
-                            )
-                            prev_signature = sig
-                    else:
-                        last_workloads = workloads
-                        not_converged = tuple(w for w in workloads if not w.converged)
-                        not_converged_names = tuple(
-                            sorted(
-                                f"{w.workload.kind}/{w.workload.namespace}/{w.workload.name}"
-                                for w in not_converged
-                            )
-                        )
-                        if not not_converged:
-                            self._record(
-                                ring,
-                                ref,
-                                "Ready",
-                                "HR Ready=True and all workloads converged",
-                                wait_start_mono,
-                            )
-                            return self._finalize(
-                                ref=ref,
-                                verdict="ready",
-                                reason="Ready",
-                                last_status=last_status,
-                                last_workloads=last_workloads,
-                                ring=ring,
-                                request=request,
-                                started_mono=wait_start_mono,
-                            )
-
-                signature = (
-                    ready_status,
-                    ready_reason,
-                    status.observed_generation,
-                    frozenset(not_converged_names),
-                    status.suspended,
-                )
-                if signature != prev_signature:
-                    phase = _phase_label(
-                        ready_status,
-                        ready_reason,
-                        gen_caught_up,
-                        history_matches,
-                        not_converged_names,
-                    )
-                    detail = _phase_detail(status, request.version, not_converged_names)
-                    self._record(ring, ref, phase, detail, wait_start_mono)
-                    prev_signature = signature
+                state.last_status = status
+                terminal = self._evaluate(status, request, state, per_poll=per_poll)
+                if terminal is not None:
+                    return terminal
 
             if cancel_event.is_set():
-                return self._finalize(
-                    ref=ref,
-                    verdict="timed-out",
-                    reason="TotalBudgetExhausted",
-                    last_status=last_status,
-                    last_workloads=last_workloads,
-                    ring=ring,
-                    request=request,
-                    started_mono=wait_start_mono,
-                )
+                return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
             if self._clock() >= hr_deadline:
-                reason = (
-                    "TotalBudgetExhausted"
+                # Which budget ran out changes what an operator should do:
+                # raise --per-hr-timeout, or accept that the run as a whole
+                # was too big for --total-timeout.
+                return Verdict.TIMED_OUT, (
+                    Reason.TOTAL_BUDGET_EXHAUSTED
                     if self._clock() >= total_deadline
-                    else "PerHRBudgetExhausted"
-                )
-                return self._finalize(
-                    ref=ref,
-                    verdict="timed-out",
-                    reason=reason,
-                    last_status=last_status,
-                    last_workloads=last_workloads,
-                    ring=ring,
-                    request=request,
-                    started_mono=wait_start_mono,
+                    else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
 
             self._sleep(request.poll_interval)
             if cancel_event.is_set():
-                return self._finalize(
-                    ref=ref,
-                    verdict="timed-out",
-                    reason="TotalBudgetExhausted",
-                    last_status=last_status,
-                    last_workloads=last_workloads,
-                    ring=ring,
-                    request=request,
-                    started_mono=wait_start_mono,
+                return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
+
+            polled = self._poll(state, per_poll=per_poll)
+            if isinstance(polled, Terminal):
+                return polled.verdict, polled.reason
+            status = polled
+
+    def _evaluate(
+        self,
+        status: HelmReleaseStatus,
+        request: MonitorRequest,
+        state: _WatchState,
+        *,
+        per_poll: float,
+    ) -> tuple[Verdict, ReasonLike] | None:
+        """Classify one poll and record what it showed; non-None ends the watch.
+
+        Two `classify` calls, not one: the first decides whether the workload
+        rollout is even relevant yet, so we never pay a `list_owned_workloads`
+        for a release the HelmRelease itself says is still reconciling.
+        """
+        decision = classify(
+            status, requested_version=request.version, workloads=None
+        )
+        if isinstance(decision, Waiting) and decision.needs_workloads:
+            workloads = self._list_workloads(state, per_poll=per_poll)
+            if workloads is not None:
+                state.last_workloads = workloads
+                decision = classify(
+                    status, requested_version=request.version, workloads=workloads
                 )
 
-    def _record(
-        self,
-        ring: deque[Transition],
-        ref: HelmReleaseRef,
-        phase: str,
-        detail: str,
-        started_mono: float,
+        if isinstance(decision, Terminal):
+            self._record(state, decision.phase, decision.detail)
+            return decision.verdict, decision.reason
+
+        if decision.signature != state.prev_signature:
+            self._record(state, decision.phase, decision.detail)
+            state.prev_signature = decision.signature
+        return None
+
+    def _poll(
+        self, state: _WatchState, *, per_poll: float
+    ) -> HelmReleaseStatus | Terminal | None:
+        """Re-read the HR: a fresh status, a Terminal if it is gone, None if the read flaked.
+
+        A NotFound is a real answer -- the release was deleted under us -- and
+        must not be retried until the budget runs out, which is why it comes
+        back as a Terminal rather than as another `None`.
+        """
+        try:
+            return self._client.get_status(state.ref, timeout=per_poll)
+        except ExternalCommandError as exc:
+            stderr = (exc.stderr or str(exc)).strip()
+            if "NotFound" in stderr or "not found" in stderr:
+                detail = stderr[:DETAIL_MAX]
+                self._record(state, "Disappeared", detail)
+                return Terminal(
+                    verdict=Verdict.FAILED,
+                    reason=Reason.DISAPPEARED,
+                    phase="Disappeared",
+                    detail=detail,
+                )
+            self._record_deduped(state, ("poll-error", stderr[:80]), "PollError", stderr)
+            return None
+
+    def _list_workloads(
+        self, state: _WatchState, *, per_poll: float
+    ) -> tuple[WorkloadRollout, ...] | None:
+        """List owned workloads; None (plus a deduped transition) if the listing failed.
+
+        Failing to read workloads is not failing the release: the HR may still
+        converge, and the budget is what decides how long we keep asking.
+        """
+        try:
+            return tuple(self._client.list_owned_workloads(state.ref, timeout=per_poll))
+        except ExternalCommandError as exc:
+            stderr = (exc.stderr or str(exc)).strip()
+            self._record_deduped(
+                state,
+                ("poll-error-workloads", stderr[:80]),
+                "WorkloadsPollError",
+                stderr,
+            )
+            return None
+
+    def _record_deduped(
+        self, state: _WatchState, signature: tuple[object, ...], phase: str, stderr: str
     ) -> None:
+        """Record a transport-error transition unless the previous poll said the same thing."""
+        if signature != state.prev_signature:
+            self._record(state, phase, stderr[:DETAIL_MAX])
+            state.prev_signature = signature
+
+    def _record(self, state: _WatchState, phase: str, detail: str) -> None:
+        """Append a transition to the ring buffer and fire the progress callback."""
         transition = Transition(at=self._now(), phase=phase, detail=detail)
-        ring.append(transition)
-        self._fire_progress(ref, transition)
+        state.ring.append(transition)
+        self._fire_progress(state.ref, transition)
 
     def _fire_progress(self, ref: HelmReleaseRef, transition: Transition) -> None:
+        """Invoke the progress callback if set; swallow+log any exception it raises."""
         if self._progress is None:
             return
         try:
@@ -508,63 +500,61 @@ class MonitorService:
 
     def _finalize(
         self,
+        state: _WatchState,
         *,
-        ref: HelmReleaseRef,
         verdict: Verdict,
-        reason: str,
-        last_status: HelmReleaseStatus | None,
-        last_workloads: tuple[WorkloadRollout, ...],
-        ring: deque[Transition],
-        request: MonitorRequest,
+        reason: ReasonLike,
+        per_poll: float,
         started_mono: float,
     ) -> MonitorOutcome:
+        """Build the final MonitorOutcome, composing diagnostics unless the verdict is healthy.
+
+        The elapsed time is taken before diagnostics run. Composing them
+        issues a namespace-events call plus up to five workload-events calls,
+        each bounded by the per-poll timeout -- so measuring afterwards
+        folded up to ~a minute of log-scraping into `duration_seconds`, and
+        only ever on the failure path. Failed promotions are precisely the
+        ones whose duration we care about.
+        """
+        duration_seconds = self._clock() - started_mono
         diagnostics: str | None = None
-        if verdict not in ("ready", "skipped-suspended"):
+        if not verdict.is_passing:
             diagnostics = self._compose_diagnostics(
-                ref=ref,
-                verdict=verdict,
-                reason=reason,
-                last_status=last_status,
-                last_workloads=last_workloads,
-                ring=tuple(ring),
-                per_poll=parse_duration(request.per_poll_timeout),
+                state, verdict=verdict, reason=reason, per_poll=per_poll
             )
         return MonitorOutcome(
-            ref=ref,
+            ref=state.ref,
             verdict=verdict,
             reason=reason,
-            last_status=last_status,
-            last_workloads=last_workloads,
-            recent_transitions=tuple(ring),
+            last_status=state.last_status,
+            last_workloads=state.last_workloads,
+            recent_transitions=tuple(state.ring),
             diagnostics=diagnostics,
-            duration_seconds=self._clock() - started_mono,
+            duration_seconds=duration_seconds,
         )
 
     def _compose_diagnostics(
         self,
+        state: _WatchState,
         *,
-        ref: HelmReleaseRef,
         verdict: Verdict,
-        reason: str,
-        last_status: HelmReleaseStatus | None,
-        last_workloads: tuple[WorkloadRollout, ...],
-        ring: tuple[Transition, ...],
+        reason: ReasonLike,
         per_poll: float,
     ) -> str:
-        ns = ref.namespace or "(none)"
-        name = ref.name or "(none)"
-        parts: list[str] = [f"## {ns}/{name} - {verdict}: {reason}"]
+        """Render a markdown diagnostics report: status, workloads, transitions, events."""
+        ref = state.ref
+        parts: list[str] = [report.header(ref, verdict, reason)]
 
+        last_status = state.last_status
         if last_status is not None:
-            parts.append("\n### Status")
-            for cond_type in ("Ready", "Released", "TestSuccess", "Stalled"):
-                cond = last_status.condition(cond_type)
-                if cond is None:
-                    parts.append(f"- {cond_type}: (absent)")
-                else:
-                    parts.append(
-                        f"- {cond_type}: {cond.status} ({cond.reason}) - {cond.message}"
-                    )
+            # "Stalled" is monitor's alone: it is the condition that ends a
+            # watch, so its absence from the report would leave the verdict
+            # unexplained.
+            parts.extend(
+                report.conditions(
+                    last_status, ("Ready", "Released", "TestSuccess", "Stalled")
+                )
+            )
             parts.append(
                 f"- desired: {last_status.desired_chart_name}@"
                 f"{last_status.desired_chart_version}  "
@@ -572,9 +562,9 @@ class MonitorService:
                 f"history[0]: {last_status.history_chart_version}"
             )
 
-        if last_workloads:
+        if state.last_workloads:
             parts.append("\n### Workloads")
-            for w in last_workloads:
+            for w in state.last_workloads:
                 parts.append(
                     f"- {w.workload.kind}/{w.workload.namespace}/{w.workload.name}: "
                     f"converged={w.converged} "
@@ -583,86 +573,48 @@ class MonitorService:
                     f"available={w.workload.available}/{w.workload.desired})"
                 )
 
-        if ring:
+        if state.ring:
             parts.append("\n### Recent transitions")
-            for t in ring:
+            for t in state.ring:
                 parts.append(f"- {t.at.isoformat()} {t.phase} - {t.detail}")
 
-        if ref.namespace:
-            parts.append(f"\n### Events (namespace {ref.namespace})")
-            parts.append(self._safe_events(self._flux.namespace_events, ref.namespace, per_poll))
+        # Events come from where the workloads run, not where the HelmRelease
+        # object lives. Those differ whenever `spec.targetNamespace` is set,
+        # and this used `ref.namespace` -- reporting events from a namespace
+        # containing none of the resources listed above. TestService already
+        # keys on target_namespace; this matches it.
+        events_namespace = ref.target_namespace or ref.namespace
+        if events_namespace:
+            parts.append(f"\n### Events (namespace {events_namespace})")
+            parts.append(
+                report.safe_events(
+                    partial(
+                        self._kubectl.namespace_events,
+                        events_namespace,
+                        timeout=per_poll,
+                    )
+                )
+            )
 
-        not_converged = [w for w in last_workloads if not w.converged][:_DIAGNOSTICS_WORKLOAD_CAP]
+        not_converged = [w for w in state.last_workloads if not w.converged]
         if not_converged:
             parts.append("\n### Workload events")
-            for w in not_converged:
+            for w in not_converged[:_DIAGNOSTICS_WORKLOAD_CAP]:
+                kind, ns, name = w.workload.kind, w.workload.namespace, w.workload.name
+                parts.append(f"\n#### {kind}/{ns}/{name}")
                 parts.append(
-                    f"\n#### {w.workload.kind}/{w.workload.namespace}/{w.workload.name}"
-                )
-                parts.append(
-                    self._safe_workload_events(
-                        w.workload.kind, w.workload.namespace, w.workload.name, per_poll
+                    report.safe_events(
+                        # `partial`, not a closure: binding the loop's values
+                        # now means the callable cannot depend on when
+                        # `safe_events` gets around to invoking it.
+                        partial(
+                            self._kubectl.workload_events,
+                            kind,
+                            ns,
+                            name,
+                            timeout=per_poll,
+                        )
                     )
                 )
 
         return "\n".join(parts)
-
-    def _safe_events(
-        self,
-        fetch: Callable[..., str],
-        namespace: str,
-        per_poll: float,
-    ) -> str:
-        try:
-            blob = fetch(namespace, timeout=per_poll)
-        except ExternalCommandError as exc:
-            stderr = (exc.stderr or str(exc)).strip()
-            return f"Events: (unavailable: {stderr[:_DETAIL_MAX]})"
-        return truncate_lines(blob, _EVENTS_LINE_CAP)
-
-    def _safe_workload_events(
-        self, kind: str, namespace: str, name: str, per_poll: float
-    ) -> str:
-        try:
-            blob = self._flux.workload_events(kind, namespace, name, timeout=per_poll)
-        except ExternalCommandError as exc:
-            stderr = (exc.stderr or str(exc)).strip()
-            return f"Events: (unavailable: {stderr[:_DETAIL_MAX]})"
-        return truncate_lines(blob, _EVENTS_LINE_CAP)
-
-
-def _phase_label(
-    ready_status: str,
-    ready_reason: str,
-    gen_caught_up: bool,
-    history_matches: bool,
-    not_converged_names: tuple[str, ...],
-) -> str:
-    if not gen_caught_up:
-        return "GenerationLag"
-    if not history_matches:
-        return "HistoryLag"
-    if ready_status != "True":
-        return f"WaitingForReady:{ready_reason}" if ready_reason else "WaitingForReady"
-    if not_converged_names:
-        return f"WaitingForWorkloads:{len(not_converged_names)}"
-    return "Ready"
-
-
-def _phase_detail(
-    status: HelmReleaseStatus,
-    requested_version: str,
-    not_converged_names: tuple[str, ...],
-) -> str:
-    ready = status.ready
-    bits = [
-        f"obs-gen={status.observed_generation}/{status.generation}",
-        f"history={status.history_chart_version}",
-        f"requested={requested_version}",
-    ]
-    if ready is not None:
-        bits.append(f"ready={ready.status}({ready.reason})")
-    if not_converged_names:
-        bits.append(f"pending=[{','.join(not_converged_names)}]")
-    detail = " ".join(bits)
-    return detail[:_DETAIL_MAX]

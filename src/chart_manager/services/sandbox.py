@@ -1,11 +1,14 @@
+"""SandboxService -- fail-fast chart install + `helm test` on a kind cluster.
+
+CI-shaped counterpart to LabService; see lab.py's module docstring for
+the full contrast.
+"""
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-from rich.console import Console
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
@@ -16,8 +19,9 @@ from chart_manager.plumbing.graph import DependencyResolver, PlanEntry
 from chart_manager.services import cluster_bootstrap
 from chart_manager.services.cluster_bootstrap import (
     CILIUM_BOOTSTRAP_CHART,
-    KIND_CONFIG_FILENAME,
+    kind_config_path,
 )
+from chart_manager.services.progress import ProgressCallback, info, step
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 DEFAULT_NAMESPACE = "observability"
@@ -26,6 +30,8 @@ DEFAULT_PROFILE = "minimal"
 
 @dataclass(frozen=True)
 class SandboxOptions:
+    """Args for `SandboxService.run`."""
+
     chart: str
     profile: str = DEFAULT_PROFILE
     namespace: str = DEFAULT_NAMESPACE
@@ -35,42 +41,88 @@ class SandboxOptions:
     lint: bool = False
 
 
+@dataclass(frozen=True)
+class SandboxResult:
+    """What one `SandboxService.run` actually did.
+
+    `ok` is trivially True: this service is fail-fast, so any chart error
+    propagates out of `run` and no result is produced at all. The property
+    exists so every surface can branch on the same attribute regardless of
+    which service it called.
+    """
+
+    chart: str
+    profile: str
+    cluster_name: str
+    installed: tuple[str, ...] = ()
+    tested: tuple[str, ...] = ()
+    namespaces: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        """True whenever a result exists -- failures raise instead of returning."""
+        return True
+
+
 class SandboxService:
+    """Install a chart's dependency plan and run its helm tests, failing fast."""
+
     def __init__(
         self,
         root: Path,
         *,
-        helm: Helm | None = None,
-        kind: Kind | None = None,
-        kubectl: Kubectl | None = None,
-        console: Console | None = None,
+        helm: Helm,
+        kind: Kind,
+        kubectl: Kubectl,
+        progress: ProgressCallback | None = None,
     ) -> None:
+        """Wire integrations; every cluster-facing collaborator is required.
+
+        See `LabService.__init__`: defaulting these silently discarded the
+        composition root's cluster configuration.
+        """
         self.root = root
         self.repository = ChartRepository(root)
         self.resolver = DependencyResolver(self.repository)
-        self.helm = helm or Helm()
-        self.kind = kind or Kind()
-        self.kubectl = kubectl or Kubectl()
-        self.console = console or Console()
+        self.helm = helm
+        self.kind = kind
+        self.kubectl = kubectl
+        # No-op default so the narration call sites don't need a None check.
+        self._progress: ProgressCallback = progress or (lambda _event: None)
 
-    def run(self, options: SandboxOptions) -> None:
+    def ensure(self, cluster_name: str = DEFAULT_CLUSTER_NAME) -> str:
+        """Create or start the sandbox kind cluster; return its name.
+
+        Owns the kind-config rule (see `cluster_bootstrap.kind_config_path`)
+        so callers never have to know where the cluster's config comes from.
+        `Kind.ensure_cluster` handles the absent/stopped/running cases.
+        """
+        self._progress(step("Ensuring sandbox cluster", cluster_name))
+        self.kind.ensure_cluster(cluster_name, config=kind_config_path(self.root))
+        return cluster_name
+
+    def run(self, options: SandboxOptions) -> SandboxResult:
+        """Ensure the cluster, bootstrap CNI, install the plan, run helm tests.
+
+        Fail-fast: the first chart error propagates (contrast LabService.up,
+        which continues on error). `include_reverse` re-runs the plans of
+        charts that declare this chart as a reverse-test target. Returns the
+        accounting of what was installed and tested; narration goes to the
+        injected progress callback.
+        """
         if options.ensure_cluster:
-            self.console.print(f"[bold]Ensuring sandbox cluster[/bold] {options.cluster_name}")
-            kind_config = self.root / KIND_CONFIG_FILENAME
-            self.kind.ensure_cluster(
-                options.cluster_name,
-                config=kind_config if kind_config.exists() else None,
-            )
+            self.ensure(options.cluster_name)
             # ensure_cluster may have started stopped node containers
             # (LabService's `down` path leaves them stopped on disk). On
             # that path the apiserver isn't reachable for several seconds
             # even though docker reports the container up, and the very
             # next thing we do is `helm dependency update` / install,
             # which races. Gate explicitly.
-            self.console.print("[bold]Waiting for kube-apiserver[/bold]")
+            self._progress(step("Waiting for kube-apiserver"))
             self.kubectl.wait_apiserver_ready()
 
         installed: set[str] = set()
+        tested: list[str] = []
         namespaces_created: set[str] = set()
 
         # Delegate to the shared bootstrap module so `sandbox test` and
@@ -83,7 +135,7 @@ class SandboxService:
             kind=self.kind,
             kubectl=self.kubectl,
             repository=self.repository,
-            console=self.console,
+            progress=self._progress,
             lint=options.lint,
         )
         if status is not None:
@@ -92,25 +144,43 @@ class SandboxService:
 
         plan = self.resolver.install_plan(options.chart, options.profile)
         self._install_plan(
-            plan, options, installed, namespaces_created, lint=options.lint
+            plan, options, installed, tested, namespaces_created, lint=options.lint
         )
 
         if options.include_reverse:
             for reverse in self.resolver.reverse_tests(options.chart):
                 reverse_plan = self.resolver.install_plan(reverse.chart, reverse.profile)
                 self._install_plan(
-                    reverse_plan, options, installed, namespaces_created, lint=options.lint
+                    reverse_plan, options, installed, tested, namespaces_created,
+                    lint=options.lint,
                 )
+
+        return SandboxResult(
+            chart=options.chart,
+            profile=options.profile,
+            cluster_name=options.cluster_name,
+            installed=tuple(sorted(installed)),
+            tested=tuple(tested),
+            namespaces=tuple(sorted(namespaces_created)),
+        )
 
     def _install_plan(
         self,
         plan: list[PlanEntry],
         options: SandboxOptions,
         installed: set[str],
+        tested: list[str],
         namespaces_created: set[str],
         *,
         lint: bool,
     ) -> None:
+        """Install each plan entry once, then `helm test` where the profile asks.
+
+        `installed` / `tested` / `namespaces_created` are mutated so work is
+        deduped across the main and reverse-test passes; helm tests still
+        re-run for already-installed charts (that is the point of reverse
+        tests).
+        """
         for entry in plan:
             chart = self.repository.get(entry.chart)
             profile = chart.spec.profile(entry.profile)
@@ -123,7 +193,7 @@ class SandboxService:
                 namespaces_created.add(namespace)
 
             if release not in installed:
-                self.console.print(f"[bold]Updating dependencies[/bold] {entry.chart}")
+                self._progress(step("Updating dependencies", entry.chart))
                 # mtime-gated: a CI runner that's just `helm dependency
                 # update`d this chart on the previous step sees the lock
                 # is fresh and skips the redundant subprocess. Per-process
@@ -131,10 +201,10 @@ class SandboxService:
                 # passes when both touch the same chart.
                 self.helm.dependency_update_if_stale(chart.path)
                 if lint:
-                    self.console.print(f"[bold]Linting[/bold] {entry.chart}")
+                    self._progress(step("Linting", entry.chart))
                     self.helm.lint(chart.path, values)
-                self.console.print(
-                    f"[bold]Installing[/bold] {entry.chart}:{entry.profile} -> {namespace}"
+                self._progress(
+                    step("Installing", f"{entry.chart}:{entry.profile} -> {namespace}")
                 )
                 with self._diagnostics_on_failure(namespace):
                     self.helm.upgrade_install(
@@ -148,9 +218,9 @@ class SandboxService:
                 installed.add(release)
 
             if profile.helm_test:
-                self.console.print(f"[bold]Waiting for workloads[/bold] {entry.chart}")
+                self._progress(step("Waiting for workloads", entry.chart))
                 self.kubectl.wait_workloads_ready(namespace, timeout=profile.timeout)
-                self.console.print(f"[bold]Running helm test[/bold] {entry.chart}")
+                self._progress(step("Running helm test", entry.chart))
                 try:
                     with self._diagnostics_on_failure(namespace):
                         result = self.helm.test(
@@ -163,13 +233,15 @@ class SandboxService:
                             )
                 except ExternalCommandError as exc:
                     raise ChartManagerError(f"helm test failed for {entry.chart}: {exc}") from exc
+                tested.append(entry.chart)
 
     @contextmanager
     def _diagnostics_on_failure(self, namespace: str) -> Iterator[None]:
+        """Emit pod/event diagnostics on ExternalCommandError, then re-raise."""
         try:
             yield
         except ExternalCommandError:
             diagnostics = self.kubectl.diagnostics(namespace)
             if diagnostics.strip():
-                self.console.print(diagnostics)
+                self._progress(info(diagnostics))
             raise

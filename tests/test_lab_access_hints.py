@@ -1,12 +1,13 @@
-"""LabService URL print path + cert/webhook gates + port-mapping drift.
+"""LabService access-hint resolution + cert/webhook gates + port-mapping drift.
 
 Three concerns covered here:
-  * `_print_virtualservice_urls`: empty / one / many VS results, with
-    grafana credentials printed under the grafana URL but only if a
-    grafana host is present.
+  * `_access_hints`: empty / one / many VS results, with grafana
+    credentials attached to the grafana URL but only if a grafana host is
+    present. The service resolves the data; `cli/main.py` renders it (see
+    test_lab_cli_rendering.py).
   * Cert + webhook waits: happy path (call recorded) and timeout path
     (warning surfaced, run continues).
-  * Port-mapping drift: matching no-op, mismatch produces a warning row.
+  * Port-mapping drift: matching no-op, mismatch produces a warning event.
 """
 from __future__ import annotations
 
@@ -14,19 +15,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rich.console import Console
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
-from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import ProfileSpec, TestSpec as _TestSpec
 from chart_manager.plumbing.charts import Chart
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.graph import PlanEntry
+from chart_manager.plumbing.spec import ProfileSpec
+from chart_manager.plumbing.spec import TestSpec as _TestSpec
 from chart_manager.services import lab as lab_module
 from chart_manager.services.lab import (
+    EntryOutcome,
     LabService,
     LabUpOptions,
 )
-
+from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
 # behaviour gets new attributes (e.g. VS host list, port mapping set) and
@@ -38,10 +40,14 @@ class _RecordingKubectl:
         self,
         *,
         vs_hosts: list[str] | None = None,
+        vs_raise: Exception | None = None,
+        secret_raise: Exception | None = None,
         cert_raise: Exception | None = None,
         webhook_raise: Exception | None = None,
     ) -> None:
         self._vs_hosts = vs_hosts or []
+        self._vs_raise = vs_raise
+        self._secret_raise = secret_raise
         self._cert_raise = cert_raise
         self._webhook_raise = webhook_raise
         self.cert_waits: list[tuple[str, str, str]] = []
@@ -69,6 +75,8 @@ class _RecordingKubectl:
             raise self._webhook_raise
 
     def list_virtualservice_hosts(self) -> list[str]:
+        if self._vs_raise is not None:
+            raise self._vs_raise
         return list(self._vs_hosts)
 
     # Returns [] because this file's tests don't exercise the
@@ -85,6 +93,8 @@ class _RecordingKubectl:
 
     def get_secret_value(self, name: str, key: str, *, namespace: str) -> str:
         self.secret_calls.append((name, key, namespace))
+        if self._secret_raise is not None:
+            raise self._secret_raise
         return "fake-password"
 
 
@@ -141,13 +151,27 @@ class _Expose:
         return None
 
 
+class _Recorder:
+    """Collect progress events and flatten them to text for substring asserts."""
+
+    def __init__(self) -> None:
+        self.events: list[ProgressEvent] = []
+
+    def __call__(self, event: ProgressEvent) -> None:
+        self.events.append(event)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
+
+
 def _service(
     tmp_path: Path,
     *,
     helm: _Helm,
     kind: _Kind,
     kubectl: _RecordingKubectl,
-    console: Console | None = None,
+    progress: _Recorder | None = None,
 ) -> LabService:
     return LabService(
         tmp_path,
@@ -155,7 +179,7 @@ def _service(
         kind=kind,  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
         expose=_Expose(),  # type: ignore[arg-type]
-        console=console or Console(quiet=True),
+        progress=progress,
     )
 
 
@@ -202,163 +226,110 @@ def _disable_cilium(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-# ----- _print_virtualservice_urls -------------------------------------------
+# ----- _access_hints --------------------------------------------------------
 
 
-def test_no_virtualservices_prints_nothing(tmp_path: Path) -> None:
-    # Empty VS list -> no URLs block at all. The summary table still prints
-    # but the access-hints function is silent.
+_GATEWAY_SYNCED = (EntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
+
+
+def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
+    # Empty VS list -> no URLs at all. The CA-trust decision still stands
+    # because istio-gateway synced this run.
     kubectl = _RecordingKubectl(vs_hosts=[])
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
     )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
-    )
-    svc._print_access_hints(summary, namespace="observability")
 
-    out = console.export_text()
-    assert "URLs:" not in out
-    assert "https://" not in out
+    assert hints.urls == ()
+    assert hints.grafana_url is None
+    assert hints.ca_trust_hint is True
     assert kubectl.secret_calls == []
 
 
-def test_single_virtualservice_prints_one_url(tmp_path: Path) -> None:
+def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
     )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
-    )
-    svc._print_access_hints(summary, namespace="observability")
 
-    out = console.export_text()
-    assert "https://grafana.localhost/" in out
+    assert hints.urls == ("https://grafana.localhost/",)
+    assert hints.grafana_url == "https://grafana.localhost/"
     # Grafana host -> credentials lookup must have fired
-    assert kubectl.secret_calls == [
-        ("grafana", "admin-password", "observability")
-    ]
-    assert "user: admin" in out
-    assert "fake-password" in out
+    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]
+    assert hints.grafana_credentials == ("admin", "fake-password")
+    assert hints.grafana_error is None
 
 
-def test_many_virtualservices_prints_sorted_unique_urls(tmp_path: Path) -> None:
+def test_many_virtualservices_yield_sorted_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(
         vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"]
     )
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
     )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
-    )
-    svc._print_access_hints(summary, namespace="observability")
 
-    out = console.export_text()
     # Hosts arrive in arbitrary order from kubectl; output is sorted.
-    pos_g = out.find("grafana.localhost")
-    pos_l = out.find("loki.localhost")
-    pos_p = out.find("prom.localhost")
-    assert -1 < pos_g < pos_l < pos_p
+    assert hints.urls == (
+        "https://grafana.localhost/",
+        "https://loki.localhost/",
+        "https://prom.localhost/",
+    )
     # Only grafana triggers the secret lookup
-    assert kubectl.secret_calls == [
-        ("grafana", "admin-password", "observability")
-    ]
+    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]
 
 
-def test_virtualservice_urls_silent_when_lab_ca_absent(tmp_path: Path) -> None:
-    # No istio-gateway in the summary -> CA hint skipped, but VS list is
-    # still printed if hosts exist (a sync that touched only grafana).
+def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
+    # No istio-gateway in the summary -> CA decision is False, but the VS
+    # list still resolves (a sync that touched only grafana).
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(
+            applied=[EntryOutcome("grafana", "minimal", "observability")]
+        ),
+        namespace="observability",
     )
-    summary = lab_module._RunSummary(
-        applied=[("grafana", "minimal", "observability")]
+
+    assert hints.ca_trust_hint is False
+    assert hints.urls == ("https://grafana.localhost/",)
+
+
+def test_virtualservice_listing_failure_is_captured_not_raised(tmp_path: Path) -> None:
+    # Best-effort: a missing CRD must not abort the run, and the surface
+    # needs the reason so it can render it where the URLs would have been.
+    kubectl = _RecordingKubectl(vs_raise=ExternalCommandError("no such CRD"))
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
     )
-    svc._print_access_hints(summary, namespace="observability")
 
-    out = console.export_text()
-    assert "Trust the lab CA" not in out
-    assert "https://grafana.localhost/" in out
-
-
-# ----- CA import hint platform gating ---------------------------------------
+    assert hints.urls == ()
+    assert hints.urls_error is not None
+    assert "could not list VirtualServices" in hints.urls_error
+    assert hints.ca_trust_hint is True
 
 
-def test_ca_hint_includes_macos_one_liner_on_darwin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # On Darwin we surface the `security add-trusted-cert` one-liner so the
-    # dev doesn't have to remember the keychain incantation.
-    monkeypatch.setattr(lab_module.sys, "platform", "darwin")
-    kubectl = _RecordingKubectl(vs_hosts=[])
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
+def test_grafana_secret_failure_is_captured_not_raised(tmp_path: Path) -> None:
+    kubectl = _RecordingKubectl(
+        vs_hosts=["grafana.localhost"],
+        secret_raise=ChartManagerError("secret not found"),
     )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    hints = svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
     )
-    svc._print_access_hints(summary, namespace="observability")
 
-    out = console.export_text()
-    assert "Trust the lab CA" in out
-    assert "macOS one-liner" in out
-    assert "security add-trusted-cert" in out
-
-
-def test_ca_hint_omits_macos_one_liner_on_linux(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # On non-Darwin the `security add-trusted-cert` line is misleading
-    # (the tool doesn't exist). The generic "import into your OS keychain"
-    # line must still print so Linux devs aren't left without instruction.
-    monkeypatch.setattr(lab_module.sys, "platform", "linux")
-    kubectl = _RecordingKubectl(vs_hosts=[])
-    console = Console(record=True, width=200)
-    svc = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=kubectl,
-        console=console,
-    )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
-    )
-    svc._print_access_hints(summary, namespace="observability")
-
-    out = console.export_text()
-    assert "Trust the lab CA" in out
-    assert "import ~/lab-ca.crt into your OS keychain" in out
-    assert "macOS one-liner" not in out
-    assert "security add-trusted-cert" not in out
+    assert hints.urls == ("https://grafana.localhost/",)
+    assert hints.grafana_credentials is None
+    assert hints.grafana_error == "secret not found"
 
 
 # ----- _wait_apps_wildcard_ready --------------------------------------------
@@ -369,9 +340,7 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._RunSummary(
-        no_change=[("istio-gateway", "minimal", "istio-ingress")]
-    )
+    summary = lab_module._RunSummary(no_change=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
 
     assert kubectl.cert_waits == [
@@ -385,7 +354,7 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     summary = lab_module._RunSummary(
-        applied=[("grafana", "minimal", "observability")]
+        applied=[EntryOutcome("grafana", "minimal", "observability")]
     )
     svc._wait_apps_wildcard_ready(summary)
     assert kubectl.cert_waits == []
@@ -398,17 +367,14 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
     kubectl = _RecordingKubectl(
         cert_raise=ExternalCommandError("timed out waiting"),
     )
-    console = Console(record=True, width=200)
+    progress = _Recorder()
     svc = _service(
-        tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, console=console
+        tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress
     )
-    summary = lab_module._RunSummary(
-        applied=[("istio-gateway", "minimal", "istio-ingress")]
-    )
+    summary = lab_module._RunSummary(applied=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
-    out = console.export_text()
-    assert "warn:" in out
-    assert "apps-wildcard cert not Ready" in out
+    assert "warn:" in progress.text
+    assert "apps-wildcard cert not Ready" in progress.text
 
 
 # ----- cert-manager webhook hook --------------------------------------------
@@ -460,9 +426,9 @@ def test_webhook_wait_warning_does_not_abort_run(
         webhook_raise=ExternalCommandError("timed out"),
     )
     helm = _Helm(status="applied")
-    console = Console(record=True, width=200)
+    progress = _Recorder()
     svc = _service(
-        tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl, console=console
+        tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl, progress=progress
     )
 
     plan = [PlanEntry(chart="cert-manager", profile="minimal")]
@@ -471,8 +437,7 @@ def test_webhook_wait_warning_does_not_abort_run(
     _disable_cilium(monkeypatch)
 
     svc.up(LabUpOptions())
-    out = console.export_text()
-    assert "cert-manager webhook not Available" in out
+    assert "cert-manager webhook not Available" in progress.text
 
 
 # ----- port-mapping drift ---------------------------------------------------
@@ -497,9 +462,9 @@ def test_port_mapping_drift_warning_when_live_missing_expected(
     kubectl = _RecordingKubectl()
     kind = _Kind(host_ports={80})
     helm = _Helm(status="applied")
-    console = Console(record=True, width=200)
+    progress = _Recorder()
     svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, console=console
+        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
     )
 
     plan: list[PlanEntry] = []
@@ -507,9 +472,8 @@ def test_port_mapping_drift_warning_when_live_missing_expected(
     _disable_cilium(monkeypatch)
 
     svc.up(LabUpOptions())
-    out = console.export_text()
-    assert "kind cluster port mappings do not match kind-config" in out
-    assert "443" in out
+    assert "kind cluster port mappings do not match kind-config" in progress.text
+    assert "443" in progress.text
 
 
 def test_port_mapping_drift_no_warning_when_matching(
@@ -529,16 +493,15 @@ def test_port_mapping_drift_no_warning_when_matching(
     kubectl = _RecordingKubectl()
     kind = _Kind(host_ports={80, 443})
     helm = _Helm(status="applied")
-    console = Console(record=True, width=200)
+    progress = _Recorder()
     svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, console=console
+        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
     )
     _wire_repo(monkeypatch, svc, plan=[], charts={})
     _disable_cilium(monkeypatch)
 
     svc.up(LabUpOptions())
-    out = console.export_text()
-    assert "kind cluster port mappings do not match" not in out
+    assert "kind cluster port mappings do not match" not in progress.text
 
 
 def test_port_mapping_drift_silent_when_kind_config_absent(
@@ -549,13 +512,56 @@ def test_port_mapping_drift_silent_when_kind_config_absent(
     kubectl = _RecordingKubectl()
     kind = _Kind(host_ports=set())
     helm = _Helm(status="applied")
-    console = Console(record=True, width=200)
+    progress = _Recorder()
     svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, console=console
+        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
     )
     _wire_repo(monkeypatch, svc, plan=[], charts={})
     _disable_cilium(monkeypatch)
 
     svc.up(LabUpOptions())
-    out = console.export_text()
-    assert "kind cluster port mappings" not in out
+    assert "kind cluster port mappings" not in progress.text
+
+
+def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
+    tmp_path: Path,
+) -> None:
+    """The lookup namespace comes from the summary, not the run default.
+
+    A profile may declare its own `namespace:`. This read `options.namespace`
+    instead, and the two coincide today only because the grafana test-spec
+    omits one -- so adding that single line would have silently degraded the
+    credential lookup to "secret not found" with no other symptom. The
+    original test could not catch it: it passed the same value for both.
+    """
+    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+
+    hints = svc._access_hints(
+        lab_module._RunSummary(
+            applied=[
+                *_GATEWAY_SYNCED,
+                # Grafana installed into its own namespace, not the default.
+                EntryOutcome("grafana", "minimal", "monitoring"),
+            ]
+        ),
+        namespace="observability",
+    )
+
+    assert kubectl.secret_calls == [("grafana", "admin-password", "monitoring")]
+    assert hints.grafana_credentials == ("admin", "fake-password")
+
+
+def test_grafana_secret_falls_back_to_the_run_namespace_when_absent(
+    tmp_path: Path,
+) -> None:
+    """No grafana row in the summary -> keep the previous behavior."""
+    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+
+    svc._access_hints(
+        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        namespace="observability",
+    )
+
+    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]

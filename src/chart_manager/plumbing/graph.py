@@ -1,3 +1,4 @@
+"""Dependency-graph resolution: install ordering and helm dependency indexing."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,23 +13,37 @@ from chart_manager.plumbing.spec import ChartRef
 
 @dataclass(frozen=True)
 class PlanEntry:
+    """One chart:profile step in an install plan; `target` marks the requested chart."""
+
     chart: str
     profile: str
     target: bool = False
 
 
 class DependencyResolver:
+    """Resolve test-spec `requires` edges into ordered install plans."""
+
     def __init__(self, repository: ChartRepository) -> None:
+        """Store the repository used to load charts during traversal."""
         self.repository = repository
 
     def install_plan(self, chart: str, profile: str) -> list[PlanEntry]:
+        """Return dependencies-first install order for chart:profile.
+
+        DFS post-order with cycle detection; raises DependencyCycleError.
+        The requested chart always appears with target=True, even if it was
+        already visited as someone else's dependency.
+        """
         plan: list[PlanEntry] = []
         permanent: set[tuple[str, str]] = set()
         temporary: list[tuple[str, str]] = []
 
         def visit(ref: ChartRef, *, target: bool = False) -> None:
+            """DFS one node; append to plan after its requires are planned."""
             key = (ref.chart, ref.profile)
             if key in permanent:
+                # Already planned as a dependency; re-append so the dedupe
+                # pass keeps the target-flagged entry (and its position last).
                 if target:
                     plan.append(PlanEntry(ref.chart, ref.profile, target=True))
                 return
@@ -49,6 +64,7 @@ class DependencyResolver:
         return _dedupe_keep_last_target(plan)
 
     def reverse_tests(self, chart: str) -> list[ChartRef]:
+        """Return the chart's declared reverseTests refs."""
         return self.repository.get(chart).spec.reverse_tests
 
 
@@ -92,6 +108,11 @@ def build_helm_dependency_index(root: Path) -> dict[str, set[str]]:
 
 
 def _dedupe_keep_last_target(entries: list[PlanEntry]) -> list[PlanEntry]:
+    """Drop duplicate chart:profile entries, keeping the last occurrence.
+
+    "Last wins" preserves the target=True re-append from install_plan, but
+    note it also moves the entry to the duplicate's (later) position.
+    """
     result: list[PlanEntry] = []
     seen: set[tuple[str, str]] = set()
     for entry in entries:

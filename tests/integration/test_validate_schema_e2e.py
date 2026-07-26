@@ -14,7 +14,7 @@ import pytest
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.validate_models import WorklistRow
 from chart_manager.services.validate.runner import RowConfig, ValidateRunner
 
@@ -30,7 +30,7 @@ def _skip_if_missing(*tools: str) -> None:
 
 
 def _runner(out_root: Path) -> ValidateRunner:
-    cmd_runner = CommandRunner()
+    cmd_runner = SubprocessRunner()
     return ValidateRunner(
         helm=Helm(runner=cmd_runner),
         output_root=out_root,

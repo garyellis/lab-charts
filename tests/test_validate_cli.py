@@ -19,12 +19,14 @@ from typer.testing import CliRunner
 
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.main import app
+from chart_manager.plumbing.errors import ChartNotFoundError
 from chart_manager.plumbing.validate_models import (
     PhaseResult,
     RowResult,
     RunResult,
     WorklistRow,
 )
+from chart_manager.services.validate.app import RunOutcome, ValidateInputError
 
 
 def _result() -> RunResult:
@@ -273,7 +275,7 @@ def test_deps_install_rejects_unknown_tool() -> None:
 
 
 def test_deps_install_defaults_to_install_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    from chart_manager.services.validate import deps_install as deps_install_mod
+    from chart_manager.services.tools import install as deps_install_mod
 
     calls: list[str] = []
 
@@ -299,7 +301,7 @@ def test_deps_install_defaults_to_install_all(monkeypatch: pytest.MonkeyPatch) -
 def test_deps_install_with_explicit_tools_calls_install_one_per_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from chart_manager.services.validate import deps_install as deps_install_mod
+    from chart_manager.services.tools import install as deps_install_mod
 
     calls: list[str] = []
 
@@ -378,7 +380,7 @@ def test_resolve_display_none_returns_null() -> None:
 
 
 def test_resolve_display_plain_returns_plain() -> None:
-    from chart_manager.services.validate.progress import PlainNarrationDisplay
+    from chart_manager.cli.validate_progress import PlainNarrationDisplay
     d = validate_cli._resolve_display("plain", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
 
@@ -393,7 +395,7 @@ def test_resolve_display_auto_with_json_picks_null() -> None:
 def test_resolve_display_live_without_tty_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from chart_manager.services.validate.progress import PlainNarrationDisplay
+    from chart_manager.cli.validate_progress import PlainNarrationDisplay
     monkeypatch.setattr("sys.stderr.isatty", lambda: False)
     d = validate_cli._resolve_display("live", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
@@ -414,20 +416,369 @@ def test_run_rejects_unknown_progress_mode() -> None:
     assert "progress" in result.output.lower()
 
 
-def test_default_workers_floors_at_two(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("os.cpu_count", lambda: 1)
-    assert validate_cli._default_workers() == 2
+# --- surface -> service handoff --------------------------------------------
+#
+# The CLI's whole job is now: build a request, hand it to ValidateApp,
+# render the outcome, apply retention, exit. These drive the commands with a
+# fake app so the handoff itself is under test.
 
 
-def test_default_workers_ceilings_at_eight(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("os.cpu_count", lambda: 32)
-    assert validate_cli._default_workers() == 8
+class _FakeApp:
+    """Records the request it was handed and returns a canned outcome."""
+
+    def __init__(self, outcome: RunOutcome | None = None, error: Exception | None = None):
+        self.outcome = outcome
+        self.error = error
+        self.requests: list[object] = []
+        self.cleanups: list[RunOutcome] = []
+        self.cleanup_saw_summary: bool | None = None
+
+    def _answer(self, request):
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        assert self.outcome is not None
+        return self.outcome
+
+    def run(self, request):
+        return self._answer(request)
+
+    def single(self, request):
+        return self._answer(request)
+
+    def cleanup(self, outcome: RunOutcome) -> None:
+        self.cleanups.append(outcome)
+        self.cleanup_saw_summary = (outcome.out_dir / "summary.md").is_file()
+
+
+def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
+    rows = ()
+    if exit_code:
+        rows = (
+            RowResult(
+                row=WorklistRow(chart="c", env="dev", release="c", namespace="lab-dev"),
+                phases={"render": PhaseResult(phase="render", status="FAIL")},
+            ),
+        )
+    return RunOutcome(
+        result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs
+    )
+
+
+def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
+    monkeypatch.setattr(validate_cli, "_make_app", lambda progress=None: fake)
+
+
+def test_run_builds_a_request_from_its_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate", "run",
+            "--all",
+            "--chart", "alpha",
+            "--env", "dev",
+            "--phases", "render,schema",
+            "--workers", "3",
+            "--row-timeout", "12",
+            "--root", str(tmp_path),
+            "--progress", "none",
+        ],
+    )
+
+    assert result.exit_code == 0
+    request = fake.requests[0]
+    assert request.all_charts is True
+    assert request.charts == ("alpha",)
+    assert request.envs == ("dev",)
+    assert request.phases == frozenset({"render", "schema"})
+    assert request.workers == 3
+    assert request.row_timeout == 12.0
+    assert request.root == tmp_path
+
+
+def test_run_exits_with_the_outcome_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
+
+    result = CliRunner().invoke(
+        app, ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+
+
+def test_run_applies_retention_only_after_the_summary_is_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--format all writes sidecars into the render dir; cleanup comes last."""
+    out_dir = tmp_path / "out"
+    fake = _FakeApp(_outcome(out_dir))
+    _install(monkeypatch, fake)
+
+    CliRunner().invoke(
+        app,
+        ["validate", "run", "--all", "--progress", "none", "--format", "all",
+         "--root", str(tmp_path)],
+    )
+
+    assert fake.cleanups == [fake.outcome]
+    assert fake.cleanup_saw_summary is True
+
+
+def test_run_maps_a_rejected_input_onto_its_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(
+        monkeypatch,
+        _FakeApp(error=ValidateInputError("cannot read it", hint="changed_files")),
+    )
+
+    result = CliRunner().invoke(
+        app, ["validate", "run", "--progress", "none", "--root", str(tmp_path)]
+    )
+
+    assert result.exit_code == 2
+    assert "--changed-files" in result.output
+    assert "cannot read it" in result.output
+
+
+def test_run_emits_extra_warnings_from_the_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out", warnings=("chart x has no spec",)))
+    _install(monkeypatch, fake)
+
+    output = _capture_stdout(
+        lambda: CliRunner().invoke(
+            app,
+            ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
+        )
+    )
+
+    assert "chart x has no spec" in output
+
+
+def test_run_summary_reports_unvalidated_charts_and_spec_errors(tmp_path: Path) -> None:
+    outcome = RunOutcome(
+        result=RunResult(
+            rows=(),
+            rendered_root=tmp_path,
+            spec_errors=("charts/broken: boom",),
+        ),
+        out_dir=tmp_path,
+        charts_unvalidated=2,
+    )
+
+    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+
+    assert "spec error: charts/broken: boom" in output
+    assert "1 spec error(s)" in output
+    assert "2 chart(s) unvalidated" in output
+    assert "0 rows" in output
+
+
+def _outcome_with_not_run(
+    tmp_path: Path, *, enabled: frozenset[str], not_run: frozenset[str]
+) -> RunOutcome:
+    """One row where `not_run` phases are NOT_RUN, under `enabled` phases.
+
+    `enabled` and `not_run` are independent on purpose: the interesting cases
+    are a disabled phase that is NOT_RUN (expected, silent) and an *enabled*
+    phase that is NOT_RUN (an anomaly worth a line).
+    """
+    return RunOutcome(
+        result=RunResult(
+            rows=(
+                RowResult(
+                    row=WorklistRow(
+                        chart="grafana", env="dev", release="grafana", namespace="lab-dev"
+                    ),
+                    phases={
+                        name: PhaseResult(
+                            phase=name,
+                            status="NOT_RUN" if name in not_run else "PASS",
+                        )
+                        for name in ("render", "schema", "policy")
+                    },
+                ),
+            ),
+            rendered_root=tmp_path,
+        ),
+        out_dir=tmp_path,
+        enabled_phases=enabled,
+    )
+
+
+def test_summary_ignores_phases_the_caller_disabled(tmp_path: Path) -> None:
+    """`--phases render` must not report schema/policy as an anomaly."""
+    outcome = _outcome_with_not_run(
+        tmp_path,
+        enabled=frozenset({"render"}),
+        not_run=frozenset({"schema", "policy"}),
+    )
+
+    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+
+    assert "NOT_RUN" not in output
+    assert "summary:" not in output
+
+
+def test_summary_still_reports_a_not_run_phase_the_caller_asked_for(
+    tmp_path: Path,
+) -> None:
+    """An enabled phase that never ran is a real anomaly and must be counted."""
+    outcome = _outcome_with_not_run(
+        tmp_path,
+        enabled=frozenset({"render", "schema", "policy"}),
+        not_run=frozenset({"schema", "policy"}),
+    )
+
+    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+
+    assert "2 phase(s) NOT_RUN" in output
+
+
+def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    seen: list[object] = []
+
+    def _make(progress=None):
+        seen.append(progress)
+        return fake
+
+    monkeypatch.setattr(validate_cli, "_make_app", _make)
+
+    output = _capture_stdout(
+        lambda: CliRunner().invoke(
+            app,
+            ["validate", "run", "--all", "--verbose", "--workers", "4",
+             "--root", str(tmp_path)],
+        )
+    )
+
+    from chart_manager.cli.validate_progress import PlainNarrationDisplay
+
+    assert isinstance(seen[0], PlainNarrationDisplay)
+    assert "--verbose forces --workers=1" in output
+    # The service is told the truth; it owns the actual clamp.
+    assert fake.requests[0].verbose is True
+    assert fake.requests[0].workers == 4
+
+
+def test_verbose_with_one_worker_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out")))
+
+    output = _capture_stdout(
+        lambda: CliRunner().invoke(
+            app,
+            ["validate", "run", "--all", "--verbose", "--workers", "1",
+             "--root", str(tmp_path)],
+        )
+    )
+
+    assert "forces --workers=1" not in output
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_phases"),
+    [
+        ("render", frozenset({"render", "schema", "policy"})),
+        ("schema", frozenset({"render", "schema", "policy"})),
+        ("policy", frozenset({"render", "schema", "policy"})),
+    ],
+)
+def test_single_row_commands_build_single_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    command: str,
+    expected_phases: frozenset[str],
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", command, "--chart", "alpha", "--env", "dev", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    request = fake.requests[0]
+    assert (request.chart, request.env) == ("alpha", "dev")
+    assert request.phases == expected_phases
+    assert fake.cleanups == [fake.outcome]
+
+
+def test_only_the_policy_command_asks_for_policy_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """render/schema must keep passing no policy paths at all (phase SKIPs)."""
+    requests = []
+    for command in ("render", "schema", "policy"):
+        fake = _FakeApp(_outcome(tmp_path / "out"))
+        _install(monkeypatch, fake)
+        CliRunner().invoke(
+            app,
+            ["validate", command, "--chart", "a", "--env", "dev", "--root", str(tmp_path)],
+        )
+        requests.append(fake.requests[0])
+
+    assert [r.discover_policies for r in requests] == [False, False, True]
+
+
+def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(monkeypatch, _FakeApp(error=ChartNotFoundError("chart not found: ghost")))
+
+    result = CliRunner().invoke(
+        app, ["validate", "render", "--chart", "ghost", "--env", "dev"]
+    )
+
+    assert result.exit_code == 2
+    assert "--chart" in result.output
+    assert "ghost" in result.output
+
+
+@pytest.mark.parametrize("command", ["render", "schema", "policy"])
+def test_single_row_commands_reject_both_helm_bindings(command: str) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["validate", command, "--chart", "a", "--env", "dev",
+         "--helm-version", "3.20.0", "--helm-bin", "/usr/bin/helm"],
+    )
+
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.output
+
+
+def test_run_rejects_an_unknown_phase() -> None:
+    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", "lint"])
+
+    assert result.exit_code == 2
+    assert "unknown phase" in result.output
+
+
+def test_run_rejects_an_empty_phase_list() -> None:
+    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", " ,"])
+
+    assert result.exit_code == 2
+    assert "at least one phase" in result.output
 
 
 def test_deps_install_exits_nonzero_on_any_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from chart_manager.services.validate import deps_install as deps_install_mod
+    from chart_manager.services.tools import install as deps_install_mod
 
     def fake_install_all(runner, *, on_warn=print):
         return [
