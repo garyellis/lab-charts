@@ -29,6 +29,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MakeChart = Callable[..., Path]
 
 
+@pytest.fixture(autouse=True)
+def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin Rich's terminal detection so rendered output is environment-independent.
+
+    Rich inspects the ambient environment to decide width and colour. Under
+    `GITHUB_ACTIONS` it forces an 80-column terminal *with* ANSI codes even
+    with no TTY attached, so Typer's `--help` output wraps differently and
+    every `assert "--format" in result.output` in this suite fails -- 12 of
+    them, green locally and red in CI, with nothing about the code changed.
+
+    Neutralising it here rather than per-test keeps the fixed point in one
+    place: a test that asserts on rendered text is asserting about *our*
+    formatting, never about the terminal it happens to run in. Tests that
+    genuinely exercise CI-detection (`--output auto`, `--github-step-summary`)
+    set the variables they need explicitly, and those `monkeypatch.setenv`
+    calls run after this fixture, so they still win.
+    """
+    for var in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "FORCE_COLOR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("COLUMNS", "200")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setenv("NO_COLOR", "1")
+
+
 @pytest.fixture
 def chart_root(tmp_path: Path) -> Path:
     """An empty repo root containing a `charts/` directory."""

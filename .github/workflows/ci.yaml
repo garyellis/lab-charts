@@ -80,7 +80,7 @@ jobs:
         run: uv run --extra dev pytest -q tests/test_layering.py
 
       # The unit suite. Integration-marked tests are excluded by the addopts
-      # in pyproject.toml; they need helm/kubeconform/conftest on PATH and are
+      # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
       # covered by the validate and sandbox-test jobs below.
       - name: Unit tests
         run: uv run --extra dev pytest -q

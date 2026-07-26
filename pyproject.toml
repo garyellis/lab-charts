@@ -40,7 +40,7 @@ packages = ["src/chart_manager"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["integration: requires helm/kubeconform/conftest on PATH"]
+markers = ["integration: requires helm/kubeconform/kyverno on PATH"]
 addopts = "-m 'not integration'"
 
 # Line length 100 instead of default 88: the existing codebase has many
