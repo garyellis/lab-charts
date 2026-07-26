@@ -2,9 +2,10 @@
 
 Sequences render -> schema -> policy per row. Strict per-row dependency:
 a render FAIL short-circuits both downstream phases to SKIP; a schema FAIL
-short-circuits policy to SKIP. Across rows the runner is fail-fast: false
-— every row is attempted so the operator sees the full failure surface in
-one go.
+short-circuits policy to SKIP. Across rows the default is fail-fast false,
+so every independent row is attempted and the operator sees the full failure
+surface in one run. Callers may opt into truthful fail-fast execution, which
+stops before later rows start.
 
 Rows are independent: with max_workers > 1 they execute concurrently via a
 ThreadPoolExecutor. The per-row sequencing above is preserved inside each
@@ -12,6 +13,7 @@ worker. Phase functions (and the integrations they call) are responsible
 for their own thread-safety; Helm's per-chart `dependency update` dedupe
 is the load-bearing example.
 """
+
 from __future__ import annotations
 
 import time
@@ -20,10 +22,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.validate import phases
 from chart_manager.services.validate.domain.models import (
     ALL_PHASES,
@@ -31,6 +35,10 @@ from chart_manager.services.validate.domain.models import (
     RowResult,
     RunResult,
     WorklistRow,
+)
+from chart_manager.services.validate.domain.output_paths import (
+    case_output_directory,
+    reset_case_output_directory,
 )
 
 EventCallback = Callable[[WorklistRow, str, str, float | None], None]
@@ -84,6 +92,8 @@ class ValidateRunner:
         # No-op default so phase code can fire-and-forget without a None
         # check on every event. CLI wires in a real callback.
         self.on_event: EventCallback = on_event or (lambda *_args: None)
+        self._terminal_events: set[tuple[WorklistRow, str]] = set()
+        self._event_lock = Lock()
         # 5-min default guards prefetch against hung OCI/DNS lookups. The
         # CLI exposes --dep-update-timeout for override (None = unbounded).
         self.dep_update_timeout = dep_update_timeout
@@ -108,18 +118,34 @@ class ValidateRunner:
         configs: list[RowConfig],
         *,
         enabled_phases: frozenset[str] | None = None,
+        fail_fast: bool = False,
     ) -> RunResult:
         """Execute render -> schema -> policy across rows.
 
         `enabled_phases` (default: all three) restricts which phases run;
         disabled phases get a `NOT_RUN` PhaseResult instead. Disabling a
         phase does NOT short-circuit later phases — schema-only runs still
-        render first because schema needs the rendered tree.
+        render first because schema needs the rendered tree. With
+        ``fail_fast=True``, execution is serial and later rows become
+        ``NOT_RUN`` after the first failed row.
         """
         if not configs:
             return RunResult(rows=(), rendered_root=self.output_root)
 
         active = enabled_phases if enabled_phases is not None else ALL_PHASES
+
+        # Validate the complete batch before dependency prefetch or any
+        # filesystem mutation. Re-check immediately before each reset to
+        # guard against a path component being replaced by a symlink between
+        # planning and execution.
+        for cfg in configs:
+            target = case_output_directory(
+                self.output_root,
+                chart=cfg.row.chart,
+                environment=cfg.row.env,
+            )
+            if target.exists() and not target.is_dir():
+                raise SpecError(f"validation output path is not a directory: {target}")
 
         # Pre-fetch helm dependencies once per distinct chart before fanning
         # out per-row work. Without this, N envs of the same chart all hit
@@ -134,18 +160,49 @@ class ValidateRunner:
         # widening it adds `helm dependency update` subprocesses to a run
         # that does not ask for them today; fix it deliberately, with a
         # timing test, rather than as a side effect.
-        if "render" in active:
-            self._prefetch_dependencies(configs)
+        with self._event_lock:
+            self._terminal_events.clear()
 
-        if self.max_workers == 1:
-            results = [self._run_row(cfg, active) for cfg in configs]
-        else:
-            results = []
+        prefetch_failures = (
+            self._prefetch_dependencies(configs, fail_fast=fail_fast) if "render" in active else {}
+        )
+        results: list[RowResult] = []
+        runnable: list[RowConfig] = []
+        stopped = False
+        for cfg in configs:
+            exc = prefetch_failures.get(cfg.chart_path.resolve())
+            if stopped:
+                results.append(self._not_run_row(cfg))
+            elif exc is not None:
+                results.append(self._crash_row(cfg, exc, context="dependency prefetch failed"))
+                stopped = fail_fast
+            else:
+                runnable.append(cfg)
+
+        # Fail-fast execution is intentionally serial. It gives the flag a
+        # truthful boundary: once one row fails, no later row has already
+        # started in another worker.
+        if self.max_workers == 1 or fail_fast:
+            for index, cfg in enumerate(runnable):
+                if stopped:
+                    results.append(self._not_run_row(cfg))
+                    continue
+                try:
+                    row_result = self._run_row(cfg, active)
+                except Exception as exc:
+                    row_result = self._crash_row(cfg, exc)
+                results.append(row_result)
+                if fail_fast and self._row_failed(row_result):
+                    stopped = True
+                    for remaining in runnable[index + 1 :]:
+                        results.append(self._not_run_row(remaining))
+                    break
+        elif runnable:
             with ThreadPoolExecutor(
                 max_workers=self.max_workers,
                 thread_name_prefix="validate-",
             ) as pool:
-                futures = {pool.submit(self._run_row, cfg, active): cfg for cfg in configs}
+                futures = {pool.submit(self._run_row, cfg, active): cfg for cfg in runnable}
                 for fut in as_completed(futures):
                     cfg = futures[fut]
                     try:
@@ -160,11 +217,19 @@ class ValidateRunner:
                         # a per-row "FAIL".
                         results.append(self._crash_row(cfg, exc))
 
+        for result in results:
+            self._finalize_row(result)
+
         # Deterministic output order regardless of completion order.
         results.sort(key=lambda r: (r.row.chart, r.row.env))
         return RunResult(rows=tuple(results), rendered_root=self.output_root)
 
-    def _prefetch_dependencies(self, configs: list[RowConfig]) -> None:
+    def _prefetch_dependencies(
+        self,
+        configs: list[RowConfig],
+        *,
+        fail_fast: bool,
+    ) -> dict[Path, Exception]:
         """Run `helm dependency update` once per distinct chart path.
 
         Helm.dependency_update is already idempotent (per-instance lock +
@@ -183,21 +248,33 @@ class ValidateRunner:
             distinct_charts.append(cfg.chart_path)
 
         if not distinct_charts:
-            return
+            return {}
 
         def _update(chart_path: Path) -> None:
             """Prefetch one chart's helm dependencies."""
             self.helm.dependency_update(chart_path, timeout=self.dep_update_timeout)
 
-        if self.max_workers == 1 or len(distinct_charts) == 1:
+        failures: dict[Path, Exception] = {}
+        if self.max_workers == 1 or len(distinct_charts) == 1 or fail_fast:
             for chart_path in distinct_charts:
-                _update(chart_path)
-            return
+                try:
+                    _update(chart_path)
+                except Exception as exc:
+                    failures[chart_path.resolve()] = exc
+                    if fail_fast:
+                        break
+            return failures
         with ThreadPoolExecutor(
             max_workers=min(self.max_workers, len(distinct_charts)),
             thread_name_prefix="validate-deps-",
         ) as pool:
-            list(pool.map(_update, distinct_charts))
+            futures = {pool.submit(_update, path): path for path in distinct_charts}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as exc:
+                    failures[futures[future].resolve()] = exc
+        return failures
 
     def _run_row(self, cfg: RowConfig, active: frozenset[str]) -> RowResult:
         """Run the enabled phases for one row in order; render precedes schema/policy.
@@ -212,6 +289,11 @@ class ValidateRunner:
         or unknown set), so both were dead and both said the opposite of the
         documented rule.
         """
+        reset_case_output_directory(
+            self.output_root,
+            chart=cfg.row.chart,
+            environment=cfg.row.env,
+        )
         render_result = self._timed(
             cfg.row,
             "render",
@@ -289,7 +371,7 @@ class ValidateRunner:
         fn: Callable[[], PhaseResult],
     ) -> PhaseResult:
         """Run a phase fn, stamp elapsed_seconds, and emit start/end events."""
-        self.on_event(row, name, "running", None)
+        self._emit(row, name, "running", None)
         start = time.monotonic()
         try:
             result = fn()
@@ -303,10 +385,16 @@ class ValidateRunner:
             error_type=result.error_type,
             elapsed_seconds=elapsed,
         )
-        self.on_event(row, name, result.status, elapsed)
+        self._emit(row, name, result.status, elapsed)
         return result
 
-    def _crash_row(self, cfg: RowConfig, exc: Exception) -> RowResult:
+    def _crash_row(
+        self,
+        cfg: RowConfig,
+        exc: Exception,
+        *,
+        context: str = "worker crashed",
+    ) -> RowResult:
         """Convert a worker-level crash into a visible row failure.
 
         error_type="tool" routes to exit code 2 (a tool/runtime fault, not
@@ -318,23 +406,65 @@ class ValidateRunner:
         render = PhaseResult(
             phase="render",
             status="FAIL",
-            detail=f"worker crashed: {detail}",
+            detail=f"{context}: {detail}",
             error_type="tool",
         )
-        schema = PhaseResult(
-            phase="schema", status="SKIP", detail="upstream render FAIL"
-        )
-        policy = PhaseResult(
-            phase="policy", status="SKIP", detail="upstream render FAIL"
-        )
-        # Emit events for ALL three phases so progress displays stay in
-        # sync. PlainNarrationDisplay's [done/total] counter bumps on the
-        # 'policy' end event; without these, a crashed row would leave the
-        # counter short by one for the rest of the run.
-        self.on_event(cfg.row, "render", "FAIL", None)
-        self.on_event(cfg.row, "schema", "SKIP", None)
-        self.on_event(cfg.row, "policy", "SKIP", None)
+        schema = PhaseResult(phase="schema", status="SKIP", detail="upstream render FAIL")
+        policy = PhaseResult(phase="policy", status="SKIP", detail="upstream render FAIL")
         return RowResult(
             row=cfg.row,
             phases={"render": render, "schema": schema, "policy": policy},
         )
+
+    @staticmethod
+    def _row_failed(result: RowResult) -> bool:
+        """Return whether a row contains any failed phase."""
+        return any(phase.status == "FAIL" for phase in result.phases.values())
+
+    @staticmethod
+    def _not_run_row(cfg: RowConfig) -> RowResult:
+        """Represent a row deliberately omitted after a fail-fast failure."""
+        phases = {
+            "render": PhaseResult(
+                phase="render",
+                status="NOT_RUN",
+                detail="fail-fast: earlier row failed",
+            ),
+            "schema": PhaseResult(
+                phase="schema",
+                status="NOT_RUN",
+                detail="fail-fast: earlier row failed",
+            ),
+            "policy": PhaseResult(
+                phase="policy",
+                status="NOT_RUN",
+                detail="fail-fast: earlier row failed",
+            ),
+        }
+        return RowResult(row=cfg.row, phases=phases)
+
+    def _finalize_row(self, result: RowResult) -> None:
+        """Emit exactly one terminal event for every phase result."""
+        for phase in result.phases.values():
+            self._emit(
+                result.row,
+                phase.phase,
+                phase.status,
+                phase.elapsed_seconds,
+            )
+
+    def _emit(
+        self,
+        row: WorklistRow,
+        phase: str,
+        status: str,
+        elapsed_s: float | None,
+    ) -> None:
+        """Emit an event, suppressing duplicate terminal notifications."""
+        if status in {"PASS", "FAIL", "SKIP", "NOT_RUN"}:
+            key = (row, phase)
+            with self._event_lock:
+                if key in self._terminal_events:
+                    return
+                self._terminal_events.add(key)
+        self.on_event(row, phase, status, elapsed_s)

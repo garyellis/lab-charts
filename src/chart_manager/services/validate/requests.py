@@ -11,6 +11,7 @@ import the orchestrator. Both requests validate themselves in
 rule has one owner, and the surface's job is only to map `hint` onto
 whatever it calls that input (a flag, a JSON field).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -97,7 +98,8 @@ class RunRequest:
     `charts`/`envs` narrow the built worklist. `changed_files` (a file of
     newline-delimited paths) and `base` (a git ref) feed the changed-files
     resolution; `all_charts` short-circuits both. Timeouts use the
-    pipeline's 0-means-unbounded convention.
+    pipeline's 0-means-unbounded convention. ``fail_fast`` stops before
+    preparing later independent rows after the first failure.
     """
 
     root: Path = Path(".")
@@ -113,6 +115,7 @@ class RunRequest:
     verbose: bool = False
     row_timeout: float = 0.0
     dep_update_timeout: float = 300.0
+    fail_fast: bool = False
 
     def __post_init__(self) -> None:
         """Reject an unknown phase name."""
@@ -134,6 +137,10 @@ class RunOutcome:
     out_dir: Path
     keep: bool = False
     warnings: tuple[str, ...] = ()
+    ignored_changes: tuple[Path, ...] = ()
+    unmatched_changes: tuple[Path, ...] = ()
+    unmatched_charts: tuple[str, ...] = ()
+    unmatched_environments: tuple[str, ...] = ()
     charts_unvalidated: int = 0
     rows_filtered_out: int = 0
     enabled_phases: frozenset[str] = ALL_PHASES

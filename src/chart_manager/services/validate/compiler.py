@@ -1,0 +1,230 @@
+"""Compile authored validation YAML into cwd-independent runtime inputs."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.validate.domain.models import (
+    ValidatableChart,
+    WorklistRow,
+)
+from chart_manager.services.validate.domain.spec import resolve_namespace
+from chart_manager.services.validate.runner import RowConfig
+
+
+@dataclass(frozen=True)
+class CompiledEnvironment:
+    """Absolute runtime inputs for one authored environment."""
+
+    name: str
+    namespace: str
+    values: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class CompiledValidateSpec:
+    """Cwd-independent runtime representation of a validation target."""
+
+    target: ValidatableChart
+    environments: dict[str, CompiledEnvironment]
+    policy_paths: tuple[Path, ...]
+    schema_locations: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
+
+
+def discover_policies(repo_root: Path, chart_path: Path) -> list[Path]:
+    """Return existing repository-wide and per-chart policy directories."""
+    candidates = [repo_root / "policies", chart_path / "policies"]
+    return [candidate.resolve() for candidate in candidates if candidate.is_dir()]
+
+
+def compile_validate_spec(
+    target: ValidatableChart,
+    repo_root: Path,
+) -> CompiledValidateSpec:
+    """Resolve an authored spec against its Helm chart and repository.
+
+    ``policies.extra`` is chart-relative as its schema documents. For a
+    migration window, an existing repository-relative directory is accepted
+    only when the chart-relative path does not exist, and produces a warning.
+    """
+    root = repo_root.resolve()
+    chart_path = target.path.resolve()
+    environments: dict[str, CompiledEnvironment] = {}
+    for name, authored_env in target.spec.environments.items():
+        values = tuple(
+            _compile_value_file(
+                value,
+                chart_path=chart_path,
+                environment=name,
+                spec_path=target.spec_path,
+            )
+            for value in authored_env.values
+        )
+        environments[name] = CompiledEnvironment(
+            name=name,
+            namespace=resolve_namespace(target.spec, name),
+            values=values,
+        )
+
+    policies = discover_policies(root, chart_path)
+    warnings: list[str] = []
+    for extra in target.spec.policies.extra:
+        chart_relative = (chart_path / extra).resolve()
+        repo_relative = (root / extra).resolve()
+        if chart_relative.is_dir():
+            _require_within(
+                chart_relative,
+                chart_path,
+                label=(
+                    f"{target.spec_path}: chart-relative policy directory {extra!r}"
+                ),
+            )
+            selected = chart_relative
+        elif chart_relative.exists():
+            warnings.append(
+                f"{target.spec_path}: policy path is not a directory: "
+                f"{chart_relative}"
+            )
+            continue
+        elif repo_relative.is_dir():
+            _require_within(
+                repo_relative,
+                root,
+                label=(
+                    f"{target.spec_path}: repository-relative policy directory "
+                    f"{extra!r}"
+                ),
+            )
+            selected = repo_relative
+            warnings.append(
+                f"{target.spec_path}: policy path {extra!r} is interpreted as "
+                "repository-relative for compatibility; move it beneath the chart "
+                "or update the authored path"
+            )
+        elif repo_relative.exists():
+            warnings.append(
+                f"{target.spec_path}: policy path is not a directory: "
+                f"{repo_relative}"
+            )
+            continue
+        else:
+            # Extra policies were historically optional and silently omitted.
+            # Keep that compatibility window non-fatal, but never omit one
+            # without an actionable diagnostic.
+            warnings.append(
+                f"{target.spec_path}: policy directory does not exist: "
+                f"{chart_relative}"
+            )
+            continue
+        if selected not in policies:
+            policies.append(selected)
+
+    schemas = tuple(
+        _compile_schema_location(
+            location,
+            root,
+            spec_path=target.spec_path,
+        )
+        for location in target.spec.schema_locations
+    )
+    return CompiledValidateSpec(
+        target=target,
+        environments=environments,
+        policy_paths=tuple(policies),
+        schema_locations=schemas,
+        warnings=tuple(warnings),
+    )
+
+
+def row_config_for(compiled: CompiledValidateSpec, row: WorklistRow) -> RowConfig:
+    """Build one runner configuration from already-compiled inputs."""
+    try:
+        environment = compiled.environments[row.env]
+    except KeyError as exc:
+        raise SpecError(
+            f"unknown environment {row.env!r} for chart {compiled.target.name!r}"
+        ) from exc
+    return RowConfig(
+        row=row,
+        chart_path=compiled.target.path,
+        values=list(environment.values),
+        kubernetes_version=compiled.target.spec.kubernetes_version,
+        schema_locations=list(compiled.schema_locations) or None,
+        policy_paths=list(compiled.policy_paths),
+    )
+
+
+def _compile_value_file(
+    value: str,
+    *,
+    chart_path: Path,
+    environment: str,
+    spec_path: Path,
+) -> Path:
+    """Resolve and validate one required chart-relative values file."""
+    resolved = (chart_path / value).resolve()
+    label = (
+        f"{spec_path}: environment {environment!r} value file {value!r}"
+    )
+    _require_within(resolved, chart_path, label=label)
+    if not resolved.exists():
+        raise SpecError(f"{label} does not exist: {resolved}")
+    if not resolved.is_file():
+        raise SpecError(f"{label} is not a regular file: {resolved}")
+    return resolved
+
+
+def _compile_schema_location(
+    location: str,
+    repo_root: Path,
+    *,
+    spec_path: Path,
+) -> str:
+    """Keep kubeconform keywords/URLs and validate local schema templates."""
+    if location == "default":
+        return location
+    parsed = urlsplit(location)
+    if parsed.scheme:
+        return location
+    if not location.strip():
+        raise SpecError(f"{spec_path}: schema location must not be empty")
+
+    resolved = (repo_root / location).resolve()
+    label = f"{spec_path}: local schema location {location!r}"
+    _require_within(resolved, repo_root, label=label)
+
+    template_start = location.find("{{")
+    if template_start < 0:
+        if not resolved.exists():
+            raise SpecError(f"{label} does not exist: {resolved}")
+        if not (resolved.is_file() or resolved.is_dir()):
+            raise SpecError(f"{label} is not a regular file or directory: {resolved}")
+        return str(resolved)
+
+    static_prefix = location[:template_start]
+    prefix_path = Path(static_prefix)
+    anchor_relative = (
+        prefix_path
+        if static_prefix.endswith(("/", "\\"))
+        else prefix_path.parent
+    )
+    anchor = (repo_root / anchor_relative).resolve()
+    _require_within(anchor, repo_root, label=label)
+    if not anchor.exists():
+        raise SpecError(
+            f"{label} has a missing template base directory: {anchor}"
+        )
+    if not anchor.is_dir():
+        raise SpecError(
+            f"{label} template base is not a directory: {anchor}"
+        )
+    return str(resolved)
+
+
+def _require_within(path: Path, base: Path, *, label: str) -> None:
+    """Reject resolved local inputs that escape their documented base."""
+    if not path.is_relative_to(base):
+        raise SpecError(f"{label} escapes its base directory: {path}")

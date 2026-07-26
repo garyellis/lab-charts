@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import (
     Kubeconform,
@@ -9,7 +11,7 @@ from chart_manager.integrations.kubeconform import (
     ResourceResult,
 )
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.validate.domain.models import WorklistRow
 from chart_manager.services.validate.runner import RowConfig, ValidateRunner
 
@@ -22,9 +24,7 @@ class _StubHelm(Helm):
         self.calls: list[dict] = []
         self.dep_update_calls: list[Path] = []
 
-    def dependency_update(
-        self, chart_path: Path, *, timeout: float | None = None
-    ) -> None:  # type: ignore[override]
+    def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:  # type: ignore[override]
         # Stub the runner's dep-prefetch pass: track calls, don't shell out.
         _ = timeout  # accepted for signature parity with the real Helm.
         self.dep_update_calls.append(chart_path.resolve())
@@ -150,13 +150,131 @@ def test_render_pass_triggers_schema_phase(tmp_path: Path) -> None:
     assert result.exit_code() == 0
 
 
+@pytest.mark.parametrize(
+    ("chart", "env"),
+    [
+        ("", "dev"),
+        ("   ", "dev"),
+        (".", "dev"),
+        ("..", "dev"),
+        ("../outside", "dev"),
+        ("/absolute", "dev"),
+        (r"chart\child", "dev"),
+        ("C:chart", "dev"),
+        ("chart\nchild", "dev"),
+        ("demo", ""),
+        ("demo", " "),
+        ("demo", "."),
+        ("demo", ".."),
+        ("demo", "../outside"),
+        ("demo", "/absolute"),
+        ("demo", r"env\child"),
+    ],
+)
+def test_unsafe_output_identifiers_are_rejected_before_mutation(
+    tmp_path: Path,
+    chart: str,
+    env: str,
+) -> None:
+    output_root = tmp_path / "out"
+    helm = _StubHelm(succeed=True)
+    runner = ValidateRunner(helm=helm, output_root=output_root)
+    row = WorklistRow(chart=chart, env=env, release="demo", namespace="lab-dev")
+
+    with pytest.raises(SpecError, match=r"path segment|absolute path"):
+        runner.run([_cfg(row, tmp_path / "chart")])
+
+    assert not output_root.exists()
+    assert helm.dep_update_calls == []
+    assert helm.calls == []
+
+
+def test_output_component_symlink_is_rejected_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "out"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.yaml"
+    sentinel.write_text("do not remove\n")
+    output_root.mkdir()
+    (output_root / "demo").symlink_to(outside, target_is_directory=True)
+    helm = _StubHelm(succeed=True)
+    runner = ValidateRunner(helm=helm, output_root=output_root)
+
+    with pytest.raises(SpecError, match="must not be a symlink"):
+        runner.run([_cfg(_row(), tmp_path / "chart")])
+
+    assert sentinel.read_text() == "do not remove\n"
+    assert helm.dep_update_calls == []
+    assert helm.calls == []
+
+
+def test_existing_case_output_is_cleared_before_render(tmp_path: Path) -> None:
+    output_root = tmp_path / "out"
+    case_dir = output_root / "demo" / "dev"
+    case_dir.mkdir(parents=True)
+    stale = case_dir / "stale.yaml"
+    stale.write_text("kind: Stale\n")
+    helm = _StubHelm(succeed=True)
+    runner = ValidateRunner(
+        helm=helm,
+        output_root=output_root,
+        kubeconform=_StubKubeconform(_ok_report()),
+    )
+
+    result = runner.run([_cfg(_row(), tmp_path / "chart")])
+
+    assert result.rows[0].phases["render"].status == "PASS"
+    assert not stale.exists()
+    assert (case_dir / "rendered.yaml").is_file()
+
+
+def test_stale_output_symlink_is_removed_without_following_it(tmp_path: Path) -> None:
+    output_root = tmp_path / "out"
+    case_dir = output_root / "demo" / "dev"
+    case_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.yaml"
+    sentinel.write_text("do not remove\n")
+    (case_dir / "linked").symlink_to(outside, target_is_directory=True)
+    helm = _StubHelm(succeed=True)
+    runner = ValidateRunner(
+        helm=helm,
+        output_root=output_root,
+        kubeconform=_StubKubeconform(_ok_report()),
+    )
+
+    result = runner.run([_cfg(_row(), tmp_path / "chart")])
+
+    assert result.rows[0].phases["render"].status == "PASS"
+    assert sentinel.read_text() == "do not remove\n"
+    assert not (case_dir / "linked").exists()
+
+
+def test_non_directory_case_output_is_rejected_without_removing_it(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "out"
+    case_path = output_root / "demo" / "dev"
+    case_path.parent.mkdir(parents=True)
+    case_path.write_text("keep\n")
+    helm = _StubHelm(succeed=True)
+    runner = ValidateRunner(helm=helm, output_root=output_root)
+
+    with pytest.raises(SpecError, match="is not a directory"):
+        runner.run([_cfg(_row(), tmp_path / "chart")])
+
+    assert case_path.read_text() == "keep\n"
+    assert helm.calls == []
+
+
 def test_render_fail_skips_schema_and_policy_with_upstream_detail(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=False)
     kc = _StubKubeconform(_ok_report())
     ky = _StubKyverno(report=_kyverno_pass())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     row = _row()
     result = runner.run([_cfg(row, tmp_path / "chart", policy_paths=[Path("/p")])])
@@ -191,9 +309,7 @@ def test_schema_fail_skips_policy_with_upstream_detail(tmp_path: Path) -> None:
         )
     )
     ky = _StubKyverno(report=_kyverno_pass())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     result = runner.run([_cfg(_row(), tmp_path / "chart", policy_paths=[Path("/p")])])
 
@@ -209,9 +325,7 @@ def test_policy_runs_after_passing_schema(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=True)
     kc = _StubKubeconform(_ok_report())
     ky = _StubKyverno(report=_kyverno_pass())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     policy_paths = [tmp_path / "policies"]
     (tmp_path / "policies").mkdir()
@@ -243,9 +357,7 @@ def test_policy_failure_yields_exit_one(tmp_path: Path) -> None:
             summary={"pass": 0, "fail": 1},
         )
     )
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     result = runner.run([_cfg(_row(), tmp_path / "chart", policy_paths=[Path("/p")])])
 
@@ -263,8 +375,11 @@ def test_runner_does_not_fail_fast_across_rows(tmp_path: Path) -> None:
         KubeconformReport(
             resources=(
                 ResourceResult(
-                    filename="/r/x.yaml", kind="Deployment", name="bad",
-                    status="invalid", msg="boom",
+                    filename="/r/x.yaml",
+                    kind="Deployment",
+                    name="bad",
+                    status="invalid",
+                    msg="boom",
                 ),
             ),
             summary={"valid": 0, "invalid": 1, "errors": 0, "skipped": 0},
@@ -281,13 +396,138 @@ def test_runner_does_not_fail_fast_across_rows(tmp_path: Path) -> None:
     assert all(rr.phases["schema"].status == "FAIL" for rr in result.rows)
 
 
+@pytest.mark.parametrize("workers", [1, 3])
+def test_unexpected_row_crash_isolated_with_serial_parallel_parity(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    class _ExplodingHelm(_StubHelm):
+        def template(self, release, chart_ref, **kwargs):  # type: ignore[override]
+            if release == "bad":
+                raise RuntimeError("kaboom")
+            return super().template(release, chart_ref, **kwargs)
+
+    runner = ValidateRunner(
+        helm=_ExplodingHelm(succeed=True),
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=workers,
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("bad"), tmp_path / "bad"),
+            _cfg(_row("good"), tmp_path / "good"),
+        ]
+    )
+
+    by_chart = {row.row.chart: row for row in result.rows}
+    assert by_chart["bad"].phases["render"].status == "FAIL"
+    assert by_chart["bad"].phases["render"].error_type == "tool"
+    assert "kaboom" in (by_chart["bad"].phases["render"].detail or "")
+    assert by_chart["good"].phases["render"].status == "PASS"
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_dependency_prefetch_failure_isolated_by_chart(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    class _PrefetchFailureHelm(_StubHelm):
+        def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
+            super().dependency_update(chart_path, timeout=timeout)
+            if chart_path.name == "bad":
+                raise RuntimeError("registry unavailable")
+
+    runner = ValidateRunner(
+        helm=_PrefetchFailureHelm(succeed=True),
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=workers,
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("bad"), tmp_path / "bad"),
+            _cfg(_row("good"), tmp_path / "good"),
+        ]
+    )
+
+    by_chart = {row.row.chart: row for row in result.rows}
+    bad = by_chart["bad"].phases["render"]
+    assert bad.status == "FAIL"
+    assert bad.error_type == "tool"
+    assert "dependency prefetch failed" in (bad.detail or "")
+    assert "registry unavailable" in (bad.detail or "")
+    assert by_chart["good"].phases["render"].status == "PASS"
+
+
+def test_fail_fast_stops_later_rows_and_marks_them_not_run(tmp_path: Path) -> None:
+    class _ExplodingHelm(_StubHelm):
+        def template(self, release, chart_ref, **kwargs):  # type: ignore[override]
+            if release == "bad":
+                raise RuntimeError("kaboom")
+            return super().template(release, chart_ref, **kwargs)
+
+    helm = _ExplodingHelm(succeed=True)
+    runner = ValidateRunner(
+        helm=helm,
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=4,
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("bad"), tmp_path / "bad"),
+            _cfg(_row("later"), tmp_path / "later"),
+        ],
+        fail_fast=True,
+    )
+
+    by_chart = {row.row.chart: row for row in result.rows}
+    assert by_chart["bad"].phases["render"].status == "FAIL"
+    assert {phase.status for phase in by_chart["later"].phases.values()} == {"NOT_RUN"}
+    assert [call["release"] for call in helm.calls] == []
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_every_phase_result_has_exactly_one_terminal_event(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+    runner = ValidateRunner(
+        helm=_StubHelm(succeed=True),
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=workers,
+        on_event=lambda row, phase, status, _elapsed: events.append((row.chart, phase, status)),
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("a"), tmp_path / "a"),
+            _cfg(_row("b"), tmp_path / "b"),
+        ],
+        enabled_phases=frozenset({"render"}),
+    )
+
+    terminal = [event for event in events if event[2] != "running"]
+    expected = [
+        (row.row.chart, phase.phase, phase.status)
+        for row in result.rows
+        for phase in row.phases.values()
+    ]
+    assert sorted(terminal) == sorted(expected)
+    assert len(terminal) == len(set(terminal)) == 6
+
+
 def test_phases_subset_marks_disabled_as_not_run(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=True)
     kc = _StubKubeconform(_ok_report())
     ky = _StubKyverno(report=_kyverno_pass())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     result = runner.run(
         [_cfg(_row(), tmp_path / "chart", policy_paths=[tmp_path / "p"])],
@@ -314,9 +554,7 @@ def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=True)
     kc = _StubKubeconform(_ok_report())
     ky = _StubKyverno(report=_kyverno_pass())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, kyverno=ky)
 
     result = runner.run(
         [_cfg(_row(), tmp_path / "chart", policy_paths=[tmp_path / "p"])],
@@ -367,9 +605,7 @@ def test_parallel_run_returns_all_rows_with_events(tmp_path: Path) -> None:
         max_workers=4,
         on_event=on_event,
     )
-    configs = [
-        _cfg(_row(f"chart-{i}"), tmp_path / f"chart-{i}") for i in range(6)
-    ]
+    configs = [_cfg(_row(f"chart-{i}"), tmp_path / f"chart-{i}") for i in range(6)]
     result = runner.run(configs)
 
     assert len(result.rows) == 6
@@ -395,9 +631,7 @@ def test_parallel_run_isolates_worker_crash_into_row_failure(tmp_path: Path) -> 
 
     helm = _ExplodingHelm(succeed=True)
     kc = _StubKubeconform(_ok_report())
-    runner = ValidateRunner(
-        helm=helm, output_root=tmp_path / "out", kubeconform=kc, max_workers=2
-    )
+    runner = ValidateRunner(helm=helm, output_root=tmp_path / "out", kubeconform=kc, max_workers=2)
 
     rows = [_row("good"), _row("bad")]
     configs = [_cfg(r, tmp_path / r.chart) for r in rows]
@@ -452,8 +686,16 @@ def test_schema_inputs_threaded_into_kubeconform(tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingKubeconform(_StubKubeconform):
-        def validate(self, manifests_dir, *, kubernetes_version=None, schema_locations=None,
-                     skip_kinds=None, strict=True, extra_args=None):
+        def validate(
+            self,
+            manifests_dir,
+            *,
+            kubernetes_version=None,
+            schema_locations=None,
+            skip_kinds=None,
+            strict=True,
+            extra_args=None,
+        ):
             captured["kubernetes_version"] = kubernetes_version
             captured["schema_locations"] = schema_locations
             return super().validate(manifests_dir)

@@ -299,6 +299,35 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     assert render["elapsed_seconds"] is None
 
 
+def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
+    tmp_path: Path,
+) -> None:
+    result = RunResult(rows=(), rendered_root=tmp_path / "out")
+    outcome = RunOutcome(
+        result=result,
+        out_dir=result.rendered_root,
+        warnings=("nothing selected",),
+        unmatched_changes=(Path("charts/app/templates/new.yaml"),),
+    )
+
+    out = _capture_stdout(
+        lambda: validate_cli._emit_result(
+            outcome,
+            fmt="json",
+            out_dir=outcome.out_dir,
+            requested_charts=("app",),
+            requested_environments=("dev",),
+        )
+    )
+
+    diagnostics = json.loads(out)["diagnostics"]
+    assert diagnostics["warnings"] == ["nothing selected"]
+    assert diagnostics["selection"]["requested_filters"] == {
+        "charts": ["app"],
+        "environments": ["dev"],
+    }
+
+
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
         lambda: validate_cli._emit_result(
@@ -420,6 +449,7 @@ def test_run_builds_a_request_from_its_flags(
             "--phases", "render,schema",
             "--workers", "3",
             "--row-timeout", "12",
+            "--fail-fast",
             "--root", str(tmp_path),
             "--progress", "none",
         ],
@@ -433,7 +463,23 @@ def test_run_builds_a_request_from_its_flags(
     assert request.phases == frozenset({"render", "schema"})
     assert request.workers == 3
     assert request.row_timeout == 12.0
+    assert request.fail_fast is True
     assert request.root == tmp_path
+
+
+def test_run_defaults_to_continuing_after_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].fail_fast is False
 
 
 def test_run_exits_with_the_outcome_exit_code(

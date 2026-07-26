@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
+from chart_manager.services.domain.charts import HelmChart
+from chart_manager.services.validate.domain.spec import ValidateSpec
+
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]
 ErrorType = Literal["tool", "spec"]
@@ -34,6 +37,38 @@ class WorklistRow:
     env: str
     release: str
     namespace: str
+
+
+@dataclass(frozen=True)
+class ValidatableChart:
+    """A Helm chart composed with its validation-specific authored spec."""
+
+    chart: HelmChart
+    spec: ValidateSpec
+    spec_path: Path
+
+    @property
+    def name(self) -> str:
+        """Return the authoritative Helm chart name."""
+        return self.chart.name
+
+    @property
+    def path(self) -> Path:
+        """Return the authoritative Helm chart directory."""
+        return self.chart.path
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    """Rows selected for execution plus explicit selection diagnostics."""
+
+    rows: tuple[WorklistRow, ...]
+    unmatched_charts: tuple[str, ...] = ()
+    unmatched_environments: tuple[str, ...] = ()
+    ignored_changes: tuple[Path, ...] = ()
+    unmatched_changes: tuple[Path, ...] = ()
+    warnings: tuple[str, ...] = ()
+    filtered_out: int = 0
 
 
 @dataclass(frozen=True)

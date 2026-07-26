@@ -6,6 +6,7 @@ buffers) rather than the rendered Rich Live output — Live writes ANSI
 sequences to a real terminal emulator, which is not what these tests
 should be coupled to.
 """
+
 from __future__ import annotations
 
 import io
@@ -16,8 +17,12 @@ from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
     PlainNarrationDisplay,
 )
-from chart_manager.services.validate.domain.models import WorklistRow
-from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.validate.domain.models import PhaseResult, RowResult, WorklistRow
+from chart_manager.services.validate.progress import (
+    NullDisplay,
+    ProgressDisplay,
+    ProgressFinalizer,
+)
 
 
 def _rows() -> list[WorklistRow]:
@@ -101,3 +106,34 @@ def test_live_table_ignores_unknown_rows() -> None:
         d.on_event(_row("not-a-row"), "render", "PASS", 0.1)
     finally:
         d.stop()
+
+
+def test_progress_finalizer_emits_missing_terminal_events_once() -> None:
+    class RecordingDisplay(NullDisplay):
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str]] = []
+
+        def on_event(self, row, phase, status, elapsed_s=None) -> None:
+            self.events.append((phase, status))
+
+    display = RecordingDisplay()
+    finalizer = ProgressFinalizer(display)
+    row = _row("alloy")
+    result = RowResult(
+        row=row,
+        phases={
+            "render": PhaseResult(phase="render", status="PASS"),
+            "schema": PhaseResult(phase="schema", status="SKIP"),
+            "policy": PhaseResult(phase="policy", status="NOT_RUN"),
+        },
+    )
+
+    finalizer.on_event(row, "render", "PASS", 0.1)
+    finalizer.finalize(result)
+    finalizer.finalize(result)
+
+    assert display.events == [
+        ("render", "PASS"),
+        ("schema", "SKIP"),
+        ("policy", "NOT_RUN"),
+    ]

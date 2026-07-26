@@ -6,6 +6,7 @@ whole validate pipeline (worklist -> filters -> row assembly -> helm
 binding -> aggregation -> retention) is exercised without helm,
 kubeconform, kyverno, or a terminal.
 """
+
 from __future__ import annotations
 
 import textwrap
@@ -80,8 +81,10 @@ class FakeRunner:
         configs: list[RowConfig],
         *,
         enabled_phases: frozenset[str] | None = None,
+        fail_fast: bool = False,
     ) -> RunResult:
         """Return a PASS row per config (or a FAIL when the chart says so)."""
+        _ = fail_fast
         self._log.append((self.spec, list(configs)))
         rows = tuple(
             RowResult(
@@ -221,13 +224,16 @@ def test_explicit_changed_files_wins_over_git(tmp_path: Path) -> None:
     git = FakeGit(files=["charts/alpha/values.yaml"])
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(
-        RunRequest(root=tmp_path, changed_files=listing)
-    )
+    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, changed_files=listing))
 
     assert git.calls == []
     # values-prod.yaml matches no trigger in the fixture spec => no rows.
     assert outcome.result.rows == ()
+    assert outcome.unmatched_changes == (
+        Path("charts/alpha/values-prod.yaml"),
+    )
+    assert outcome.ignored_changes == ()
+    assert any("matches no trigger" in warning for warning in outcome.warnings)
 
 
 def test_git_diff_supplies_changed_files_by_default(tmp_path: Path) -> None:
@@ -351,6 +357,50 @@ def test_all_rows_share_one_runner_when_bindings_match(tmp_path: Path) -> None:
     assert len(rec.runs[0][1]) == 4
 
 
+def test_group_construction_failure_does_not_block_later_binding(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha")
+    _chart(tmp_path, "zulu", extra='helm_version: "3.20.0"\n')
+    rec = Recorder()
+
+    def factory(spec: RunnerSpec):
+        if spec.helm_version is None:
+            raise RuntimeError("helm binding unavailable")
+        return FakeRunner(spec, rec.runs)
+
+    outcome = ValidateApp(
+        runner_factory=factory,
+        run_id_factory=lambda: "RUNID",
+    ).run(RunRequest(root=tmp_path, all_charts=True, envs=("dev",)))
+
+    by_chart = {row.row.chart: row for row in outcome.result.rows}
+    assert by_chart["alpha"].phases["render"].status == "FAIL"
+    assert "helm binding unavailable" in (by_chart["alpha"].phases["render"].detail or "")
+    assert by_chart["zulu"].phases["render"].status == "PASS"
+    assert len(rec.runs) == 1
+
+
+def test_fail_fast_stops_before_preparing_later_binding(tmp_path: Path) -> None:
+    _chart(tmp_path, "bad-alpha")
+    _chart(tmp_path, "zulu", extra='helm_version: "3.20.0"\n')
+    rec = Recorder()
+
+    outcome = _app(rec).run(
+        RunRequest(
+            root=tmp_path,
+            all_charts=True,
+            envs=("dev",),
+            fail_fast=True,
+        )
+    )
+
+    by_chart = {row.row.chart: row for row in outcome.result.rows}
+    assert by_chart["bad-alpha"].phases["render"].status == "FAIL"
+    assert {phase.status for phase in by_chart["zulu"].phases.values()} == {"NOT_RUN"}
+    assert len(rec.runs) == 1
+
+
 # --- result assembly --------------------------------------------------------
 
 
@@ -381,14 +431,14 @@ def test_missing_spec_is_a_warning_not_a_failure(tmp_path: Path) -> None:
     assert outcome.ok is True
 
 
-def test_empty_worklist_still_yields_a_result(tmp_path: Path) -> None:
+def test_unknown_explicit_chart_filter_is_an_input_error(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, all_charts=True, charts=("ghost",)))
+    with pytest.raises(ValidateInputError) as exc:
+        _app(rec).run(RunRequest(root=tmp_path, all_charts=True, charts=("ghost",)))
 
-    assert outcome.result.rows == ()
-    assert outcome.exit_code == 0
+    assert exc.value.hint == "charts"
     assert rec.runs == []
 
 
@@ -517,13 +567,14 @@ class SpySink:
 
     def __init__(self) -> None:
         self.started: list[list[WorklistRow]] = []
+        self.events: list[tuple[str, str, str]] = []
         self.stops = 0
 
     def start(self, rows) -> None:
         self.started.append(list(rows))
 
     def on_event(self, row, phase, status, elapsed_s=None) -> None:
-        return
+        self.events.append((row.chart, phase, status))
 
     def stop(self) -> None:
         self.stops += 1
@@ -536,16 +587,18 @@ def test_progress_sink_is_started_with_every_row_and_always_stopped(
     rec = Recorder()
     sink = SpySink()
 
-    ValidateApp(
-        runner_factory=rec.factory, progress=sink, run_id_factory=lambda: "RUNID"
-    ).run(RunRequest(root=tmp_path, all_charts=True))
+    ValidateApp(runner_factory=rec.factory, progress=sink, run_id_factory=lambda: "RUNID").run(
+        RunRequest(root=tmp_path, all_charts=True)
+    )
 
     assert len(sink.started) == 1
     assert len(sink.started[0]) == 2
     assert sink.stops == 1
 
 
-def test_progress_sink_stops_even_when_a_sub_run_explodes(tmp_path: Path) -> None:
+def test_runner_construction_failure_becomes_outcomes_and_progress(
+    tmp_path: Path,
+) -> None:
     _chart(tmp_path, "alpha")
     sink = SpySink()
 
@@ -555,10 +608,17 @@ def test_progress_sink_stops_even_when_a_sub_run_explodes(tmp_path: Path) -> Non
     app = ValidateApp(
         runner_factory=exploding_factory, progress=sink, run_id_factory=lambda: "RUNID"
     )
-    with pytest.raises(RuntimeError):
-        app.run(RunRequest(root=tmp_path, all_charts=True))
+    outcome = app.run(RunRequest(root=tmp_path, all_charts=True))
 
     assert sink.stops == 1
+    assert len(outcome.result.rows) == 2
+    assert outcome.exit_code == 2
+    assert {(event[0], event[1], event[2]) for event in sink.events} == {
+        ("alpha", "render", "FAIL"),
+        ("alpha", "schema", "SKIP"),
+        ("alpha", "policy", "SKIP"),
+    }
+    assert len(sink.events) == 6
 
 
 # --- single row -------------------------------------------------------------
@@ -614,9 +674,7 @@ def test_single_discovers_policies_when_asked(tmp_path: Path) -> None:
     (tmp_path / "policies").mkdir()
     rec = Recorder()
 
-    _app(rec).single(
-        SingleRequest(chart="alpha", env="dev", root=tmp_path, discover_policies=True)
-    )
+    _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path, discover_policies=True))
 
     assert rec.configs[0].policy_paths == [tmp_path / "policies"]
 
@@ -646,9 +704,7 @@ def test_single_accepts_a_chart_path_outside_the_charts_dir(tmp_path: Path) -> N
     (fixture / "Chart.yaml").write_text("apiVersion: v2\nname: outside\nversion: 0.1.0\n")
     rec = Recorder()
 
-    _app(rec).single(
-        SingleRequest(chart="fixtures/outside", env="dev", root=tmp_path)
-    )
+    _app(rec).single(SingleRequest(chart="fixtures/outside", env="dev", root=tmp_path))
 
     cfg = rec.configs[0]
     assert cfg.chart_path == fixture.resolve()
@@ -719,9 +775,7 @@ def test_single_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
     rec = Recorder()
     target = tmp_path / "named"
 
-    outcome = _app(rec).single(
-        SingleRequest(chart="alpha", env="dev", root=tmp_path, out=target)
-    )
+    outcome = _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path, out=target))
 
     assert outcome.out_dir == target.resolve()
     assert outcome.keep is True

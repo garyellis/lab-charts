@@ -247,14 +247,14 @@
   <p class="lead">chart-manager is a <b>Helm chart lifecycle tool</b>. Picture 1: the lifecycle it serves. Picture 2: the layered architecture that implements it — four layers plus a composition root. Then use the Services / Integrations tabs for one dedicated section per component, and Flows for the end-to-end sequences. <b>The promotion/lifecycle model those services encode is specified in <code>DESIGN.md</code></b>; this page documents the code that implements it.</p>
 
   <div class="stats">
-    <div class="stat"><div class="v">~14.3k</div><div class="k">lines python</div></div>
+    <div class="stat"><div class="v">~15.4k</div><div class="k">lines python</div></div>
     <div class="stat"><div class="v">27</div><div class="k">cli commands</div></div>
-    <div class="stat"><div class="v">38</div><div class="k">service modules</div></div>
+    <div class="stat"><div class="v">57</div><div class="k">service modules</div></div>
     <div class="stat"><div class="v">10</div><div class="k">integrations</div></div>
     <div class="stat"><div class="v">9</div><div class="k">external binaries</div></div>
     <div class="stat"><div class="v">2</div><div class="k">cloud SDKs</div></div>
     <div class="stat"><div class="v">1</div><div class="k">composition root</div></div>
-    <div class="stat"><div class="v">694</div><div class="k">tests · 0 failing</div></div>
+    <div class="stat"><div class="v">747</div><div class="k">unit/service tests · passing</div></div>
   </div>
 
   <h3 class="sub">① The chart lifecycle — every service exists for one stage</h3>
@@ -283,16 +283,16 @@
     <div class="ldivider">▼ requests in, frozen results out · no integrations import (ruff TID251 — and <b>zero</b> import sites remain)</div>
     <div class="lrow lc-comp"><div class="lname">composition.py</div><div class="lbody">The <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>. <span class="ref" data-tip="composition.py:84 — @dataclass(frozen) Settings(kube_context, docker_host, command_timeout, event_source)">Settings</span> (frozen: <code>kube_context</code>, <code>docker_host</code>, <code>command_timeout</code>, <code>event_source</code>) + <span class="ref" data-tip="composition.py:125 — class Container(settings=None)">Container</span> → adapters <span class="ref" data-tip="composition.py:141 — command_runner() (memoized SubprocessRunner)">command_runner</span> · <span class="ref" data-tip="composition.py:147 — helmrelease_client() → HelmReleaseClient(self.kubectl())">helmrelease_client</span> · <span class="ref" data-tip="composition.py:156 — helm(verbose=True)">helm</span> · <span class="ref" data-tip="composition.py:164 — kubectl() — context + timeout from Settings">kubectl</span> · <span class="ref" data-tip="composition.py:172 — kind() — docker_host + timeout from Settings">kind</span>; capabilities <span class="ref" data-tip="composition.py:182 — event_writer() (memoized: one EventStore per container)">event_writer</span> · <span class="ref" data-tip="composition.py:194 — monitor_service(progress=None)">monitor_service</span> · <span class="ref" data-tip="composition.py:212 — test_service(progress=None)">test_service</span> · <span class="ref" data-tip="composition.py:230 — promote_service(confirm_downgrade=None)">promote_service</span> · <span class="ref" data-tip="composition.py:245 — expose_service(state_dir=None)">expose_service</span> · <span class="ref" data-tip="composition.py:249 — grafana_exporter()">grafana_exporter</span> · <span class="ref" data-tip="composition.py:253 — lab_service(root, progress=None)">lab_service</span> · <span class="ref" data-tip="composition.py:271 — sandbox_service(root, progress=None)">sandbox_service</span> · <span class="ref" data-tip="composition.py:283 — ci_service(root)">ci_service</span> · <span class="ref" data-tip="composition.py:287 — validate_app(progress=None, on_warn=None)">validate_app</span>. 298 ln, no module-level singleton — the CLI builds one per process, a server one per startup.</div></div>
     <div class="ldivider">▼ constructor-injected adapters — <b>required</b>, not <code>or Helm()</code> fallbacks</div>
-    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">36 modules, six bounded contexts: <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — imports every services/ module in a clean interpreter; AST-sweeps for sys.exit outside cli/">tests/test_layering.py</span>.</div></div>
+    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">57 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. <code>services/domain/</code> owns Helm chart metadata, managed charts, test specifications and dependency graphs; <code>services/validate/domain/</code> owns validation-only schemas and outcomes. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
     <div class="ldivider">▼ typed results, no upward imports</div>
     <div class="lrow lc-int"><div class="lname">integrations/</div><div class="lbody">One class per external tool: <span class="ref" data-tip="integrations/helm.py:63 — class Helm">helm</span> · <span class="ref" data-tip="integrations/kubectl.py:24 — class Kubectl">kubectl</span> · <span class="ref" data-tip="integrations/kind.py:34 — class Kind">kind</span> · <span class="ref" data-tip="integrations/helmrelease.py:110 — class HelmReleaseClient (was integrations/flux.py: class Flux)">helmrelease</span> · <span class="ref" data-tip="integrations/git.py:12 — class Git">git</span> · <span class="ref" data-tip="integrations/github.py:21 — class Github">github</span> · <span class="ref" data-tip="integrations/kubeconform.py:53 — class Kubeconform">kubeconform</span> · <span class="ref" data-tip="integrations/kyverno.py:80 — class Kyverno">kyverno</span> · <span class="ref" data-tip="integrations/aws/dynamodb/client.py">aws/dynamodb</span> · <span class="ref" data-tip="integrations/azure/cosmos/client.py">azure/cosmos</span>. Typed results, no upward imports. <b>All four kube-facing adapters take the same addressing arguments</b> — see the <a href="#integrations/helmrelease" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">HelmReleaseClient panel</a>.</div></div>
     <div class="ldivider">▼ every subprocess goes through one chokepoint</div>
-    <div class="lrow lc-plumb"><div class="lname">plumbing/</div><div class="lbody"><span class="ref" data-tip="plumbing/commands.py:28 — class CommandRunner(Protocol) · :67 — class SubprocessRunner">CommandRunner Protocol</span> + <code>SubprocessRunner</code> (timeouts, env overlay, error-wrap) · <span class="ref" data-tip="plumbing/errors.py:4 — class ChartManagerError + 6 subclasses incl. MissingToolError, CommandTimeout">error taxonomy</span> · <span class="ref" data-tip="plumbing/text.py:18 — truncate_lines · :30 — truncate_bytes">text caps</span> · <span class="ref" data-tip="plumbing/chart_deps.py:75 — deps_are_fresh · :54 — lock_dep_count">chart_deps</span> · <b>plus the domain model</b>: <span class="ref" data-tip="plumbing/spec.py:88 — class TestSpec">TestSpec</span>/<span class="ref" data-tip="plumbing/spec.py:48 — class ProfileSpec">ProfileSpec</span>, <span class="ref" data-tip="plumbing/validate_spec.py:62 — class ValidateSpec">ValidateSpec</span>, <span class="ref" data-tip="plumbing/charts.py:21 — class ChartRepository">ChartRepository</span>, <span class="ref" data-tip="plumbing/graph.py:23 — class DependencyResolver">DependencyResolver</span> → <span class="ref" data-tip="plumbing/graph.py:15 — @dataclass(frozen) PlanEntry">PlanEntry</span>. <span class="pill p-amber">rename to domain/ during productionization</span> <a href="#plumbing/commands" style="color:var(--amber);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--amber)">→ Plumbing tab: one panel per file</a></div></div>
+    <div class="lrow lc-plumb"><div class="lname">plumbing/</div><div class="lbody">Generic, domain-neutral building blocks only: <span class="ref" data-tip="plumbing/commands.py — CommandRunner Protocol · SubprocessRunner">subprocess kernel</span> · <span class="ref" data-tip="plumbing/errors.py — shared exception taxonomy">errors</span> · <span class="ref" data-tip="plumbing/duration.py — parse_duration">duration parsing</span> · <span class="ref" data-tip="plumbing/paths.py — ensure_relative">relative-path validation</span> · <span class="ref" data-tip="plumbing/yaml_files.py — load_yaml_file">generic YAML loading</span> · <span class="ref" data-tip="plumbing/text.py — truncate_lines · truncate_bytes">text caps</span>. Chart, Helm dependency and validation policy no longer live here. <span class="pill p-green">boundary corrected</span> <a href="#plumbing/commands" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Plumbing tab</a></div></div>
   </div>
 
-  <div class="callout good" style="margin-top:18px"><b>The diagram is now a build step, not a wish.</b> Three checks run in the <code>layering</code> job of <span class="ref" data-tip=".github/workflows/ci.yaml — job: layering (2 steps, no `needs`)">.github/workflows/ci.yaml</span>: <b>(a)</b> ruff <code>TID251</code> bans <code>chart_manager.integrations</code> imports <i>globally</i> and lifts the ban per-directory for <code>integrations/</code>, <code>services/</code>, <code>composition.py</code>, <code>tests/</code> — so a future <code>api/</code> or <code>slack/</code> package is guarded on the day it is created, with no table to edit. <b>(b)</b> <span class="ref" data-tip="tests/test_layering.py — imports every service module in a clean interpreter, asserts rich/typer absent from sys.modules">a subprocess import of every module under <code>services/</code></span> asserting neither <code>rich</code> nor <code>typer</code> lands in <code>sys.modules</code>. <b>(c)</b> an AST sweep for <code>sys.exit</code> / <code>os._exit</code> / bare <code>exit()</code> outside <code>cli/</code>. Before the refactor <code>ci.yaml</code> had <b>no lint, type, or unit-test job at all</b>; the <code>layering</code> job was deliberately scoped to these three contracts rather than full ruff/pytest/mypy, because the backlog at the time (22 ruff, 40 mypy, 3 failing tests) would have made it permanently red. <b>That justification has since expired</b> and the job has not been widened: the tree is now <b>694 passing / 0 failing</b>, 2 ruff findings (both <code>UP042</code> in the frozen <code>services/events/lifecycle.py</code>) and 37 mypy. Wiring the full gate is now a cheap, uncontroversial change — and the longer it waits the more likely the backlog regrows.</div>
+  <div class="callout good" style="margin-top:18px"><b>The boundaries are machine-enforced.</b> Ruff <code>TID251</code> guards adapter imports; service import tests keep Rich and Typer out of capabilities; AST checks keep process exits in the CLI; and dedicated layering tests prevent chart- or validation-domain modules from drifting back into <code>plumbing/</code>. The completed cleanup baseline is <b>747 unit/service tests + 4 external-tool integration tests passing</b>, with Ruff and mypy clean.</div>
 
-  <div class="callout info" style="margin-top:10px"><b>How to read the rest:</b> the <b>Commands</b> tab is the entry surface — every command, its flags, the service it calls, and whether that outcome is reachable without Typer (plus the layering verdict). The <b>Services</b> tab gives each service its own section — responsibilities, public API, a communication diagram, and its main sequence. The <b>Integrations</b> tab does the same per adapter, including which services consume it. The <b>Plumbing</b> tab covers the bottom layer file-by-file — the subprocess kernel, the error taxonomy, and the misfiled domain model. The <b>Matrix</b> is the full grid of who-talks-to-what. <b>Flows</b> walks the end-to-end paths across all layers — starting with Flow 0, the target renovate→all-envs propagation loop that chains everything else. <b>Productionize</b> is the extraction plan into the larger project.</div>
+  <div class="callout info" style="margin-top:10px"><b>How to read the rest:</b> the <b>Commands</b> tab is the entry surface. The <b>Services</b> tab covers the shared chart domain and each bounded service, including the validation lifecycle. The <b>Integrations</b> tab documents external adapters. The <b>Plumbing</b> tab now distinguishes genuinely generic utilities from the service-domain panels retained under the same deep-link routes. The <b>Matrix</b> and <b>Flows</b> show cross-layer communication; <b>Productionize</b> evaluates the current, already-cleaned package shape.</div>
 </section>
 
 <!-- ================================================================ COMMANDS -->
@@ -487,7 +487,7 @@ for entry in service.install_plan(chart, profile):
         <div class="api"><span class="m">validate render</span>  <span class="r">--chart  --env  --values…  --namespace  --release  --helm-version|--helm-bin  --out  --keep  --format  --github-step-summary  --root</span>
 <span class="m">validate schema</span>  <span class="r">…render flags…  --kube-version  --schema-location…</span>
 <span class="m">validate policy</span>  <span class="r">…schema flags…  --policy-dir…</span>
-<span class="m">validate run</span>     <span class="r">--chart…  --env…  --base  --changed-files  --all  --phases  --out  --keep  --workers  --progress  --timings  --verbose  --row-timeout  --dep-update-timeout  --format  --github-step-summary  --root</span>
+<span class="m">validate run</span>     <span class="r">--chart…  --env…  --base  --changed-files  --all  --phases  --fail-fast|--no-fail-fast  --out  --keep  --workers  --progress  --timings  --verbose  --row-timeout  --dep-update-timeout  --format  --github-step-summary  --root</span>
 <span class="m">validate clean</span>   <span class="r">--root PATH=.</span></div>
 
         <h3 class="sub">What <code>validate run</code> used to do in the command body — the orchestration inventory <span style="font-weight:500;font-size:12px;color:var(--muted)">(every row now lives in <code>services/validate/app.py</code>)</span></h3>
@@ -739,19 +739,19 @@ for entry in service.install_plan(chart, profile):
 
       <!-- testspec -->
       <div class="panel" id="svc-testspec">
-        <div class="phead"><h2>test-spec.yaml → <span class="ref" data-tip="plumbing/spec.py:88 — class TestSpec(BaseModel)">TestSpec</span></h2><span class="loc">plumbing/spec.py 125 · charts.py 67 · graph.py 128</span><span class="pill p-amber">domain contract</span></div>
+        <div class="phead"><h2>test-spec.yaml → <span class="ref" data-tip="services/domain/spec.py — class TestSpec(BaseModel)">TestSpec</span></h2><span class="loc">services/domain/spec.py · charts.py · graph.py</span><span class="pill p-blue">shared chart domain</span></div>
         <p class="oneliner">The per-chart <b>dynamic test contract</b>: which profiles exist, what each profile requires, which values files it layers, and whether <code>helm test</code> runs. Everything Sandbox / Lab / CI execute is a translation of this file.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to executable plan</div>
           <div class="cnode c-store">charts/&lt;name&gt;/<br>test-spec.yaml</div>
           <div class="carrow">▸<small>yaml.safe_load</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="plumbing/spec.py:118 — load_test_spec(path)">load_test_spec</span><small>SpecError if missing / not a mapping</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/domain/spec.py — load_test_spec(path)">load_test_spec</span><small>SpecError if missing / not a mapping</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/spec.py:88 — class TestSpec(BaseModel)">TestSpec</span>.model_validate<small>extra=&quot;forbid&quot; — any typo raises</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/spec.py — class TestSpec(BaseModel)">TestSpec</span>.model_validate<small>extra=&quot;forbid&quot; — any typo raises</small></div>
           <div class="carrow">▸<small>via</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="plumbing/charts.py:21 — class ChartRepository">ChartRepository</span>.get(name)<small>Chart.yaml name ≟ dir name</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get_managed(name)">ChartRepository</span>.get_managed(name)<small>HelmChart + TestSpec</small></div>
           <div class="carrow">▸<small>requires DFS</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/graph.py:23 — class DependencyResolver">DependencyResolver</span>.install_plan<small>→ ordered [PlanEntry]</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/graph.py — class DependencyResolver">DependencyResolver</span>.install_plan<small>→ ordered [PlanEntry]</small></div>
         </div>
 
         <div class="yml-title">A real spec, annotated — <code>charts/harbor/test-spec.yaml</code> (verbatim, one check trimmed)</div>
@@ -790,11 +790,11 @@ for entry in service.install_plan(chart, profile):
           <thead><tr><th>yaml key</th><th class="mono">model field</th><th>type / default</th><th>validation</th></tr></thead>
           <tbody>
             <tr><td class="mono">version</td><td class="mono">TestSpec.version</td><td><code>int</code> = 1</td><td>not enforced (contrast: ValidateSpec rejects ≠1)</td></tr>
-            <tr><td class="mono">profiles</td><td class="mono">TestSpec.profiles</td><td><code>dict[str, ProfileSpec]</code> — <b>required</b></td><td>lookup via <span class="ref" data-tip="plumbing/spec.py — TestSpec.profile(name) → SpecError with sorted profile list">.profile(name)</span>: unknown name ⇒ <code>SpecError: unknown profile 'x'. available profiles: minimal, routed</code></td></tr>
+            <tr><td class="mono">profiles</td><td class="mono">TestSpec.profiles</td><td><code>dict[str, ProfileSpec]</code> — <b>required</b></td><td>lookup via <span class="ref" data-tip="services/domain/spec.py — TestSpec.profile(name) → SpecError with sorted profile list">.profile(name)</span>: unknown name ⇒ <code>SpecError: unknown profile 'x'. available profiles: minimal, routed</code></td></tr>
             <tr><td class="mono">reverseTests</td><td class="mono">TestSpec.reverse_tests</td><td><code>list[ChartRef]</code> = []</td><td>alias — snake_case also accepted (<code>populate_by_name</code>)</td></tr>
             <tr><td class="mono">profiles.*.namespace</td><td class="mono">ProfileSpec.namespace</td><td><code>str | None</code> = None</td><td>None ⇒ installer's default namespace</td></tr>
             <tr><td class="mono">profiles.*.requires</td><td class="mono">ProfileSpec.requires</td><td><code>list[ChartRef]</code> = []</td><td>each ref resolved through ChartRepository at plan time — a missing chart fails then, not at parse</td></tr>
-            <tr><td class="mono">profiles.*.values</td><td class="mono">ProfileSpec.values</td><td><code>list[str]</code> = <code>["values.yaml"]</code></td><td><span class="ref" data-tip="plumbing/spec.py:13 — ensure_chart_relative(values, *, label)">values_must_be_relative</span>: absolute path or <code>..</code> ⇒ ValueError; existence checked later by <span class="ref" data-tip="plumbing/charts.py — ChartRepository.value_paths → SpecError listing missing files">value_paths</span></td></tr>
+            <tr><td class="mono">profiles.*.values</td><td class="mono">ProfileSpec.values</td><td><code>list[str]</code> = <code>["values.yaml"]</code></td><td><span class="ref" data-tip="services/domain/spec.py — chart-relative values validator">values_must_be_relative</span>: absolute path or <code>..</code> ⇒ ValueError; existence checked later by <span class="ref" data-tip="services/domain/charts.py — ChartRepository.value_paths">value_paths</span></td></tr>
             <tr><td class="mono">profiles.*.helmTest</td><td class="mono">ProfileSpec.helm_test</td><td><code>bool</code> = true</td><td>false ⇒ install only, skip rollout-wait + helm test (Sandbox path)</td></tr>
             <tr><td class="mono">profiles.*.checks</td><td class="mono">ProfileSpec.checks</td><td><code>list[CheckSpec]</code> = []</td><td>CheckSpec: <code>name</code> required, <code>type</code>=&quot;helm-test&quot;, <code>description</code> optional</td></tr>
             <tr><td class="mono">profiles.*.timeout</td><td class="mono">ProfileSpec.timeout</td><td><code>str</code> = &quot;10m&quot;</td><td>helm-style duration, forwarded verbatim to helm/kubectl</td></tr>
@@ -804,22 +804,22 @@ for entry in service.install_plan(chart, profile):
 
         <h3 class="sub">Loading path in detail — what raises where</h3>
         <div class="seq">
-          <div class="sq"><div class="who"><span class="ref" data-tip="plumbing/charts.py — ChartRepository.get(name)">ChartRepository.get(name)</span></div><div class="what"><code>charts/&lt;name&gt;/Chart.yaml</code> must exist ⇒ else <code>ChartNotFoundError</code>. Then the guard rail: <code>Chart.yaml name</code> must equal the directory name ⇒ else <code>SpecError</code> <em>(catches copy-pasted chart dirs)</em></div></div>
+          <div class="sq"><div class="who"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get_managed(name)">ChartRepository.get_managed(name)</span></div><div class="what"><code>get()</code> first loads a generic <code>HelmChart</code> through the strict metadata loader and checks metadata name against the directory; <code>get_managed()</code> then requires and composes <code>test-spec.yaml</code>. Library charts remain loadable through <code>get()</code>.</div></div>
           <div class="sq"><div class="who">load_test_spec(path)</div><div class="what">missing file ⇒ <code>SpecError: missing test spec</code> · unreadable ⇒ wrapped OSError · non-mapping YAML ⇒ <code>SpecError: must contain a YAML mapping</code></div></div>
           <div class="sq"><div class="who">TestSpec.model_validate</div><div class="what">any pydantic ValueError (unknown key, wrong type, non-relative values path) ⇒ <code>SpecError: invalid test spec &lt;path&gt;: &lt;pydantic detail&gt;</code> — one wrapped error type for the whole boundary</div></div>
           <div class="sq"><div class="who">spec.profile(profile)</div><div class="what">unknown profile ⇒ the helpful error listing <em>sorted available profiles</em> — the CLI surfaces it verbatim</div></div>
           <div class="sq"><div class="who">repository.value_paths(chart, profile)</div><div class="what">every values file must exist on disk ⇒ else <code>SpecError: missing values file(s) for harbor:routed: …</code> — caught at plan-walk time, before helm runs</div></div>
-          <div class="sq"><div class="who">DependencyResolver.install_plan</div><div class="what">DFS over <code>requires</code> (below) ⇒ ordered <span class="ref" data-tip="plumbing/graph.py:15 — @dataclass(frozen) PlanEntry(chart, profile, target=False)">PlanEntry</span> list, dependencies first, target last</div></div>
+          <div class="sq"><div class="who">DependencyResolver.install_plan</div><div class="what">DFS over <code>requires</code> (below) ⇒ ordered <span class="ref" data-tip="services/domain/graph.py — @dataclass(frozen) PlanEntry(chart, profile, target=False)">PlanEntry</span> list, dependencies first, target last</div></div>
         </div>
 
-        <h3 class="sub">The DFS — <span class="ref" data-tip="plumbing/graph.py — DependencyResolver.install_plan(chart, profile)">install_plan</span> mechanics <span style="font-weight:500;font-size:12px;color:var(--muted)">(code-side deep dive, incl. the second graph in graph.py: <a href="#plumbing/graph" style="color:var(--blue)">Plumbing → dependency graphs</a>)</span></h3>
+        <h3 class="sub">The DFS — <span class="ref" data-tip="services/domain/graph.py — DependencyResolver.install_plan(chart, profile)">install_plan</span> mechanics <span style="font-weight:500;font-size:12px;color:var(--muted)">(code-side deep dive: <a href="#plumbing/graph" style="color:var(--blue)">Shared domain → dependency graphs</a>)</span></h3>
         <div class="two-col">
           <div class="block"><h4>Algorithm (post-order DFS, keyed by (chart, profile))</h4>
             <ul>
               <li><b>permanent</b> set = fully emitted nodes: re-visits short-circuit, so shared deps appear once</li>
               <li><b>temporary</b> stack = the current descent path: hitting a key already on it is a cycle ⇒ <code>DependencyCycleError: dependency cycle detected: a:minimal -&gt; b:minimal -&gt; a:minimal</code> — the message is the full <code>chart:profile</code> chain</li>
               <li>each node appended <i>after</i> its requires ⇒ dependencies always install first</li>
-              <li><span class="ref" data-tip="plumbing/graph.py:110 — _dedupe_keep_last_target(entries)">_dedupe_keep_last_target</span>: if the target chart also appears as someone's dependency, the earlier entry is dropped and the final <code>target=True</code> entry kept — the target is installed exactly once, and last</li>
+              <li><span class="ref" data-tip="services/domain/graph.py:110 — _dedupe_keep_last_target(entries)">_dedupe_keep_last_target</span>: if the target chart also appears as someone's dependency, the earlier entry is dropped and the final <code>target=True</code> entry kept — the target is installed exactly once, and last</li>
               <li>same chart under two <i>different</i> profiles = two distinct plan entries (key is the pair, not the chart)</li>
             </ul>
           </div>
@@ -845,21 +845,21 @@ for entry in service.install_plan(chart, profile):
 
       <!-- validatespec -->
       <div class="panel" id="svc-validatespec">
-        <div class="phead"><h2>validate-spec.yaml → <span class="ref" data-tip="plumbing/validate_spec.py:62 — class ValidateSpec(BaseModel)">ValidateSpec</span></h2><span class="loc">plumbing/validate_spec.py 166 · services/validate/worklist.py 438</span><span class="pill p-amber">domain contract</span></div>
+        <div class="phead"><h2>validate-spec.yaml → <span class="ref" data-tip="services/validate/domain/spec.py — class ValidateSpec(BaseModel)">ValidateSpec</span></h2><span class="loc">services/validate/domain/spec.py · catalog.py · planner.py · compiler.py</span><span class="pill p-green">validation-owned contract</span></div>
         <p class="oneliner">The per-chart <b>static validation contract</b>: which envs exist, which values overlays each renders with, what namespace to template against, and which changed files trigger which envs. Consulted by <code>validate run</code> only — the single-row commands (<code>render</code>/<code>schema</code>/<code>policy</code>) take explicit <code>--values</code> and never read it.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to worklist rows</div>
           <div class="cnode c-store">charts/&lt;name&gt;/<br>validate-spec.yaml</div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="plumbing/validate_spec.py:159 — load_validate_spec(path)">load_validate_spec</span><small>SpecError · version 1 only</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/validate/domain/spec.py — load_validate_spec(path)">load_validate_spec</span><small>SpecError · version 1 only</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/validate_spec.py:62 — class ValidateSpec(BaseModel)">ValidateSpec</span><small>4 model_validators (below)</small></div>
-          <div class="carrow">▸<small>changed files</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/validate/worklist.py — build_worklist(root, changed_files, all_charts)">build_worklist</span><small>trigger fanout</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/domain/models.py — ValidatableChart(chart: HelmChart, spec, spec_path)">ValidatableChart</span><small>composition over shared HelmChart</small></div>
+          <div class="carrow">▸<small>catalog + changed files</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/validate/planner.py — build_worklist">planner</span><small>trigger fanout + SelectionResult</small></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/validate_models.py:30 — @dataclass(frozen) WorklistRow(chart, env, release, namespace)">WorklistRow</span> ×N<small>chart × env</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/compiler.py — compile_validate_spec">CompiledValidateSpec</span><small>absolute validated runtime paths</small></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc2">ValidateRunner<small>render → schema → policy</small></div>
+          <div class="cnode c-svc2">ValidateRunner<small>WorklistRow ×N · render → schema → policy</small></div>
         </div>
 
         <div class="yml-title">Real spec ① — <code>charts/grafana/validate-spec.yaml</code> (namespace template + per-env values, verbatim; uat/prod elided)</div>
@@ -903,36 +903,37 @@ for entry in service.install_plan(chart, profile):
 <span class="k">schema_locations:</span> [<span class="v">…CRD catalogs…</span>]  <span class="c">extra kubeconform schema sources</span>
 <span class="k">triggers:</span>
   <span class="k">"envs/*.yaml":</span> <span class="v">match-by-basename</span>  <span class="c">sentinel: envs/dev.yaml ⇒ env "dev" (Path.stem, must be a declared env)</span>
+<span class="k">trigger_ignores:</span> [<span class="v">README.md</span>]        <span class="c">intentional chart-relative exclusions; retained in diagnostics</span>
 <span class="k">policies:</span>
-  <span class="k">extra:</span> [<span class="v">policies/strict/</span>]         <span class="c">→ PoliciesSpec.extra — additional kyverno policy dirs</span>
+  <span class="k">extra:</span> [<span class="v">policies/strict/</span>]         <span class="c">authoritative chart-relative paths; legacy repo-relative paths warn</span>
 <span class="k">skip:</span> <span class="v">true</span>                          <span class="c">chart opts out of validation entirely (dropped from usable specs)</span></div>
 
         <h3 class="sub">The four model validators — what fails at load time</h3>
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th class="mono">validator</th><th>rule</th><th>error you'll see</th></tr></thead>
           <tbody>
-            <tr><td class="mono"><span class="ref" data-tip="plumbing/validate_spec.py:89 — ValidateSpec._check_version">_check_version</span></td><td><code>version == 1</code>, hard</td><td><code>unsupported validate-spec version: 2 (only version 1 is supported)</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="plumbing/validate_spec.py:98 — ValidateSpec._check_helm_exclusive">_check_helm_exclusive</span></td><td>at most one of <code>helm_version</code> / <code>helm_bin</code></td><td><code>helm_version and helm_bin are mutually exclusive</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="plumbing/validate_spec.py:105 — ValidateSpec._check_environments">_check_environments</span></td><td>≥1 env; and without <code>namespace_template</code>, every env needs <code>namespace</code></td><td><code>namespace_template is unset; every environment must declare 'namespace'. missing: dev, test</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="plumbing/validate_spec.py:119 — ValidateSpec._check_triggers">_check_triggers</span></td><td>string trigger value must be exactly <code>match-by-basename</code>; list values must name declared envs</td><td><code>trigger 'values.yaml' references unknown environment(s): qa</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="services/validate/domain/spec.py — ValidateSpec._check_version">_check_version</span></td><td><code>version == 1</code>, hard</td><td><code>unsupported validate-spec version: 2 (only version 1 is supported)</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="services/validate/domain/spec.py — ValidateSpec._check_helm_exclusive">_check_helm_exclusive</span></td><td>at most one of <code>helm_version</code> / <code>helm_bin</code></td><td><code>helm_version and helm_bin are mutually exclusive</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="services/validate/domain/spec.py — ValidateSpec._check_environments">_check_environments</span></td><td>≥1 env; and without <code>namespace_template</code>, every env needs <code>namespace</code></td><td><code>namespace_template is unset; every environment must declare 'namespace'. missing: dev, test</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="services/validate/domain/spec.py — ValidateSpec._check_triggers">_check_triggers</span></td><td>trigger values reference declared envs; <code>trigger_ignores</code> remains chart-relative</td><td><code>trigger 'values.yaml' references unknown environment(s): qa</code></td></tr>
           </tbody>
         </table></div>
 
-        <h3 class="sub">Trigger resolution — changed file → env rows (<span class="ref" data-tip="services/validate/worklist.py — _envs_for_chart_file(spec, chart_rel)">worklist fanout</span>)</h3>
+        <h3 class="sub">Trigger resolution — changed file → env rows (<span class="ref" data-tip="services/validate/planner.py — build_worklist and _envs_for_chart_file">planner fanout</span>)</h3>
         <div class="seq">
           <div class="sq"><div class="who">repo-wide rules first</div><div class="what"><code>policies/**</code> edit ⇒ <b>every chart × every env</b> · validate-pipeline code paths (<code>src/chart_manager/services/validate/</code>, integrations <code>helm.py/kubeconform.py/kyverno.py</code>) ⇒ same full fanout · other <code>src/chart_manager/</code> paths ⇒ ignored</div></div>
-          <div class="sq"><div class="who">chart-wide files</div><div class="what"><code>charts/&lt;C&gt;/Chart.yaml</code>, <code>validate-spec.yaml</code>, or <code>charts/&lt;C&gt;/policies/**</code> ⇒ all of C's envs, <b>plus</b> every dependent chart's envs via the <span class="ref" data-tip="plumbing/graph.py:71 — build_helm_dependency_index(root) reads Chart.yaml dependencies[] directly">Chart.yaml reverse index</span> <em>(library-chart edits revalidate consumers)</em></div></div>
+          <div class="sq"><div class="who">chart-wide files</div><div class="what"><code>Chart.yaml</code>, <code>validate-spec.yaml</code>, or chart policies ⇒ all chart envs, plus dependents from <span class="ref" data-tip="services/domain/graph.py — build_helm_dependency_index uses ChartRepository and typed metadata">the shared typed metadata index</span>; validation no longer reparses <code>Chart.yaml</code>.</div></div>
           <div class="sq"><div class="who">glob match — union semantics</div><div class="what">every matching trigger contributes (<code>fnmatch</code>, chart-relative posix path); overlapping globs like <code>values.yaml</code> + <code>*.yaml</code> union, not last-wins</div></div>
           <div class="sq"><div class="who">match-by-basename</div><div class="what"><code>Path.stem</code>: <code>envs/dev.yaml</code> ⇒ env <code>dev</code> — only if <code>dev</code> is declared in <code>environments</code>, otherwise dropped</div></div>
-          <div class="sq alt"><div class="who">no trigger matched</div><div class="what"><code>triggers_strict: false</code> (default) ⇒ file silently ignored · <code>true</code> ⇒ fan out to <b>every</b> env of that chart (arc &amp; arc-runner-set opt in)</div></div>
-          <div class="sq"><div class="who">materialize</div><div class="what">each (chart, env) pair ⇒ <code>WorklistRow(chart, env, release=spec.release_name, namespace=<span class="ref" data-tip="plumbing/validate_spec.py:138 — resolve_namespace(spec, env): explicit env namespace wins, else Template(namespace_template).safe_substitute(env=env)">resolve_namespace</span>)</code> — e.g. grafana × prod ⇒ release <code>grafana</code>, namespace <code>lab-prod</code></div></div>
+          <div class="sq alt"><div class="who">ignored or unmatched</div><div class="what"><code>trigger_ignores</code> records intentional exclusions. Every other unmatched change is retained in <code>SelectionResult.unmatched_changes</code> and warned; <code>triggers_strict: true</code> additionally selects every environment. The compatibility default still selects none, but it is no longer silent.</div></div>
+          <div class="sq"><div class="who">materialize + compile</div><div class="what">each pair becomes a <code>WorklistRow</code>; <code>compiler.py</code> resolves required values, schemas and policies into cwd-independent absolute runtime paths before execution.</div></div>
         </div>
 
         <div class="two-col">
           <div class="block"><h4>Missing / broken specs (per-chart degradation)</h4>
             <ul>
               <li>no validate-spec.yaml ⇒ <b>warn + skip chart</b> (counted in <code>chart_count_unvalidated</code>), run continues</li>
-              <li>corrupt spec ⇒ recorded in <span class="ref" data-tip="services/validate/worklist.py — class WorklistBuildResult"><code>WorklistBuildResult.spec_errors</code></span> ⇒ whole run exits <b>3</b> (spec &gt; tool 2 &gt; fail 1 &gt; pass 0 — <span class="ref" data-tip="plumbing/validate_models.py — RunResult.exit_code() precedence">RunResult.exit_code</span>)</li>
+              <li>corrupt spec ⇒ retained by <code>ValidationCatalog</code>/<code>WorklistBuildResult.spec_errors</code> ⇒ whole run exits <b>3</b> (spec &gt; tool 2 &gt; fail 1 &gt; pass 0)</li>
               <li><code>skip: true</code> ⇒ silently excluded from usable specs, no warning</li>
             </ul>
           </div>
@@ -945,7 +946,7 @@ for entry in service.install_plan(chart, profile):
             </ul>
           </div>
         </div>
-        <div class="callout info"><b>Not consulted by:</b> <code>validate render</code> / <code>schema</code> / <code>policy</code> (single-row commands — you pass <code>--values</code>, <code>--namespace</code>, <code>--release</code>, <code>--helm-version</code> explicitly) · anything outside the validate context. The dynamic-test counterpart is <a href="#services/testspec" style="color:var(--blue)">test-spec.yaml</a> — the two files never reference each other.</div>
+        <div class="callout good"><b>Domain rule:</b> validation and managed-test configuration share <code>HelmChart</code> metadata through composition, not inheritance. <code>ValidatableChart = HelmChart + ValidateSpec</code>; <code>ManagedChart = HelmChart + TestSpec</code>. There is intentionally no shared <code>BaseSpec</code>: the two workflows evolve independently while consuming one authoritative Helm metadata source.</div>
       </div>
 
       <!-- sandbox -->
@@ -968,7 +969,7 @@ for entry in service.install_plan(chart, profile):
               <div class="sq"><div class="what"><span class="ref" data-tip="integrations/kind.py:70 — Kind.ensure_cluster(name, config)"><code>Kind.ensure_cluster</code></span> — absent/stopped/running all converge</div></div>
               <div class="sq"><div class="what"><span class="ref" data-tip="integrations/kubectl.py:204 — Kubectl.wait_apiserver_ready"><code>Kubectl.wait_apiserver_ready</code></span> — gates a documented docker-vs-apiserver race</div></div>
               <div class="sq"><div class="what"><span class="ref" data-tip="services/cluster_bootstrap.py:45 — bootstrap(cluster_name, *, helm, kind, kubectl, repository, progress, lint)"><code>cluster_bootstrap.bootstrap</code></span> — cilium CNI, shared with <code>sandbox up</code></div></div>
-              <div class="sq"><div class="what"><span class="ref" data-tip="plumbing/graph.py — DependencyResolver.install_plan"><code>resolver.install_plan</code></span> → per entry: dep-update (mtime-gated) → install → wait rollout → <code>helm test</code></div></div>
+              <div class="sq"><div class="what"><span class="ref" data-tip="services/domain/graph.py — DependencyResolver.install_plan"><code>resolver.install_plan</code></span> → per entry: dep-update (mtime-gated) → install → wait rollout → <code>helm test</code></div></div>
               <div class="sq"><div class="what">on any failure: <code>_diagnostics_on_failure</code> dumps kubectl state, then re-raises (fail-fast)</div></div>
             </div>
           </div>
@@ -1195,14 +1196,16 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
 
       <!-- validate -->
       <div class="panel" id="svc-validate">
-        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/validate/">validate/ pipeline</span></h2><span class="loc">services/validate/ · 7 modules · ~1,920 ln</span><span class="pill p-green">static validation</span></div>
-        <p class="oneliner">Static chart validation: <b>render → schema → policy</b> per (chart × env) row, concurrent across rows. The best-architected package in the repo — execution, progress display, and output rendering are fully separated, and since <code>app.py</code> landed the whole pipeline is drivable without a terminal.</p>
+        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/validate/">validate/ pipeline</span></h2><span class="loc">services/validate/ · catalog · planner · compiler · app · runner · phases · wire</span><span class="pill p-green">static validation</span></div>
+        <p class="oneliner">Static chart validation: <b>catalog → plan → compile → render → schema → policy → project</b>. Each validation target composes the shared <code>HelmChart</code> with a validation-owned <code>ValidateSpec</code>; runtime paths are compiled before execution, and the capability remains terminal-independent.</p>
         <div class="comm">
           <div class="comm-title">Communication path — the CLI hands over a request, not an assembled plan</div>
           <div class="cnode c-cli">CLI<small>validate run · render · schema · policy · clean</small></div>
           <div class="carrow">▸<small>RunRequest / SingleRequest</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/app.py:149 — class ValidateApp">ValidateApp</span><small>worklist · filters · RowConfig · helm grouping · retention</small></div>
-          <div class="carrow">▸<small>RowConfig[] + Helm/Kubeconform/Kyverno it builds per group</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/catalog.py · planner.py · compiler.py">catalog → planner → compiler</span><small>ValidatableChart · SelectionResult · CompiledValidateSpec</small></div>
+          <div class="carrow">▸<small>validated RowConfig[]</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/app.py — class ValidateApp">ValidateApp</span><small>binding groups · fail-fast policy · retention</small></div>
+          <div class="carrow">▸</div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/validate/runner.py:63 — class ValidateRunner">ValidateRunner</span><small>ThreadPoolExecutor</small></div>
           <div class="carrow">▸<small>per row</small></div>
           <div class="cgroup"><div class="cnode c-svc2"><span class="ref" data-tip="services/validate/phases.py — render()">phases.render</span></div><div class="cnode c-svc2"><span class="ref" data-tip="services/validate/phases.py — schema()">phases.schema</span></div><div class="cnode c-svc2"><span class="ref" data-tip="services/validate/phases.py — policy()">phases.policy</span></div></div>
@@ -1212,15 +1215,18 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
           <div class="cnode c-ext">helm · kubeconform · kyverno<small>mise-pinned versions</small></div>
         </div>
         <div class="two-col">
-          <div class="block"><h4>The seven modules</h4>
+          <div class="block"><h4>Responsibility map</h4>
             <ul>
-              <li><b><span class="ref" data-tip="services/validate/app.py · 404 ln · class ValidateApp + default_namespace/default_workers/resolve_workers/new_run_id/RunnerSpec">app</span></b> <span class="pill p-green">the entry point</span> — <code>run</code> / <code>single</code> / <code>cleanup</code>. Owns everything that used to be in the Typer callback: changed-files precedence, worklist + filters, <code>RowConfig</code> assembly, <code>(helm_version, helm_bin)</code> grouping, aggregation, <code>RunResult</code> construction, run-id minting and artifact retention</li>
+              <li><b><span class="ref" data-tip="services/validate/catalog.py">catalog</span></b> — loads repository charts through <code>ChartRepository</code> and composes <code>ValidatableChart(HelmChart, ValidateSpec, spec_path)</code>; best-effort scans retain per-chart errors</li>
+              <li><b><span class="ref" data-tip="services/validate/planner.py">planner</span></b> — dependency fanout, triggers, ignores and explicit filters; returns rows plus structured selection diagnostics</li>
+              <li><b><span class="ref" data-tip="services/validate/compiler.py">compiler</span></b> — resolves authored values, policy and schema paths into absolute, validated runtime inputs; removes process-cwd interpretation</li>
+              <li><b><span class="ref" data-tip="services/validate/app.py — class ValidateApp">app</span></b> <span class="pill p-green">the entry point</span> — changed-files precedence, orchestration, Helm binding groups, fail-fast policy, aggregation and retention</li>
               <li><b><span class="ref" data-tip="services/validate/requests.py · 149 ln · SingleRequest · RunRequest · RunOutcome · ValidateInputError">requests</span></b> — the caller-facing vocabulary: two frozen request types that validate their own fields in <code>__post_init__</code>, one <code>RunOutcome</code> carrying <code>.exit_code</code>/<code>.ok</code>, and <code>ValidateInputError</code> so a bad phase name is rejected identically for every surface</li>
-              <li><b><span class="ref" data-tip="services/validate/worklist.py · 438 ln">worklist</span></b> (pure) — builds rows; git-driven fanout via the Chart.yaml reverse index, so a library edit revalidates every dependent</li>
               <li><b><span class="ref" data-tip="services/validate/phases.py · 188 ln">phases</span></b> (pure fns) — one per gate, each returns <code>PhaseResult</code>; runner owns short-circuiting, not the phase</li>
-              <li><b><span class="ref" data-tip="services/validate/runner.py · 340 ln">runner</span></b> — per-row DAG: render FAIL ⇒ schema+policy SKIP; across rows never fail-fast (full failure surface in one run); row timeouts</li>
-              <li><b><span class="ref" data-tip="services/validate/progress.py · 95 ln · ProgressDisplay Protocol + NullDisplay">progress</span></b> — a headless <b>matrix</b> port: <code>start</code> pre-sizes rows × phases and each event addresses one <code>(row, phase)</code> cell. The Rich live-table and plain-narration displays live in <code>cli/validate_progress.py</code></li>
-              <li><b><span class="ref" data-tip="services/validate/wire.py · 306 ln · JSON_SCHEMA_VERSION · to_json · to_markdown">wire</span></b> — pure RunResult → markdown ($GITHUB_STEP_SUMMARY) / JSON (<code>JSON_SCHEMA_VERSION=1</code>). The Rich table renderer is <code>cli/validate_render.py</code></li>
+              <li><b><span class="ref" data-tip="services/validate/runner.py">runner</span></b> — per-row DAG, dependency prefetch, serial/concurrent parity, row timeouts and truthful <code>fail_fast</code>; preparation and execution failures become row outcomes when disabled</li>
+              <li><b><span class="ref" data-tip="services/validate/progress.py — ProgressFinalizer">progress</span></b> — <code>ProgressFinalizer</code> couples terminal result creation with exactly one terminal event, preventing stale live-table cells</li>
+              <li><b><span class="ref" data-tip="services/validate/wire.py — to_json · to_markdown">wire</span></b> — additive JSON/Markdown projections include warnings, requested and unmatched filters, ignored/unmatched changes and no-work reasons</li>
+              <li><b><span class="ref" data-tip="services/validate/worklist.py">worklist</span></b> — compatibility facade over the extracted catalog/planner/compiler responsibilities</li>
             </ul>
             <p style="font-size:12px;color:var(--muted);margin-top:6px"><b>Gone from this package:</b> <code>rendering.py</code>, split into <code>wire.py</code> + <code>cli/validate_render.py</code>.</p>
           </div>
@@ -1232,26 +1238,29 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
 <span class="m">on_event</span>(row, phase, status, secs) <span class="r">← worker callbacks</span></div>
             <ul style="margin-top:8px">
               <li class="good">Display-agnostic runner + versioned JSON = ready for the host project's CI as-is</li>
-              <li class="good">The assembly (worklist → <span class="ref" data-tip="services/validate/runner.py:40 — class RowConfig">RowConfig</span>, env resolution) came <b>down</b> into <code>app.py</code>; <code>cli/validate.py</code> fell 1,079 → 755 ln and is now flags plus formatting</li>
+              <li class="good">Output identifiers are validated as safe path segments; every resolved case directory must remain beneath the output root and is cleared before rendering, so stale manifests cannot leak between runs</li>
+              <li class="good"><code>--fail-fast/--no-fail-fast</code> exposes the execution contract. Disabled is the default and converts prefetch, binding, runner construction and row failures into outcomes while independent work continues; enabled records later rows as <code>NOT_RUN</code></li>
               <li class="good"><span class="ref" data-tip="services/validate/runner.py — ValidateRunner sets adapter timeouts in __init__, not in run()">ValidateRunner</span> sets its adapters' timeouts in <code>__init__</code> rather than writing public attributes on adapters shared across worker threads</li>
             </ul>
           </div>
         </div>
         <div class="callout info"><b>The per-chart contract, validate-spec.yaml, now has its own panel:</b> <a href="#services/validatespec" style="color:var(--blue);font-weight:700">Domain contracts → validate-spec.yaml</a> — annotated real specs (grafana, arc), the full field/validator table, the trigger-resolution flow, and the helm-binding grouping. Short version: <code>version: 1</code> envelope · per-env values + namespace or <code>namespace_template ${env}</code> · trigger globs → env fanout · consulted by <code>validate run</code> only.</div>
 
-        <h3 class="sub">The data spine — <code>plumbing/validate_models.py</code> (frozen stdlib dataclasses, pydantic stays at IO) <span style="font-weight:500;font-size:12px;color:var(--muted)">— dedicated panel: <a href="#plumbing/models" style="color:var(--blue)">Plumbing → validate models</a></span></h3>
+        <h3 class="sub">The data spine — <code>services/validate/domain/models.py</code> (frozen stdlib dataclasses; pydantic stays at authored-YAML IO)</h3>
         <div class="two-col">
           <div class="block"><h4>Shapes</h4>
-            <div class="api"><span class="ref" data-tip="plumbing/validate_models.py:30 — WorklistRow">WorklistRow</span>:  <span class="m">chart</span> · <span class="m">env</span> · <span class="m">release</span> · <span class="m">namespace</span>
-<span class="ref" data-tip="plumbing/validate_models.py:40 — PhaseResult">PhaseResult</span>: <span class="m">phase</span> <span class="r">render|schema|policy</span>
+            <div class="api"><span class="ref" data-tip="services/validate/domain/models.py — ValidatableChart">ValidatableChart</span>: <span class="m">chart: HelmChart</span> · <span class="m">spec: ValidateSpec</span> · <span class="m">spec_path</span>
+<span class="ref" data-tip="services/validate/domain/models.py — SelectionResult">SelectionResult</span>: <span class="m">rows</span> · <span class="m">unmatched filters</span> · <span class="m">ignored/unmatched changes</span> · <span class="m">warnings</span>
+<span class="ref" data-tip="services/validate/domain/models.py — WorklistRow">WorklistRow</span>:  <span class="m">chart</span> · <span class="m">env</span> · <span class="m">release</span> · <span class="m">namespace</span>
+<span class="ref" data-tip="services/validate/domain/models.py — PhaseResult">PhaseResult</span>: <span class="m">phase</span> <span class="r">render|schema|policy</span>
              <span class="m">status</span> <span class="r">PASS|FAIL|SKIP|NOT_RUN</span>
              <span class="m">detail</span> · <span class="m">artifacts</span>: (Path, …)
              <span class="m">error_type</span> <span class="r">tool|spec|None</span>
              <span class="m">elapsed_seconds</span> <span class="r">set by runner, shown with --timings</span>
-<span class="ref" data-tip="plumbing/validate_models.py:57 — RowResult">RowResult</span>:   <span class="m">row</span> + <span class="m">phases</span>: {name → PhaseResult}
-<span class="ref" data-tip="plumbing/validate_models.py:65 — RunResult">RunResult</span>:   <span class="m">rows</span> · <span class="m">rendered_root</span> · <span class="m">spec_errors</span></div>
+<span class="ref" data-tip="services/validate/domain/models.py — RowResult">RowResult</span>:   <span class="m">row</span> + <span class="m">phases</span>: {name → PhaseResult}
+<span class="ref" data-tip="services/validate/domain/models.py — RunResult">RunResult</span>:   <span class="m">rows</span> · <span class="m">rendered_root</span> · <span class="m">spec_errors</span></div>
           </div>
-          <div class="block"><h4>Exit-code contract — <span class="ref" data-tip="plumbing/validate_models.py — RunResult.exit_code()">RunResult.exit_code()</span></h4>
+          <div class="block"><h4>Exit-code contract — <span class="ref" data-tip="services/validate/domain/models.py — RunResult.exit_code()">RunResult.exit_code()</span></h4>
             <div class="ft-wrap"><table class="ft">
               <thead><tr><th>code</th><th>meaning</th><th>trigger</th></tr></thead>
               <tbody>
@@ -1264,7 +1273,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
             <p style="font-size:12px;color:var(--muted)">Precedence is strict (3 &gt; 2 &gt; 1 &gt; 0): CI can distinguish &quot;the chart is wrong&quot; from &quot;the tooling broke&quot; from &quot;someone broke a spec&quot;.</p>
           </div>
         </div>
-        <div class="callout good"><b>Row DAG:</b> render FAIL ⇒ schema + policy get status SKIP (runner decides, phases stay pure); across rows there is no fail-fast — one run shows the <i>entire</i> failure surface. Empty policy dirs ⇒ policy phase SKIP by design (explicit-absence, not an error).</div>
+        <div class="callout good"><b>Execution and diagnostics:</b> render FAIL ⇒ schema + policy SKIP. With fail-fast disabled, independent rows continue; with it enabled, later rows finalize as NOT_RUN. Unknown explicit chart/environment filters are input errors, while legitimate change-detection no-ops remain successful. Every terminal PASS/FAIL/SKIP/NOT_RUN result emits exactly one terminal progress event.</div>
       </div>
 
       <!-- promote -->
@@ -1706,7 +1715,7 @@ promo_correlation_id = flux-repo PR</div>
 
         <h3 class="sub">Method-by-method detail</h3>
         <div class="seq">
-          <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:30 — changed_charts(base='origin/main')">changed_charts(base)</span></div><div class="what"><span class="ref" data-tip="integrations/git.py — Git.changed_charts"><code>Git.changed_charts</code></span> maps diff paths to <code>charts/&lt;name&gt;/</code> prefixes, then intersects with <span class="ref" data-tip="plumbing/charts.py — ChartRepository.list_names"><code>ChartRepository.list_names()</code></span> — deleted or renamed chart dirs can't produce phantom work. Default base <code>origin/main</code></div></div>
+          <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:30 — changed_charts(base='origin/main')">changed_charts(base)</span></div><div class="what"><span class="ref" data-tip="integrations/git.py — Git.changed_charts"><code>Git.changed_charts</code></span> maps diff paths to <code>charts/&lt;name&gt;/</code> prefixes, then intersects with <span class="ref" data-tip="services/domain/charts.py — ChartRepository.list_names"><code>ChartRepository.list_names()</code></span> — deleted or renamed chart dirs can't produce phantom work. Default base <code>origin/main</code></div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:35 — install_source_chart(chart_name, profile, namespace)">install_source_chart</span></div><div class="what">test-spec-driven: profile's <code>values</code> + <code>timeout</code> → create ns → <span class="ref" data-tip="integrations/helm.py:98 — Helm.dependency_update"><code>dependency_update</code></span> (unconditional, not the mtime-gated variant — CI runners start cold) → <span class="ref" data-tip="integrations/helm.py:158 — Helm.upgrade_install"><code>upgrade_install</code></span> → <code>helm test</code> if <code>profile.helm_test</code>; rc≠0 ⇒ <code>ExternalCommandError</code> with stderr</div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:60 — upgrade_from_oci(chart_name, profile, namespace, oci_ref)">upgrade_from_oci</span></div><div class="what">phase 1 installs the OCI ref <b>with the same profile values</b> (so the baseline release matches prod config, not chart defaults) — note: no dep-update needed, the published artifact is self-contained. Phase 2 dep-updates the <i>source</i> chart and <code>helm upgrade</code>s to it. Phase 3 <code>helm test</code>s the upgraded release</div></div>
         </div>
@@ -1785,25 +1794,25 @@ promo_correlation_id = flux-repo PR</div>
       <!-- queries -->
       <div class="panel" id="svc-queries">
         <div class="phead"><h2><span class="ref" data-tip="services/charts.py:9 — class ChartService">ChartService</span> · <span class="ref" data-tip="services/dependencies.py:21 — class DependencyService">DependencyService</span></h2><span class="loc">charts.py 22 · dependencies.py 55</span><span class="pill p-slate">core queries</span></div>
-        <p class="oneliner">Read-only facades over the domain model, existing purely so the CLI never imports <code>plumbing</code> directly. Under twenty lines each — layering ceremony, not behavior.</p>
+        <p class="oneliner">Read-only facades over the shared chart domain. The CLI stays behind a service capability while the actual chart vocabulary lives in <code>services/domain/</code>.</p>
         <div class="comm">
           <div class="comm-title">Communication path</div>
           <div class="cnode c-cli">CLI<small>charts list·spec · deps plan·checks·reverse</small></div>
           <div class="carrow">▸</div>
           <div class="cgroup"><div class="cnode c-svc">ChartService</div><div class="cnode c-svc">DependencyService</div></div>
           <div class="carrow">▸<small>passthrough</small></div>
-          <div class="cgroup"><div class="cnode c-warn">ChartRepository<small>plumbing (domain!)</small></div><div class="cnode c-warn">DependencyResolver<small>plumbing (domain!)</small></div></div>
+          <div class="cgroup"><div class="cnode c-svc2">ChartRepository<small>services/domain</small></div><div class="cnode c-svc2">DependencyResolver<small>services/domain</small></div></div>
           <div class="carrow">▸</div>
           <div class="cnode c-store">charts/*/Chart.yaml<br>+ test-spec.yaml</div>
         </div>
-        <div class="callout warn"><b>Teardown decision:</b> dissolve them (let surfaces query a proper <code>domain/</code> package directly) or keep them as the query facade — but pick one convention. Their existence is the strongest evidence that the domain model is misfiled under "plumbing" — see the <a href="#plumbing/charts" style="color:inherit;font-weight:700">Plumbing tab</a>, whose sidebar makes the infra-vs-domain split explicit.</div>
+        <div class="callout good"><b>Current convention:</b> keep these small query facades for surface isolation, while <code>services/domain/</code> owns behavior and types. No repository Protocol was introduced: the filesystem repository remains concrete until a second implementation creates a real abstraction need.</div>
 
         <h3 class="sub">The complete surface (both files, in full — this is all of it)</h3>
         <div class="two-col">
           <div class="block"><h4><span class="ref" data-tip="services/charts.py:9 — class ChartService(root)">ChartService</span></h4>
             <div class="api"><span class="m">list_charts</span>()      <span class="r">→ repository.list_names()</span>
-<span class="m">get_chart</span>(name)    <span class="r">→ repository.get(name) → Chart</span>
-<span class="r">Chart(frozen): name · path · chart_yaml: dict · spec: TestSpec</span></div>
+<span class="m">get_chart</span>(name)    <span class="r">→ repository.get_managed(name) → ManagedChart</span>
+<span class="r">ManagedChart = HelmChart + TestSpec</span></div>
             <p style="font-size:12px;color:var(--muted);margin-top:6px">Backs <code>charts list</code> and <code>charts spec</code> (which pretty-prints <code>chart.spec</code>).</p>
           </div>
           <div class="block"><h4><span class="ref" data-tip="services/dependencies.py:21 — class DependencyService(root)">DependencyService</span></h4>
@@ -1858,13 +1867,16 @@ promo_correlation_id = flux-repo PR</div>
 <span class="m ref" data-tip="integrations/helm.py:253 — Helm.upgrade">upgrade</span> · <span class="m ref" data-tip="integrations/helm.py:149 — Helm.lint">lint</span> · <span class="m ref" data-tip="integrations/helm.py:279 — Helm.template">template</span> · <span class="m ref" data-tip="integrations/helm.py:356 — Helm.test">test</span> <span class="r">→ CommandResult</span>
 <span class="m ref" data-tip="integrations/helm.py:383 — Helm.list_releases">list_releases</span> <span class="r">→ [ReleaseInfo]</span> · <span class="m ref" data-tip="integrations/helm.py:429 — Helm.get_values">get_values</span> · <span class="m ref" data-tip="integrations/helm.py:472 — Helm.status">status</span>
 
-<span class="s"># the pure freshness predicates moved down to plumbing:</span>
-<span class="r"># <span class="ref" data-tip="plumbing/chart_deps.py:28 — is_local_chart · :36 — chart_has_dependencies · :54 — lock_dep_count · :75 — deps_are_fresh">chart_deps.deps_are_fresh / lock_dep_count / chart_has_dependencies</span></span></div>
+<span class="s"># Helm dependency policy lives in the shared chart domain:</span>
+<span class="r"># <span class="ref" data-tip="services/domain/chart_deps.py — chart_has_dependencies · deps_are_fresh">chart_deps.deps_are_fresh / chart_has_dependencies</span></span>
+<span class="s"># local-vs-remote reference classification is adapter-owned:</span>
+<span class="r"># <span class="ref" data-tip="integrations/helm.py — _is_local_chart">integrations.helm._is_local_chart</span></span></div>
           </div>
           <div class="block"><h4>Load-bearing design details</h4>
             <ul>
               <li class="good"><b>Revision-diff upgrade detection</b>: helm holds the revision steady on no-op upgrades — a stable public contract — so "no-change" lets lab skip rollout waits</li>
               <li class="good"><b>Dedupe lock held across the subprocess</b>: one chart validated across 5 envs in parallel fetches deps once; concurrent callers wait</li>
+              <li class="good"><b>Identity-aware freshness</b>: the gate compares declared/locked names, versions and aliases with expanded charts or bounded <code>.tgz</code> metadata inspection; malformed, unsafe or ambiguous state is stale and falls back to Helm</li>
               <li class="good"><code>verbose=False</code> mode exists specifically so parallel validate runs don't interleave output</li>
               <li class="good">Version resolution: no pin ⇒ plain <code>helm</code> on PATH; <code>version=</code> ⇒ <code>mise where helm@X</code>, memoized per (runner, version) so concurrent workers pay one probe; <code>binary=</code> wins outright. The memo is a <code>WeakKeyDictionary</code> keyed by the runner plus a lock, not a module-level <code>@cache</code> — a process-lifetime cache keyed on a mutable object leaked across tests and across containers</li>
               <li class="good"><code>status()</code> and its <code>--debug</code> rerun now honor <code>self.timeout</code>; they previously ignored it and could hang a bounded run</li>
@@ -2091,12 +2103,12 @@ promo_correlation_id = flux-repo PR</div>
       <button data-item="commands">CommandRunner</button>
       <button data-item="errors">error taxonomy</button>
       <button data-item="duration">parse_duration</button>
-      <button data-item="pure">text · chart_deps</button>
-      <div class="grp">Domain model (misfiled)</div>
-      <button data-item="charts">ChartRepository</button>
-      <button data-item="graph">dependency graphs</button>
-      <button data-item="models">validate models</button>
-      <button data-item="spec">spec · validate_spec</button>
+      <button data-item="pure">text · paths · yaml</button>
+      <div class="grp">Service domains</div>
+      <button data-item="charts">shared chart domain</button>
+      <button data-item="graph">dependency policy</button>
+      <button data-item="models">validate domain</button>
+      <button data-item="spec">domain boundaries</button>
     </div>
 
     <div class="panelbox" id="plb-panels">
@@ -2184,9 +2196,9 @@ promo_correlation_id = flux-repo PR</div>
           <thead><tr><th class="mono">class</th><th>raise sites</th><th>character</th></tr></thead>
           <tbody>
             <tr><td class="mono">ChartManagerError</td><td>~50 sites, everywhere above plumbing: service guard rails (expose port parsing, monitor/test <code>__post_init__</code> budget checks, promote's path-escape guard, scanner/editor YAML parse, grafana, kyverno's parse failures — which used to raise a bare <code>ValueError</code>), integrations that detect semantic failure (kind, kubectl), and <a href="#plumbing/duration" style="color:var(--blue)">parse_duration</a></td><td>the general-purpose &quot;operator did/configured something wrong&quot; error</td></tr>
-            <tr><td class="mono">SpecError</td><td><b>only plumbing itself</b>: spec.py (missing/invalid test-spec, unknown profile), validate_spec.py (invalid validate-spec, unknown env), charts.py (name≠dir, missing values files)</td><td>every spec-boundary failure funnels into one type — validate maps it to exit 3</td></tr>
-            <tr><td class="mono">ChartNotFoundError</td><td>exactly one: <span class="ref" data-tip="plumbing/charts.py — raise ChartNotFoundError(f&quot;chart not found: {name}&quot;)">ChartRepository.get</span></td><td>a name that isn't a chart dir</td></tr>
-            <tr><td class="mono">DependencyCycleError</td><td>exactly one: <span class="ref" data-tip="plumbing/graph.py — raise DependencyCycleError(f&quot;dependency cycle detected: {cycle}&quot;)">install_plan's DFS</span></td><td>message carries the full <code>chart:profile</code> chain</td></tr>
+            <tr><td class="mono">SpecError</td><td>domain boundaries: <code>services/domain/spec.py</code> (missing/invalid test-spec, unknown profile), <code>services/validate/domain/spec.py</code> (invalid validate-spec, unknown env), <code>services/domain/charts.py</code> (metadata/name/value errors), and validation compilation (invalid or missing authored paths)</td><td>every spec-boundary failure funnels into one type — validate maps it to exit 3</td></tr>
+            <tr><td class="mono">ChartNotFoundError</td><td>exactly one: <span class="ref" data-tip="services/domain/charts.py — raise ChartNotFoundError(f&quot;chart not found: {name}&quot;)">ChartRepository.get</span></td><td>a name that isn't a chart dir</td></tr>
+            <tr><td class="mono">DependencyCycleError</td><td>exactly one: <span class="ref" data-tip="services/domain/graph.py — raise DependencyCycleError(f&quot;dependency cycle detected: {cycle}&quot;)">install_plan's DFS</span></td><td>message carries the full <code>chart:profile</code> chain</td></tr>
             <tr><td class="mono">ExternalCommandError</td><td>the <a href="#plumbing/commands" style="color:var(--blue)">kernel</a> (check-fail) plus integrations that post-process output (git, github, kyverno, kubectl, kubeconform, helm's JSON parses) and Ci/Sandbox promoting a <code>helm test</code> rc≠0. <code>.stderr</code>/<code>.returncode</code> are populated at every raise site now</td><td>&quot;a tool ran and failed&quot; — validate's phases catch it as <code>error_type=&quot;tool&quot;</code></td></tr>
             <tr><td class="mono">MissingToolError</td><td>exactly one: the kernel's <code>except FileNotFoundError</code>. Subclasses <code>ExternalCommandError</code></td><td>&quot;the binary isn't installed&quot; — the <b>only</b> source of exit 127</td></tr>
             <tr><td class="mono">CommandTimeout</td><td>exactly one: the kernel's <code>except subprocess.TimeoutExpired</code>. Subclasses <code>ExternalCommandError</code></td><td>&quot;we stopped waiting&quot; — carries the partial output salvaged from the killed child</td></tr>
@@ -2197,7 +2209,7 @@ promo_correlation_id = flux-repo PR</div>
         <div class="seq">
           <div class="sq"><div class="who"><span class="ref" data-tip="cli/main.py:649 — def main(): try app() except …">cli/main.py main()</span> — the funnel</div><div class="what"><code>except ChartManagerError</code> ⇒ <code>error: &lt;msg&gt;</code> in red ⇒ <b>exit 1</b>. The <i>only</i> top-level catch: any subclass from any layer, any command, ends here. Subprocess output is <code>escape()</code>d before it reaches Rich, so a manifest containing <code>[bold]</code> can no longer raise a <code>MarkupError</code> out of the error handler itself</div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="cli/main.py:660 — except MissingToolError as exc → exit 127 (ordered before the ChartManagerError catch)">cli/main.py main()</span> — missing binary</div><div class="what"><code>except MissingToolError</code> ⇒ <b>exit 127</b> (shell convention), caught <i>before</i> the general <code>ChartManagerError</code> arm. It is now a <b>type</b>, not a sniffed <code>FileNotFoundError</code> — so a missing data file exits 1 like any other operator error, and &quot;helm isn't installed&quot; still never masquerades as &quot;helm failed&quot;</div></div>
-          <div class="sq alt"><div class="who">validate — its own regime</div><div class="what">phases catch <code>ExternalCommandError</code> ⇒ <code>PhaseResult(error_type=&quot;tool&quot;)</code>; spec failures ⇒ <code>spec_errors</code> / <code>error_type=&quot;spec&quot;</code> ⇒ <span class="ref" data-tip="plumbing/validate_models.py — RunResult.exit_code(): 3 > 2 > 1 > 0">RunResult.exit_code()</span> precedence <b>3 (spec) &gt; 2 (tool) &gt; 1 (FAIL) &gt; 0</b> via <code>sys.exit</code> — errors become data, the run never aborts mid-matrix. Details: <a href="#plumbing/models" style="color:var(--blue)">validate models</a></div></div>
+          <div class="sq alt"><div class="who">validate — its own regime</div><div class="what">phases catch <code>ExternalCommandError</code> ⇒ <code>PhaseResult(error_type=&quot;tool&quot;)</code>; spec failures ⇒ <code>spec_errors</code> / <code>error_type=&quot;spec&quot;</code> ⇒ <span class="ref" data-tip="services/validate/domain/models.py — RunResult.exit_code(): 3 > 2 > 1 > 0">RunResult.exit_code()</span> precedence <b>3 (spec) &gt; 2 (tool) &gt; 1 (FAIL) &gt; 0</b> via <code>sys.exit</code> — errors become data, the run never aborts mid-matrix. Details: <a href="#plumbing/models" style="color:var(--blue)">validate models</a></div></div>
           <div class="sq alt"><div class="who">local best-effort catches</div><div class="what">a handful of sites catch-and-degrade instead of propagating: <span class="ref" data-tip="services/expose.py:134 — ExposeService.apps_domain(): on failure fall back to APPS_DOMAIN_FALLBACK">ExposeService.apps_domain</span> falls back to <code>localhost</code> · <code>charts list</code> renders <code>&lt;no test-spec&gt;</code> per-row · sandbox's <code>_diagnostics_on_failure</code> catches <code>ExternalCommandError</code>, dumps kubectl diagnostics, then <b>re-raises</b> · <span class="ref" data-tip="services/helmrelease/report.py:57 — safe_events(fetch) — a diagnostics fetch must never replace the real failure">report.safe_events</span> swallows a failed diagnostics fetch so it can't replace the real failure · hr monitor/test record per-item failures and keep polling · lifecycle emission is non-fatal via <code>emit_non_fatal</code></div></div>
           <div class="sq"><div class="who">typer's own exits</div><div class="what">flag misuse raises <code>typer.BadParameter</code> (usage error, typer prints help-style) and some hr/validate commands exit via <code>typer.Exit(1)</code> after rendering results — both bypass the taxonomy by design; they are verdicts, not failures</div></div>
         </div>
@@ -2232,8 +2244,8 @@ promo_correlation_id = flux-repo PR</div>
 
       <!-- pure helpers -->
       <div class="panel" id="plb-pure">
-        <div class="phead"><h2>text.py · chart_deps.py</h2><span class="loc">plumbing/text.py 40 ln · plumbing/chart_deps.py 126 ln</span><span class="pill p-green">pure predicates — new</span></div>
-        <p class="oneliner">Two small modules that exist because of <b>where their callers were, not what they do</b>. Both are pure, both were extracted from a module that had no claim on them, and both are the cheap kind of correction: a move, not a rewrite.</p>
+        <div class="phead"><h2>text.py · paths.py · yaml_files.py</h2><span class="loc">chart_manager/plumbing/</span><span class="pill p-green">generic utilities</span></div>
+        <p class="oneliner">Post-cleanup plumbing contains domain-neutral mechanics only: bounded text, relative-path validation and generic YAML mapping loads. Helm chart dependency policy moved to the shared chart domain.</p>
 
         <div class="two-col">
           <div class="block"><h4><span class="ref" data-tip="plumbing/text.py:18 — truncate_lines(blob, max_lines) · :30 — truncate_bytes(blob, max_bytes)">text.py</span> — size caps for subprocess output</h4>
@@ -2244,37 +2256,34 @@ promo_correlation_id = flux-repo PR</div>
               <li>Consumed by <code>TestService</code> for pod logs (<code>pod_log_tail</code>, <code>pod_log_max_bytes</code>) and helm-test stdout (<code>helm_test_stdout_max_bytes</code>) — the budgets that keep <code>TestOutcome</code> bounded</li>
             </ul>
           </div>
-          <div class="block"><h4><span class="ref" data-tip="plumbing/chart_deps.py:28 — is_local_chart · :36 — chart_has_dependencies · :54 — lock_dep_count · :75 — deps_are_fresh">chart_deps.py</span> — chart-freshness predicates</h4>
-            <div class="api"><span class="m">is_local_chart</span>(chart_ref) <span class="r">→ bool</span>
-<span class="m">chart_has_dependencies</span>(chart_path) <span class="r">→ bool</span>
-<span class="m">lock_dep_count</span>(lock_path) <span class="r">→ int | None</span>
-<span class="m">deps_are_fresh</span>(chart_path) <span class="r">→ bool</span></div>
+          <div class="block"><h4><span class="ref" data-tip="plumbing/paths.py · plumbing/yaml_files.py">paths.py + yaml_files.py</span> — shared mechanics</h4>
+            <div class="api"><span class="m">ensure_relative</span>(values, label, relation) <span class="r">→ list[str]</span>
+<span class="m">load_yaml_file</span>(path) <span class="r">→ dict[str, Any]</span></div>
             <ul style="margin-top:8px">
-              <li>Lifted out of <code>integrations/helm.py</code>, which is otherwise an adapter over a subprocess. These are <b>filesystem predicates over one chart directory</b> — no helm binary, no <code>CommandRunner</code>, nothing to fake</li>
-              <li><code>deps_are_fresh</code> is the gate behind <code>dependency_update_if_stale</code>: Chart.lock mtime vs Chart.yaml, plus a declared-vs-materialized dependency count so a hand-edited lock can't pass</li>
-              <li class="good">Being pure, they are directly unit-testable without constructing an adapter — which is the whole reason the extraction was worth doing</li>
+              <li>Both are shared by independent domain schemas without importing chart or validation vocabulary back into plumbing</li>
+              <li>Strict metadata shape belongs to <code>services/domain/charts.py</code>; authored validation shape belongs to <code>services/validate/domain/spec.py</code></li>
             </ul>
           </div>
         </div>
-        <div class="callout info"><b>Both belong in the same bucket as <code>commands</code>/<code>errors</code>/<code>duration</code>:</b> genuine infrastructure, not the misfiled domain model. When <code>plumbing/</code> splits into <code>domain/</code> + <code>plumbing/</code>, these stay put.</div>
+        <div class="callout good"><b>Boundary complete:</b> chart, graph, test-spec and dependency policy live in <code>services/domain/</code>; validation schemas and outcomes live in <code>services/validate/domain/</code>. Layering tests prevent either from returning to plumbing.</div>
       </div>
 
       <!-- charts -->
       <div class="panel" id="plb-charts">
-        <div class="phead"><h2>Chart + ChartRepository</h2><span class="loc">plumbing/charts.py · 67 ln</span><span class="pill p-amber">domain (misfiled)</span></div>
-        <p class="oneliner">The filesystem gateway to <code>charts/</code>: directory scan → validated <code>Chart</code> aggregate. Every chart the tool ever touches is materialized here, with its test-spec loaded <b>eagerly</b> at <code>get()</code> time.</p>
+        <div class="phead"><h2>HelmChart · ManagedChart · ChartRepository</h2><span class="loc">services/domain/charts.py</span><span class="pill p-blue">shared chart domain</span></div>
+        <p class="oneliner">The filesystem gateway now separates generic Helm metadata from chart-manager test participation. <code>get()</code> returns a <code>HelmChart</code>; <code>get_managed()</code> explicitly adds a <code>TestSpec</code>.</p>
         <div class="comm">
           <div class="comm-title">Loading path</div>
           <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + test-spec.yaml</div>
           <div class="carrow">▸<small>scan / read</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/charts.py:21 — class ChartRepository(root)">ChartRepository</span><small>list_names · get · value_paths</small></div>
-          <div class="carrow">▸<small>eager load_test_spec</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="plumbing/charts.py:12 — @dataclass(frozen) Chart(name, path, chart_yaml, spec)">Chart</span><small>(frozen) name · path · chart_yaml: dict · spec: TestSpec</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/charts.py — class ChartRepository(root)">ChartRepository</span><small>list_names · get · get_managed · value_paths</small></div>
+          <div class="carrow">▸<small>strict load_chart_metadata</small></div>
+          <div class="cgroup"><div class="cnode c-svc2">HelmChart<small>path + ChartMetadata</small></div><div class="cnode c-svc2">ManagedChart<small>HelmChart + TestSpec</small></div></div>
           <div class="carrow">▸</div>
           <div class="cgroup"><div class="cnode c-svc2">DependencyResolver</div><div class="cnode c-svc2">Sandbox · Lab · Ci</div><div class="cnode c-svc2">ChartService</div></div>
         </div>
         <div class="two-col">
-          <div class="block"><h4><span class="ref" data-tip="plumbing/charts.py — list_names() → sorted dir names">list_names()</span> — the dir-scan rules</h4>
+          <div class="block"><h4><span class="ref" data-tip="services/domain/charts.py — list_names() → sorted dir names">list_names()</span> — the dir-scan rules</h4>
             <ul>
               <li>scans <code>&lt;root&gt;/charts/*</code> — one level, no recursion</li>
               <li>counts only <b>directories containing a Chart.yaml</b>; stray files and non-chart dirs are silently skipped</li>
@@ -2282,34 +2291,34 @@ promo_correlation_id = flux-repo PR</div>
               <li>sorted, so every plan / table / fanout is deterministic</li>
             </ul>
           </div>
-          <div class="block"><h4><span class="ref" data-tip="plumbing/charts.py — get(name) → Chart">get(name)</span> — three gates, in order</h4>
+          <div class="block"><h4><span class="ref" data-tip="services/domain/charts.py — get(name) and get_managed(name)">get / get_managed</span> — explicit intent</h4>
             <ul>
               <li><code>Chart.yaml</code> must exist ⇒ else <code>ChartNotFoundError: chart not found: &lt;name&gt;</code></li>
-              <li><span class="ref" data-tip="plumbing/charts.py — raise SpecError(name-mismatch)">guard rail</span>: <code>Chart.yaml</code>'s <code>name:</code> must equal the directory name ⇒ else <code>SpecError</code> — catches copy-pasted chart dirs before helm ever sees them</li>
-              <li><code>load_test_spec(path / &quot;test-spec.yaml&quot;)</code> runs <b>inside get()</b> — missing or invalid spec ⇒ <code>SpecError</code>, even if the caller never needed the spec</li>
+              <li><span class="ref" data-tip="services/domain/charts.py — raise SpecError(name-mismatch)">guard rail</span>: <code>Chart.yaml</code>'s <code>name:</code> must equal the directory name ⇒ else <code>SpecError</code> — catches copy-pasted chart dirs before helm ever sees them</li>
+              <li><code>get()</code> returns a library-capable <code>HelmChart</code>; <code>get_managed()</code> alone requires <code>test-spec.yaml</code></li>
             </ul>
           </div>
         </div>
-        <h3 class="sub"><span class="ref" data-tip="plumbing/charts.py — value_paths(chart, profile) → [Path]">value_paths(chart, profile)</span> — values-file existence gate</h3>
+        <h3 class="sub"><span class="ref" data-tip="services/domain/charts.py — value_paths(chart, profile) → [Path]">value_paths(chart, profile)</span> — values-file existence gate</h3>
         <p style="font-size:13px;max-width:900px;margin-bottom:10px">Resolves the profile's <code>values:</code> list against the chart dir and checks <b>every file exists</b>, reporting all missing ones in a single <code>SpecError: missing values file(s) for &lt;chart&gt;:&lt;profile&gt;: …</code>. Runs at plan-walk time — a typo'd <code>values-ci.yaml</code> fails before any helm subprocess. (The chart-relative-only rule itself is enforced upstream by the pydantic validator — see <a href="#services/testspec" style="color:var(--blue)">test-spec.yaml</a>.)</p>
-        <div class="callout warn"><b>The eager-load consequence:</b> a chart without a <code>test-spec.yaml</code> is <b>visible to <code>list_names()</code> but invisible to <code>get()</code></b> — every access raises <code>SpecError: missing test spec</code>. <code>charts list</code> papers over it per-row (<code>&lt;no test-spec&gt;</code> in red), but such a chart can never join an install plan. This is exactly why <span class="ref" data-tip="plumbing/graph.py:71 — build_helm_dependency_index reads Chart.yaml directly">build_helm_dependency_index</span> bypasses the repository and reads Chart.yaml raw — library charts without test-specs must still enter validate's fanout index. See <a href="#plumbing/graph" style="color:var(--blue)">dependency graphs</a>.</div>
+        <div class="callout good"><b>One metadata source:</b> <code>ChartMetadata</code> holds name, version, chart type and typed <code>ChartDependency</code>s (name/version/repository/alias). Graph and validation discovery consume this strict loader through <code>ChartRepository</code>; raw duplicate <code>Chart.yaml</code> parsing is gone.</div>
       </div>
 
       <!-- graph -->
       <div class="panel" id="plb-graph">
-        <div class="phead"><h2>The two dependency graphs</h2><span class="loc">plumbing/graph.py · 128 ln</span><span class="pill p-amber">domain (misfiled)</span></div>
+        <div class="phead"><h2>Dependency planning and freshness</h2><span class="loc">services/domain/graph.py · chart_deps.py</span><span class="pill p-blue">shared chart domain</span></div>
         <p class="oneliner">One file, two unrelated graphs over the same <code>charts/</code> tree: the <b>test-spec requires graph</b> (forward: what must install before X) walked by <code>DependencyResolver</code>, and the <b>Chart.yaml dependency index</b> (reverse: who consumes X) built by <code>build_helm_dependency_index</code>. Different source files, different directions, different consumers. YAML-side view of the first: <a href="#services/testspec" style="color:var(--blue)">test-spec.yaml panel</a>.</p>
         <div class="comm">
           <div class="comm-title">Two sources, two directions</div>
           <div class="cnode c-store">test-spec.yaml<br>profiles.*.requires</div>
           <div class="carrow">▸<small>via ChartRepository</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/graph.py — DependencyResolver.install_plan(chart, profile)">install_plan</span><small>DFS → ordered [PlanEntry]</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/graph.py — DependencyResolver.install_plan(chart, profile)">install_plan</span><small>managed-chart DFS → ordered [PlanEntry]</small></div>
           <div class="carrow">▸</div>
           <div class="cnode c-svc2">Sandbox · Lab · Ci · deps</div>
           <div class="carrow" style="min-width:24px">‖</div>
           <div class="cnode c-store">Chart.yaml<br>dependencies[].name</div>
           <div class="carrow">▸<small>raw yaml.safe_load</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/graph.py:71 — build_helm_dependency_index(root) → dict[dep → {dependents}]">build_helm_dependency_index</span><small>reverse index</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/graph.py — build_helm_dependency_index(root)">build_helm_dependency_index</span><small>typed Helm metadata reverse index</small></div>
           <div class="carrow">▸</div>
           <div class="cnode c-svc2">validate worklist<small>library-edit fanout</small></div>
         </div>
@@ -2318,16 +2327,16 @@ promo_correlation_id = flux-repo PR</div>
         <div class="two-col">
           <div class="block"><h4>The two bookkeeping structures</h4>
             <ul>
-              <li><b><span class="ref" data-tip="plumbing/graph.py — temporary: list[tuple[str, str]] (the descent path)">temporary</span> is a <i>list</i>, not a set</b> — it is the current descent path in order, so the cycle error can render the actual chain: <code>DependencyCycleError: dependency cycle detected: a:minimal -&gt; b:minimal -&gt; a:minimal</code> (path + the repeated key appended)</li>
-              <li><b><span class="ref" data-tip="plumbing/graph.py — permanent: set[tuple[str, str]] (fully emitted)">permanent</span> is a set</b> — fully-emitted nodes; re-visits short-circuit, so a dep shared by two branches is emitted once</li>
+              <li><b><span class="ref" data-tip="services/domain/graph.py — temporary: list[tuple[str, str]] (the descent path)">temporary</span> is a <i>list</i>, not a set</b> — it is the current descent path in order, so the cycle error can render the actual chain: <code>DependencyCycleError: dependency cycle detected: a:minimal -&gt; b:minimal -&gt; a:minimal</code> (path + the repeated key appended)</li>
+              <li><b><span class="ref" data-tip="services/domain/graph.py — permanent: set[tuple[str, str]] (fully emitted)">permanent</span> is a set</b> — fully-emitted nodes; re-visits short-circuit, so a dep shared by two branches is emitted once</li>
               <li>nodes are keyed by <b>(chart, profile)</b> pairs — the same chart under two profiles is two distinct plan entries</li>
               <li>post-order emit: a node is appended <i>after</i> its <code>requires</code> ⇒ dependencies always precede dependents</li>
             </ul>
           </div>
           <div class="block"><h4>The target re-append + dedupe pair</h4>
             <ul>
-              <li><span class="ref" data-tip="plumbing/graph.py — if key in permanent: if target: plan.append(…, target=True)">re-append branch</span>: visiting an already-permanent node normally no-ops, <i>except</i> when it's the target — then a fresh <code>target=True</code> entry is appended anyway</li>
-              <li><span class="ref" data-tip="plumbing/graph.py:110 — _dedupe_keep_last_target(entries)">_dedupe_keep_last_target</span> then removes any earlier entry for the same (chart, profile), keeping the last — i.e. the <code>target=True</code> one</li>
+              <li><span class="ref" data-tip="services/domain/graph.py — if key in permanent: if target: plan.append(…, target=True)">re-append branch</span>: visiting an already-permanent node normally no-ops, <i>except</i> when it's the target — then a fresh <code>target=True</code> entry is appended anyway</li>
+              <li><span class="ref" data-tip="services/domain/graph.py:110 — _dedupe_keep_last_target(entries)">_dedupe_keep_last_target</span> then removes any earlier entry for the same (chart, profile), keeping the last — i.e. the <code>target=True</code> one</li>
               <li><b>net invariant:</b> the target appears exactly once, last, flagged — even if it also occurs as someone's dependency</li>
               <li class="warn">honest note: with today's single-root call (<code>visit(target)</code> first, and a dep looping back to the target would be a <i>cycle</i>), plain post-order already yields target-last — the pair makes the invariant explicit rather than incidental, and keeps it if multi-root plans ever appear</li>
             </ul>
@@ -2354,7 +2363,7 @@ promo_correlation_id = flux-repo PR</div>
             <p style="font-size:12px;color:var(--muted);margin-top:6px">Full trace with the visit-by-visit walk lives on the <a href="#services/testspec" style="color:var(--blue)">test-spec panel</a>; run it live with <code>deps plan harbor --profile routed</code>.</p>
           </div>
         </div>
-        <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Also here: <span class="ref" data-tip="plumbing/graph.py — reverse_tests(chart) → spec.reverse_tests">reverse_tests(chart)</span> — a one-line passthrough to the test-spec's <code>reverseTests</code> list (no graph walk; each ref becomes its own install_plan in <code>sandbox test --reverse</code>).</p>
+        <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Also here: <span class="ref" data-tip="services/domain/graph.py — reverse_tests(chart)">reverse_tests(chart)</span>. Beside it, <code>services/domain/chart_deps.py</code> conservatively compares declarations, lock identities and materialized expanded/<code>.tgz</code> chart metadata. Names, versions, aliases, timestamps and artifact safety must agree; uncertainty means stale. Helm-reference local/remote classification remains in <code>integrations/helm.py</code> because it interprets adapter arguments.</p>
 
         <h3 class="sub">② build_helm_dependency_index — the reverse index for validate fanout</h3>
         <div class="seq">
@@ -2377,17 +2386,17 @@ promo_correlation_id = flux-repo PR</div>
 
       <!-- models -->
       <div class="panel" id="plb-models">
-        <div class="phead"><h2>Validate models</h2><span class="loc">plumbing/validate_models.py · 93 ln</span><span class="pill p-amber">domain (misfiled)</span></div>
+        <div class="phead"><h2>Validate domain models</h2><span class="loc">services/validate/domain/models.py · spec.py · output_paths.py</span><span class="pill p-green">validation-owned</span></div>
         <p class="oneliner">Four frozen stdlib dataclasses — the <b>data spine of the validate pipeline</b>. They cross the integration/service/CLI seams, so they're deliberately plain dataclasses, not pydantic: pydantic stays at IO boundaries (spec parsing, JSON output); internal state transfer stays stdlib. Pipeline context: <a href="#services/validate" style="color:var(--blue)">validate/ panel</a>.</p>
         <div class="comm">
           <div class="comm-title">How the shapes flow — worklist → runner → rendering</div>
           <div class="cnode c-svc2">worklist<small>chart × env fanout</small></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/validate_models.py:30 — WorklistRow(chart, env, release, namespace)">WorklistRow</span> ×N</div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/domain/models.py — ValidatableChart">ValidatableChart</span><small>HelmChart + ValidateSpec</small></div>
           <div class="carrow">▸<small>runner workers</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/validate_models.py:40 — PhaseResult(...)">PhaseResult</span><small>per phase: render · schema · policy</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/domain/models.py — SelectionResult · WorklistRow · PhaseResult">SelectionResult → WorklistRow → PhaseResult</span></div>
           <div class="carrow">▸<small>aggregate</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="plumbing/validate_models.py:57 — RowResult(row, phases)">RowResult</span> → <span class="ref" data-tip="plumbing/validate_models.py:65 — RunResult(rows, rendered_root, spec_errors)">RunResult</span></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/validate/domain/models.py — RowResult · RunResult">RowResult → RunResult</span></div>
           <div class="carrow">▸</div>
           <div class="cgroup"><div class="cnode c-svc2">rendering<small>table · md · JSON v1</small></div><div class="cnode c-cli">exit_code()<small>sys.exit</small></div></div>
         </div>
@@ -2412,20 +2421,20 @@ promo_correlation_id = flux-repo PR</div>
             </ul>
           </div>
         </div>
-        <div class="callout info"><b><span class="ref" data-tip="plumbing/validate_models.py — RunResult.exit_code()">exit_code()</span> precedence, verbatim from the source:</b> <code>spec error (3) &gt; tool error (2) &gt; validation failure (1) &gt; pass (0)</code> — any phase with <code>error_type=&quot;spec&quot;</code> short-circuits to 3; otherwise one pass over all phases collects tool-errors and FAILs. The full exit-code table with CI interpretation lives on the <a href="#services/validate" style="color:var(--blue)">validate panel</a>.</div>
+        <div class="callout info"><b>Composition, not inheritance:</b> validation owns <code>ValidateSpec</code>, selection, cases and outcomes; the shared chart domain owns <code>HelmChart</code>. <code>ValidatableChart</code> composes them. Output-path helpers reject unsafe segments, enforce containment beneath the run root and guard cleanup against symlink/traversal escape.</div>
       </div>
 
       <!-- spec stub -->
       <div class="panel" id="plb-spec">
-        <div class="phead"><h2>spec.py · validate_spec.py</h2><span class="loc">plumbing/spec.py 125 ln · validate_spec.py 166 ln</span><span class="pill p-amber">domain contracts — see Services tab</span></div>
+        <div class="phead"><h2>Domain boundaries</h2><span class="loc">services/domain/ · services/validate/domain/ · plumbing/</span><span class="pill p-green">enforced layering</span></div>
         <p class="oneliner">The two pydantic contract files live in plumbing/, but their full documentation lives with the YAML files they parse — this stub exists so the Plumbing sidebar shows the whole directory.</p>
         <div class="two-col">
           <div class="block"><h4>spec.py — owns test-spec.yaml</h4>
-            <p style="font-size:13px">Models <span class="ref" data-tip="plumbing/spec.py:29 — class ChartRef"><code>ChartRef</code></span> · <span class="ref" data-tip="plumbing/spec.py:38 — class CheckSpec"><code>CheckSpec</code></span> · <span class="ref" data-tip="plumbing/spec.py:48 — class ProfileSpec"><code>ProfileSpec</code></span> · <span class="ref" data-tip="plumbing/spec.py:88 — class TestSpec"><code>TestSpec</code></span> (all <code>extra=&quot;forbid&quot;</code>), the chart-relative-values validator, and the loaders <span class="ref" data-tip="plumbing/spec.py:106 — load_yaml_file(path)"><code>load_yaml_file</code></span> / <span class="ref" data-tip="plumbing/spec.py:118 — load_test_spec(path)"><code>load_test_spec</code></span> that normalize every parse failure to <code>SpecError</code>. The shared <code>load_yaml_file</code> is also the YAML boundary for charts.py and validate_spec.py.</p>
+            <p style="font-size:13px"><code>services/domain/</code> owns <code>ChartRef</code>, checks, profiles, <code>TestSpec</code>, typed Helm metadata, repositories, graphs and dependency freshness. It may consume generic plumbing but plumbing cannot import it.</p>
             <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/testspec" style="color:var(--blue);font-weight:700">Services → test-spec.yaml</a> (annotated real spec, field table, load-path error map)</p>
           </div>
-          <div class="block"><h4>validate_spec.py — owns validate-spec.yaml</h4>
-            <p style="font-size:13px">Models <span class="ref" data-tip="plumbing/validate_spec.py:33 — class EnvironmentSpec"><code>EnvironmentSpec</code></span> · <span class="ref" data-tip="plumbing/validate_spec.py:48 — class PoliciesSpec"><code>PoliciesSpec</code></span> · <span class="ref" data-tip="plumbing/validate_spec.py:62 — class ValidateSpec"><code>ValidateSpec</code></span> with four cross-field <code>model_validator</code>s (version-1 envelope, helm_version⊕helm_bin, namespace coverage, trigger sanity incl. the <code>match-by-basename</code> literal), plus <span class="ref" data-tip="plumbing/validate_spec.py:138 — resolve_namespace(spec, env)"><code>resolve_namespace</code></span> (<code>${env}</code> templating) and <span class="ref" data-tip="plumbing/validate_spec.py:159 — load_validate_spec(path)"><code>load_validate_spec</code></span>.</p>
+          <div class="block"><h4>services/validate/domain/spec.py — owns validate-spec.yaml</h4>
+            <p style="font-size:13px"><code>services/validate/domain/</code> owns <code>EnvironmentSpec</code>, <code>PoliciesSpec</code>, <code>ValidateSpec</code>, <code>ValidatableChart</code>, selections and outcomes. It composes the shared <code>HelmChart</code>; it does not inherit from <code>TestSpec</code> or a common <code>BaseSpec</code>.</p>
             <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/validatespec" style="color:var(--blue);font-weight:700">Services → validate-spec.yaml</a> (annotated specs, validator table, trigger-resolution flow)</p>
           </div>
         </div>
@@ -2537,7 +2546,7 @@ promo_correlation_id = flux-repo PR</div>
       <div class="sq"><div class="who"><span class="ref" data-tip="integrations/kind.py:70 — Kind.ensure_cluster">Kind.ensure_cluster</span></div><div class="what">absent → create · stopped → docker start · running → no-op</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="integrations/kubectl.py:204 — Kubectl.wait_apiserver_ready">Kubectl.wait_apiserver_ready</span></div><div class="what">gate the docker-up-vs-apiserver-ready race</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/cluster_bootstrap.py:45 — bootstrap(cluster_name, *, helm, kind, kubectl, repository, progress, lint)">cluster_bootstrap.bootstrap</span></div><div class="what">cilium CNI converge — "applied" | "no-change" | None</div></div>
-      <div class="sq"><div class="who"><span class="ref" data-tip="plumbing/graph.py — DependencyResolver.install_plan">DependencyResolver</span></div><div class="what">test-spec <code>requires</code> DFS → ordered <code>[PlanEntry]</code></div></div>
+      <div class="sq"><div class="who"><span class="ref" data-tip="services/domain/graph.py — DependencyResolver.install_plan">DependencyResolver</span></div><div class="what">test-spec <code>requires</code> DFS → ordered <code>[PlanEntry]</code></div></div>
       <div class="sq"><div class="who">per entry: Helm + Kubectl</div><div class="what">dep-update (mtime-gated) → upgrade_install → wait_workloads_ready → helm test</div></div>
       <div class="sq"><div class="who">on failure</div><div class="what"><span class="ref" data-tip="services/sandbox.py — @contextmanager _diagnostics_on_failure"><code>_diagnostics_on_failure</code></span> dumps kubectl state → <code>ChartManagerError</code> → exit 1 <em>(single catch in main)</em></div></div>
     </div>
@@ -2553,7 +2562,7 @@ promo_correlation_id = flux-repo PR</div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/validate/phases.py — schema()">phases.schema</span> → <span class="ref" data-tip="integrations/kubeconform.py — Kubeconform.validate">Kubeconform</span></div><div class="what">FAIL ⇒ policy SKIPped (runner owns short-circuiting)</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/validate/phases.py — policy()">phases.policy</span> → <span class="ref" data-tip="integrations/kyverno.py — Kyverno.apply">Kyverno</span></div><div class="what">failures gate; warnings advise (audit-mode)</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/validate/progress.py — ProgressDisplay Protocol; Rich impls in cli/validate_progress.py">progress display</span></div><div class="what">worker <code>on_event</code> → thread-safe live table on <b>stderr only</b></div></div>
-      <div class="sq"><div class="who"><span class="ref" data-tip="services/validate/wire.py — JSON_SCHEMA_VERSION · to_json · to_markdown">wire</span> + <span class="ref" data-tip="cli/validate_render.py — Rich Table renderers">cli/validate_render.py</span></div><div class="what"><span class="ref" data-tip="plumbing/validate_models.py:65 — RunResult"><code>RunResult</code></span> → markdown ($GITHUB_STEP_SUMMARY) / versioned JSON from <code>wire</code>; the Rich text table from the CLI renderer. <code>ValidateApp.cleanup</code> then applies the artifact-retention rule</div></div>
+      <div class="sq"><div class="who"><span class="ref" data-tip="services/validate/wire.py — JSON_SCHEMA_VERSION · to_json · to_markdown">wire</span> + <span class="ref" data-tip="cli/validate_render.py — Rich Table renderers">cli/validate_render.py</span></div><div class="what"><span class="ref" data-tip="services/validate/domain/models.py:65 — RunResult"><code>RunResult</code></span> → markdown ($GITHUB_STEP_SUMMARY) / versioned JSON from <code>wire</code>; the Rich text table from the CLI renderer. <code>ValidateApp.cleanup</code> then applies the artifact-retention rule</div></div>
     </div>
   </div>
 
@@ -2604,8 +2613,8 @@ promo_correlation_id = flux-repo PR</div>
   <table class="port">
     <thead><tr><th>unit</th><th>verdict</th><th>why / what to do</th></tr></thead>
     <tbody>
-      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/plumbing/">plumbing: commands·errors·duration·text·chart_deps</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">Zero deps, fully tested. The host's subprocess/error kernel, or adapt onto its existing one. <code>CommandRunner</code> being a Protocol makes the "adapt onto the host's runner" option a one-class job. Panels: <a href="#plumbing/commands" style="color:var(--blue)">kernel</a> · <a href="#plumbing/errors" style="color:var(--blue)">taxonomy</a> · <a href="#plumbing/duration" style="color:var(--blue)">duration</a> · <a href="#plumbing/pure" style="color:var(--blue)">text·chart_deps</a>.</td></tr>
-      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/plumbing/">plumbing: spec·charts·graph·validate_spec·validate_models</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">The domain model — including <code>validate_spec.py</code>, the pydantic validate-spec.yaml contract. Rename to <code>domain/</code> on the way in — the move that makes the architecture legible. Panels: <a href="#plumbing/charts" style="color:var(--blue)">charts</a> · <a href="#plumbing/graph" style="color:var(--blue)">graph</a> · <a href="#plumbing/models" style="color:var(--blue)">models</a> · <a href="#plumbing/spec" style="color:var(--blue)">specs</a>.</td></tr>
+      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/plumbing/">plumbing: commands·errors·duration·paths·text·yaml_files</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">Generic, domain-neutral utilities. The host's subprocess/error kernel can ship directly or adapt onto an existing runner. <code>CommandRunner</code> being a Protocol makes that adapter a one-class job. Panels: <a href="#plumbing/commands" style="color:var(--blue)">kernel</a> · <a href="#plumbing/errors" style="color:var(--blue)">taxonomy</a> · <a href="#plumbing/duration" style="color:var(--blue)">duration</a> · <a href="#plumbing/pure" style="color:var(--blue)">pure helpers</a>.</td></tr>
+      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/domain/ and src/chart_manager/services/validate/domain/">services/domain + services/validate/domain</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">Shared chart metadata, managed-test policy, and validation policy now have explicit ownership. Validation composes <code>HelmChart</code> through <code>ValidatableChart</code>; it does not inherit from <code>TestSpec</code>. Panels: <a href="#plumbing/charts" style="color:var(--blue)">charts</a> · <a href="#plumbing/graph" style="color:var(--blue)">graph</a> · <a href="#plumbing/models" style="color:var(--blue)">validation models</a> · <a href="#plumbing/spec" style="color:var(--blue)">specs</a>.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/integrations/">integrations/ (all)</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">Pure adapters, typed results, dense unit tests, no upward imports. Most portable layer — and now uniformly addressable: every kube-facing adapter takes <code>context</code>/<code>timeout</code> (kind takes <code>docker_host</code>), so the host wires one <code>Settings</code>. The <code>oci.py</code> stub is gone; nothing left to resolve here.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/validate/">services/validate/</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why"><b>Precondition met:</b> the assembly is in <code>services/validate/app.py</code> and the request vocabulary in <code>requests.py</code>, so the pipeline runs without Typer today. Lift the package as-is.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/helmrelease/">helmrelease/ monitor·test·state·classify·scanner·editor</span></td><td><span class="pill p-green">ship as-is</span></td><td class="why">Explicitly built for reuse — docstrings name "CLI, FastAPI" as callers; typed aggregates, zero printing. <code>state.py</code> is the piece most worth carrying <i>first</i>: it is the vocabulary the phase tables and the event stream both key on, and <code>classify()</code> is a pure function the host can test without a cluster.</td></tr>

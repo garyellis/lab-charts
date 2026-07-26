@@ -41,6 +41,9 @@ triggers:
   "values.yaml": [dev, prod]
   "values-dev.yaml": [dev]
   "envs/*.yaml": match-by-basename
+trigger_ignores:
+  - "README.md"
+  - "docs/**"
 policies:
   extra: [extra/policies]
 """,
@@ -53,6 +56,7 @@ policies:
     assert set(s.environments) == {"dev", "prod"}
     assert s.environments["dev"].values == ["values.yaml", "values-dev.yaml"]
     assert s.triggers["envs/*.yaml"] == MATCH_BY_BASENAME
+    assert s.trigger_ignores == ["README.md", "docs/**"]
     assert s.policies.extra == ["extra/policies"]
 
 
@@ -185,6 +189,27 @@ triggers:
 """,
     )
     with pytest.raises(SpecError, match="unknown environment"):
+        load_validate_spec(spec)
+
+
+@pytest.mark.parametrize("pattern", ["/tmp/**", "../README.md", "docs/../../README.md"])
+def test_trigger_ignore_patterns_must_stay_inside_chart(
+    tmp_path: Path,
+    pattern: str,
+) -> None:
+    spec = _write_spec(
+        tmp_path,
+        f"""
+version: 1
+release_name: x
+environments:
+  dev:
+    namespace: x
+trigger_ignores: ["{pattern}"]
+""",
+    )
+
+    with pytest.raises(SpecError, match="trigger ignore pattern"):
         load_validate_spec(spec)
 
 

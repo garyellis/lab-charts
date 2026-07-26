@@ -8,6 +8,15 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.validate.catalog import load_validatable_chart
+from chart_manager.services.validate.compiler import (
+    compile_validate_spec,
+    row_config_for,
+)
+from chart_manager.services.validate.planner import select_rows
 from chart_manager.services.validate.worklist import build_worklist
 
 
@@ -379,3 +388,236 @@ triggers:
     )
 
     assert result.rows == ()
+    assert result.ignored_changes == ()
+    assert result.unmatched_changes == (
+        Path("charts/alpha/templates/deployment.yaml"),
+    )
+    assert any("matches no trigger" in warning for warning in result.warnings)
+    assert any("no environments selected" in warning for warning in result.warnings)
+
+
+def test_explicit_trigger_ignore_is_distinct_from_unmatched_change(
+    tmp_path: Path,
+) -> None:
+    spec = """
+version: 1
+release_name: alpha
+environments:
+  dev:
+    namespace: lab-dev
+triggers:
+  "values.yaml": [dev]
+trigger_ignores:
+  - "README.md"
+  - "docs/**"
+"""
+    _chart(tmp_path, "alpha", spec=spec)
+
+    result = build_worklist(
+        root=tmp_path,
+        changed_files=[
+            "charts/alpha/README.md",
+            "charts/alpha/docs/configuration.md",
+            "charts/alpha/templates/deployment.yaml",
+        ],
+    )
+
+    assert result.rows == ()
+    assert result.ignored_changes == (
+        Path("charts/alpha/README.md"),
+        Path("charts/alpha/docs/configuration.md"),
+    )
+    assert result.unmatched_changes == (
+        Path("charts/alpha/templates/deployment.yaml"),
+    )
+    assert sum("explicitly ignored" in warning for warning in result.warnings) == 2
+    assert sum("matches no trigger" in warning for warning in result.warnings) == 1
+
+
+def test_explicit_ignore_takes_precedence_over_overlapping_trigger(
+    tmp_path: Path,
+) -> None:
+    spec = """
+version: 1
+release_name: alpha
+environments:
+  dev:
+    namespace: lab-dev
+triggers:
+  "*.md": [dev]
+trigger_ignores:
+  - "README.md"
+"""
+    _chart(tmp_path, "alpha", spec=spec)
+
+    result = build_worklist(
+        root=tmp_path,
+        changed_files=["charts/alpha/README.md"],
+    )
+
+    assert result.rows == ()
+    assert result.ignored_changes == (Path("charts/alpha/README.md"),)
+    assert result.unmatched_changes == ()
+
+
+def test_strict_fanout_still_records_unmatched_trigger_coverage(
+    tmp_path: Path,
+) -> None:
+    spec = """
+version: 1
+release_name: alpha
+environments:
+  dev:
+    namespace: lab-dev
+  prod:
+    namespace: lab-prod
+triggers_strict: true
+"""
+    _chart(tmp_path, "alpha", spec=spec)
+
+    result = build_worklist(
+        root=tmp_path,
+        changed_files=["charts/alpha/templates/deployment.yaml"],
+    )
+
+    assert {(row.chart, row.env) for row in result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
+    assert result.unmatched_changes == (
+        Path("charts/alpha/templates/deployment.yaml"),
+    )
+    assert any(
+        "triggers_strict selected all environments" in warning
+        for warning in result.warnings
+    )
+
+
+def test_catalog_composes_validate_spec_over_authoritative_helm_chart(
+    tmp_path: Path,
+) -> None:
+    chart_dir = _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
+
+    result = build_worklist(root=tmp_path, all_charts=True)
+
+    target = result.targets["alpha"]
+    assert target.name == "alpha"
+    assert target.path == chart_dir
+    assert target.chart.metadata.version == "0.1.0"
+    assert target.spec_path == chart_dir / "validate-spec.yaml"
+
+
+def test_repository_scan_records_malformed_chart_metadata_without_aborting(
+    tmp_path: Path,
+) -> None:
+    malformed = _chart(tmp_path, "broken", spec=_DEFAULT_SPEC.format(name="broken"))
+    (malformed / "Chart.yaml").write_text("name: [not-a-string]\n")
+    _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
+
+    result = build_worklist(root=tmp_path, all_charts=True)
+
+    assert {(row.chart, row.env) for row in result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
+    assert any(error.startswith("broken:") for error in result.spec_errors)
+
+
+def test_explicit_validatable_chart_load_is_strict(tmp_path: Path) -> None:
+    _chart(tmp_path, "alpha", spec=None)
+
+    with pytest.raises(SpecError, match="missing validate spec"):
+        load_validatable_chart(tmp_path, "alpha")
+
+
+def test_compiler_resolves_chart_relative_paths_independently_of_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _DEFAULT_SPEC.format(name="alpha") + """
+schema_locations:
+  - default
+  - schemas/{{.Group}}/{{.ResourceKind}}.json
+policies:
+  extra: [extra-policies]
+"""
+    chart_dir = _chart(tmp_path, "alpha", spec=spec)
+    (chart_dir / "values.yaml").write_text("{}\n")
+    (chart_dir / "values-prod.yaml").write_text("{}\n")
+    (chart_dir / "extra-policies").mkdir()
+    (tmp_path / "schemas").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    build = build_worklist(root=tmp_path, all_charts=True)
+    compiled = compile_validate_spec(build.targets["alpha"], tmp_path)
+    dev = next(row for row in build.rows if row.env == "dev")
+    config = row_config_for(compiled, dev)
+
+    assert config.values == [(chart_dir / "values.yaml").resolve()]
+    assert config.policy_paths == [(chart_dir / "extra-policies").resolve()]
+    assert config.schema_locations == [
+        "default",
+        str(
+            (
+                tmp_path
+                / "schemas"
+                / "{{.Group}}"
+                / "{{.ResourceKind}}.json"
+            ).resolve()
+        ),
+    ]
+
+
+def test_compiler_accepts_legacy_repo_relative_policy_with_diagnostic(
+    tmp_path: Path,
+) -> None:
+    spec = _DEFAULT_SPEC.format(name="alpha") + """
+policies:
+  extra: [legacy-policies]
+"""
+    chart_dir = _chart(tmp_path, "alpha", spec=spec)
+    (chart_dir / "values.yaml").write_text("{}\n")
+    (chart_dir / "values-prod.yaml").write_text("{}\n")
+    legacy = tmp_path / "legacy-policies"
+    legacy.mkdir()
+
+    build = build_worklist(root=tmp_path, all_charts=True)
+    compiled = compile_validate_spec(build.targets["alpha"], tmp_path)
+
+    assert compiled.policy_paths == (legacy.resolve(),)
+    assert any("repository-relative for compatibility" in item for item in compiled.warnings)
+
+
+def test_explicit_filter_diagnostics_use_catalog_not_affected_rows(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
+    build = build_worklist(root=tmp_path, changed_files=["README.md"])
+    available_environments = {
+        environment
+        for target in build.targets.values()
+        for environment in target.spec.environments
+    }
+
+    known_noop = select_rows(
+        build.rows,
+        charts={"alpha"},
+        envs={"dev"},
+        available_charts=set(build.targets),
+        available_environments=available_environments,
+    )
+    unknown = select_rows(
+        build.rows,
+        charts={"ghost"},
+        envs={"staging"},
+        available_charts=set(build.targets),
+        available_environments=available_environments,
+    )
+
+    assert known_noop.rows == ()
+    assert known_noop.unmatched_charts == ()
+    assert known_noop.unmatched_environments == ()
+    assert unknown.unmatched_charts == ("ghost",)
+    assert unknown.unmatched_environments == ("staging",)

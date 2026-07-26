@@ -27,6 +27,7 @@ from chart_manager.services.validate.domain.models import (
     PhaseResult,
     RunResult,
 )
+from chart_manager.services.validate.requests import RunOutcome
 
 # Stable, jq-friendly JSON shape. Bump on breaking changes only; additive
 # fields are safe at this version.
@@ -62,19 +63,43 @@ def row_elapsed_text(row_result) -> str:
     return f"{total:.1f}s" if any_timed else ""
 
 
-def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
-    """Render a RunResult as GitHub-flavored markdown.
+def to_markdown(
+    source: RunResult | RunOutcome,
+    *,
+    include_timings: bool = False,
+    requested_charts: tuple[str, ...] = (),
+    requested_environments: tuple[str, ...] = (),
+) -> str:
+    """Render a run result or outcome as GitHub-flavored markdown.
 
     Suitable for $GITHUB_STEP_SUMMARY and PR comments. Always emits a
     heading + tally line so an empty result is still self-describing.
+    Passing the full outcome preserves planning diagnostics; accepting a
+    bare RunResult keeps the original projection API compatible.
     """
+    result, diagnostics = _wire_inputs(
+        source,
+        requested_charts=requested_charts,
+        requested_environments=requested_environments,
+    )
     lines: list[str] = ["## validate", ""]
 
     if not result.rows:
-        lines.append("_nothing to validate_")
-        warnings = _markdown_warnings(result)
+        no_work_reason = diagnostics.get("no_work_reason")
+        lines.append(
+            f"_nothing to validate: {no_work_reason}_"
+            if no_work_reason
+            else "_nothing to validate_"
+        )
+        diagnostic_lines = _markdown_diagnostics(diagnostics)
+        if diagnostic_lines:
+            lines.extend(["", "### Diagnostics", "", *diagnostic_lines])
+        warnings = _markdown_warnings(result, diagnostics)
         if warnings:
-            lines.extend(["", *warnings])
+            if diagnostics:
+                lines.extend(["", "### Warnings", "", *warnings])
+            else:
+                lines.extend(["", *warnings])
         return "\n".join(lines).rstrip() + "\n"
 
     # Status table.
@@ -117,7 +142,11 @@ def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
             lines.append("")
 
     # Warnings (spec errors, etc.) — only when present.
-    warnings = _markdown_warnings(result)
+    diagnostic_lines = _markdown_diagnostics(diagnostics)
+    if diagnostic_lines:
+        lines.extend(["### Diagnostics", "", *diagnostic_lines, ""])
+
+    warnings = _markdown_warnings(result, diagnostics)
     if warnings:
         lines.extend(["### Warnings", ""])
         lines.extend(warnings)
@@ -125,8 +154,13 @@ def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def to_json(result: RunResult) -> dict[str, object]:
-    """Render a RunResult as a stable, jq-friendly dict.
+def to_json(
+    source: RunResult | RunOutcome,
+    *,
+    requested_charts: tuple[str, ...] = (),
+    requested_environments: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Render a run result or outcome as a stable, jq-friendly dict.
 
     Uses str(Path) for any path so json.dumps works without a custom
     encoder. `schema_version` is the breaking-change signal for
@@ -139,6 +173,11 @@ def to_json(result: RunResult) -> dict[str, object]:
     always emits them, and a no-op flag on a versioned wire contract
     invites a consumer to depend on it.
     """
+    result, diagnostics = _wire_inputs(
+        source,
+        requested_charts=requested_charts,
+        requested_environments=requested_environments,
+    )
     rows_out: list[dict[str, object]] = []
     passing_rows = 0
     failing_rows = 0
@@ -170,7 +209,7 @@ def to_json(result: RunResult) -> dict[str, object]:
             "phases": phases_out,
         })
 
-    return {
+    payload: dict[str, object] = {
         "schema_version": JSON_SCHEMA_VERSION,
         "exit_code": result.exit_code(),
         "rendered_root": str(result.rendered_root),
@@ -183,6 +222,12 @@ def to_json(result: RunResult) -> dict[str, object]:
         "rows": rows_out,
         "spec_errors": list(result.spec_errors),
     }
+    # Preserve byte-for-byte compatibility for callers that still project a
+    # bare RunResult. The object is additive when the richer RunOutcome
+    # carries planning diagnostics.
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    return payload
 
 
 def _md_cell(phase: PhaseResult | None) -> str:
@@ -289,14 +334,120 @@ def _safe_fence(body: str) -> str:
     return "`" * max(3, longest + 1)
 
 
-def _markdown_warnings(result: RunResult) -> list[str]:
-    """Render spec errors as markdown bullets; empty list when none."""
+def _markdown_warnings(
+    result: RunResult, diagnostics: dict[str, object] | None = None
+) -> list[str]:
+    """Render operator warnings and spec errors as markdown bullets."""
     out: list[str] = []
+    if diagnostics:
+        warnings = diagnostics.get("warnings")
+        if isinstance(warnings, list):
+            out.extend(f"- {warning}" for warning in warnings)
     if result.spec_errors:
         out.append(f"- {len(result.spec_errors)} spec error(s):")
         for err in result.spec_errors:
             out.append(f"  - {err}")
     return out
+
+
+def _markdown_diagnostics(diagnostics: dict[str, object]) -> list[str]:
+    """Render non-warning selection diagnostics as concise bullets."""
+    selection = diagnostics.get("selection")
+    if not isinstance(selection, dict):
+        return []
+    lines: list[str] = []
+    requested = selection["requested_filters"]
+    unmatched = selection["unmatched_filters"]
+    assert isinstance(requested, dict)
+    assert isinstance(unmatched, dict)
+    if requested["charts"]:
+        lines.append(f"- Requested charts: {', '.join(requested['charts'])}")
+    if requested["environments"]:
+        lines.append(
+            f"- Requested environments: {', '.join(requested['environments'])}"
+        )
+    if unmatched["charts"]:
+        lines.append(f"- Unmatched charts: {', '.join(unmatched['charts'])}")
+    if unmatched["environments"]:
+        lines.append(
+            f"- Unmatched environments: {', '.join(unmatched['environments'])}"
+        )
+    ignored = selection["ignored_changes"]
+    if ignored:
+        lines.append("- Ignored changes:")
+        lines.extend(f"  - `{path}`" for path in ignored)
+    unmatched_changes = selection["unmatched_changes"]
+    if unmatched_changes:
+        lines.append("- Changes matching no trigger:")
+        lines.extend(f"  - `{path}`" for path in unmatched_changes)
+    if selection["rows_filtered_out"]:
+        lines.append(f"- Rows filtered out: {selection['rows_filtered_out']}")
+    if selection["charts_unvalidated"]:
+        lines.append(f"- Charts without a validation spec: {selection['charts_unvalidated']}")
+    return lines
+
+
+def _wire_inputs(
+    source: RunResult | RunOutcome,
+    *,
+    requested_charts: tuple[str, ...],
+    requested_environments: tuple[str, ...],
+) -> tuple[RunResult, dict[str, object]]:
+    """Normalize the backwards-compatible result/outcome projection inputs."""
+    if isinstance(source, RunResult):
+        return source, {}
+
+    result = source.result
+    no_work_reason: str | None = None
+    if not result.rows:
+        if source.unmatched_charts or source.unmatched_environments:
+            no_work_reason = "requested filters did not match"
+        elif requested_charts or requested_environments:
+            no_work_reason = "requested filters selected no affected validation cases"
+        elif source.unmatched_changes:
+            no_work_reason = "changed files matched no validation trigger"
+        elif source.ignored_changes:
+            no_work_reason = "all relevant changed files were explicitly ignored"
+        elif source.charts_unvalidated:
+            no_work_reason = "no chart with a validation specification was selected"
+        else:
+            no_work_reason = "no affected validation cases"
+
+    selection: dict[str, object] = {
+        "requested_filters": {
+            "charts": list(requested_charts),
+            "environments": list(requested_environments),
+        },
+        "unmatched_filters": {
+            "charts": list(source.unmatched_charts),
+            "environments": list(source.unmatched_environments),
+        },
+        "ignored_changes": [str(path) for path in source.ignored_changes],
+        "unmatched_changes": [str(path) for path in source.unmatched_changes],
+        "rows_filtered_out": source.rows_filtered_out,
+        "charts_unvalidated": source.charts_unvalidated,
+    }
+    has_selection_diagnostics = any((
+        requested_charts,
+        requested_environments,
+        source.unmatched_charts,
+        source.unmatched_environments,
+        source.ignored_changes,
+        source.unmatched_changes,
+        source.rows_filtered_out,
+        source.charts_unvalidated,
+    ))
+    diagnostics: dict[str, object] = {}
+    if source.warnings:
+        diagnostics["warnings"] = list(source.warnings)
+    if has_selection_diagnostics:
+        diagnostics["selection"] = selection
+    if no_work_reason is not None:
+        # Selection is present whenever there is a no-work reason, giving
+        # consumers one stable object shape for explaining an empty run.
+        diagnostics.setdefault("selection", selection)
+        diagnostics["no_work_reason"] = no_work_reason
+    return result, diagnostics
 
 
 def _phase_iter(phases) -> list[str]:

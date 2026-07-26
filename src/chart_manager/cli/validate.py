@@ -457,6 +457,16 @@ def run(
             ),
         ),
     ] = 300.0,
+    fail_fast: Annotated[
+        bool,
+        typer.Option(
+            "--fail-fast/--no-fail-fast",
+            help=(
+                "Stop after the first failed row and mark remaining rows NOT_RUN. "
+                "Default: continue and report every row."
+            ),
+        ),
+    ] = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
@@ -499,6 +509,7 @@ def run(
         verbose=verbose,
         row_timeout=row_timeout,
         dep_update_timeout=dep_update_timeout,
+        fail_fast=fail_fast,
     )
 
     app = _make_app(display)
@@ -513,10 +524,12 @@ def run(
     # rendered tree on disk.
     try:
         _emit_result(
-            outcome.result,
+            outcome,
             fmt=fmt,
             out_dir=outcome.out_dir,
             extra_warnings=outcome.warnings,
+            requested_charts=request.charts,
+            requested_environments=request.envs,
             timings=timings,
             verbose=verbose,
             github_step_summary=github_step_summary,
@@ -546,7 +559,7 @@ def _run_single(
 
     try:
         _emit_result(
-            outcome.result,
+            outcome,
             fmt=fmt,
             out_dir=outcome.out_dir,
             github_step_summary=github_step_summary,
@@ -607,11 +620,13 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
 
 
 def _emit_result(
-    result: RunResult,
+    source: RunResult | RunOutcome,
     *,
     fmt: str,
     out_dir: Path,
     extra_warnings: tuple[str, ...] = (),
+    requested_charts: tuple[str, ...] = (),
+    requested_environments: tuple[str, ...] = (),
     timings: bool = False,
     verbose: bool = False,
     github_step_summary: bool = False,
@@ -629,6 +644,7 @@ def _emit_result(
     results without re-parsing markdown.
     """
     fmt = _validate_format(fmt)
+    result = source.result if isinstance(source, RunOutcome) else source
 
     # Both projections are pure functions of (result, timings), and both have
     # more than one consumer: markdown feeds --format md, the `all` sidecar,
@@ -638,11 +654,23 @@ def _emit_result(
     # caches are closures, so they die with this call; nothing is retained.
     @functools.cache
     def markdown_text() -> str:
-        return to_markdown(result, include_timings=timings)
+        return to_markdown(
+            source,
+            include_timings=timings,
+            requested_charts=requested_charts,
+            requested_environments=requested_environments,
+        )
 
     @functools.cache
     def json_text() -> str:
-        return json.dumps(to_json(result), indent=2) + "\n"
+        return json.dumps(
+            to_json(
+                source,
+                requested_charts=requested_charts,
+                requested_environments=requested_environments,
+            ),
+            indent=2,
+        ) + "\n"
 
     if fmt == "json":
         sys.stdout.write(json_text())

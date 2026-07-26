@@ -20,6 +20,7 @@ from chart_manager.services.validate.domain.models import (
     RunResult,
     WorklistRow,
 )
+from chart_manager.services.validate.requests import RunOutcome
 from chart_manager.services.validate.wire import (
     JSON_SCHEMA_VERSION,
     to_json,
@@ -376,6 +377,83 @@ def test_to_json_round_trips_through_json_module() -> None:
     payload = json.dumps(data, indent=2)
     parsed = json.loads(payload)
     assert parsed == data
+
+
+def test_wire_outcome_preserves_selection_diagnostics() -> None:
+    """The richer outcome projection is additive to the stable result shape."""
+    result = RunResult(rows=(), rendered_root=Path("/tmp/render"))
+    outcome = RunOutcome(
+        result=result,
+        out_dir=result.rendered_root,
+        warnings=("chart legacy has no validate-spec.yaml",),
+        ignored_changes=(Path("charts/app/README.md"),),
+        unmatched_changes=(Path("charts/app/templates/new.yaml"),),
+        rows_filtered_out=2,
+        charts_unvalidated=1,
+    )
+
+    data = to_json(
+        outcome,
+        requested_charts=("app",),
+        requested_environments=("dev",),
+    )
+
+    diagnostics = data["diagnostics"]
+    assert diagnostics["warnings"] == ["chart legacy has no validate-spec.yaml"]
+    assert diagnostics["no_work_reason"] == (
+        "requested filters selected no affected validation cases"
+    )
+    selection = diagnostics["selection"]
+    assert selection == {
+        "requested_filters": {"charts": ["app"], "environments": ["dev"]},
+        "unmatched_filters": {"charts": [], "environments": []},
+        "ignored_changes": ["charts/app/README.md"],
+        "unmatched_changes": ["charts/app/templates/new.yaml"],
+        "rows_filtered_out": 2,
+        "charts_unvalidated": 1,
+    }
+
+    markdown = to_markdown(
+        outcome,
+        requested_charts=("app",),
+        requested_environments=("dev",),
+    )
+    assert "nothing to validate: requested filters selected no affected validation cases" in markdown
+    assert "### Diagnostics" in markdown
+    assert "Requested charts: app" in markdown
+    assert "Changes matching no trigger" in markdown
+    assert "### Warnings" in markdown
+    assert "chart legacy has no validate-spec.yaml" in markdown
+
+
+def test_markdown_outcome_with_only_warnings_needs_no_selection_metadata() -> None:
+    result = RunResult(
+        rows=(
+            RowResult(
+                row=WorklistRow(chart="app", env="dev", release="app", namespace="lab-dev"),
+                phases={"render": PhaseResult(phase="render", status="PASS")},
+            ),
+        ),
+        rendered_root=Path("/tmp/render"),
+    )
+    outcome = RunOutcome(
+        result=result,
+        out_dir=result.rendered_root,
+        warnings=("using fallback schema catalog",),
+    )
+
+    markdown = to_markdown(outcome)
+
+    assert "### Warnings" in markdown
+    assert "using fallback schema catalog" in markdown
+    assert "### Diagnostics" not in markdown
+
+
+def test_bare_run_result_wire_shape_remains_unchanged() -> None:
+    """Existing callers do not gain an empty diagnostics object."""
+    data = to_json(RunResult(rows=(), rendered_root=Path("/tmp/render")))
+
+    assert "diagnostics" not in data
 
 
 # ---- markdown safety -------------------------------------------------------

@@ -25,10 +25,12 @@ Slack handler must be able to import and drive the pipeline without
 dragging a TUI library into the process. A guard test in
 `tests/test_validate_rendering.py` asserts it.
 """
+
 from __future__ import annotations
 
 import os
 import shutil
+import traceback
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -41,8 +43,23 @@ from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.validate.domain.models import ALL_PHASES, RowResult, RunResult
-from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.validate.compiler import (
+    CompiledValidateSpec,
+    compile_validate_spec,
+    row_config_for,
+)
+from chart_manager.services.validate.domain.models import (
+    ALL_PHASES,
+    PhaseResult,
+    RowResult,
+    RunResult,
+)
+from chart_manager.services.validate.planner import select_rows
+from chart_manager.services.validate.progress import (
+    NullDisplay,
+    ProgressDisplay,
+    ProgressFinalizer,
+)
 from chart_manager.services.validate.requests import (
     RunOutcome,
     RunRequest,
@@ -55,13 +72,11 @@ from chart_manager.services.validate.runner import (
     ValidateRunner,
 )
 from chart_manager.services.validate.worklist import (
-    apply_filters,
     build_single_row,
     build_worklist,
     discover_policies,
     resolve_chart_path,
     resolve_values,
-    row_config_for,
 )
 
 # Re-exports, so a surface needs one import for "drive the validate
@@ -200,17 +215,26 @@ class ValidateApp:
             policy_paths=self._resolve_policy_paths(repo_root, chart_label, request),
         )
 
-        runner = self._runner_factory(
-            RunnerSpec(
-                output_root=out_dir,
-                helm_version=request.helm_version,
-                helm_bin=request.helm_bin,
-                on_event=self._progress.on_event,
-            )
-        )
+        progress = ProgressFinalizer(self._progress)
         self._progress.start([row])
         try:
-            result = runner.run([config], enabled_phases=request.phases)
+            try:
+                runner = self._runner_factory(
+                    RunnerSpec(
+                        output_root=out_dir,
+                        helm_version=request.helm_version,
+                        helm_bin=request.helm_bin,
+                        on_event=progress.on_event,
+                    )
+                )
+                result = runner.run([config], enabled_phases=request.phases)
+            except Exception as exc:
+                result = RunResult(
+                    rows=(self._execution_failure(config, exc),),
+                    rendered_root=out_dir,
+                )
+            for row_result in result.rows:
+                progress.finalize(row_result)
         finally:
             self._progress.stop()
 
@@ -239,9 +263,32 @@ class ValidateApp:
             all_charts=request.all_charts,
         )
 
-        rows, filtered_out = apply_filters(
-            build.rows, charts=set(request.charts), envs=set(request.envs)
+        selection = select_rows(
+            build.rows,
+            charts=set(request.charts),
+            envs=set(request.envs),
+            available_charts=set(build.targets),
+            available_environments={
+                environment
+                for target in build.targets.values()
+                for environment in target.spec.environments
+            },
+            ignored_changes=build.ignored_changes,
+            unmatched_changes=build.unmatched_changes,
+            warnings=build.warnings,
         )
+        if selection.unmatched_charts:
+            raise ValidateInputError(
+                "unknown chart filter(s): " + ", ".join(selection.unmatched_charts),
+                hint="charts",
+            )
+        if selection.unmatched_environments:
+            raise ValidateInputError(
+                "unknown environment filter(s): " + ", ".join(selection.unmatched_environments),
+                hint="envs",
+            )
+        rows = selection.rows
+        filtered_out = selection.filtered_out
 
         out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
 
@@ -249,15 +296,24 @@ class ValidateApp:
         # binding so we build one runner (and one Helm) per distinct
         # binding rather than one per row.
         grouped: dict[tuple[str | None, str | None], list[RowConfig]] = {}
+        compiled_by_chart: dict[str, CompiledValidateSpec] = {}
+        compile_warnings: list[str] = []
         for row in rows:
             # Indexed, not `.get(...) or continue`: `build_worklist` only
-            # materializes rows for charts in `build.specs`, and
-            # `apply_filters` only removes rows. A miss here means that
+            # materializes rows for charts in `build.targets`, and selection
+            # only removes rows. A miss here means that
             # invariant broke, and a silent `continue` would drop the row
             # from the run without it appearing anywhere in the result.
-            spec = build.specs[row.chart]
+            target = build.targets[row.chart]
+            spec = target.spec
+            if row.chart not in compiled_by_chart:
+                compiled = compile_validate_spec(target, repo_root)
+                compiled_by_chart[row.chart] = compiled
+                compile_warnings.extend(compiled.warnings)
+                for warning in compiled.warnings:
+                    self._on_warn(warning)
             grouped.setdefault((spec.helm_version, spec.helm_bin), []).append(
-                row_config_for(repo_root, row, spec)
+                row_config_for(compiled_by_chart[row.chart], row)
             )
 
         workers = resolve_workers(request.workers)
@@ -270,7 +326,6 @@ class ValidateApp:
         base_spec = RunnerSpec(
             output_root=out_dir,
             max_workers=workers,
-            on_event=self._progress.on_event,
             # 0 means unbounded at the request boundary; the runner and the
             # integrations below it want None as that sentinel.
             row_timeout=request.row_timeout if request.row_timeout > 0 else None,
@@ -281,14 +336,40 @@ class ValidateApp:
         )
 
         all_cfgs = [cfg for cfgs in grouped.values() for cfg in cfgs]
+        progress = ProgressFinalizer(self._progress)
+        base_spec = replace(base_spec, on_event=progress.on_event)
         self._progress.start([cfg.row for cfg in all_cfgs])
         aggregated: list[RowResult] = []
+        stopped = False
         try:
             for (helm_version, helm_bin), cfgs in grouped.items():
-                runner = self._runner_factory(
-                    replace(base_spec, helm_version=helm_version, helm_bin=helm_bin)
-                )
-                aggregated.extend(runner.run(cfgs, enabled_phases=request.phases).rows)
+                if stopped:
+                    group_rows = tuple(self._not_run(cfg) for cfg in cfgs)
+                else:
+                    try:
+                        runner = self._runner_factory(
+                            replace(
+                                base_spec,
+                                helm_version=helm_version,
+                                helm_bin=helm_bin,
+                            )
+                        )
+                        group_rows = runner.run(
+                            cfgs,
+                            enabled_phases=request.phases,
+                            fail_fast=request.fail_fast,
+                        ).rows
+                    except Exception as exc:
+                        group_rows = tuple(self._execution_failure(cfg, exc) for cfg in cfgs)
+                aggregated.extend(group_rows)
+                for row_result in group_rows:
+                    progress.finalize(row_result)
+                if request.fail_fast and any(
+                    phase.status == "FAIL"
+                    for row_result in group_rows
+                    for phase in row_result.phases.values()
+                ):
+                    stopped = True
         finally:
             self._progress.stop()
 
@@ -304,7 +385,11 @@ class ValidateApp:
             ),
             out_dir=out_dir,
             keep=keep,
-            warnings=tuple(build.warnings),
+            warnings=(*selection.warnings, *compile_warnings),
+            ignored_changes=selection.ignored_changes,
+            unmatched_changes=selection.unmatched_changes,
+            unmatched_charts=selection.unmatched_charts,
+            unmatched_environments=selection.unmatched_environments,
             charts_unvalidated=build.chart_count_unvalidated,
             rows_filtered_out=filtered_out,
             enabled_phases=request.phases,
@@ -333,9 +418,7 @@ class ValidateApp:
 
     # --- internals ---------------------------------------------------------
 
-    def _resolve_out_dir(
-        self, repo_root: Path, out: Path | None, keep: bool
-    ) -> tuple[Path, bool]:
+    def _resolve_out_dir(self, repo_root: Path, out: Path | None, keep: bool) -> tuple[Path, bool]:
         """Resolve the render dir; an explicit dir is an implicit keep.
 
         A caller who names the directory chose it deliberately, so we never
@@ -352,16 +435,13 @@ class ValidateApp:
         """Explicit dirs win; else discover when asked; else no policies at all."""
         if request.policy_dirs:
             return [
-                p if p.is_absolute() else (repo_root / p).resolve()
-                for p in request.policy_dirs
+                p if p.is_absolute() else (repo_root / p).resolve() for p in request.policy_dirs
             ]
         if request.discover_policies:
             return discover_policies(repo_root, chart)
         return None
 
-    def _resolve_changed_files(
-        self, repo_root: Path, request: RunRequest
-    ) -> list[str] | None:
+    def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".
 
         Precedence: all_charts > an explicit changed-files file > `git
@@ -401,4 +481,62 @@ class ValidateApp:
             on_event=spec.on_event,
             row_timeout=spec.row_timeout,
             dep_update_timeout=spec.dep_update_timeout,
+        )
+
+    @staticmethod
+    def _execution_failure(cfg: RowConfig, exc: Exception) -> RowResult:
+        """Convert a runner-level failure into a complete terminal row.
+
+        This is the boundary for failures outside an individual validation
+        phase: runner/Helm construction, dependency prefetch, and unexpected
+        serial runner crashes. A failure in one Helm-binding group therefore
+        remains visible without preventing later independent groups from
+        running.
+        """
+        rendered = traceback.format_exception_only(type(exc), exc)
+        detail = (rendered[-1] if rendered else repr(exc)).strip()
+        return RowResult(
+            row=cfg.row,
+            phases={
+                "render": PhaseResult(
+                    phase="render",
+                    status="FAIL",
+                    detail=f"execution failed: {detail}",
+                    error_type="tool",
+                ),
+                "schema": PhaseResult(
+                    phase="schema",
+                    status="SKIP",
+                    detail="upstream render FAIL",
+                ),
+                "policy": PhaseResult(
+                    phase="policy",
+                    status="SKIP",
+                    detail="upstream render FAIL",
+                ),
+            },
+        )
+
+    @staticmethod
+    def _not_run(cfg: RowConfig) -> RowResult:
+        """Represent a row omitted after an earlier fail-fast failure."""
+        return RowResult(
+            row=cfg.row,
+            phases={
+                "render": PhaseResult(
+                    phase="render",
+                    status="NOT_RUN",
+                    detail="fail-fast: earlier row failed",
+                ),
+                "schema": PhaseResult(
+                    phase="schema",
+                    status="NOT_RUN",
+                    detail="fail-fast: earlier row failed",
+                ),
+                "policy": PhaseResult(
+                    phase="policy",
+                    status="NOT_RUN",
+                    detail="fail-fast: earlier row failed",
+                ),
+            },
         )

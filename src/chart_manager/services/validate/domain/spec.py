@@ -77,6 +77,11 @@ class ValidateSpec(BaseModel):
 
     environments: dict[str, EnvironmentSpec]
     triggers: dict[str, TriggerValue] = Field(default_factory=dict)
+    # Explicit exclusions for chart-relative files which intentionally do
+    # not affect rendered output. Keeping this separate from `triggers`
+    # preserves the version-1 trigger mapping unchanged while making a
+    # deliberate exclusion distinguishable from an accidental coverage gap.
+    trigger_ignores: list[str] = Field(default_factory=list)
     # Opt-in safety net: when true, an edited chart file that matches no
     # trigger fans out to every env in `environments` (instead of being
     # silently dropped). Catches under-enumerated triggers — e.g. a chart
@@ -134,6 +139,16 @@ class ValidateSpec(BaseModel):
                     f"trigger '{pattern}' references unknown environment(s): {', '.join(unknown)}"
                 )
         return self
+
+    @field_validator("trigger_ignores")
+    @classmethod
+    def trigger_ignores_must_be_relative(cls, patterns: list[str]) -> list[str]:
+        """Reject ignore patterns that point outside the chart."""
+        return ensure_relative(
+            patterns,
+            label="trigger ignore pattern",
+            relation="chart-relative",
+        )
 
 
 def resolve_namespace(spec: ValidateSpec, env: str) -> str:
