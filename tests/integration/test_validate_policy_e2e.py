@@ -2,8 +2,7 @@
 
 Skips cleanly if helm, kubeconform, or kyverno are missing on PATH so
 unit-test runs on contributor machines without the validate tooling stay
-green. CI install of these tools is handled by `chart-manager validate
-deps-install` (kyverno lands in M6).
+green. Local and CI tool installation is owned by mise.
 """
 from __future__ import annotations
 

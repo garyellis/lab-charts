@@ -248,7 +248,7 @@
 
   <div class="stats">
     <div class="stat"><div class="v">~14.3k</div><div class="k">lines python</div></div>
-    <div class="stat"><div class="v">28</div><div class="k">cli commands</div></div>
+    <div class="stat"><div class="v">27</div><div class="k">cli commands</div></div>
     <div class="stat"><div class="v">38</div><div class="k">service modules</div></div>
     <div class="stat"><div class="v">10</div><div class="k">integrations</div></div>
     <div class="stat"><div class="v">9</div><div class="k">external binaries</div></div>
@@ -279,11 +279,11 @@
 
   <h3 class="sub">② The four layers plus a composition root — imports only flow down (machine-enforced)</h3>
   <div class="layerstack">
-    <div class="lrow lc-cli"><div class="lname">cli/</div><div class="lbody">8 groups, 28 commands, 7 modules, 2,555 ln. Actual shape today: parse flags → build a frozen Request → call one service → render a returned result. Single error-catch in <span class="ref" data-tip="cli/main.py:649 — def main()"><code>main()</code></span>, which now maps <span class="ref" data-tip="cli/main.py:660 — except MissingToolError → exit 127"><code>MissingToolError</code></span> to exit 127 rather than sniffing a bare <code>FileNotFoundError</code>. <span class="pill p-green">✓ 26 of 28 commands portable</span> <a href="#commands/verdict" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Commands tab: per-command verdict</a></div></div>
+    <div class="lrow lc-cli"><div class="lname">cli/</div><div class="lbody">8 groups, 27 commands, 7 modules, 2,480 ln. Actual shape today: parse flags → build a frozen Request → call one service → render a returned result. Single error-catch in <span class="ref" data-tip="cli/main.py:649 — def main()"><code>main()</code></span>, which now maps <span class="ref" data-tip="cli/main.py:660 — except MissingToolError → exit 127"><code>MissingToolError</code></span> to exit 127 rather than sniffing a bare <code>FileNotFoundError</code>. <span class="pill p-green">✓ 26 of 27 commands portable</span> <a href="#commands/verdict" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Commands tab: per-command verdict</a></div></div>
     <div class="ldivider">▼ requests in, frozen results out · no integrations import (ruff TID251 — and <b>zero</b> import sites remain)</div>
     <div class="lrow lc-comp"><div class="lname">composition.py</div><div class="lbody">The <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>. <span class="ref" data-tip="composition.py:84 — @dataclass(frozen) Settings(kube_context, docker_host, command_timeout, event_source)">Settings</span> (frozen: <code>kube_context</code>, <code>docker_host</code>, <code>command_timeout</code>, <code>event_source</code>) + <span class="ref" data-tip="composition.py:125 — class Container(settings=None)">Container</span> → adapters <span class="ref" data-tip="composition.py:141 — command_runner() (memoized SubprocessRunner)">command_runner</span> · <span class="ref" data-tip="composition.py:147 — helmrelease_client() → HelmReleaseClient(self.kubectl())">helmrelease_client</span> · <span class="ref" data-tip="composition.py:156 — helm(verbose=True)">helm</span> · <span class="ref" data-tip="composition.py:164 — kubectl() — context + timeout from Settings">kubectl</span> · <span class="ref" data-tip="composition.py:172 — kind() — docker_host + timeout from Settings">kind</span>; capabilities <span class="ref" data-tip="composition.py:182 — event_writer() (memoized: one EventStore per container)">event_writer</span> · <span class="ref" data-tip="composition.py:194 — monitor_service(progress=None)">monitor_service</span> · <span class="ref" data-tip="composition.py:212 — test_service(progress=None)">test_service</span> · <span class="ref" data-tip="composition.py:230 — promote_service(confirm_downgrade=None)">promote_service</span> · <span class="ref" data-tip="composition.py:245 — expose_service(state_dir=None)">expose_service</span> · <span class="ref" data-tip="composition.py:249 — grafana_exporter()">grafana_exporter</span> · <span class="ref" data-tip="composition.py:253 — lab_service(root, progress=None)">lab_service</span> · <span class="ref" data-tip="composition.py:271 — sandbox_service(root, progress=None)">sandbox_service</span> · <span class="ref" data-tip="composition.py:283 — ci_service(root)">ci_service</span> · <span class="ref" data-tip="composition.py:287 — validate_app(progress=None, on_warn=None)">validate_app</span>. 298 ln, no module-level singleton — the CLI builds one per process, a server one per startup.</div></div>
     <div class="ldivider">▼ constructor-injected adapters — <b>required</b>, not <code>or Helm()</code> fallbacks</div>
-    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">38 modules, six bounded contexts: <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span> — plus <span class="pill p-slate">tools</span>, the toolchain installer moved out of <code>validate/</code>. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — imports every services/ module in a clean interpreter; AST-sweeps for sys.exit outside cli/">tests/test_layering.py</span>.</div></div>
+    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">36 modules, six bounded contexts: <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — imports every services/ module in a clean interpreter; AST-sweeps for sys.exit outside cli/">tests/test_layering.py</span>.</div></div>
     <div class="ldivider">▼ typed results, no upward imports</div>
     <div class="lrow lc-int"><div class="lname">integrations/</div><div class="lbody">One class per external tool: <span class="ref" data-tip="integrations/helm.py:63 — class Helm">helm</span> · <span class="ref" data-tip="integrations/kubectl.py:24 — class Kubectl">kubectl</span> · <span class="ref" data-tip="integrations/kind.py:34 — class Kind">kind</span> · <span class="ref" data-tip="integrations/helmrelease.py:110 — class HelmReleaseClient (was integrations/flux.py: class Flux)">helmrelease</span> · <span class="ref" data-tip="integrations/git.py:12 — class Git">git</span> · <span class="ref" data-tip="integrations/github.py:21 — class Github">github</span> · <span class="ref" data-tip="integrations/kubeconform.py:53 — class Kubeconform">kubeconform</span> · <span class="ref" data-tip="integrations/kyverno.py:80 — class Kyverno">kyverno</span> · <span class="ref" data-tip="integrations/aws/dynamodb/client.py">aws/dynamodb</span> · <span class="ref" data-tip="integrations/azure/cosmos/client.py">azure/cosmos</span>. Typed results, no upward imports. <b>All four kube-facing adapters take the same addressing arguments</b> — see the <a href="#integrations/helmrelease" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">HelmReleaseClient panel</a>.</div></div>
     <div class="ldivider">▼ every subprocess goes through one chokepoint</div>
@@ -300,7 +300,7 @@
   <div class="split">
     <div class="side" id="cmd-side">
       <div class="grp">The surface</div>
-      <button data-item="surface">all 28 commands</button>
+      <button data-item="surface">all 27 commands</button>
       <div class="grp">Command groups</div>
       <button data-item="charts">charts</button>
       <button data-item="deps">deps</button>
@@ -319,8 +319,8 @@
 
       <!-- surface -->
       <div class="panel" id="cmd-surface">
-        <div class="phead"><h2>The command surface</h2><span class="loc">cli/ · 7 files · 2,555 ln · 8 groups · 28 commands</span><span class="pill p-purple">entry points</span></div>
-        <p class="oneliner">Every way a human or a pipeline can enter the system today. One Typer app in <span class="ref" data-tip="cli/main.py:106 — app = typer.Typer(no_args_is_help=True)">cli/main.py</span>; three groups delegate to sub-modules through a <code>register(app)</code> hook, the rest are declared inline. The right-hand column is the question this tab exists to answer: <b>could a non-CLI surface reach this outcome?</b> After the layering refactor the answer is <b>yes for 26 of 28</b> — the two remaining residues are named below and on the <a href="#commands/fix" style="color:var(--blue)">shipped/remaining</a> panel.</p>
+        <div class="phead"><h2>The command surface</h2><span class="loc">cli/ · 7 files · 2,480 ln · 8 groups · 27 commands</span><span class="pill p-purple">entry points</span></div>
+        <p class="oneliner">Every way a human or a pipeline can enter the system today. One Typer app in <span class="ref" data-tip="cli/main.py:106 — app = typer.Typer(no_args_is_help=True)">cli/main.py</span>; three groups delegate to sub-modules through a <code>register(app)</code> hook, the rest are declared inline. The right-hand column is the question this tab exists to answer: <b>could a non-CLI surface reach this outcome?</b> After the layering refactor the answer is <b>yes for 26 of 27</b> — the remaining residue is named below and on the <a href="#commands/fix" style="color:var(--blue)">shipped/remaining</a> panel.</p>
 
         <div class="comm">
           <div class="comm-title">App wiring — where each group's handlers live, and where its Rich half lives</div>
@@ -332,7 +332,7 @@
           </div>
           <div class="carrow">▸<small>register(app)</small></div>
           <div class="cgroup">
-            <div class="cnode c-cli">cli/validate.py<small>6 cmds · 826 ln</small></div>
+            <div class="cnode c-cli">cli/validate.py<small>5 cmds · 755 ln</small></div>
             <div class="cnode c-cli">cli/helmrelease.py<small>3 cmds · 360 ln</small></div>
             <div class="cnode c-cli">cli/events.py<small>2 cmds · 118 ln</small></div>
           </div>
@@ -373,7 +373,6 @@
             <tr><td class="mono">validate policy</td><td class="mono"><span class="ref" data-tip="cli/validate.py:290 — policy(...)">validate.py:290</span></td><td>same call, plus <code>policy_dirs</code> / <code>discover_policies=True</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">validate run</td><td class="mono"><span class="ref" data-tip="cli/validate.py:356 — run(...) — almost all of it flag declarations">validate.py:356</span></td><td><b>was type A</b> → now <code>ValidateApp.run(RunRequest)</code> → <code>RunOutcome</code>; git, worklist, filters, grouping, aggregation and <code>RunResult</code> construction all moved into the service</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">validate clean</td><td class="mono"><span class="ref" data-tip="cli/validate.py:744 — clean(root) — shutil.rmtree + typer.Exit(1)">validate.py:744</span></td><td><code>shutil.rmtree</code> on a CLI-computed path; still no service owns the render tree — <b>the one command still doing its own orchestration</b></td><td class="mono"><span class="pill p-red">no · A</span></td></tr>
-            <tr><td class="mono">validate deps-install</td><td class="mono"><span class="ref" data-tip="cli/validate.py:765 — deps_install(tool, all_tools)">validate.py:765</span></td><td><code>services.tools.install.install_all/install_one</code> → <code>[InstallResult]</code>; the CLI still folds the tally and the exit rule. <b>The module moved out of <code>validate/</code></b> — it installs helm/kubeconform/kyverno/<code>uv</code> and nothing in the validate pipeline imports it; only the <i>verb</i> is still spelled <code>validate deps-install</code></td><td class="mono"><span class="pill p-amber">partial · A</span></td></tr>
             <tr><td class="mono">helmrelease promote</td><td class="mono"><span class="ref" data-tip="cli/helmrelease.py:250 — promote(...)">helmrelease.py:250</span></td><td><code>PromoteService.promote(PromoteRequest) → PromoteResult</code>; the result now carries one <code>status: PromoteStatus</code> instead of five booleans</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">helmrelease monitor</td><td class="mono"><span class="ref" data-tip="cli/helmrelease.py:122 — monitor(...)">helmrelease.py:122</span></td><td><code>MonitorService.monitor(MonitorRequest) → MonitorResult</code>; JSON via <code>wire.monitor_to_dict</code>; <code>--environment</code> arms lifecycle emission</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">helmrelease test</td><td class="mono"><span class="ref" data-tip="cli/helmrelease.py:186 — test(...)">helmrelease.py:186</span></td><td><code>TestService.test(TestRequest) → TestResult</code>; JSON via <code>wire.test_to_dict</code>; <code>--environment</code> arms lifecycle emission</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
@@ -383,7 +382,7 @@
         </table>
         </div>
 
-        <div class="callout good"><b>The re-derived tally: 26 of 28 portable.</b> Two failure modes were tracked. <b>A · orchestration above the line</b> — the CLI did work a service should own, so a second surface had to copy it: <b>was 11, now 2</b> (<code>validate clean</code> outright; <code>validate deps-install</code> partial). <b>B · presentation below the line</b> — the CLI was thin but the service returned <code>None</code> and reported only by printing Rich: <b>was 5, now 0</b>. Every service that used to hold a <code>Console</code> now returns a frozen result and narrates through an injected callback. Full argument on the <a href="#commands/verdict" style="color:var(--blue)">layering verdict</a> panel; what shipped and what is left on <a href="#commands/fix" style="color:var(--blue)">shipped / remaining</a>.</div>
+        <div class="callout good"><b>The re-derived tally: 26 of 27 portable.</b> Two failure modes were tracked. <b>A · orchestration above the line</b> — the CLI did work a service should own, so a second surface had to copy it: <b>was 10, now 1</b> (<code>validate clean</code>). <b>B · presentation below the line</b> — the CLI was thin but the service returned <code>None</code> and reported only by printing Rich: <b>was 5, now 0</b>. Every service that used to hold a <code>Console</code> now returns a frozen result and narrates through an injected callback. Full argument on the <a href="#commands/verdict" style="color:var(--blue)">layering verdict</a> panel; what shipped and what is left on <a href="#commands/fix" style="color:var(--blue)">shipped / remaining</a>.</div>
 
         <div class="callout warn"><b>Finding: <code>validate render</code> invokes kubeconform.</b> The three single-row commands do <i>not</i> differ by phase. All three build a <code>SingleRequest</code> with <code>phases=ALL_PHASES</code> (<span class="ref" data-tip="cli/validate.py:220 · :283 · :349 — phases=ALL_PHASES on all three SingleRequest literals">validate.py:220 · 283 · 349</span>), so <code>runner.run(configs)</code> activates render, schema <i>and</i> policy; <code>render</code>/<code>schema</code> merely pass no policy dirs, so the policy phase reports SKIP. Verified live: <code>validate render --chart tests/fixtures/charts/passing-app --env dev</code> prints <code>Render PASS | Schema PASS | Policy SKIP</code>. This is a latent bug, <b>deliberately preserved rather than silently fixed</b>: scoping <code>render</code> to <code>{"render"}</code> would flip a chart that renders but fails kubeconform from exit 1 to exit 0, weakening a CI gate as a side effect of a naming cleanup. The <code>phases</code> field is fully plumbed through <code>SingleRequest</code> → <code>ValidateRunner.run(enabled_phases=…)</code>, so it is a one-line change per command whenever the owner decides which behavior is intended.</div>
       </div>
@@ -483,14 +482,13 @@ for entry in service.install_plan(chart, profile):
 
       <!-- validate -->
       <div class="panel" id="cmd-validate">
-        <div class="phead"><h2><code>chart-manager validate</code></h2><span class="loc">cli/validate.py · 826 ln · 6 commands</span><span class="pill p-green">was the main violation — resolved</span></div>
+        <div class="phead"><h2><code>chart-manager validate</code></h2><span class="loc">cli/validate.py · 755 ln · 5 commands</span><span class="pill p-green">was the main violation — resolved</span></div>
         <p class="oneliner">The static gate: render → schema → policy. Functionally the most sophisticated part of the tool, and once architecturally the least portable: <b>the pipeline could not be run without Typer</b>, because the assembly that turns a git diff into a <code>RunResult</code> lived in the command body. It now lives in <span class="ref" data-tip="services/validate/app.py:149 — class ValidateApp — run(RunRequest) / single(SingleRequest) / cleanup(outcome)"><code>services/validate/app.py</code></span>, with the caller-facing vocabulary in <span class="ref" data-tip="services/validate/requests.py:57 — SingleRequest · :94 — RunRequest · :123 — RunOutcome · :30 — ValidateInputError"><code>services/validate/requests.py</code></span>. The inventory below is kept as the <i>before</i> picture — it is the clearest statement of what "orchestration above the line" actually means.</p>
         <div class="api"><span class="m">validate render</span>  <span class="r">--chart  --env  --values…  --namespace  --release  --helm-version|--helm-bin  --out  --keep  --format  --github-step-summary  --root</span>
 <span class="m">validate schema</span>  <span class="r">…render flags…  --kube-version  --schema-location…</span>
 <span class="m">validate policy</span>  <span class="r">…schema flags…  --policy-dir…</span>
 <span class="m">validate run</span>     <span class="r">--chart…  --env…  --base  --changed-files  --all  --phases  --out  --keep  --workers  --progress  --timings  --verbose  --row-timeout  --dep-update-timeout  --format  --github-step-summary  --root</span>
-<span class="m">validate clean</span>   <span class="r">--root PATH=.</span>
-<span class="m">validate deps-install</span>  <span class="r">--tool…|--all</span></div>
+<span class="m">validate clean</span>   <span class="r">--root PATH=.</span></div>
 
         <h3 class="sub">What <code>validate run</code> used to do in the command body — the orchestration inventory <span style="font-weight:500;font-size:12px;color:var(--muted)">(every row now lives in <code>services/validate/app.py</code>)</span></h3>
         <div class="seq">
@@ -633,8 +631,8 @@ for entry in service.install_plan(chart, profile):
 
       <!-- verdict -->
       <div class="panel" id="cmd-verdict">
-        <div class="phead"><h2>Layering verdict — is the CLI doing the services' job?</h2><span class="loc">assessed 2026-07-25 · resolved same day</span><span class="pill p-green">was 11 of 28 · now 2</span></div>
-        <p class="oneliner"><b>It was, in 11 of 28 commands — and the fix was worth doing. But the diagnosis had to be sharper than "orchestration is in the CLI", because a third of what lives in cli/ belongs there and moving it down would have made things worse.</b> <span style="color:var(--muted)">This panel keeps the original assessment and records what shipped against it; the before/after is the point.</span></p>
+        <div class="phead"><h2>Layering verdict — is the CLI doing the services' job?</h2><span class="loc">assessed 2026-07-25 · resolved same day</span><span class="pill p-green">was 10 of 27 · now 1</span></div>
+        <p class="oneliner"><b>It was, in 10 of 27 commands — and the fix was worth doing. But the diagnosis had to be sharper than "orchestration is in the CLI", because a third of what lives in cli/ belongs there and moving it down would have made things worse.</b> <span style="color:var(--muted)">This panel keeps the original assessment and records what shipped against it; the before/after is the point.</span></p>
 
         <h3 class="sub">Four different things live in <code>cli/</code>. Two of them had to move.</h3>
         <div class="ft-wrap">
@@ -674,7 +672,7 @@ for entry in service.install_plan(chart, profile):
         </div>
 
         <div class="reco"><b>Bottom line, as assessed:</b> the target — front the same capabilities with REST, GraphQL, RPC, or a Slack app — was the correct reason to act, but the work was <b>not</b> "move orchestration out of the CLI". It was two moves of similar size, plus a third the original cut missed. <b>(1)</b> Pull the 11 type-A commands' decisions into services, concentrated in <code>cli/validate.py</code> and four commands in <code>cli/main.py</code>. <b>(2)</b> Pull presentation out of <code>LabService</code>, <code>SandboxService</code>, <code>cluster_bootstrap</code> and give them frozen results. <b>(3)</b> Extract the wire contracts — the move test ① alone would have missed, because a JSON serializer looks like presentation right up until a second surface needs the identical bytes.
-        <br><br><b>What actually shipped:</b> all three, plus a named composition root and mechanical enforcement. <b>26 of 28 commands are now reachable from any surface</b> — the two residues are <code>validate clean</code> and <code>validate deps-install</code>, both small and both named on the <a href="#commands/fix" style="color:var(--blue)">fix</a> panel. The CLI kept exactly what a CLI should own: flags, tables, and an exit code. The claim that this stays true is no longer a promise — <code>tests/test_layering.py</code> and ruff <code>TID251</code> fail the build when it stops being true.</div>
+        <br><br><b>What actually shipped:</b> all three, plus a named composition root and mechanical enforcement. <b>26 of 27 commands are now reachable from any surface</b> — the remaining residue is <code>validate clean</code>, named on the <a href="#commands/fix" style="color:var(--blue)">fix</a> panel. The CLI kept exactly what a CLI should own: flags, tables, and an exit code. The claim that this stays true is no longer a promise — <code>tests/test_layering.py</code> and ruff <code>TID251</code> fail the build when it stops being true.</div>
       </div>
 
       <!-- fix -->
@@ -734,7 +732,6 @@ for entry in service.install_plan(chart, profile):
       <div class="grp">CI &amp; misc</div>
       <button data-item="ci">CiService</button>
       <button data-item="grafana">grafana/</button>
-      <button data-item="tools">tools/ (toolchain)</button>
       <button data-item="queries">Chart/Dependency svc</button>
     </div>
 
@@ -1202,7 +1199,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
         <p class="oneliner">Static chart validation: <b>render → schema → policy</b> per (chart × env) row, concurrent across rows. The best-architected package in the repo — execution, progress display, and output rendering are fully separated, and since <code>app.py</code> landed the whole pipeline is drivable without a terminal.</p>
         <div class="comm">
           <div class="comm-title">Communication path — the CLI hands over a request, not an assembled plan</div>
-          <div class="cnode c-cli">CLI<small>validate run · render · schema · policy · clean · deps-install</small></div>
+          <div class="cnode c-cli">CLI<small>validate run · render · schema · policy · clean</small></div>
           <div class="carrow">▸<small>RunRequest / SingleRequest</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/validate/app.py:149 — class ValidateApp">ValidateApp</span><small>worklist · filters · RowConfig · helm grouping · retention</small></div>
           <div class="carrow">▸<small>RowConfig[] + Helm/Kubeconform/Kyverno it builds per group</small></div>
@@ -1225,7 +1222,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
               <li><b><span class="ref" data-tip="services/validate/progress.py · 95 ln · ProgressDisplay Protocol + NullDisplay">progress</span></b> — a headless <b>matrix</b> port: <code>start</code> pre-sizes rows × phases and each event addresses one <code>(row, phase)</code> cell. The Rich live-table and plain-narration displays live in <code>cli/validate_progress.py</code></li>
               <li><b><span class="ref" data-tip="services/validate/wire.py · 306 ln · JSON_SCHEMA_VERSION · to_json · to_markdown">wire</span></b> — pure RunResult → markdown ($GITHUB_STEP_SUMMARY) / JSON (<code>JSON_SCHEMA_VERSION=1</code>). The Rich table renderer is <code>cli/validate_render.py</code></li>
             </ul>
-            <p style="font-size:12px;color:var(--muted);margin-top:6px"><b>Gone from this package:</b> <code>rendering.py</code> (split into <code>wire.py</code> + <code>cli/validate_render.py</code>) and <code>deps_install.py</code>, which moved to <a href="#services/tools" style="color:var(--blue)"><code>services/tools/install.py</code></a> — it installs <code>uv</code> and the toolchain, and nothing in this package ever imported it.</p>
+            <p style="font-size:12px;color:var(--muted);margin-top:6px"><b>Gone from this package:</b> <code>rendering.py</code>, split into <code>wire.py</code> + <code>cli/validate_render.py</code>.</p>
           </div>
           <div class="block"><h4>Notes</h4>
             <div class="api"><span class="m">ValidateApp.run</span>(RunRequest)      <span class="r">→ RunOutcome</span>
@@ -1235,7 +1232,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
 <span class="m">on_event</span>(row, phase, status, secs) <span class="r">← worker callbacks</span></div>
             <ul style="margin-top:8px">
               <li class="good">Display-agnostic runner + versioned JSON = ready for the host project's CI as-is</li>
-              <li class="good">The assembly (worklist → <span class="ref" data-tip="services/validate/runner.py:40 — class RowConfig">RowConfig</span>, env resolution) came <b>down</b> into <code>app.py</code>; <code>cli/validate.py</code> fell 1,079 → 826 ln and is now flags plus formatting</li>
+              <li class="good">The assembly (worklist → <span class="ref" data-tip="services/validate/runner.py:40 — class RowConfig">RowConfig</span>, env resolution) came <b>down</b> into <code>app.py</code>; <code>cli/validate.py</code> fell 1,079 → 755 ln and is now flags plus formatting</li>
               <li class="good"><span class="ref" data-tip="services/validate/runner.py — ValidateRunner sets adapter timeouts in __init__, not in run()">ValidateRunner</span> sets its adapters' timeouts in <code>__init__</code> rather than writing public attributes on adapters shared across worker threads</li>
             </ul>
           </div>
@@ -1785,45 +1782,6 @@ promo_correlation_id = flux-repo PR</div>
         <p style="font-size:12.5px;color:var(--muted)">Discovery walks <code>charts/grafana-dashboards/dashboards/**/*.json</code> (sorted, stable). Findings render as <code>path: [rule] message</code> — greppable in CI logs; the CLI exits 1 on any finding.</p>
       </div>
 
-      <!-- tools -->
-      <div class="panel" id="svc-tools">
-        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/tools/">tools/</span></h2><span class="loc">services/tools/install.py · 121 ln</span><span class="pill p-slate">toolchain provisioning</span></div>
-        <p class="oneliner">Installs the pinned versions of every binary chart-manager shells out to, by shelling <code>mise install</code>. Backs <code>chart-manager validate deps-install</code> — the one place where the <b>CLI verb and the module address deliberately disagree</b>.</p>
-
-        <div class="callout good"><b>Why it is not under <code>validate/</code> any more.</b> It lived at <code>services/validate/deps_install.py</code> because <code>validate deps-install</code> is the verb that drives it. That was a filing mistake, not a dependency: <b>nothing in <code>services/validate/</code> imports it</b>, and one of the tools it installs is <code>uv</code> — the package manager for this project itself, which the validate pipeline never invokes. The module's address moved; the CLI verb did not, because renaming a verb people have in their shell history is a real cost and being in the wrong package is a real confusion. <i>This is the doc's clearest small example of "the surface name is not the ownership claim".</i></div>
-
-        <div class="comm">
-          <div class="comm-title">Communication path — the one service with no integration wrapper</div>
-          <div class="cnode c-cli">CLI<small>validate deps-install --tool|--all</small></div>
-          <div class="carrow">▸</div>
-          <div class="cnode c-svc"><span class="ref" data-tip="services/tools/install.py:112 — install_all(runner, on_warn) · :74 — install_one(runner, tool, on_warn)">install_all / install_one</span><small>→ [InstallResult]</small></div>
-          <div class="carrow">▸<small>CommandRunner (no adapter)</small></div>
-          <div class="cnode c-ext">mise install &lt;tool&gt;@&lt;version&gt;</div>
-        </div>
-
-        <div class="two-col">
-          <div class="block"><h4>The pinned registry</h4>
-            <div class="api"><span class="m">HELM_VERSIONS</span>        = (<span class="s">"4.1.3"</span>, <span class="s">"3.20.0"</span>)  <span class="r">default first; alternates</span>
-                                        <span class="r">keep older SDKs installed for</span>
-                                        <span class="r">charts pinning helm_version</span>
-<span class="m">KUBECONFORM_VERSIONS</span> = (<span class="s">"0.8.0"</span>,)
-<span class="m">KYVERNO_VERSIONS</span>     = (<span class="s">"1.18.1"</span>,)
-<span class="m">UV_VERSIONS</span>          = (<span class="s">"0.11.7"</span>,)  <span class="r">← the tell: validate never runs uv</span>
-
-<span class="m">KNOWN_TOOLS</span>          <span class="r">public; the CLI reads it so --tool's</span>
-                            <span class="r">allowed values can't drift from the registry</span></div>
-          </div>
-          <div class="block"><h4>Design points</h4>
-            <ul>
-              <li class="good">Each version is attempted <b>independently</b>; a failure downgrades to a warning carrying the upstream release URL rather than aborting the rest of the run</li>
-              <li class="good">An <code>assert</code> at import time pins <code>_TOOL_VERSIONS</code> and <code>_RELEASE_URLS</code> to the same key set — "added a tool to one map but not the other" fails on import, not at first warn-emission</li>
-              <li class="good"><code>capture=False</code> so mise's progress output streams to the terminal live — one of only two callers that want an uncaptured child</li>
-              <li class="warn">The only service that shells a binary through <code>CommandRunner</code> with no <code>integrations/</code> wrapper. Defensible (one verb, one command shape), but it is the exception to the layer rule and worth a wrapper if a second mise call ever appears</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-
       <!-- queries -->
       <div class="panel" id="svc-queries">
         <div class="phead"><h2><span class="ref" data-tip="services/charts.py:9 — class ChartService">ChartService</span> · <span class="ref" data-tip="services/dependencies.py:21 — class DependencyService">DependencyService</span></h2><span class="loc">charts.py 22 · dependencies.py 55</span><span class="pill p-slate">core queries</span></div>
@@ -2152,7 +2110,7 @@ promo_correlation_id = flux-repo PR</div>
 
         <div class="comm">
           <div class="comm-title">Everything funnels here</div>
-          <div class="cgroup"><div class="cnode c-int">Helm</div><div class="cnode c-int">Kubectl</div><div class="cnode c-int">Kind</div><div class="cnode c-int">Git</div><div class="cnode c-int">Github</div><div class="cnode c-int">Kubeconform</div><div class="cnode c-int">Kyverno</div><div class="cnode c-warn">services/tools/install<small>mise install — the one service caller</small></div></div>
+          <div class="cgroup"><div class="cnode c-int">Helm</div><div class="cnode c-int">Kubectl</div><div class="cnode c-int">Kind</div><div class="cnode c-int">Git</div><div class="cnode c-int">Github</div><div class="cnode c-int">Kubeconform</div><div class="cnode c-int">Kyverno</div></div>
           <div class="carrow">▸<small>runner.run(args)</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="plumbing/commands.py:28 — class CommandRunner(Protocol) — the seam every adapter is built against">CommandRunner</span><small>Protocol · structural</small></div>
           <div class="carrow">▸<small>implemented by</small></div>
@@ -2176,7 +2134,7 @@ promo_correlation_id = flux-repo PR</div>
             <ul>
               <li><b>check=True</b> (default): rc≠0 ⇒ <span class="ref" data-tip="plumbing/commands.py:126 — raise ExternalCommandError(msg, stderr=..., returncode=...)">ExternalCommandError</span> — detail is <code>stderr.strip() or stdout.strip()</code>, and <code>.stderr</code>/<code>.returncode</code> <b>are populated</b> (they used to be left empty by the kernel — the test fakes were more capable than production)</li>
               <li><b>check=False</b>: caller reads <code>result.returncode</code> itself — how Ci/Sandbox turn a <code>helm test</code> rc≠0 into their own richer error, and how hr/test avoids aborting a fan-out</li>
-              <li><b>capture=False</b>: child inherits the terminal (<code>tools/install</code> streams mise output live); <code>stdout</code>/<code>stderr</code> come back as <code>""</code></li>
+              <li><b>capture=False</b>: child inherits the terminal; <code>stdout</code>/<code>stderr</code> come back as <code>""</code></li>
               <li><b>timeout</b>: seconds or None ⇒ <span class="ref" data-tip="plumbing/errors.py:46 — class CommandTimeout(ExternalCommandError)"><code>CommandTimeout</code></span>. The hr monitor/test budgets land here after <a href="#plumbing/duration" style="color:var(--blue)">parse_duration</a></li>
               <li><b>env</b>: <b>overlaid on <code>os.environ</code>, never substituted for it</b> — a bare <code>env=</code> drops <code>PATH</code>, and the next thing that happens is the tool isn't found, which surfaces as <code>MissingToolError</code> and reads like a broken install rather than like the caller having scoped one variable. Lets a caller pin <code>KUBECONFIG</code> or <code>DOCKER_HOST</code> to a single invocation</li>
               <li><b>credential redaction</b>: <code>--set</code>, <code>--set-string</code>, <code>--token</code>, <code>--password</code>, <code>--docker-password</code> values are masked in every error message. <code>--set key=value</code> keeps the <i>key</i> so the message still says which setting failed — rendered errors travel into logs and event payloads</li>
@@ -2498,8 +2456,6 @@ promo_correlation_id = flux-repo PR</div>
       <tr class="section"><td colspan="11">static validation</td></tr>
       <tr><td class="rl"><a href="#services/validate">validate/app → runner+phases</a></td><td><span class="dot d">●</span></td><td></td><td></td><td></td><td><span class="dot d">●</span></td><td></td><td><span class="dot d">●</span></td><td><span class="dot d">●</span></td><td></td><td></td></tr>
       <tr><td class="rl">validate/worklist·wire·progress·requests</td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">pure — no integrations</td></tr>
-      <tr class="section"><td colspan="11">toolchain</td></tr>
-      <tr><td class="rl"><a href="#services/tools">tools/install</a></td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px"><span class="ref" data-tip="plumbing/commands.py:28 — class CommandRunner(Protocol)">CommandRunner</span> → <code>mise install</code> directly (the one service with no integration wrapper; was <code>validate/deps_install</code>)</td></tr>
       <tr class="section"><td colspan="11">gitops delivery</td></tr>
       <tr><td class="rl"><a href="#services/promote">PromoteService</a></td><td></td><td></td><td></td><td></td><td><span class="dot d">●</span></td><td><span class="dot d">●</span></td><td></td><td></td><td colspan="2" style="color:var(--muted);font-size:11px">via EventWriter →</td></tr>
       <tr><td class="rl"><a href="#services/monitor">MonitorService</a></td><td></td><td><span class="dot i">◍</span></td><td></td><td><span class="dot i">◍</span></td><td></td><td></td><td></td><td></td><td colspan="2" style="color:var(--muted);font-size:11px">via EventWriter →</td></tr>
@@ -2658,7 +2614,7 @@ promo_correlation_id = flux-repo PR</div>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/grafana/">services/grafana/</span></td><td><span class="pill p-amber">fix first</span></td><td class="why">lint travels free; split exporter's fetch from normalize (normalizer is already pure, just co-located).</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/ci.py">services/ci.py</span></td><td><span class="pill p-amber">fix first</span></td><td class="why">Constructor aligned — <code>helm</code>/<code>kubectl</code> are required keyword args, so it no longer runs against whatever kubeconfig happens to be ambient. Slots into host CI as-is.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/sandbox.py · services/lab/ · services/cluster_bootstrap.py · services/expose.py">sandbox·lab/·bootstrap·expose</span></td><td><span class="pill p-amber">fix first</span></td><td class="why"><b>Printing is gone</b> — all four return frozen results and narrate through an injected callback, and <code>lab</code> is now a package split by collaborator set. <b>Still open:</b> <code>SandboxService._install_plan</code> and <code>LabService._install_plan</code> remain two implementations of iterate-PlanEntry → dep-update → namespace → upgrade_install. The variation points are only failure policy, skip policy and test-or-not: one plan-executor + a policy object, with <code>cluster_bootstrap</code> as the precedent. Port the result, not the fork.</td></tr>
-      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/cli/">cli/ (all)</span></td><td><span class="pill p-red">rework</span></td><td class="why">Rebuild thin inside the host CLI. <b>Both bypasses are closed</b> — <code>_detect_apps_domain</code> is in <code>ExposeService</code>, <code>Git.changed_files</code> + assembly are in <code>ValidateApp</code> — and <code>cli/</code> now imports no adapter at all, enforced by ruff <code>TID251</code>. cli/helmrelease is the thin-DI template to copy; the <code>*_render.py</code> modules move to surfaces/ with it. Residue: <code>validate clean</code> still computes its own path, and <code>validate deps-install</code> still folds the tally in the callback.</td></tr>
+      <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/cli/">cli/ (all)</span></td><td><span class="pill p-red">rework</span></td><td class="why">Rebuild thin inside the host CLI. <b>Both bypasses are closed</b> — <code>_detect_apps_domain</code> is in <code>ExposeService</code>, <code>Git.changed_files</code> + assembly are in <code>ValidateApp</code> — and <code>cli/</code> now imports no adapter at all, enforced by ruff <code>TID251</code>. cli/helmrelease is the thin-DI template to copy; the <code>*_render.py</code> modules move to surfaces/ with it. Residue: <code>validate clean</code> still computes its own path.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/charts.py · dependencies.py">ChartService·DependencyService</span></td><td><span class="pill p-slate">decide</span></td><td class="why">Dissolve (surfaces query domain/ directly) or keep as the query facade — either, but one convention.</td></tr>
       <tr><td class="pkg"><span class="ref" data-tip="src/chart_manager/services/image_resolver/">image_resolver (publish · image enrichment)</span></td><td><span class="pill p-slate">decide</span></td><td class="why"><code>integrations/oci.py</code> was <b>deleted</b> — an 11-line stub whose <code>chart_ref()</code> raised "not configured", with zero callers. Deleting it was the right half of this decision: a raising stub reads like a seat that is nearly filled. <code>services/image_resolver/</code> is still an empty package holding the <code>images</code> tuple's seat. Implement publish against the real registry (Harbor, per harbor-robot.sh) or drop the package and track the intent in the plan docs.</td></tr>
     </tbody>
@@ -2677,7 +2633,6 @@ promo_correlation_id = flux-repo PR</div>
 │   ├── sandbox.py lab/      <span class="wn"># dup plan-walk</span>
 │   ├── validate/ helmrelease/
 │   ├── events/   grafana/
-│   ├── tools/               <span class="cm"># toolchain install</span>
 │   └── image_resolver/      <span class="wn"># empty</span>
 ├── integrations/ <span class="cm"># clean adapters</span>
 └── plumbing/     <span class="wn"># infra + domain conflated</span>
@@ -2705,7 +2660,7 @@ promo_correlation_id = flux-repo PR</div>
   <div class="steps">
     <div class="pstep"><div><h5>domain/ + plumbing/ first</h5><p>Zero dependencies; everything depends on them. Do the plumbing→domain split during this move so nothing ports against the old layout.</p></div></div>
     <div class="pstep"><div><h5>integrations/ wholesale</h5><p>Bring the tests: tests/ is a flat suite of 52 files (694 passing, 0 failing) with dense per-adapter coverage — helm, kubectl, kind, helmrelease-client, git, github, kubeconform, kyverno parsers — plus <code>test_composition_addressing.py</code>, which walks Settings → Container → adapter → argv/env and is the guard that keeps "one process, two clusters" true. The two <code>-m integration</code> e2e suites (validate schema/policy) are excluded by default <code>addopts</code> and need real binaries on PATH. Note there is <b>one</b> fake runner (<code>tests/conftest.py:FakeCommandRunner</code>) rather than 19 bespoke subclasses — port it first, everything else depends on it.</p></div></div>
-    <div class="pstep"><div><h5>validation/ — already demoted</h5><p>The assembly is in <code>services/validate/app.py</code>; the pipeline is drivable from host CI without Typer today, so this step is a move rather than a refactor. Take <code>services/tools/</code> with it or leave it behind — nothing in validate imports it.</p></div></div>
+    <div class="pstep"><div><h5>validation/ — already demoted</h5><p>The assembly is in <code>services/validate/app.py</code>; the pipeline is drivable from host CI without Typer today, so this step is a move rather than a refactor.</p></div></div>
     <div class="pstep"><div><h5>delivery/ + events/ together</h5><p>All three hr services → EventWriter is the cross-context edge (it was one edge when only promote emitted). Promote is already de-Riched; what remains is lazy SDK imports in <code>store.py</code>, a read/query API, and settling image_resolver. Carry <code>state.py</code> across first — the phase tables are the contract both packages key on.</p></div></div>
     <div class="pstep"><div><h5>clusterops/ — unify, then port</h5><p>Shared plan-executor (bootstrap is the precedent), Sandbox/Lab as policies over it. The "summaries instead of prints" half is done; the duplicated <code>_install_plan</code> is what is left.</p></div></div>
     <div class="pstep"><div><h5>Re-shell the surfaces last</h5><p>Thin CLI in the host project + the FastAPI surface monitor/test were designed for. Nothing below should know which surface called it.</p></div></div>
@@ -2716,7 +2671,7 @@ promo_correlation_id = flux-repo PR</div>
 
 </main>
 
-<footer>chart-manager system explorer · src/chart_manager @ main (33a87e9) + the uncommitted cleanup waves · all edges re-derived from the import graph after the rename of <code>integrations/flux.py</code> → <code>integrations/helmrelease.py</code> and the deletion of <code>integrations/oci.py</code> · hash routes: #commands/surface, #commands/verdict, #services/testspec, #services/lab, #services/monitor, #services/tools, #integrations/helmrelease, #plumbing/commands, #plumbing/pure, #plumbing/graph, #matrix, #flows, #productionize · hover dotted terms for file:line locations · companion: chart-manager-design.html · the promotion/lifecycle model is specified in DESIGN.md</footer>
+<footer>chart-manager system explorer · src/chart_manager @ main (33a87e9) + the uncommitted cleanup waves · all edges re-derived from the import graph after the rename of <code>integrations/flux.py</code> → <code>integrations/helmrelease.py</code> and the deletion of <code>integrations/oci.py</code> · hash routes: #commands/surface, #commands/verdict, #services/testspec, #services/lab, #services/monitor, #integrations/helmrelease, #plumbing/commands, #plumbing/pure, #plumbing/graph, #matrix, #flows, #productionize · hover dotted terms for file:line locations · companion: chart-manager-design.html · the promotion/lifecycle model is specified in DESIGN.md</footer>
 
 <script>
 (function () {

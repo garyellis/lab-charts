@@ -1,9 +1,8 @@
 """End-to-end render -> schema integration test.
 
 Skips cleanly if helm or kubeconform are not on PATH so unit-test runs on
-contributor machines without the validate tooling stay green. CI install
-of these tools is handled by `chart-manager validate deps-install` (M1b
-ships helm; kubeconform/conftest land in M6).
+contributor machines without the validate tooling stay green. Local and CI
+tool installation is owned by mise.
 """
 from __future__ import annotations
 

@@ -67,10 +67,6 @@ run = "uv run chart-manager validate policy \"$@\""
 description = "Remove .chart-manager/rendered/ tree."
 run = "uv run chart-manager validate clean"
 
-[tasks."validate:deps-install"]
-description = "Install helm (default + alternates), kubeconform, kyverno, uv via mise. Per-tool failures downgrade to warnings."
-run = "uv run chart-manager validate deps-install"
-
 [tasks.vuln-scan]
 description = "Scan installed Python deps against PyPI's vulnerability database (pip-audit)."
 run = "uv run pip-audit --skip-editable"

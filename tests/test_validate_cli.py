@@ -255,71 +255,6 @@ def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
     assert "--format" in result.output
 
 
-# --- deps-install CLI -------------------------------------------------
-
-
-def test_deps_install_rejects_tool_and_all_combined() -> None:
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["validate", "deps-install", "--all", "--tool", "helm"]
-    )
-    assert result.exit_code != 0
-    assert "mutually exclusive" in result.output
-
-
-def test_deps_install_rejects_unknown_tool() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install", "--tool", "terraform"])
-    assert result.exit_code != 0
-    assert "unknown tool" in result.output
-
-
-def test_deps_install_defaults_to_install_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    calls: list[str] = []
-
-    def fake_install_all(runner, *, on_warn=print):
-        calls.append("all")
-        return [deps_install_mod.InstallResult(tool="helm", version="4.1.3", success=True)]
-
-    def fake_install_one(runner, tool, *, on_warn=print):
-        calls.append(f"one:{tool}")
-        return []
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_all", fake_install_all)
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_one", fake_install_one)
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install"])
-
-    assert result.exit_code == 0
-    assert calls == ["all"]
-    assert "helm@4.1.3: ok" in result.output
-
-
-def test_deps_install_with_explicit_tools_calls_install_one_per_tool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    calls: list[str] = []
-
-    def fake_install_one(runner, tool, *, on_warn=print):
-        calls.append(tool)
-        return [deps_install_mod.InstallResult(tool=tool, version="x", success=True)]
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_one", fake_install_one)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["validate", "deps-install", "--tool", "kubeconform", "--tool", "kyverno"]
-    )
-
-    assert result.exit_code == 0
-    assert calls == ["kubeconform", "kyverno"]
-
-
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
     from chart_manager.plumbing.validate_models import (
         PhaseResult,
@@ -773,26 +708,3 @@ def test_run_rejects_an_empty_phase_list() -> None:
 
     assert result.exit_code == 2
     assert "at least one phase" in result.output
-
-
-def test_deps_install_exits_nonzero_on_any_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    def fake_install_all(runner, *, on_warn=print):
-        return [
-            deps_install_mod.InstallResult(tool="helm", version="4.1.3", success=True),
-            deps_install_mod.InstallResult(
-                tool="kyverno", version="1.18.1", success=False, detail="boom"
-            ),
-        ]
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_all", fake_install_all)
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install", "--all"])
-
-    assert result.exit_code == 1
-    assert "kyverno@1.18.1: failed" in result.output
-    assert "github.com/kyverno/kyverno/releases/tag/v1.18.1" in result.output

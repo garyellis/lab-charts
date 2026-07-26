@@ -8,8 +8,8 @@ workers, run identity, artifact retention — lives in the service.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
 This `register(app)` pattern keeps cli/main.py free of validate-specific
-imports and lets the sub-app grow (render/schema/policy/run/clean/deps-install)
-without touching main.py.
+imports and lets the sub-app grow (render/schema/policy/run/clean) without
+touching main.py.
 """
 from __future__ import annotations
 
@@ -36,7 +36,6 @@ from chart_manager.cli.validate_render import (
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartNotFoundError
 from chart_manager.plumbing.validate_models import PHASE_ORDER, RunResult
-from chart_manager.services.tools import install as deps_install_mod
 from chart_manager.services.validate.app import (
     ALL_PHASES,
     RunOutcome,
@@ -171,7 +170,6 @@ def register(app: typer.Typer) -> None:
     app.command("policy")(policy)
     app.command("run")(run)
     app.command("clean")(clean)
-    app.command("deps-install")(deps_install)
 
 
 def _container() -> Container:
@@ -755,72 +753,3 @@ def clean(
         console.print(f"[red]error:[/red] cleanup failed: {exc}")
         raise typer.Exit(1) from exc
     console.print(f"cleaned: {target}")
-
-
-# Derived from the service registry so adding a tool there automatically
-# extends the CLI's allow-list — no second source of truth to drift.
-_DEPS_INSTALL_TOOLS = deps_install_mod.KNOWN_TOOLS
-
-
-def deps_install(
-    tool: Annotated[
-        list[str],
-        typer.Option(
-            "--tool",
-            help=(
-                "Tool(s) to install (repeatable). Allowed: "
-                f"{', '.join(_DEPS_INSTALL_TOOLS)}. "
-                "Defaults to --all when omitted."
-            ),
-        ),
-    ] = [],
-    all_tools: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Install every known tool. Mutually exclusive with --tool.",
-        ),
-    ] = False,
-) -> None:
-    """Install validate pipeline tool versions via mise.
-
-    Per-tool failures downgrade to warnings (with upstream release URLs)
-    but still flip the exit code so CI surfaces a partial install rather
-    than passing on soft warnings.
-    """
-    if tool and all_tools:
-        raise typer.BadParameter(
-            "--tool and --all are mutually exclusive",
-            param_hint="--tool / --all",
-        )
-    unknown = [t for t in tool if t not in _DEPS_INSTALL_TOOLS]
-    if unknown:
-        raise typer.BadParameter(
-            f"unknown tool(s): {', '.join(unknown)} "
-            f"(allowed: {', '.join(_DEPS_INSTALL_TOOLS)})",
-            param_hint="--tool",
-        )
-
-    runner_cmd = _container().command_runner()
-    if all_tools or not tool:
-        results = deps_install_mod.install_all(runner_cmd, on_warn=console.print)
-    else:
-        results = []
-        for t in tool:
-            results.extend(
-                deps_install_mod.install_one(runner_cmd, t, on_warn=console.print)
-            )
-
-    for r in results:
-        status = "ok" if r.success else "failed"
-        suffix = ""
-        if not r.success:
-            url = deps_install_mod.release_url(r.tool, r.version)
-            suffix = f" (release: {url})"
-        console.print(f"{r.tool}@{r.version}: {status}{suffix}")
-
-    failed = sum(1 for r in results if not r.success)
-    total = len(results)
-    console.print(f"summary: {total - failed}/{total} installed")
-    if failed:
-        raise typer.Exit(1)
