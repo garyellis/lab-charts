@@ -1,6 +1,6 @@
 """`chart-manager validate` sub-app.
 
-Thin CLI shell over `services/validate/app.ValidateApp`: flag shape and
+Thin CLI shell over `services/manifest_validation/app.ManifestValidationService`: flag shape and
 help text, progress-display choice, output-format dispatch, and the
 mapping from domain errors to Typer's `BadParameter`. Everything that
 changes the *answer* — worklist construction, row assembly, helm binding,
@@ -11,6 +11,7 @@ This `register(app)` pattern keeps cli/main.py free of validate-specific
 imports and lets the sub-app grow (render/schema/policy/run/clean) without
 touching main.py.
 """
+
 from __future__ import annotations
 
 import functools
@@ -35,18 +36,18 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.services.validate.app import (
+from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
+    ManifestValidationService,
     RunOutcome,
     RunRequest,
     SingleRequest,
-    ValidateApp,
     ValidateInputError,
     resolve_workers,
 )
-from chart_manager.services.validate.domain.models import PHASE_ORDER, RunResult
-from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
-from chart_manager.services.validate.wire import to_json, to_markdown
+from chart_manager.services.manifest_validation.models import PHASE_ORDER, RunResult
+from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.manifest_validation.wire import to_json, to_markdown
 
 _FORMATS = ("text", "md", "json", "all")
 _PROGRESS_MODES = ("auto", "live", "plain", "none")
@@ -84,7 +85,9 @@ def _validate_format(value: str) -> str:
 # required precisely because the call sites give them no default).
 ChartOption = Annotated[
     str,
-    typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."),
+    typer.Option(
+        "--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."
+    ),
 ]
 EnvOption = Annotated[
     str,
@@ -92,7 +95,7 @@ EnvOption = Annotated[
         "--env",
         help=(
             "Environment label. Used for the namespace default (lab-<env>) and output path. "
-            "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
+            "Single-row commands (render/schema/policy) do NOT consult chart-manager.yaml — "
             "pass --values explicitly to overlay per-env values. Use `validate run` for "
             "spec-driven multi-row execution."
         ),
@@ -126,7 +129,9 @@ HelmBinOption = Annotated[
 ]
 OutOption = Annotated[
     Path | None,
-    typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
+    typer.Option(
+        "--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."
+    ),
 ]
 KeepOption = Annotated[
     bool,
@@ -177,8 +182,8 @@ def _container() -> Container:
     return Container()
 
 
-def _make_app(progress: ProgressDisplay | None = None) -> ValidateApp:
-    """Build the ValidateApp (module-level so tests can override)."""
+def _make_app(progress: ProgressDisplay | None = None) -> ManifestValidationService:
+    """Build the ManifestValidationService (module-level so tests can override)."""
     return _container().validate_app(progress=progress, on_warn=_warn)
 
 
@@ -241,7 +246,8 @@ def schema(
             help=(
                 "Kubernetes version for kubeconform (e.g. 1.31.2). "
                 "Defaults to kubeconform's built-in default. "
-                "For multi-row runs this is sourced from validate-spec.yaml (kubernetes_version)."
+                "For multi-row runs this is sourced from chart-manager.yaml "
+                "(manifestValidation.kubernetesVersion)."
             ),
         ),
     ] = None,
@@ -252,7 +258,8 @@ def schema(
             help=(
                 "Override kubeconform schema search path (repeatable). "
                 "Default: ['default', datreeio CRDs catalog]. "
-                "For multi-row runs this is sourced from validate-spec.yaml (schema_locations)."
+                "For multi-row runs this is sourced from chart-manager.yaml "
+                "(manifestValidation.schemaLocations)."
             ),
         ),
     ] = [],
@@ -299,14 +306,14 @@ def policy(
         str | None,
         typer.Option(
             "--kube-version",
-            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from validate-spec.yaml.",
+            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from chart-manager.yaml.",
         ),
     ] = None,
     schema_location: Annotated[
         list[str],
         typer.Option(
             "--schema-location",
-            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from validate-spec.yaml.",
+            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from chart-manager.yaml.",
         ),
     ] = [],
     policy_dir: Annotated[
@@ -405,8 +412,7 @@ def run(
         typer.Option(
             "--progress",
             help=(
-                "Progress UI: auto (default; live in TTY+text, plain "
-                "otherwise), live, plain, none."
+                "Progress UI: auto (default; live in TTY+text, plain otherwise), live, plain, none."
             ),
         ),
     ] = "auto",
@@ -471,7 +477,7 @@ def run(
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build worklist from validate-spec.yaml + git, then run all phases.
+    """Build worklist from chart-manager.yaml + git, then run all phases.
 
     Source of the changed-files list (in precedence order):
       --all > --changed-files > git diff against --base.
@@ -580,9 +586,7 @@ def _guard_helm_selection(helm_version: str | None, helm_bin: Path | None) -> No
 
 def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:
     """Map a rejected service input onto the flag that carries it."""
-    return typer.BadParameter(
-        str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint)
-    )
+    return typer.BadParameter(str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint))
 
 
 def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
@@ -663,14 +667,17 @@ def _emit_result(
 
     @functools.cache
     def json_text() -> str:
-        return json.dumps(
-            to_json(
-                source,
-                requested_charts=requested_charts,
-                requested_environments=requested_environments,
-            ),
-            indent=2,
-        ) + "\n"
+        return (
+            json.dumps(
+                to_json(
+                    source,
+                    requested_charts=requested_charts,
+                    requested_environments=requested_environments,
+                ),
+                indent=2,
+            )
+            + "\n"
+        )
 
     if fmt == "json":
         sys.stdout.write(json_text())
@@ -731,8 +738,7 @@ def _parse_phases(raw: str) -> frozenset[str]:
             # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
             # order the user would type them into --phases, which is also
             # the order the flag's default and help text use.
-            f"unknown phase(s): {', '.join(sorted(unknown))}; "
-            f"valid: {','.join(PHASE_ORDER)}",
+            f"unknown phase(s): {', '.join(sorted(unknown))}; valid: {','.join(PHASE_ORDER)}",
             param_hint="--phases",
         )
     return frozenset(parts)
@@ -771,7 +777,7 @@ def clean(
     root: RootOption = Path("."),
 ) -> None:
     """Remove the entire .chart-manager/rendered/ tree."""
-    target = (root.resolve() / ".chart-manager" / "rendered")
+    target = root.resolve() / ".chart-manager" / "rendered"
     if not target.exists():
         console.print("nothing to clean")
         return

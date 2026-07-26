@@ -24,7 +24,7 @@ mise run setup
 mise run validate -- --chart grafana --env dev
 ```
 
-`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared in its `validate-spec.yaml`.
+`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `manifestValidation` in its `chart-manager.yaml`.
 
 ## Daily commands
 
@@ -57,7 +57,23 @@ The fanout heuristic lives in [`.github/workflows/ci.yaml`](.github/workflows/ci
 
 ## Adding or editing a chart
 
-Each chart owns a `charts/<name>/validate-spec.yaml` that declares its environments, the values files composed for each environment, and the policy set to apply. See [`tests/fixtures/charts/passing-app/validate-spec.yaml`](tests/fixtures/charts/passing-app/validate-spec.yaml) for the canonical minimal example.
+Each managed chart owns one `charts/<name>/chart-manager.yaml`. Its optional
+`manifestValidation` section declares environments, composed values, triggers,
+and policies. Its optional `clusterTests` section declares live-cluster install
+profiles and checks; `dependentTests` lists chart/profile tests that should
+rerun when this chart changes. Either capability can be absent or explicitly
+disabled, and the root `enabled` switch pauses both.
+
+See [`tests/fixtures/charts/passing-app/chart-manager.yaml`](tests/fixtures/charts/passing-app/chart-manager.yaml)
+for a minimal manifest-validation example. `chart-manager.yaml` intentionally
+remains in packaged charts so later lifecycle automation can consume the same
+authoritative configuration.
+
+Changed chart files are selected through the existing `triggers:` glob-to-environment
+mapping. Intentional exclusions belong in the additive, chart-relative
+`triggerIgnores:` glob list. Files matching neither are reported as trigger
+coverage gaps; `unmatchedChanges: all-environments` additionally fans those
+files out to every declared environment.
 
 ## Troubleshooting
 

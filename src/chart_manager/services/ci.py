@@ -7,7 +7,7 @@ from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 
 
 class CiService:
@@ -22,24 +22,28 @@ class CiService:
         which this service already owns.
         """
         self.root = root
-        self.repository = ChartRepository(root)
+        self.cluster_tests = ClusterTestCatalog(root)
         self.git = Git(root)
         self.helm = helm
         self.kubectl = kubectl
 
     def changed_charts(self, base: str = "origin/main") -> list[str]:
-        """Chart names changed vs `base`, filtered to charts the repository knows."""
-        known = set(self.repository.list_names())
+        """Changed charts that have enabled live-cluster tests."""
+        known = set(self.cluster_tests.enabled_names())
         return [chart for chart in self.git.changed_charts(base) if chart in known]
+
+    def cluster_test_charts(self) -> list[str]:
+        """Return every chart with enabled live-cluster tests."""
+        return self.cluster_tests.enabled_names()
 
     def install_source_chart(self, chart_name: str, profile: str, namespace: str) -> None:
         """Install the chart from local source, then run `helm test` if the profile enables it.
 
         Raises ExternalCommandError on a nonzero `helm test`.
         """
-        chart = self.repository.get_managed(chart_name)
+        chart = self.cluster_tests.get(chart_name)
         profile_spec = chart.spec.profile(profile)
-        values = self.repository.value_paths(chart, profile)
+        values = self.cluster_tests.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)
         self.helm.dependency_update(chart.path)
         self.helm.upgrade_install(
@@ -70,9 +74,9 @@ class CiService:
         what's running in production rather than chart defaults. Runs
         `helm test` after the upgrade if the profile enables it.
         """
-        chart = self.repository.get_managed(chart_name)
+        chart = self.cluster_tests.get(chart_name)
         profile_spec = chart.spec.profile(profile)
-        values = self.repository.value_paths(chart, profile)
+        values = self.cluster_tests.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)
         self.helm.upgrade_install(
             chart.name,

@@ -25,6 +25,7 @@ supposed to wrap adapters), while rule (c) needs it *enforced* there -- that
 is exactly where a stray `sys.exit` would do the most damage. One code cannot
 be both, so (c) is checked here instead of weakening (a).
 """
+
 from __future__ import annotations
 
 import ast
@@ -49,7 +50,9 @@ _FORBIDDEN_ROOTS = ("rich", "typer")
 _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
     "chart_deps.py",
     "charts.py",
+    "cluster_tests.py",
     "graph.py",
+    "install_plan.py",
     "spec.py",
 }
 
@@ -69,13 +72,11 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
     expected = {
         "chart_deps.py",
         "charts.py",
-        "graph.py",
-        "spec.py",
+        "cluster_tests.py",
+        "install_plan.py",
     }
     actual = {
-        path.name
-        for path in (_SERVICES / "domain").glob("*.py")
-        if path.name != "__init__.py"
+        path.name for path in (_SERVICES / "domain").glob("*.py") if path.name != "__init__.py"
     }
     assert expected <= actual
 
@@ -92,17 +93,13 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     )
     assert not misplaced, (
         "validation-domain modules belong in "
-        "chart_manager/services/validate/domain, not plumbing: "
+        "chart_manager/services/manifest_validation, not plumbing: "
         f"{', '.join(misplaced)}"
     )
 
-    validation_domain = _SERVICES / "validate" / "domain"
-    expected = {"models.py", "spec.py"}
-    actual = {
-        path.name
-        for path in validation_domain.glob("*.py")
-        if path.name != "__init__.py"
-    }
+    validation_domain = _SERVICES / "manifest_validation"
+    expected = {"models.py", "output_paths.py", "spec.py"}
+    actual = {path.name for path in validation_domain.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual
 
 
@@ -110,7 +107,7 @@ def test_plumbing_does_not_import_service_domains() -> None:
     """Generic plumbing may not depend on chart or validation service policy."""
     forbidden_prefixes = (
         "chart_manager.services.domain",
-        "chart_manager.services.validate.domain",
+        "chart_manager.services.manifest_validation",
     )
     offenders: list[str] = []
 
@@ -128,8 +125,7 @@ def test_plumbing_does_not_import_service_domains() -> None:
                     offenders.append(f"{rel}:{node.lineno}: {module}")
 
     assert not offenders, (
-        "generic plumbing must not import service-domain modules:\n  "
-        + "\n  ".join(offenders)
+        "generic plumbing must not import service-domain modules:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -166,13 +162,10 @@ def _probe(modules: list[str]) -> str:
         + f"leaked = sorted({{m.split('.')[0] for m in sys.modules}} & set({_FORBIDDEN_ROOTS!r}))\n"
         "print(','.join(leaked))\n"
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
+    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     if proc.returncode != 0:
         pytest.fail(
-            "importing the services layer failed:\n"
-            f"modules: {', '.join(modules)}\n{proc.stderr}"
+            f"importing the services layer failed:\nmodules: {', '.join(modules)}\n{proc.stderr}"
         )
     return proc.stdout.strip()
 
@@ -182,7 +175,7 @@ def test_service_modules_are_discoverable() -> None:
     modules = _service_modules()
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
-    assert "chart_manager.services.validate.app" in modules
+    assert "chart_manager.services.manifest_validation.app" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -191,7 +184,7 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     Rendering belongs to the surface: Rich widgets live in
     `cli/helmrelease_render.py`, `cli/validate_render.py` and
     `cli/validate_progress.py`; services narrate through injected callbacks
-    (`services/progress.py`, `services/validate/progress.py`) and return
+    (`services/progress.py`, `services/manifest_validation/progress.py`) and return
     plain result objects plus versioned wire projections
     (`services/*/wire.py`).
 
@@ -258,10 +251,13 @@ def test_non_surface_modules_are_discoverable() -> None:
     paths = _non_surface_modules()
     assert len(paths) > 30, f"suspiciously few non-surface modules: {len(paths)}"
     assert _PKG / "composition.py" in paths
-    # `services/lab` became a package (models/access/drift/service); the
-    # canary follows the converge engine to its new file. Pure move -- the
-    # old assertion was not wrong, just pinned to a path that no longer exists.
-    assert _PKG / "services" / "lab" / "service.py" in paths
+    # Cluster workflows are grouped by subject but remain separate services.
+    # The canaries ensure both the persistent development converge engine and
+    # fail-fast ephemeral test service remain visible to the layer scan.
+    clusters = _PKG / "services" / "clusters"
+    assert clusters / "development" / "service.py" in paths
+    assert clusters / "ephemeral.py" in paths
+    assert clusters / "bootstrap.py" in paths
 
 
 def test_no_process_exit_outside_cli() -> None:
@@ -271,7 +267,7 @@ def test_no_process_exit_outside_cli() -> None:
     Slack listener, or a long-lived worker -- it takes the whole process down
     instead of returning a result the caller can turn into a status code.
     Services raise `ChartManagerError` (or return a result carrying an
-    `exit_code`, as `ValidateApp` does via `RunOutcome`); `cli/main.py` and
+    `exit_code`, as `ManifestValidationService` does via `RunOutcome`); `cli/main.py` and
     `cli/validate.py` are the only places that translate that into an exit.
     """
     offenders: list[str] = []

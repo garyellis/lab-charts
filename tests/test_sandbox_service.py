@@ -1,10 +1,11 @@
-"""SandboxService result accounting + the `ensure` verb.
+"""EphemeralTestClusterService result accounting + the `ensure` verb.
 
 `sandbox ensure` used to reach through the service into its injected Kind
 integration and own the "kind-config.yaml at repo root if it exists" rule
 in the CLI handler. Both now belong to the service, and `run` returns what
 it did instead of printing it.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,17 +15,20 @@ import pytest
 
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
-from chart_manager.services import sandbox as sandbox_module
+from chart_manager.services.clusters import ephemeral as sandbox_module
+from chart_manager.services.clusters.ephemeral import (
+    EphemeralTestClusterService,
+    EphemeralTestRequest,
+)
 from chart_manager.services.domain.charts import (
     ChartMetadata,
+    ClusterTestChart,
     HelmChart,
-    ManagedChart,
 )
-from chart_manager.services.domain.graph import PlanEntry
-from chart_manager.services.domain.spec import ProfileSpec
-from chart_manager.services.domain.spec import TestSpec as _TestSpec
+from chart_manager.services.domain.cluster_tests import ClusterTestProfile
+from chart_manager.services.domain.cluster_tests import ClusterTestSpec as _TestSpec
+from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.progress import ProgressEvent
-from chart_manager.services.sandbox import SandboxOptions, SandboxService
 
 
 class _Kind:
@@ -82,27 +86,27 @@ class _Recorder:
         return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
 
 
-def _stub_chart(name: str, *, helm_test: bool = True) -> ManagedChart:
-    profile = ProfileSpec(
+def _stub_chart(name: str, *, helm_test: bool = True) -> ClusterTestChart:
+    profile = ClusterTestProfile(
         namespace="observability",
         values=[],
         timeout="1m",
         requires=[],
-        helm_test=helm_test,
+        helmTest=helm_test,
         checks=[],
     )
-    return ManagedChart(
+    return ClusterTestChart(
         chart=HelmChart(
             name=name,
             path=Path(f"/tmp/{name}"),
             metadata=ChartMetadata(name, "0.0.0", "application", ()),
         ),
-        spec=_TestSpec(profiles={"minimal": profile}, reverse_tests=[]),
+        spec=_TestSpec(profiles={"minimal": profile}, dependentTests=[]),
     )
 
 
 def _service(tmp_path: Path, *, kind: _Kind, helm: _Helm, progress: _Recorder | None = None):
-    return SandboxService(
+    return EphemeralTestClusterService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
@@ -118,7 +122,7 @@ def test_ensure_passes_the_repo_kind_config_when_present(tmp_path: Path) -> None
     (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n")
     kind = _Kind()
 
-    name = _service(tmp_path, kind=kind, helm=_Helm()).ensure("chart-manager")
+    name = _service(tmp_path, kind=kind, helm=_Helm()).ensure_cluster("chart-manager")
 
     assert name == "chart-manager"
     assert kind.ensure_calls == [("chart-manager", tmp_path / "kind-config.yaml")]
@@ -127,7 +131,7 @@ def test_ensure_passes_the_repo_kind_config_when_present(tmp_path: Path) -> None
 def test_ensure_passes_no_config_when_the_repo_has_none(tmp_path: Path) -> None:
     kind = _Kind()
 
-    _service(tmp_path, kind=kind, helm=_Helm()).ensure("chart-manager")
+    _service(tmp_path, kind=kind, helm=_Helm()).ensure_cluster("chart-manager")
 
     assert kind.ensure_calls == [("chart-manager", None)]
 
@@ -135,7 +139,7 @@ def test_ensure_passes_no_config_when_the_repo_has_none(tmp_path: Path) -> None:
 def test_ensure_narrates_through_the_progress_callback(tmp_path: Path) -> None:
     progress = _Recorder()
 
-    _service(tmp_path, kind=_Kind(), helm=_Helm(), progress=progress).ensure("c")
+    _service(tmp_path, kind=_Kind(), helm=_Helm(), progress=progress).ensure_cluster("c")
 
     assert "Ensuring sandbox cluster c" in progress.text
 
@@ -144,19 +148,21 @@ def test_ensure_narrates_through_the_progress_callback(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SandboxService, _Helm]:
-    """A SandboxService whose plan and repository are stubbed in memory."""
+def wired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[EphemeralTestClusterService, _Helm]:
+    """An EphemeralTestClusterService with an in-memory plan and repository."""
     helm = _Helm()
     svc = _service(tmp_path, kind=_Kind(), helm=helm)
     charts = {"grafana": _stub_chart("grafana"), "loki": _stub_chart("loki")}
-    monkeypatch.setattr(svc.repository, "get_managed", lambda name: charts[name])
-    monkeypatch.setattr(svc.repository, "value_paths", lambda _c, _p: [])
+    monkeypatch.setattr(svc.cluster_tests, "get", lambda name: charts[name])
+    monkeypatch.setattr(svc.cluster_tests, "value_paths", lambda _c, _p: [])
     monkeypatch.setattr(
         svc.resolver,
         "install_plan",
         lambda _c, _p: [
-            PlanEntry(chart="loki", profile="minimal"),
-            PlanEntry(chart="grafana", profile="minimal"),
+            InstallPlanEntry(chart="loki", profile="minimal"),
+            InstallPlanEntry(chart="grafana", profile="minimal"),
         ],
     )
     # The real bootstrap reads cilium's chart from disk; collapse it to the
@@ -166,11 +172,11 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SandboxServi
 
 
 def test_run_returns_what_it_installed_and_tested(
-    wired: tuple[SandboxService, _Helm],
+    wired: tuple[EphemeralTestClusterService, _Helm],
 ) -> None:
     svc, helm = wired
 
-    result = svc.run(SandboxOptions(chart="grafana", ensure_cluster=False))
+    result = svc.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
 
     assert result.ok
     assert result.chart == "grafana"
@@ -187,15 +193,17 @@ def test_run_omits_charts_whose_profile_disables_helm_test(
     helm = _Helm()
     svc = _service(tmp_path, kind=_Kind(), helm=helm)
     monkeypatch.setattr(
-        svc.repository, "get_managed", lambda name: _stub_chart(name, helm_test=False)
+        svc.cluster_tests, "get", lambda name: _stub_chart(name, helm_test=False)
     )
-    monkeypatch.setattr(svc.repository, "value_paths", lambda _c, _p: [])
+    monkeypatch.setattr(svc.cluster_tests, "value_paths", lambda _c, _p: [])
     monkeypatch.setattr(
-        svc.resolver, "install_plan", lambda _c, _p: [PlanEntry(chart="grafana", profile="minimal")]
+        svc.resolver,
+        "install_plan",
+        lambda _c, _p: [InstallPlanEntry(chart="grafana", profile="minimal")],
     )
     monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
 
-    result = svc.run(SandboxOptions(chart="grafana", ensure_cluster=False))
+    result = svc.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
 
     assert result.installed == ("grafana",)
     assert result.tested == ()
@@ -211,7 +219,7 @@ def test_run_ensures_the_cluster_and_narrates_it(
     monkeypatch.setattr(svc.resolver, "install_plan", lambda _c, _p: [])
     monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
 
-    svc.run(SandboxOptions(chart="grafana", cluster_name="sbx"))
+    svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx"))
 
     assert kind.ensure_calls == [("sbx", None)]
     assert "Ensuring sandbox cluster sbx" in progress.text

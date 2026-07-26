@@ -1,0 +1,44 @@
+version: 1
+enabled: true
+
+manifestValidation:
+  enabled: true
+  releaseName: flink-operator
+  namespaceTemplate: "lab-${env}"
+  environments:
+    ci:
+      namespace: flink-operator
+      values:
+        - values.yaml
+        - values-ci.yaml
+  triggers:
+    "Chart.yaml":     [ci]
+    "values.yaml":    [ci]
+    "values-ci.yaml": [ci]
+    "templates/**":   [ci]
+  unmatchedChanges: warn
+
+clusterTests:
+  enabled: true
+  profiles:
+    minimal:
+      description: Install the Flink Kubernetes Operator with a sample FlinkDeployment and verify both become ready.
+      namespace: flink-operator
+      requires: []
+      values:
+        - values.yaml
+        - values-ci.yaml
+      helmTest: true
+      checks:
+        - name: control-plane-ready
+          type: helm-test
+          description: Wait for the flink-kubernetes-operator deployment to become available.
+        - name: crds-installed
+          type: helm-test
+          description: Verify the Flink operator CRDs exist.
+        - name: flinkdeployment-ready
+          type: helm-test
+          description: Wait for the sample FlinkDeployment job manager to report READY.
+      timeout: 15m
+
+  dependentTests: []

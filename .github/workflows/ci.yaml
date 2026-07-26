@@ -46,18 +46,8 @@ jobs:
   # capabilities. Documented in tests/test_layering.py; the same two commands
   # run locally via `mise run lint-layering`.
   #
-  # This job used to run only the three contract checks, because a backlog of
-  # ~22 ruff findings, ~40 mypy findings and 3 stale chart-inventory test
-  # assertions would have made a wider job permanently red. The ruff and test
-  # backlogs are now cleared (0 and 0), so the suite and the linter are gates
-  # here too -- without them CI could not catch a regression in any of the
-  # ~694 tests.
-  #
-  # mypy is still out: ~37 findings remain, most of them one root cause
-  # (untyped JSON payload plumbing in integrations/helmrelease.py). Add a
-  # `mypy src/` step here once that is addressed; until then a red mypy gate
-  # would train people to ignore this job, which is the failure mode the
-  # original scoping was avoiding.
+  # Keep the fast Python and workflow quality gates together. Runtime chart
+  # validation and cluster tests remain in their dedicated jobs below.
   layering:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -66,6 +56,12 @@ jobs:
 
       - name: Install mise + tools
         uses: jdx/mise-action@v4
+
+      # actionlint is pinned in .mise.toml, like the other CI tools. Checking
+      # the workflow with the project toolchain keeps this gate reproducible
+      # locally and avoids another action dependency.
+      - name: Workflow syntax
+        run: actionlint .github/workflows/ci.yaml
 
       # (a) cli/ may import services/ + plumbing/ + the composition root,
       #     never integrations/. Banned-api config lives in pyproject.toml
@@ -89,6 +85,11 @@ jobs:
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
         run: uv run --extra dev ruff check src/ tests/
+
+      # Mypy is intentionally scoped to production code. The package baseline
+      # is clean; test annotations stay lightweight by design.
+      - name: Type check
+        run: uv run --extra dev mypy src/chart_manager
 
   prep:
     runs-on: ubuntu-latest
@@ -167,31 +168,40 @@ jobs:
           # Job-log only — the authoritative $GITHUB_OUTPUT write is below.
           echo "resolved dispatch mode: $mode"
 
-          # ---- Validate list-mode chart names against charts/ -------------
-          # Fail loud rather than silently dropping unknown names: a typo in
-          # the dispatch input would otherwise produce a partial matrix and
-          # look like a successful run.
+          # ---- Validate explicitly requested live-cluster capabilities ----
+          # Fail loud for unknown names and charts which exist but do not
+          # have enabled clusterTests. Silently dropping either would produce
+          # a misleading partial-green run.
           if [[ "$mode" == "list" ]]; then
             unknown=()
+            unavailable=()
+            enabled_cluster_tests="$(uv run chart-manager ci cluster-test-charts)"
             while IFS= read -r c; do
               [[ -z "$c" ]] && continue
               if [[ ! -d "charts/$c" ]]; then
                 unknown+=("$c")
+              elif ! grep -Fqx "$c" <<< "$enabled_cluster_tests"; then
+                unavailable+=("$c")
               fi
             done <<< "$chart_list_newline"
-            if (( ${#unknown[@]} > 0 )) ; then
+            if (( ${#unknown[@]} > 0 || ${#unavailable[@]} > 0 )) ; then
               {
                 echo "### dispatch input rejected"
                 echo ""
-                echo "Unknown chart name(s) in \`charts\` input: \`${unknown[*]}\`"
+                if (( ${#unknown[@]} > 0 )); then
+                  echo "Unknown chart name(s): \`${unknown[*]}\`"
+                fi
+                if (( ${#unavailable[@]} > 0 )); then
+                  echo "Chart(s) without enabled \`clusterTests\`: \`${unavailable[*]}\`"
+                fi
                 echo ""
-                echo "Available charts:"
+                echo "Charts enabled for cluster tests:"
                 echo ""
                 echo '```'
-                ls -1 charts/
+                printf '%s\n' "$enabled_cluster_tests"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "unknown chart name(s): ${unknown[*]}" >&2
+              echo "invalid cluster-test chart request" >&2
               exit 1
             fi
           fi
@@ -253,7 +263,8 @@ jobs:
           set -euo pipefail
 
           all_charts() {
-            ls -1 charts/ | jq -R -s -c 'split("\n") | map(select(length > 0))'
+            uv run chart-manager ci cluster-test-charts \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))'
           }
 
           emit() {
@@ -399,9 +410,8 @@ jobs:
     env:
       # Route matrix.chart through env once and refer to $CHART in every shell
       # block, instead of literal-interpolating ${{ matrix.chart }} into bash.
-      # Chart names come from `ls charts/` (DNS-1123 dirnames) so injection
-      # risk is ~zero today, but routing through env closes the door fully and
-      # mirrors the prep job's discipline.
+      # Chart names come from Chart Manager's enabled cluster-test catalog;
+      # routing through env keeps the shell blocks readable.
       CHART: ${{ matrix.chart }}
       # kind cluster names are DNS-1123 (≤63 chars). All existing chart names
       # in this repo are short + DNS-safe, so `lab-<chart>-<run_id>` fits.

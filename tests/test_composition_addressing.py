@@ -7,6 +7,7 @@ writes to the wrong cluster with no diagnostic. These tests walk the whole
 path (Settings -> Container -> adapter -> argv/env) rather than asserting
 that a constructor stored a field, because storing it was never the bug.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -92,7 +93,7 @@ def test_lab_service_gets_every_adapter_configured() -> None:
     """The service can no longer fall back to an unconfigured adapter."""
     container = _configured()
 
-    service = container.lab_service(Path("."))
+    service = container.development_cluster_service(Path("."))
 
     assert service.kubectl.context == "kind-b"
     assert service.helm._context == "kind-b"
@@ -102,7 +103,7 @@ def test_lab_service_gets_every_adapter_configured() -> None:
 def test_sandbox_and_ci_services_get_configured_adapters() -> None:
     container = _configured()
 
-    assert container.sandbox_service(Path(".")).kubectl.context == "kind-b"
+    assert container.ephemeral_test_cluster_service(Path(".")).kubectl.context == "kind-b"
     assert container.ci_service(Path(".")).kubectl.context == "kind-b"
 
 

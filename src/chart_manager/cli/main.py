@@ -1,4 +1,5 @@
 """Top-level Typer app wiring and small inline commands for chart-manager."""
+
 from __future__ import annotations
 
 import sys
@@ -15,31 +16,31 @@ from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
-from chart_manager.services.charts import ChartService
-from chart_manager.services.dependencies import DependencyService
-from chart_manager.services.expose import ExposeRequest
-from chart_manager.services.lab import (
-    DEFAULT_CHART as LAB_DEFAULT_CHART,
+from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.services.clusters.development import (
+    DEFAULT_CHART as DEVELOPMENT_DEFAULT_CHART,
 )
-from chart_manager.services.lab import (
-    DEFAULT_PROFILE as LAB_DEFAULT_PROFILE,
+from chart_manager.services.clusters.development import (
+    DEFAULT_PROFILE as DEVELOPMENT_DEFAULT_PROFILE,
 )
-from chart_manager.services.lab import (
+from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
     LAB_CA_SECRET_NAMESPACE,
-    AccessHints,
-    ClusterActionResult,
-    LabResult,
-    LabSyncOptions,
-    LabUpOptions,
+    DevelopmentClusterAccessHints,
+    DevelopmentClusterActionResult,
+    DevelopmentClusterResult,
+    DevelopmentClusterSyncRequest,
+    DevelopmentClusterUpRequest,
 )
-from chart_manager.services.progress import ProgressEvent
-from chart_manager.services.sandbox import (
+from chart_manager.services.clusters.ephemeral import (
     DEFAULT_CLUSTER_NAME,
     DEFAULT_NAMESPACE,
     DEFAULT_PROFILE,
-    SandboxOptions,
+    EphemeralTestRequest,
 )
+from chart_manager.services.expose import ExposeRequest
+from chart_manager.services.install_plan import InstallPlanService
+from chart_manager.services.progress import ProgressEvent
 
 console = Console()
 
@@ -104,7 +105,10 @@ def _exit_if_failed(ok: bool) -> None:
 
 
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
-charts_app = typer.Typer(no_args_is_help=True, help="Inspect charts and test specs.")
+charts_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inspect Helm charts and their chart-manager configuration.",
+)
 deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
 sandbox_app = typer.Typer(
     no_args_is_help=True,
@@ -144,35 +148,55 @@ app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
-ProfileOption = Annotated[str, typer.Option("--profile", help="test-spec profile.")]
+ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
 ClusterNameOption = Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")]
 NamespaceOption = Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")]
 
 
 @charts_app.command("list")
 def list_charts(root: RootOption = Path(".")) -> None:
-    service = ChartService(root)
-    table = Table("Chart", "Version", "Dependencies", "Profiles")
-    for name in service.list_charts():
-        try:
-            chart = service.get_chart(name)
-        except ChartManagerError:
-            table.add_row(name, "?", "?", "[red]<no test-spec>[/red]")
-            continue
-        version = chart.metadata.version or ""
-        dep_versions = ", ".join(
-            f"{dep.name} {dep.version or '?'}" for dep in chart.metadata.dependencies
+    """List Helm charts and their chart-manager capability status."""
+    service = ChartCatalogService(root)
+    table = Table(
+        "Chart",
+        "Type",
+        "Version",
+        "Dependencies",
+        "Config",
+        "Manifest validation",
+        "Cluster tests",
+        "Profiles",
+    )
+    invalid = False
+    for entry in service.list_entries():
+        invalid = invalid or entry.error is not None
+        config_status = (
+            f"[red]invalid: {escape(entry.error or '')}[/red]"
+            if entry.error is not None
+            else entry.config_status
         )
-        profiles = ", ".join(chart.spec.profiles)
-        table.add_row(name, str(version), dep_versions, profiles)
+        table.add_row(
+            entry.name,
+            entry.chart_type,
+            entry.version,
+            ", ".join(entry.dependencies),
+            config_status,
+            entry.manifest_validation.value,
+            entry.cluster_tests.value,
+            ", ".join(entry.profiles),
+        )
     console.print(table)
+    if invalid:
+        raise typer.Exit(1)
 
 
-@charts_app.command("spec")
-def show_spec(chart: str, root: RootOption = Path(".")) -> None:
-    service = ChartService(root)
-    model = service.get_chart(chart)
-    console.print_json(data=model.spec.model_dump(by_alias=True))
+@charts_app.command("config")
+def show_config(chart: str, root: RootOption = Path(".")) -> None:
+    """Print one chart's normalized chart-manager.yaml configuration."""
+    config = ChartCatalogService(root).get_config(chart)
+    console.print_json(
+        data=config.model_dump(mode="json", by_alias=True, exclude_none=True)
+    )
 
 
 @grafana_app.command("export-dashboard")
@@ -182,11 +206,15 @@ def grafana_export_dashboard(
     namespace: NamespaceOption = DEFAULT_NAMESPACE,
     release: Annotated[
         str,
-        typer.Option("--release", help="Grafana Helm release name (drives secret and service name)."),
+        typer.Option(
+            "--release", help="Grafana Helm release name (drives secret and service name)."
+        ),
     ] = "grafana",
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Write the normalized JSON to this file (default: stdout)."),
+        typer.Option(
+            "--output", "-o", help="Write the normalized JSON to this file (default: stdout)."
+        ),
     ] = None,
 ) -> None:
     """Export a dashboard from a kind-deployed Grafana and normalize for git.
@@ -197,12 +225,16 @@ def grafana_export_dashboard(
     """
     from chart_manager.services.grafana.dashboard_export import ExportRequest
 
-    payload = _container().grafana_exporter().export(
-        ExportRequest(
-            uid=uid,
-            cluster_name=cluster_name,
-            namespace=namespace,
-            release=release,
+    payload = (
+        _container()
+        .grafana_exporter()
+        .export(
+            ExportRequest(
+                uid=uid,
+                cluster_name=cluster_name,
+                namespace=namespace,
+                release=release,
+            )
         )
     )
     if output is None:
@@ -251,7 +283,7 @@ def dependency_plan(
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
-    service = DependencyService(root)
+    service = InstallPlanService(root)
     table = Table("Order", "Chart", "Profile", "Target")
     for index, entry in enumerate(service.install_plan(chart, profile), start=1):
         table.add_row(str(index), entry.chart, entry.profile, "yes" if entry.target else "")
@@ -264,7 +296,7 @@ def dependency_checks(
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
-    service = DependencyService(root)
+    service = InstallPlanService(root)
     table = Table("Order", "Chart", "Profile", "Check", "Type", "Description")
     row = 0
     for entry in service.plan_checks(chart, profile):
@@ -281,11 +313,11 @@ def dependency_checks(
     console.print(table)
 
 
-@deps_app.command("reverse")
-def reverse_tests(chart: str, root: RootOption = Path(".")) -> None:
-    service = DependencyService(root)
+@deps_app.command("dependent-tests")
+def dependent_tests(chart: str, root: RootOption = Path(".")) -> None:
+    service = InstallPlanService(root)
     table = Table("Chart", "Profile")
-    for ref in service.reverse_tests(chart):
+    for ref in service.dependent_tests(chart):
         table.add_row(ref.chart, ref.profile)
     console.print(table)
 
@@ -297,7 +329,7 @@ def ensure_kind(
 ) -> None:
     # No progress callback: this command's whole output is the one line
     # below, so the service's "Ensuring sandbox cluster" step would be noise.
-    _container().sandbox_service(root.resolve()).ensure(cluster_name)
+    _container().ephemeral_test_cluster_service(root.resolve()).ensure_cluster(cluster_name)
     console.print(f"sandbox cluster ready: {cluster_name}")
 
 
@@ -309,14 +341,14 @@ def sandbox_up(
             "--chart",
             help="Entry chart whose profile is the install plan source.",
         ),
-    ] = LAB_DEFAULT_CHART,
+    ] = DEVELOPMENT_DEFAULT_CHART,
     profile: Annotated[
         str,
         typer.Option(
             "--profile",
             help="Profile on --chart to resolve into the install plan.",
         ),
-    ] = LAB_DEFAULT_PROFILE,
+    ] = DEVELOPMENT_DEFAULT_PROFILE,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     namespace: NamespaceOption = DEFAULT_NAMESPACE,
     skip_installed: Annotated[
@@ -344,9 +376,9 @@ def sandbox_up(
     restore the prior fast-skip behavior (don't even invoke helm for
     releases already in `helm list -A`).
     """
-    service = _container().lab_service(root, progress=_print_progress)
+    service = _container().development_cluster_service(root, progress=_print_progress)
     result = service.up(
-        LabUpOptions(
+        DevelopmentClusterUpRequest(
             chart=chart,
             profile=profile,
             cluster_name=cluster_name,
@@ -354,7 +386,7 @@ def sandbox_up(
             skip_installed=skip_installed,
         )
     )
-    _render_lab_result(result)
+    _render_development_cluster_result(result)
     _exit_if_failed(result.ok)
 
 
@@ -373,14 +405,14 @@ def sandbox_sync(
             "--chart",
             help="Entry chart whose profile is the install plan source.",
         ),
-    ] = LAB_DEFAULT_CHART,
+    ] = DEVELOPMENT_DEFAULT_CHART,
     profile: Annotated[
         str,
         typer.Option(
             "--profile",
             help="Profile on --chart to resolve into the install plan.",
         ),
-    ] = LAB_DEFAULT_PROFILE,
+    ] = DEVELOPMENT_DEFAULT_PROFILE,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     namespace: NamespaceOption = DEFAULT_NAMESPACE,
     root: RootOption = Path("."),
@@ -394,9 +426,9 @@ def sandbox_sync(
     Errors if any named chart is not a member of the configured install
     plan, so a typo can't quietly do nothing.
     """
-    service = _container().lab_service(root, progress=_print_progress)
+    service = _container().development_cluster_service(root, progress=_print_progress)
     result = service.sync(
-        LabSyncOptions(
+        DevelopmentClusterSyncRequest(
             chart_names=tuple(chart_names),
             chart=chart,
             profile=profile,
@@ -404,7 +436,7 @@ def sandbox_sync(
             namespace=namespace,
         )
     )
-    _render_lab_result(result)
+    _render_development_cluster_result(result)
     _exit_if_failed(result.ok)
 
 
@@ -421,7 +453,7 @@ def sandbox_down(
     stopped, since its kubectl process will lose the apiserver anyway.
     """
     _render_cluster_action(
-        _container().lab_service(root, progress=_print_progress).down(cluster_name),
+        _container().development_cluster_service(root, progress=_print_progress).down(cluster_name),
         verb="stopped",
         absent="not running",
     )
@@ -439,19 +471,21 @@ def sandbox_delete(
     want to stop the cluster.
     """
     _render_cluster_action(
-        _container().lab_service(root, progress=_print_progress).delete(cluster_name),
+        _container()
+        .development_cluster_service(root, progress=_print_progress)
+        .delete(cluster_name),
         verb="deleted",
         absent="not present",
     )
 
 
-def _render_lab_result(result: LabResult) -> None:
+def _render_development_cluster_result(result: DevelopmentClusterResult) -> None:
     """Print the converge summary table, then the access hints.
 
     Order is operational and load-bearing: what happened, then how to reach
     it. Everything here is pure formatting -- every decision (which bucket,
     whether the CA hint applies, which URLs exist) was already made by
-    LabService and arrives on the result.
+    DevelopmentClusterService and arrives on the result.
     """
     table = Table("Status", "Chart", "Profile", "Namespace", title="Lab install summary")
     for entry in result.applied:
@@ -462,13 +496,11 @@ def _render_lab_result(result: LabResult) -> None:
         table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
     console.print(table)
     if not result.ok:
-        console.print(
-            f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above"
-        )
+        console.print(f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above")
     _render_access_hints(result.hints)
 
 
-def _render_access_hints(hints: AccessHints) -> None:
+def _render_access_hints(hints: DevelopmentClusterAccessHints) -> None:
     """Print the CA-trust block and the URL block for a finished converge."""
     if hints.ca_trust_hint:
         _print_ca_import_hint()
@@ -513,9 +545,7 @@ def _print_ca_import_hint() -> None:
     )
     console.print("\n[bold]Trust the lab CA[/bold] (one-time, per workstation):")
     console.print(f"  [dim]{cmd}[/dim]")
-    console.print(
-        "  Then import ~/lab-ca.crt into your OS keychain and mark it trusted."
-    )
+    console.print("  Then import ~/lab-ca.crt into your OS keychain and mark it trusted.")
     if sys.platform == "darwin":
         macos_trust = (
             "security add-trusted-cert -d -r trustRoot "
@@ -537,7 +567,7 @@ def _print_ca_import_hint() -> None:
 
 
 def _render_cluster_action(
-    result: ClusterActionResult, *, verb: str, absent: str
+    result: DevelopmentClusterActionResult, *, verb: str, absent: str
 ) -> None:
     """Print the outcome of `down` / `delete` plus any port-forward we reaped."""
     state = verb if result.changed else absent
@@ -555,9 +585,13 @@ def kind_expose(
     ] = "istio-ingress/istio-gateway",
     port: Annotated[
         list[str],
-        typer.Option("--port", "-p", help="LOCAL:REMOTE mapping (repeatable). Defaults to 8443:443 8080:80."),
+        typer.Option(
+            "--port", "-p", help="LOCAL:REMOTE mapping (repeatable). Defaults to 8443:443 8080:80."
+        ),
     ] = [],
-    stop: Annotated[bool, typer.Option("--stop", help="Stop the running port-forward for this cluster.")] = False,
+    stop: Annotated[
+        bool, typer.Option("--stop", help="Stop the running port-forward for this cluster.")
+    ] = False,
 ) -> None:
     expose = _container().expose_service()
 
@@ -592,22 +626,28 @@ def sandbox_test(
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOption = DEFAULT_NAMESPACE,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    reverse: Annotated[bool, typer.Option("--reverse", help="Run reverse dependency tests.")] = False,
+    dependent_tests: Annotated[
+        bool,
+        typer.Option(
+            "--dependent-tests",
+            help="Run cluster tests affected by this chart.",
+        ),
+    ] = False,
     no_ensure_cluster: Annotated[
         bool,
         typer.Option("--no-ensure-cluster", help="Do not create the sandbox cluster if missing."),
     ] = False,
     lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
 ) -> None:
-    service = _container().sandbox_service(root, progress=_print_progress)
+    service = _container().ephemeral_test_cluster_service(root, progress=_print_progress)
     service.run(
-        SandboxOptions(
+        EphemeralTestRequest(
             chart=chart,
             profile=profile,
             namespace=namespace,
             cluster_name=cluster_name,
             ensure_cluster=not no_ensure_cluster,
-            include_reverse=reverse,
+            include_dependent_tests=dependent_tests,
             lint=lint,
         )
     )
@@ -620,6 +660,13 @@ def ci_changed(
 ) -> None:
     service = _container().ci_service(root)
     for chart in service.changed_charts(base):
+        console.print(chart)
+
+
+@ci_app.command("cluster-test-charts")
+def ci_cluster_test_charts(root: RootOption = Path(".")) -> None:
+    """List every chart enabled for live-cluster tests."""
+    for chart in _container().ci_service(root).cluster_test_charts():
         console.print(chart)
 
 
@@ -636,7 +683,9 @@ def ci_install(
 @ci_app.command("upgrade")
 def ci_upgrade(
     chart: str,
-    oci_ref: Annotated[str, typer.Option("--from-oci", help="OCI chart ref for the main-branch artifact.")],
+    oci_ref: Annotated[
+        str, typer.Option("--from-oci", help="OCI chart ref for the main-branch artifact.")
+    ],
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOption = DEFAULT_NAMESPACE,

@@ -1,4 +1,4 @@
-"""Cilium k8sServiceHost drift detection in `LabService.up`.
+"""Cilium k8sServiceHost drift detection in `DevelopmentClusterService.up`.
 
 If the docker `kind` network is recreated (e.g. `docker network prune`),
 the control-plane container's IP changes but the installed cilium release
@@ -6,6 +6,7 @@ still pins the old `k8sServiceHost`. We detect this and bail with a clear
 recovery message rather than silently leaving the cluster in a broken
 state where kube-proxy-replacement traffic goes to the wrong IP.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,8 +16,11 @@ import pytest
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services import lab as lab_module
-from chart_manager.services.lab import LabService, LabUpOptions
+from chart_manager.services.clusters import development as lab_module
+from chart_manager.services.clusters.development import (
+    DevelopmentClusterService,
+    DevelopmentClusterUpRequest,
+)
 
 
 class _FakeKind:
@@ -123,8 +127,8 @@ def _service(
     *,
     helm: _FakeHelm,
     kind: _FakeKind,
-) -> LabService:
-    return LabService(
+) -> DevelopmentClusterService:
+    return DevelopmentClusterService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
@@ -133,17 +137,15 @@ def _service(
     )
 
 
-def _stub_empty_plan(monkeypatch: pytest.MonkeyPatch, service: LabService) -> None:
+def _stub_empty_plan(monkeypatch: pytest.MonkeyPatch, service: DevelopmentClusterService) -> None:
     """Force the install plan to be empty so positive drift cases can run
-    `LabService.up` to completion and assert it raised nothing.
+    `DevelopmentClusterService.up` to completion and assert it raised nothing.
 
     Without this, the resolver fails on a tmp_path-rooted repo (no charts
     on disk) and tests have to assert against the *absence* of the drift
     string in an unrelated downstream error -- brittle.
     """
-    monkeypatch.setattr(
-        service.resolver, "install_plan", lambda _chart, _profile: []
-    )
+    monkeypatch.setattr(service.resolver, "install_plan", lambda _chart, _profile: [])
 
 
 def _cilium_installed() -> list[ReleaseInfo]:
@@ -167,7 +169,7 @@ def test_up_raises_on_cilium_service_host_drift(tmp_path: Path) -> None:
     service = _service(tmp_path, helm=helm, kind=kind)
 
     with pytest.raises(ChartManagerError) as excinfo:
-        service.up(LabUpOptions())
+        service.up(DevelopmentClusterUpRequest())
 
     msg = str(excinfo.value)
     assert "172.18.0.2" in msg
@@ -188,7 +190,7 @@ def test_up_passes_when_cilium_service_host_matches(
     service = _service(tmp_path, helm=helm, kind=kind)
     _stub_empty_plan(monkeypatch, service)
 
-    service.up(LabUpOptions())  # no exception => drift check passed
+    service.up(DevelopmentClusterUpRequest())  # no exception => drift check passed
 
 
 def test_up_warns_and_continues_when_helm_get_values_fails(
@@ -203,7 +205,7 @@ def test_up_warns_and_continues_when_helm_get_values_fails(
     service = _service(tmp_path, helm=helm, kind=kind)
     _stub_empty_plan(monkeypatch, service)
 
-    service.up(LabUpOptions())  # warn-and-continue => no exception
+    service.up(DevelopmentClusterUpRequest())  # warn-and-continue => no exception
 
 
 def test_up_warns_and_continues_when_service_host_key_missing(
@@ -219,4 +221,4 @@ def test_up_warns_and_continues_when_service_host_key_missing(
     service = _service(tmp_path, helm=helm, kind=kind)
     _stub_empty_plan(monkeypatch, service)
 
-    service.up(LabUpOptions())  # warn-and-continue => no exception
+    service.up(DevelopmentClusterUpRequest())  # warn-and-continue => no exception

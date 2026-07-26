@@ -42,6 +42,7 @@ container. Tests that `monkeypatch.setattr(module, "_make_x_service", ...)`
 keep working unchanged; tests that want real services with fake adapters can
 subclass `Container` or pass a `Settings`.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -54,6 +55,8 @@ from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.services.ci import CiService
+from chart_manager.services.clusters.development import DevelopmentClusterService
+from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
@@ -65,18 +68,16 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.lab import LabService
+from chart_manager.services.manifest_validation.app import ManifestValidationService
+from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
-from chart_manager.services.sandbox import SandboxService
-from chart_manager.services.validate.app import ValidateApp
-from chart_manager.services.validate.progress import ProgressDisplay
 
 __all__ = ["Container", "HelmReleaseProgress", "Settings"]
 
 #: Narration callback shape shared by MonitorService and TestService.
 HelmReleaseProgress = Callable[[HelmReleaseRef, Transition], None]
 
-#: Operator-warning channel shape accepted by ValidateApp.
+#: Operator-warning channel shape accepted by ManifestValidationService.
 WarnCallback = Callable[[str], None]
 
 
@@ -95,8 +96,9 @@ class Settings:
       from the `EVENTS_BACKEND` environment variable at first write. Mirroring
       it here would create a second source of truth that nothing reads.
     * ``root`` -- the repository root is a per-invocation argument (`--root`),
-      not process configuration, so root-scoped services (`LabService`,
-      `SandboxService`, `ChartService`, ...) are constructed by their caller.
+      not process configuration, so root-scoped services (`DevelopmentClusterService`,
+      cluster lifecycle services, `ChartCatalogService`, ...) are constructed
+      by their caller.
     * ``helm_verbose`` -- see `Container.test_service`; that flag is a
       per-service policy, not a deployment knob.
     """
@@ -191,9 +193,7 @@ class Container:
             self._event_writer = EventWriter(source=self._settings.event_source)
         return self._event_writer
 
-    def monitor_service(
-        self, *, progress: HelmReleaseProgress | None = None
-    ) -> MonitorService:
+    def monitor_service(self, *, progress: HelmReleaseProgress | None = None) -> MonitorService:
         """Build the HelmRelease convergence monitor.
 
         Gets the same memoized writer as `promote_service`: a rollout's
@@ -250,16 +250,16 @@ class Container:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
         return GrafanaExporter(kubectl=self.kubectl())
 
-    def lab_service(
+    def development_cluster_service(
         self, root: Path, *, progress: ProgressCallback | None = None
-    ) -> LabService:
+    ) -> DevelopmentClusterService:
         """Build the full-stack lab converger for the repo at `root`.
 
         `root` is a per-invocation argument, not configuration -- see
         `Settings`. Every cluster-facing adapter is passed in, so there is
         no path by which the service can fall back to an unconfigured one.
         """
-        return LabService(
+        return DevelopmentClusterService(
             root,
             helm=self.helm(),
             kind=self.kind(),
@@ -268,11 +268,11 @@ class Container:
             progress=progress,
         )
 
-    def sandbox_service(
+    def ephemeral_test_cluster_service(
         self, root: Path, *, progress: ProgressCallback | None = None
-    ) -> SandboxService:
+    ) -> EphemeralTestClusterService:
         """Build the single-chart sandbox installer for the repo at `root`."""
-        return SandboxService(
+        return EphemeralTestClusterService(
             root,
             helm=self.helm(),
             kind=self.kind(),
@@ -289,9 +289,9 @@ class Container:
         *,
         progress: ProgressDisplay | None = None,
         on_warn: WarnCallback | None = None,
-    ) -> ValidateApp:
+    ) -> ManifestValidationService:
         """Build the validate pipeline entry point (render -> schema -> policy)."""
-        return ValidateApp(
+        return ManifestValidationService(
             progress=progress,
             on_warn=on_warn,
             command_runner=self.command_runner(),

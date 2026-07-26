@@ -6,6 +6,7 @@ the summary table, the access-hint blocks, the down/delete lines and the
 progress narration must carry the same information they did when the
 services printed them themselves.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -13,12 +14,12 @@ import typer
 from rich.console import Console
 
 from chart_manager.cli import main as cli_main
-from chart_manager.services.lab import (
-    AccessHints,
-    ClusterActionResult,
-    EntryFailure,
-    EntryOutcome,
-    LabResult,
+from chart_manager.services.clusters.development import (
+    DevelopmentClusterAccessHints,
+    DevelopmentClusterActionResult,
+    DevelopmentClusterEntryFailure,
+    DevelopmentClusterEntryOutcome,
+    DevelopmentClusterResult,
 )
 from chart_manager.services.progress import detail, failure, info, step, warn
 
@@ -37,15 +38,21 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> Console:
 @pytest.mark.parametrize(
     ("event", "expected"),
     [
-        (step("Applying", "grafana:minimal -> observability"),
-         "Applying grafana:minimal -> observability"),
+        (
+            step("Applying", "grafana:minimal -> observability"),
+            "Applying grafana:minimal -> observability",
+        ),
         (step("Waiting for kube-apiserver"), "Waiting for kube-apiserver"),
-        (detail("skip", "grafana:minimal (already installed in observability)"),
-         "skip grafana:minimal (already installed in observability)"),
+        (
+            detail("skip", "grafana:minimal (already installed in observability)"),
+            "skip grafana:minimal (already installed in observability)",
+        ),
         (warn("could not list helm releases"), "warn: could not list helm releases"),
         (warn("cilium chart not found", label=None), "cilium chart not found"),
-        (failure("apply failed:", "grafana:minimal -> boom"),
-         "apply failed: grafana:minimal -> boom"),
+        (
+            failure("apply failed:", "grafana:minimal -> boom"),
+            "apply failed: grafana:minimal -> boom",
+        ),
         (info("pod/foo   0/1   CrashLoopBackOff"), "pod/foo   0/1   CrashLoopBackOff"),
     ],
 )
@@ -61,13 +68,13 @@ def test_progress_events_render_label_then_message(
 
 
 def test_lab_result_renders_every_bucket(captured: Console) -> None:
-    result = LabResult(
-        applied=(EntryOutcome("grafana", "minimal", "observability"),),
-        no_change=(EntryOutcome("loki", "minimal", "observability"),),
-        failed=(EntryFailure("mimir", "minimal", "observability", "boom"),),
+    result = DevelopmentClusterResult(
+        applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),),
+        no_change=(DevelopmentClusterEntryOutcome("loki", "minimal", "observability"),),
+        failed=(DevelopmentClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
-    cli_main._render_lab_result(result)
+    cli_main._render_development_cluster_result(result)
     out = captured.export_text()
 
     assert "Lab install summary" in out
@@ -77,8 +84,10 @@ def test_lab_result_renders_every_bucket(captured: Console) -> None:
 
 
 def test_lab_result_omits_the_failure_line_when_ok(captured: Console) -> None:
-    cli_main._render_lab_result(
-        LabResult(applied=(EntryOutcome("grafana", "minimal", "observability"),))
+    cli_main._render_development_cluster_result(
+        DevelopmentClusterResult(
+            applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),)
+        )
     )
 
     assert "chart(s) failed" not in captured.export_text()
@@ -89,7 +98,7 @@ def test_lab_result_omits_the_failure_line_when_ok(captured: Console) -> None:
 
 def test_access_hints_render_urls_and_grafana_credentials(captured: Console) -> None:
     cli_main._render_access_hints(
-        AccessHints(
+        DevelopmentClusterAccessHints(
             urls=("https://grafana.localhost/", "https://loki.localhost/"),
             grafana_url="https://grafana.localhost/",
             grafana_credentials=("admin", "s3cret"),
@@ -106,7 +115,7 @@ def test_access_hints_render_urls_and_grafana_credentials(captured: Console) -> 
 
 def test_access_hints_render_the_secret_read_failure_in_place(captured: Console) -> None:
     cli_main._render_access_hints(
-        AccessHints(
+        DevelopmentClusterAccessHints(
             urls=("https://grafana.localhost/",),
             grafana_url="https://grafana.localhost/",
             grafana_error="secret not found",
@@ -121,7 +130,9 @@ def test_access_hints_render_the_secret_read_failure_in_place(captured: Console)
 
 def test_access_hints_render_the_virtualservice_listing_failure(captured: Console) -> None:
     cli_main._render_access_hints(
-        AccessHints(urls_error="could not list VirtualServices (boom); skipping URL hints")
+        DevelopmentClusterAccessHints(
+            urls_error="could not list VirtualServices (boom); skipping URL hints"
+        )
     )
     out = captured.export_text()
 
@@ -131,7 +142,7 @@ def test_access_hints_render_the_virtualservice_listing_failure(captured: Consol
 
 
 def test_access_hints_are_silent_when_nothing_applies(captured: Console) -> None:
-    cli_main._render_access_hints(AccessHints())
+    cli_main._render_access_hints(DevelopmentClusterAccessHints())
 
     assert captured.export_text().strip() == ""
 
@@ -143,7 +154,7 @@ def test_ca_hint_includes_macos_one_liner_on_darwin(
     # dev doesn't have to remember the keychain incantation.
     monkeypatch.setattr(cli_main.sys, "platform", "darwin")
 
-    cli_main._render_access_hints(AccessHints(ca_trust_hint=True))
+    cli_main._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
     out = captured.export_text()
 
     assert "Trust the lab CA" in out
@@ -159,7 +170,7 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
     # must still print so Linux devs aren't left without instruction.
     monkeypatch.setattr(cli_main.sys, "platform", "linux")
 
-    cli_main._render_access_hints(AccessHints(ca_trust_hint=True))
+    cli_main._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
     out = captured.export_text()
 
     assert "Trust the lab CA" in out
@@ -169,7 +180,9 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
 
 
 def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(captured: Console) -> None:
-    cli_main._render_access_hints(AccessHints(ca_trust_hint=False, urls=("https://x/",)))
+    cli_main._render_access_hints(
+        DevelopmentClusterAccessHints(ca_trust_hint=False, urls=("https://x/",))
+    )
 
     assert "Trust the lab CA" not in captured.export_text()
 
@@ -181,7 +194,9 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
     captured: Console,
 ) -> None:
     cli_main._render_cluster_action(
-        ClusterActionResult(cluster_name="chart-manager", changed=True, port_forward_pid=4242),
+        DevelopmentClusterActionResult(
+            cluster_name="chart-manager", changed=True, port_forward_pid=4242
+        ),
         verb="stopped",
         absent="not running",
     )
@@ -193,7 +208,7 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
 
 def test_cluster_action_reports_the_absent_state(captured: Console) -> None:
     cli_main._render_cluster_action(
-        ClusterActionResult(cluster_name="chart-manager", changed=False),
+        DevelopmentClusterActionResult(cluster_name="chart-manager", changed=False),
         verb="deleted",
         absent="not present",
     )
@@ -236,24 +251,28 @@ def test_progress_still_styles_the_label(captured: Console) -> None:
     assert "Applying grafana:minimal" in captured.export_text()
 
 
-def _result(*, failed: bool) -> LabResult:
-    entry = EntryOutcome(chart="grafana", profile="minimal", namespace="obs")
-    return LabResult(
+def _result(*, failed: bool) -> DevelopmentClusterResult:
+    entry = DevelopmentClusterEntryOutcome(chart="grafana", profile="minimal", namespace="obs")
+    return DevelopmentClusterResult(
         applied=[entry],
         no_change=[],
         failed=(
-            [EntryFailure(chart="loki", profile="minimal", namespace="obs", error="boom")]
+            [
+                DevelopmentClusterEntryFailure(
+                    chart="loki", profile="minimal", namespace="obs", error="boom"
+                )
+            ]
             if failed
             else []
         ),
-        hints=AccessHints(),
+        hints=DevelopmentClusterAccessHints(),
     )
 
 
 def test_a_converge_with_failures_exits_non_zero(captured: Console) -> None:
     """`sandbox up` rendered the failure line and then exited 0.
 
-    LabResult.ok exists so a surface can branch on it; CI wrappers and
+    DevelopmentClusterResult.ok exists so a surface can branch on it; CI wrappers and
     `mise run lab-up` read success from a run in which charts failed.
     """
     with pytest.raises(typer.Exit) as exc:

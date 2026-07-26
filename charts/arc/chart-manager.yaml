@@ -1,0 +1,36 @@
+version: 1
+enabled: true
+
+manifestValidation:
+  enabled: true
+  releaseName: arc
+  environments:
+    ci:
+      namespace: arc-systems
+      values:
+        - values.yaml
+        - values-ci.yaml
+  triggers:
+    "Chart.yaml":     [ci]
+    "values.yaml":    [ci]
+    "values-ci.yaml": [ci]
+  unmatchedChanges: all-environments
+
+clusterTests:
+  enabled: true
+  profiles:
+    minimal:
+      description: Install the GitHub ARC controller CRDs and manager in arc-systems.
+      namespace: arc-systems
+      requires: []
+      values:
+        - values.yaml
+        - values-ci.yaml
+      helmTest: true
+      checks:
+        - name: arc-controller-release
+          type: helm-test
+          description: Verify the controller HelmRelease is ready; the upstream controller chart has no functional runner test without a runner scale set.
+      timeout: 10m
+
+  dependentTests: []

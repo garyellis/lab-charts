@@ -6,7 +6,11 @@ class ChartManagerError(Exception):
 
 
 class SpecError(ChartManagerError):
-    """Raised when a chart test spec is missing or invalid."""
+    """Raised when authored chart-manager configuration is missing or invalid."""
+
+
+class CapabilityUnavailableError(ChartManagerError):
+    """Raised when a requested chart-manager capability is not enabled."""
 
 
 class ChartNotFoundError(ChartManagerError):
@@ -14,7 +18,7 @@ class ChartNotFoundError(ChartManagerError):
 
 
 class DependencyCycleError(SpecError):
-    """Raised when test-spec requirements contain a cycle."""
+    """Raised when cluster-test requirements contain a cycle."""
 
 
 class ExternalCommandError(ChartManagerError):

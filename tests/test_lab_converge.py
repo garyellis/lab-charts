@@ -1,4 +1,4 @@
-"""Coverage for LabService.up / sync converge-by-default behavior.
+"""Coverage for DevelopmentClusterService.up / sync converge-by-default behavior.
 
 Focus areas:
   * cilium does not appear twice in the install summary, even though it's
@@ -9,6 +9,7 @@ Focus areas:
   * `sync <chart>` validates membership against the configured install
     plan; an unknown chart raises before any helm work runs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,20 +19,20 @@ import pytest
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services import lab as lab_module
+from chart_manager.services.clusters import development as lab_module
+from chart_manager.services.clusters.development import (
+    DevelopmentClusterService,
+    DevelopmentClusterSyncRequest,
+    DevelopmentClusterUpRequest,
+)
 from chart_manager.services.domain.charts import (
     ChartMetadata,
+    ClusterTestChart,
     HelmChart,
-    ManagedChart,
 )
-from chart_manager.services.domain.graph import PlanEntry
-from chart_manager.services.domain.spec import ProfileSpec
-from chart_manager.services.domain.spec import TestSpec as _TestSpec
-from chart_manager.services.lab import (
-    LabService,
-    LabSyncOptions,
-    LabUpOptions,
-)
+from chart_manager.services.domain.cluster_tests import ClusterTestProfile
+from chart_manager.services.domain.cluster_tests import ClusterTestSpec as _TestSpec
+from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.progress import ProgressEvent
 
 
@@ -166,8 +167,8 @@ def _service(
     helm: _RecordingHelm,
     kind: _FakeKind,
     progress: _Recorder | None = None,
-) -> LabService:
-    return LabService(
+) -> DevelopmentClusterService:
+    return DevelopmentClusterService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
@@ -177,25 +178,25 @@ def _service(
     )
 
 
-def _stub_chart(name: str, *, namespace: str = "observability") -> ManagedChart:
+def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestChart:
     """Synthesize an in-memory Chart with a minimal `minimal` profile.
 
-    Skips disk I/O so LabService tests don't need a chart tree on tmp_path.
+    Skips disk I/O so DevelopmentClusterService tests don't need a chart tree on tmp_path.
     The profile must specify the namespace explicitly because the lab
     resolver falls back to options.namespace otherwise -- which is fine
     for these tests but reads less clearly.
     """
-    profile = ProfileSpec(
+    profile = ClusterTestProfile(
         description="stub",
         namespace=namespace,
         values=[],
         timeout="1m",
         requires=[],
-        helm_test=False,
+        helmTest=False,
         checks=[],
     )
-    spec = _TestSpec(profiles={"minimal": profile}, reverse_tests=[])
-    return ManagedChart(
+    spec = _TestSpec(profiles={"minimal": profile}, dependentTests=[])
+    return ClusterTestChart(
         chart=HelmChart(
             name=name,
             path=Path(f"/tmp/{name}"),
@@ -207,10 +208,10 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> ManagedChart:
 
 def _stub_plan_and_repo(
     monkeypatch: pytest.MonkeyPatch,
-    service: LabService,
+    service: DevelopmentClusterService,
     *,
-    plan: list[PlanEntry],
-    charts: dict[str, ManagedChart],
+    plan: list[InstallPlanEntry],
+    charts: dict[str, ClusterTestChart],
 ) -> None:
     """Replace the resolver + repository so tests don't need a chart tree.
 
@@ -219,17 +220,15 @@ def _stub_plan_and_repo(
     `value_paths` repo method is stubbed to return [] (no overlay files)
     so `helm upgrade --install` is called with an empty values list.
     """
-    monkeypatch.setattr(
-        service.resolver, "install_plan", lambda _chart, _profile: list(plan)
-    )
+    monkeypatch.setattr(service.resolver, "install_plan", lambda _chart, _profile: list(plan))
 
-    def _get(name: str) -> ManagedChart:
+    def _get(name: str) -> ClusterTestChart:
         if name not in charts:
             raise ChartManagerError(f"chart not found: {name}")
         return charts[name]
 
-    monkeypatch.setattr(service.repository, "get_managed", _get)
-    monkeypatch.setattr(service.repository, "value_paths", lambda _c, _p: [])
+    monkeypatch.setattr(service.cluster_tests, "get", _get)
+    monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
 
 
 def _disable_cilium_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,7 +239,7 @@ def _disable_cilium_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     as it would in production after a real bootstrap.
     """
     monkeypatch.setattr(
-        lab_module.cluster_bootstrap,
+        lab_module.bootstrap,
         "bootstrap",
         lambda *_args, **_kwargs: "applied",
     )
@@ -253,7 +252,7 @@ def test_up_lists_cilium_once_even_when_plan_includes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # grafana-dashboards:prototyping transitively pulls cilium into the
-    # install plan. Without the filter in LabService.up, cilium would
+    # install plan. Without the filter in DevelopmentClusterService.up, cilium would
     # appear twice in the summary: once from bootstrap, once from the
     # plan-iteration loop.
     helm = _RecordingHelm(releases=[])
@@ -261,8 +260,8 @@ def test_up_lists_cilium_once_even_when_plan_includes_it(
     service = _service(tmp_path, helm=helm, kind=kind)
 
     plan = [
-        PlanEntry(chart="cilium", profile="minimal"),
-        PlanEntry(chart="grafana", profile="minimal"),
+        InstallPlanEntry(chart="cilium", profile="minimal"),
+        InstallPlanEntry(chart="grafana", profile="minimal"),
     ]
     charts = {
         "cilium": _stub_chart("cilium", namespace="kube-system"),
@@ -271,12 +270,10 @@ def test_up_lists_cilium_once_even_when_plan_includes_it(
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
-    result = service.up(LabUpOptions())
+    result = service.up(DevelopmentClusterUpRequest())
 
     cilium_entries = [
-        entry
-        for entry in (*result.applied, *result.no_change)
-        if entry.chart == "cilium"
+        entry for entry in (*result.applied, *result.no_change) if entry.chart == "cilium"
     ]
     assert len(cilium_entries) == 1, (
         f"cilium should appear once in the result; got {cilium_entries}"
@@ -284,9 +281,7 @@ def test_up_lists_cilium_once_even_when_plan_includes_it(
     # grafana should also have been applied -- proves the plan iteration
     # didn't get filtered too aggressively.
     grafana_entries = [
-        entry
-        for entry in (*result.applied, *result.no_change)
-        if entry.chart == "grafana"
+        entry for entry in (*result.applied, *result.no_change) if entry.chart == "grafana"
     ]
     assert len(grafana_entries) == 1
     assert result.ok
@@ -302,20 +297,18 @@ def test_up_skip_installed_does_not_invoke_helm_for_existing_releases(
     # no-change and never call upgrade_install.
     helm = _RecordingHelm(
         releases=[
-            ReleaseInfo(
-                name="grafana", namespace="observability", revision=1, status="deployed"
-            )
+            ReleaseInfo(name="grafana", namespace="observability", revision=1, status="deployed")
         ]
     )
     kind = _FakeKind()
     service = _service(tmp_path, helm=helm, kind=kind)
 
-    plan = [PlanEntry(chart="grafana", profile="minimal")]
+    plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
-    service.up(LabUpOptions(skip_installed=True))
+    service.up(DevelopmentClusterUpRequest(skip_installed=True))
 
     assert helm.upgrade_calls == [], (
         "skip_installed=True must not invoke helm for existing releases"
@@ -329,21 +322,19 @@ def test_up_default_converges_existing_releases(
     # converge it (call upgrade_install) so values edits land.
     helm = _RecordingHelm(
         releases=[
-            ReleaseInfo(
-                name="grafana", namespace="observability", revision=1, status="deployed"
-            )
+            ReleaseInfo(name="grafana", namespace="observability", revision=1, status="deployed")
         ],
         default_status="no-change",
     )
     kind = _FakeKind()
     service = _service(tmp_path, helm=helm, kind=kind)
 
-    plan = [PlanEntry(chart="grafana", profile="minimal")]
+    plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
-    service.up(LabUpOptions())
+    service.up(DevelopmentClusterUpRequest())
 
     assert helm.upgrade_calls == [("grafana", "observability")], (
         "default must converge: every plan chart gets upgrade_install"
@@ -353,16 +344,14 @@ def test_up_default_converges_existing_releases(
 # ----- sync verb ------------------------------------------------------------
 
 
-def test_sync_runs_only_named_chart(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sync_runs_only_named_chart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     helm = _RecordingHelm()
     kind = _FakeKind()
     service = _service(tmp_path, helm=helm, kind=kind)
 
     plan = [
-        PlanEntry(chart="grafana", profile="minimal"),
-        PlanEntry(chart="loki", profile="minimal"),
+        InstallPlanEntry(chart="grafana", profile="minimal"),
+        InstallPlanEntry(chart="loki", profile="minimal"),
     ]
     charts = {
         "grafana": _stub_chart("grafana"),
@@ -371,7 +360,7 @@ def test_sync_runs_only_named_chart(
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
-    service.sync(LabSyncOptions(chart_names=("grafana",)))
+    service.sync(DevelopmentClusterSyncRequest(chart_names=("grafana",)))
 
     # Only grafana was named; loki must not be touched.
     assert helm.upgrade_calls == [("grafana", "observability")]
@@ -384,13 +373,13 @@ def test_sync_raises_when_chart_not_in_plan(
     kind = _FakeKind()
     service = _service(tmp_path, helm=helm, kind=kind)
 
-    plan = [PlanEntry(chart="grafana", profile="minimal")]
+    plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
     with pytest.raises(ChartManagerError) as excinfo:
-        service.sync(LabSyncOptions(chart_names=("does-not-exist",)))
+        service.sync(DevelopmentClusterSyncRequest(chart_names=("does-not-exist",)))
 
     assert "does-not-exist" in str(excinfo.value)
     assert helm.upgrade_calls == [], "must not run helm when validation fails"
@@ -402,7 +391,7 @@ def test_sync_requires_at_least_one_chart_name(tmp_path: Path) -> None:
     service = _service(tmp_path, helm=helm, kind=kind)
 
     with pytest.raises(ChartManagerError):
-        service.sync(LabSyncOptions(chart_names=()))
+        service.sync(DevelopmentClusterSyncRequest(chart_names=()))
 
 
 # ----- down / delete return results -----------------------------------------
@@ -434,8 +423,8 @@ class _ReapingExpose:
 
 def _lifecycle_service(
     tmp_path: Path, *, kind: _StoppableKind, expose: _ReapingExpose
-) -> LabService:
-    return LabService(
+) -> DevelopmentClusterService:
+    return DevelopmentClusterService(
         tmp_path,
         helm=_RecordingHelm(),  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
@@ -449,9 +438,7 @@ def test_lifecycle_verb_reports_the_change_and_reaps_the_port_forward(
     tmp_path: Path, verb: str
 ) -> None:
     expose = _ReapingExpose(pid=4242)
-    service = _lifecycle_service(
-        tmp_path, kind=_StoppableKind(changed=True), expose=expose
-    )
+    service = _lifecycle_service(tmp_path, kind=_StoppableKind(changed=True), expose=expose)
 
     result = getattr(service, verb)("chart-manager")
 
@@ -465,13 +452,9 @@ def test_lifecycle_verb_reports_the_change_and_reaps_the_port_forward(
 
 
 @pytest.mark.parametrize("verb", ["down", "delete"])
-def test_lifecycle_verb_reports_an_absent_cluster_as_unchanged(
-    tmp_path: Path, verb: str
-) -> None:
+def test_lifecycle_verb_reports_an_absent_cluster_as_unchanged(tmp_path: Path, verb: str) -> None:
     expose = _ReapingExpose(pid=None)
-    service = _lifecycle_service(
-        tmp_path, kind=_StoppableKind(changed=False), expose=expose
-    )
+    service = _lifecycle_service(tmp_path, kind=_StoppableKind(changed=False), expose=expose)
 
     result = getattr(service, verb)("chart-manager")
 
@@ -481,7 +464,7 @@ def test_lifecycle_verb_reports_an_absent_cluster_as_unchanged(
 
 def test_lifecycle_verb_narrates_through_the_progress_callback(tmp_path: Path) -> None:
     progress = _Recorder()
-    service = LabService(
+    service = DevelopmentClusterService(
         tmp_path,
         helm=_RecordingHelm(),  # type: ignore[arg-type]
         kind=_StoppableKind(changed=True),  # type: ignore[arg-type]
@@ -495,7 +478,7 @@ def test_lifecycle_verb_narrates_through_the_progress_callback(tmp_path: Path) -
     assert "Stopping sandbox cluster chart-manager" in progress.text
 
 
-# ----- LabResult.ok ---------------------------------------------------------
+# ----- DevelopmentClusterResult.ok ---------------------------------------------------------
 
 
 def test_up_result_is_not_ok_when_a_chart_fails(
@@ -506,15 +489,13 @@ def test_up_result_is_not_ok_when_a_chart_fails(
     helm = _RecordingHelm()
     service = _service(tmp_path, helm=helm, kind=_FakeKind())
     plan = [
-        PlanEntry(chart="missing", profile="minimal"),
-        PlanEntry(chart="grafana", profile="minimal"),
+        InstallPlanEntry(chart="missing", profile="minimal"),
+        InstallPlanEntry(chart="grafana", profile="minimal"),
     ]
-    _stub_plan_and_repo(
-        monkeypatch, service, plan=plan, charts={"grafana": _stub_chart("grafana")}
-    )
+    _stub_plan_and_repo(monkeypatch, service, plan=plan, charts={"grafana": _stub_chart("grafana")})
     _disable_cilium_bootstrap(monkeypatch)
 
-    result = service.up(LabUpOptions())
+    result = service.up(DevelopmentClusterUpRequest())
 
     assert not result.ok
     assert [f.chart for f in result.failed] == ["missing"]
@@ -526,18 +507,16 @@ def test_up_narration_goes_to_the_progress_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     progress = _Recorder()
-    service = _service(
-        tmp_path, helm=_RecordingHelm(), kind=_FakeKind(), progress=progress
-    )
+    service = _service(tmp_path, helm=_RecordingHelm(), kind=_FakeKind(), progress=progress)
     _stub_plan_and_repo(
         monkeypatch,
         service,
-        plan=[PlanEntry(chart="grafana", profile="minimal")],
+        plan=[InstallPlanEntry(chart="grafana", profile="minimal")],
         charts={"grafana": _stub_chart("grafana")},
     )
     _disable_cilium_bootstrap(monkeypatch)
 
-    service.up(LabUpOptions())
+    service.up(DevelopmentClusterUpRequest())
 
     assert "Ensuring sandbox cluster chart-manager" in progress.text
     assert "Applying grafana:minimal -> observability" in progress.text
@@ -560,8 +539,8 @@ def test_an_unknown_profile_fails_one_row_instead_of_aborting_the_run(
     helm = _RecordingHelm()
     service = _service(tmp_path, helm=helm, kind=_FakeKind())
     plan = [
-        PlanEntry(chart="stale", profile="renamed-away"),
-        PlanEntry(chart="grafana", profile="minimal"),
+        InstallPlanEntry(chart="stale", profile="renamed-away"),
+        InstallPlanEntry(chart="grafana", profile="minimal"),
     ]
     _stub_plan_and_repo(
         monkeypatch,
@@ -575,7 +554,7 @@ def test_an_unknown_profile_fails_one_row_instead_of_aborting_the_run(
     )
     _disable_cilium_bootstrap(monkeypatch)
 
-    result = service.up(LabUpOptions())
+    result = service.up(DevelopmentClusterUpRequest())
 
     assert not result.ok
     assert [f.chart for f in result.failed] == ["stale"]

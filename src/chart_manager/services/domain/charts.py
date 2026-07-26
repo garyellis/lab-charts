@@ -9,7 +9,7 @@ import yaml
 
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.domain.spec import TestSpec, load_test_spec
+from chart_manager.services.domain.cluster_tests import ClusterTestSpec
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class ChartMetadata:
 
 @dataclass(frozen=True)
 class HelmChart:
-    """A Helm chart, independent of chart-manager's test specification."""
+    """A Helm chart, independent of cluster-test configuration."""
 
     name: str
     path: Path
@@ -42,11 +42,11 @@ class HelmChart:
 
 
 @dataclass(frozen=True)
-class ManagedChart:
-    """A Helm chart that participates in chart-manager test workflows."""
+class ClusterTestChart:
+    """A Helm chart paired with its live-cluster test configuration."""
 
     chart: HelmChart
-    spec: TestSpec
+    spec: ClusterTestSpec
 
     @property
     def name(self) -> str:
@@ -112,7 +112,7 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
 
 
 class ChartRepository:
-    """Look up Helm and chart-manager-managed charts under ``<root>/charts``."""
+    """Discover and load Helm charts under ``<root>/charts``."""
 
     def __init__(self, root: Path) -> None:
         """Anchor the repository at the resolved repo root."""
@@ -131,7 +131,7 @@ class ChartRepository:
         return sorted(names)
 
     def get(self, name: str) -> HelmChart:
-        """Load Helm metadata for a chart; no test specification is required."""
+        """Load Helm metadata; no cluster-test configuration is required."""
         path = self.charts_dir / name
         chart_yaml_path = path / "Chart.yaml"
         if not chart_yaml_path.exists():
@@ -142,25 +142,6 @@ class ChartRepository:
                 f"{chart_yaml_path} name '{metadata.name}' does not match directory '{name}'"
             )
         return HelmChart(name=name, path=path, metadata=metadata)
-
-    def get_managed(self, name: str) -> ManagedChart:
-        """Load a chart and require its chart-manager ``test-spec.yaml``."""
-        chart = self.get(name)
-        return ManagedChart(
-            chart=chart,
-            spec=load_test_spec(chart.path / "test-spec.yaml"),
-        )
-
-    def value_paths(self, chart: ManagedChart, profile: str) -> list[Path]:
-        """Resolve a profile's values files to absolute paths, all must exist."""
-        profile_spec = chart.spec.profile(profile)
-        paths = [chart.path / value for value in profile_spec.values]
-        missing = [path for path in paths if not path.exists()]
-        if missing:
-            rendered = ", ".join(str(path) for path in missing)
-            raise SpecError(f"missing values file(s) for {chart.name}:{profile}: {rendered}")
-        return paths
-
 
 def _required_string(
     data: dict[str, Any],

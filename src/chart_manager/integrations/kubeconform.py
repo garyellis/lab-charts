@@ -2,7 +2,7 @@
 
 Runs `kubeconform` over a directory of rendered manifests, parses the
 JSON output, and surfaces a frozen report. Parse types live here (not in
-services/validate/domain/models) because they're integration-local: the rest of
+services/manifest_validation/models) because they're integration-local: the rest of
 the pipeline consumes them via the schema phase, which collapses the
 report into a PhaseResult.
 """

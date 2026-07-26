@@ -6,6 +6,7 @@ side-file writing, and GITHUB_STEP_SUMMARY behavior by driving the
 internal `_emit_result` helper with a fabricated RunResult and by
 invoking `--help` / `--format unknown` through Typer's CliRunner.
 """
+
 from __future__ import annotations
 
 import io
@@ -20,8 +21,8 @@ from typer.testing import CliRunner
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.main import app
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.services.validate.app import RunOutcome, ValidateInputError
-from chart_manager.services.validate.domain.models import (
+from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
+from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
     RunResult,
@@ -50,6 +51,7 @@ def _capture_stdout(fn) -> str:
     buf = io.StringIO()
     # Replace the module-level Rich console with one writing to our buffer.
     from rich.console import Console as _Console
+
     new_console = _Console(file=buf, force_terminal=False, no_color=True, width=200)
     old_console = validate_cli.console
     validate_cli.console = new_console
@@ -256,7 +258,7 @@ def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
 
 
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
-    from chart_manager.services.validate.domain.models import (
+    from chart_manager.services.manifest_validation.models import (
         PhaseResult,
         RowResult,
         RunResult,
@@ -339,18 +341,21 @@ def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> 
 
 def test_resolve_display_none_returns_null() -> None:
     d = validate_cli._resolve_display("none", fmt="text")
-    from chart_manager.services.validate.progress import NullDisplay
+    from chart_manager.services.manifest_validation.progress import NullDisplay
+
     assert isinstance(d, NullDisplay)
 
 
 def test_resolve_display_plain_returns_plain() -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
+
     d = validate_cli._resolve_display("plain", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
 
 
 def test_resolve_display_auto_with_json_picks_null() -> None:
-    from chart_manager.services.validate.progress import NullDisplay
+    from chart_manager.services.manifest_validation.progress import NullDisplay
+
     d = validate_cli._resolve_display("auto", fmt="json")
     # JSON output piped through jq must not see progress chatter.
     assert isinstance(d, NullDisplay)
@@ -360,6 +365,7 @@ def test_resolve_display_live_without_tty_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
+
     monkeypatch.setattr("sys.stderr.isatty", lambda: False)
     d = validate_cli._resolve_display("live", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
@@ -382,7 +388,7 @@ def test_run_rejects_unknown_progress_mode() -> None:
 
 # --- surface -> service handoff --------------------------------------------
 #
-# The CLI's whole job is now: build a request, hand it to ValidateApp,
+# The CLI's whole job is now: build a request, hand it to ManifestValidationService,
 # render the outcome, apply retention, exit. These drive the commands with a
 # fake app so the handoff itself is under test.
 
@@ -424,9 +430,7 @@ def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
                 phases={"render": PhaseResult(phase="render", status="FAIL")},
             ),
         )
-    return RunOutcome(
-        result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs
-    )
+    return RunOutcome(result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
@@ -442,16 +446,24 @@ def test_run_builds_a_request_from_its_flags(
     result = CliRunner().invoke(
         app,
         [
-            "validate", "run",
+            "validate",
+            "run",
             "--all",
-            "--chart", "alpha",
-            "--env", "dev",
-            "--phases", "render,schema",
-            "--workers", "3",
-            "--row-timeout", "12",
+            "--chart",
+            "alpha",
+            "--env",
+            "dev",
+            "--phases",
+            "render,schema",
+            "--workers",
+            "3",
+            "--row-timeout",
+            "12",
             "--fail-fast",
-            "--root", str(tmp_path),
-            "--progress", "none",
+            "--root",
+            str(tmp_path),
+            "--progress",
+            "none",
         ],
     )
 
@@ -504,8 +516,17 @@ def test_run_applies_retention_only_after_the_summary_is_written(
 
     CliRunner().invoke(
         app,
-        ["validate", "run", "--all", "--progress", "none", "--format", "all",
-         "--root", str(tmp_path)],
+        [
+            "validate",
+            "run",
+            "--all",
+            "--progress",
+            "none",
+            "--format",
+            "all",
+            "--root",
+            str(tmp_path),
+        ],
     )
 
     assert fake.cleanups == [fake.outcome]
@@ -640,8 +661,7 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
     output = _capture_stdout(
         lambda: CliRunner().invoke(
             app,
-            ["validate", "run", "--all", "--verbose", "--workers", "4",
-             "--root", str(tmp_path)],
+            ["validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)],
         )
     )
 
@@ -662,8 +682,7 @@ def test_verbose_with_one_worker_does_not_warn(
     output = _capture_stdout(
         lambda: CliRunner().invoke(
             app,
-            ["validate", "run", "--all", "--verbose", "--workers", "1",
-             "--root", str(tmp_path)],
+            ["validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)],
         )
     )
 
@@ -721,9 +740,7 @@ def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
 ) -> None:
     _install(monkeypatch, _FakeApp(error=ChartNotFoundError("chart not found: ghost")))
 
-    result = CliRunner().invoke(
-        app, ["validate", "render", "--chart", "ghost", "--env", "dev"]
-    )
+    result = CliRunner().invoke(app, ["validate", "render", "--chart", "ghost", "--env", "dev"])
 
     assert result.exit_code == 2
     assert "--chart" in result.output
@@ -734,8 +751,18 @@ def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
 def test_single_row_commands_reject_both_helm_bindings(command: str) -> None:
     result = CliRunner().invoke(
         app,
-        ["validate", command, "--chart", "a", "--env", "dev",
-         "--helm-version", "3.20.0", "--helm-bin", "/usr/bin/helm"],
+        [
+            "validate",
+            command,
+            "--chart",
+            "a",
+            "--env",
+            "dev",
+            "--helm-version",
+            "3.20.0",
+            "--helm-bin",
+            "/usr/bin/helm",
+        ],
     )
 
     assert result.exit_code == 2

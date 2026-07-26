@@ -4,7 +4,7 @@
     around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservice_hosts` / `list_gateway_hosts`: best-effort
-    listings used by LabService and the `sandbox expose` CLI. Empty list
+    listings used by DevelopmentClusterService and the `sandbox expose` CLI. Empty list
     on missing CRD / parse error is the contract -- callers treat that
     as "no hosts yet" rather than as a hard error.
 """
