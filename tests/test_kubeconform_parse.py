@@ -17,41 +17,16 @@ stable across upstream kubernetes-json-schema versions.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from tests.conftest import FakeCommandRunner
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
 
-
-class StubRunner(CommandRunner):
-    def __init__(self, *, returncode: int, stdout: str, stderr: str = "") -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._returncode = returncode
-        self._stdout = stdout
-        self._stderr = stderr
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        return CommandResult(
-            args=tuple(args),
-            returncode=self._returncode,
-            stdout=self._stdout,
-            stderr=self._stderr,
-        )
 
 
 def _load(name: str) -> str:
@@ -59,7 +34,7 @@ def _load(name: str) -> str:
 
 
 def test_default_args_include_strict_summary_json_and_crd_skip(tmp_path: Path) -> None:
-    runner = StubRunner(returncode=0, stdout=_load("valid.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
 
     kc.validate(tmp_path)
@@ -79,7 +54,7 @@ def test_default_args_include_strict_summary_json_and_crd_skip(tmp_path: Path) -
 
 
 def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
-    runner = StubRunner(returncode=0, stdout=_load("valid.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
 
     kc.validate(
@@ -100,7 +75,7 @@ def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
 
 
 def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:
-    runner = StubRunner(returncode=0, stdout=_load("valid.json"))
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
 
     report = kc.validate(tmp_path)
@@ -114,7 +89,7 @@ def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:
 
 
 def test_invalid_fixture_populates_invalid_with_expected_finding(tmp_path: Path) -> None:
-    runner = StubRunner(returncode=1, stdout=_load("invalid.json"))
+    runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"))
     kc = Kubeconform(runner=runner)
 
     report = kc.validate(tmp_path)
@@ -132,7 +107,7 @@ def test_invalid_fixture_populates_invalid_with_expected_finding(tmp_path: Path)
 
 
 def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> None:
-    runner = StubRunner(returncode=2, stdout=_load("tool-error.json"), stderr="kubeconform: panic")
+    runner = FakeCommandRunner(returncode=2, stdout=_load("tool-error.json"), stderr="kubeconform: panic")
     kc = Kubeconform(runner=runner)
 
     with pytest.raises(ExternalCommandError) as exc:
@@ -144,7 +119,7 @@ def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> Non
 
 
 def test_empty_resources_list_with_rc_zero_is_pass(tmp_path: Path) -> None:
-    runner = StubRunner(
+    runner = FakeCommandRunner(
         returncode=0,
         stdout='{"resources": [], "summary": {"valid": 0, "invalid": 0, "errors": 0, "skipped": 0}}',
     )
@@ -160,7 +135,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
     # kubeconform exits non-zero whenever any resource is invalid, but still
     # writes a well-formed JSON report. The integration must NOT confuse this
     # with a tool crash — only unparseable output should raise.
-    runner = StubRunner(returncode=1, stdout=_load("invalid.json"), stderr="")
+    runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"), stderr="")
     kc = Kubeconform(runner=runner)
 
     report = kc.validate(tmp_path)
@@ -170,7 +145,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
 
 
 def test_unknown_status_string_maps_to_error(tmp_path: Path) -> None:
-    runner = StubRunner(
+    runner = FakeCommandRunner(
         returncode=1,
         stdout=(
             '{"resources": [{"filename": "x.yaml", "kind": "Foo", "name": "y", '

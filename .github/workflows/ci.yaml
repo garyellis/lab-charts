@@ -1,6 +1,7 @@
 name: ci
 
 # Combined PR/main pipeline:
+#   layering     → architecture contract between cli/, services/, integrations/.
 #   prep         → compute diff + sandbox chart matrix once.
 #   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
 #   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
@@ -10,6 +11,9 @@ name: ci
 # the CLI's build_worklist; sandbox-test's fanout regex lives here in YAML
 # because the trigger set (kind-config, mise pins, the workflow file itself)
 # is a CI concern, not a chart concern.
+#
+# layering has no `needs` — it's a seconds-long static gate on the Python
+# package and shares nothing with the chart pipeline.
 
 on:
   push:
@@ -37,6 +41,55 @@ permissions:
   contents: read
 
 jobs:
+  # Enforce the surface/service/adapter layering so `cli/` stays thin enough
+  # that a REST, GraphQL, RPC, or Slack surface can front the same
+  # capabilities. Documented in tests/test_layering.py; the same two commands
+  # run locally via `mise run lint-layering`.
+  #
+  # This job used to run only the three contract checks, because a backlog of
+  # ~22 ruff findings, ~40 mypy findings and 3 stale chart-inventory test
+  # assertions would have made a wider job permanently red. The ruff and test
+  # backlogs are now cleared (0 and 0), so the suite and the linter are gates
+  # here too -- without them CI could not catch a regression in any of the
+  # ~694 tests.
+  #
+  # mypy is still out: ~37 findings remain, most of them one root cause
+  # (untyped JSON payload plumbing in integrations/helmrelease.py). Add a
+  # `mypy src/` step here once that is addressed; until then a red mypy gate
+  # would train people to ignore this job, which is the failure mode the
+  # original scoping was avoiding.
+  layering:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v4
+
+      # (a) cli/ may import services/ + plumbing/ + the composition root,
+      #     never integrations/. Banned-api config lives in pyproject.toml
+      #     under [tool.ruff.lint.flake8-tidy-imports.banned-api]; the
+      #     per-file-ignores there name the layers allowed to lift it.
+      - name: Layer contract — cli/ must not import integrations/
+        run: uv run --extra dev ruff check --select TID251 src/
+
+      # (b) no module under services/ pulls rich/typer into the process.
+      # (c) sys.exit is a surface concern; nothing outside cli/ may exit.
+      - name: Layer contract — services/ stay headless, exits stay in cli/
+        run: uv run --extra dev pytest -q tests/test_layering.py
+
+      # The unit suite. Integration-marked tests are excluded by the addopts
+      # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
+      # covered by the validate and sandbox-test jobs below.
+      - name: Unit tests
+        run: uv run --extra dev pytest -q
+
+      # Lint the package and the suite. Exemptions (and why each exists) live
+      # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
+      - name: Lint
+        run: uv run --extra dev ruff check src/ tests/
+
   prep:
     runs-on: ubuntu-latest
     outputs:

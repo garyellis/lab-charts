@@ -1,7 +1,8 @@
 """Tool installation via mise.
 
-Installs the validate pipeline's pinned tool versions (helm primary +
-alternates, kubeconform, kyverno, uv) by shelling `mise install`. Each
+Installs the pinned versions of every binary chart-manager shells out to
+(helm primary + alternates, kubeconform, kyverno, uv) by shelling
+`mise install`. Each
 version is attempted independently; failures downgrade to warnings (with
 the upstream release URL) rather than raising so one bad version doesn't
 abort the rest of a deps-install run.
@@ -44,7 +45,7 @@ _RELEASE_URLS: dict[str, str] = {
 # and vice versa. Catches "added a tool to one map but not the other" at
 # import time instead of at first warn-emission.
 assert set(_TOOL_VERSIONS) == set(_RELEASE_URLS), (
-    "deps_install registries out of sync: "
+    "tools.install registries out of sync: "
     f"_TOOL_VERSIONS={sorted(_TOOL_VERSIONS)} "
     f"_RELEASE_URLS={sorted(_RELEASE_URLS)}"
 )
@@ -57,6 +58,8 @@ KNOWN_TOOLS: tuple[str, ...] = tuple(_TOOL_VERSIONS)
 
 @dataclass(frozen=True)
 class InstallResult:
+    """Outcome of installing one tool: which tool/version and whether it succeeded."""
+
     tool: str
     version: str
     success: bool
@@ -116,5 +119,3 @@ def install_all(
     for tool in _TOOL_VERSIONS:
         aggregated.extend(install_one(runner, tool, on_warn=on_warn))
     return aggregated
-
-

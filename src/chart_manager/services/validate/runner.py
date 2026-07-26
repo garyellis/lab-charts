@@ -25,6 +25,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.validate_models import (
+    ALL_PHASES,
     PhaseResult,
     RowResult,
     RunResult,
@@ -39,12 +40,16 @@ EventCallback = Callable[[WorklistRow, str, str, float | None], None]
 class RowConfig:
     """Per-row inputs threaded through every phase.
 
-    M2 carried `RenderInputs` + `SchemaInputs`; M3 collapses to a single
-    config so policy (and future phases) don't multiply the constructor
-    surface. CLI builds these from flags; M4 will build them from
-    `validate-spec.yaml`. `None` means use phase defaults; an empty list
-    in `policy_paths` is a deliberate signal that no policies were
-    discovered (phase => SKIP).
+    One config for all phases rather than one input struct per phase, so
+    adding a phase does not multiply the constructor surface.
+
+    Two builders: `worklist.row_config_for` assembles these from a chart's
+    `validate-spec.yaml` for `validate run`; `ValidateApp.single` assembles
+    them from explicit flags for `validate render/schema/policy`.
+
+    `None` means "use the phase's own default"; an empty list in
+    `policy_paths` is a deliberate signal that no policies were discovered
+    at all (phase => SKIP), which is why it is not merged with `None`.
     """
 
     row: WorklistRow
@@ -56,6 +61,8 @@ class RowConfig:
 
 
 class ValidateRunner:
+    """Orchestrate render -> schema -> policy across worklist rows, optionally in parallel."""
+
     def __init__(
         self,
         *,
@@ -68,6 +75,7 @@ class ValidateRunner:
         dep_update_timeout: float | None = 300.0,
         row_timeout: float | None = None,
     ) -> None:
+        """Wire integrations, worker count, event callback, and dep/row timeouts."""
         self.helm = helm
         self.kubeconform = kubeconform or Kubeconform()
         self.kyverno = kyverno or Kyverno()
@@ -83,6 +91,17 @@ class ValidateRunner:
         # Default None preserves legacy behavior; CLI exposes --row-timeout.
         # On timeout, the row is marked FAIL with error_type=tool.
         self.row_timeout = row_timeout
+        # Propagate it onto each integration's per-subprocess cap here rather
+        # than in `run`. These three adapters are then shared across
+        # `max_workers` threads, and writing a public attribute on an object
+        # other threads are already reading is a race waiting for someone to
+        # move the fan-out. It was only safe because the writes happened to
+        # land before the pool started. `_build_runner` constructs a runner
+        # per run, so nothing loses the ability to change --row-timeout.
+        if self.row_timeout is not None:
+            self.helm.timeout = self.row_timeout
+            self.kubeconform.timeout = self.row_timeout
+            self.kyverno.timeout = self.row_timeout
 
     def run(
         self,
@@ -100,18 +119,7 @@ class ValidateRunner:
         if not configs:
             return RunResult(rows=(), rendered_root=self.output_root)
 
-        active = enabled_phases if enabled_phases is not None else frozenset(
-            {"render", "schema", "policy"}
-        )
-
-        # Propagate row_timeout onto each integration's per-subprocess cap.
-        # The integrations honor `self.timeout` on their runner.run calls.
-        # Done here (not in __init__) so swapping --row-timeout between runs
-        # of a long-lived runner takes effect.
-        if self.row_timeout is not None:
-            self.helm.timeout = self.row_timeout
-            self.kubeconform.timeout = self.row_timeout
-            self.kyverno.timeout = self.row_timeout
+        active = enabled_phases if enabled_phases is not None else ALL_PHASES
 
         # Pre-fetch helm dependencies once per distinct chart before fanning
         # out per-row work. Without this, N envs of the same chart all hit
@@ -119,6 +127,13 @@ class ValidateRunner:
         # first call holds the lock for the entire network fetch while the
         # other N-1 wait. Pre-fetching collapses that wait to a single up-
         # front pass that can itself parallelize across DISTINCT charts.
+        # NOTE: `_run_row` renders unconditionally (schema and policy need
+        # the tree), so this gate is narrower than the work it guards: a
+        # `--phases schema` run renders WITHOUT the prefetch and each row
+        # pays its own first-time dep fetch serially. Left as-is because
+        # widening it adds `helm dependency update` subprocesses to a run
+        # that does not ask for them today; fix it deliberately, with a
+        # timing test, rather than as a side effect.
         if "render" in active:
             self._prefetch_dependencies(configs)
 
@@ -171,6 +186,7 @@ class ValidateRunner:
             return
 
         def _update(chart_path: Path) -> None:
+            """Prefetch one chart's helm dependencies."""
             self.helm.dependency_update(chart_path, timeout=self.dep_update_timeout)
 
         if self.max_workers == 1 or len(distinct_charts) == 1:
@@ -184,22 +200,31 @@ class ValidateRunner:
             list(pool.map(_update, distinct_charts))
 
     def _run_row(self, cfg: RowConfig, active: frozenset[str]) -> RowResult:
-        if "render" in active or "schema" in active or "policy" in active:
-            render_result = self._timed(
-                cfg.row,
-                "render",
-                lambda: phases.render(
-                    cfg.row,
-                    helm=self.helm,
-                    chart_path=cfg.chart_path,
-                    values=cfg.values,
-                    output_root=self.output_root,
-                ),
-            )
-        else:
-            render_result = PhaseResult(phase="render", status="NOT_RUN")
+        """Run the enabled phases for one row in order; render precedes schema/policy.
 
-        if render_result.status not in ("PASS", "NOT_RUN"):
+        Render is unconditional. Per `run`'s contract, disabling a phase
+        does not short-circuit later ones — schema and policy both read the
+        rendered tree, so `--phases schema` still has to render first. There
+        used to be an `if any phase is active` guard here plus a matching
+        "downgrade later phases to SKIP because render was NOT_RUN" block at
+        the end; `active` is non-empty on every reachable path (`run`
+        defaults it to `ALL_PHASES`, and the request models reject an empty
+        or unknown set), so both were dead and both said the opposite of the
+        documented rule.
+        """
+        render_result = self._timed(
+            cfg.row,
+            "render",
+            lambda: phases.render(
+                cfg.row,
+                helm=self.helm,
+                chart_path=cfg.chart_path,
+                values=cfg.values,
+                output_root=self.output_root,
+            ),
+        )
+
+        if render_result.status != "PASS":
             schema_result = PhaseResult(
                 phase="schema",
                 status="SKIP",
@@ -249,22 +274,6 @@ class ValidateRunner:
                 )
             else:
                 policy_result = PhaseResult(phase="policy", status="NOT_RUN")
-
-        # If render was NOT_RUN but a later phase is active, downgrade
-        # the later phase to SKIP — it has no manifests to chew on.
-        if render_result.status == "NOT_RUN":
-            if schema_result.status not in ("NOT_RUN",):
-                schema_result = PhaseResult(
-                    phase="schema",
-                    status="SKIP",
-                    detail="render not run",
-                )
-            if policy_result.status not in ("NOT_RUN",):
-                policy_result = PhaseResult(
-                    phase="policy",
-                    status="SKIP",
-                    detail="render not run",
-                )
 
         phase_map: dict[str, PhaseResult] = {
             "render": render_result,

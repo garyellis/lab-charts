@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 _log = logging.getLogger(__name__)
@@ -25,6 +25,8 @@ ResourceStatus = Literal["valid", "invalid", "error", "skipped"]
 
 @dataclass(frozen=True)
 class ResourceResult:
+    """One resource's validation verdict from kubeconform's JSON output."""
+
     filename: str
     kind: str
     name: str
@@ -34,17 +36,23 @@ class ResourceResult:
 
 @dataclass(frozen=True)
 class KubeconformReport:
+    """Full kubeconform run: per-resource results plus the summary counters."""
+
     resources: tuple[ResourceResult, ...]
     summary: Mapping[str, int]
 
     def invalid(self) -> tuple[ResourceResult, ...]:
+        """Resources with status invalid or error."""
         return tuple(r for r in self.resources if r.status in ("invalid", "error"))
 
     def has_failures(self) -> bool:
+        """True if any resource failed validation."""
         return bool(self.invalid())
 
 
 class Kubeconform:
+    """Run `kubeconform` over rendered manifests and parse its JSON report."""
+
     # datreeio CRDs catalog — covers most common in-tree CRDs. Charts that
     # vendor uncatalogued CRDs (cert-manager, istio-base) are addressed via
     # the CRD-skip default rather than a per-chart schema location.
@@ -60,7 +68,8 @@ class Kubeconform:
         binary: str | Path | None = None,
         timeout: float | None = None,
     ) -> None:
-        self.runner = runner or CommandRunner()
+        """Bind a CommandRunner, binary path (default `kubeconform`), and timeout."""
+        self.runner = runner or SubprocessRunner()
         self._bin = str(binary) if binary is not None else "kubeconform"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --row-timeout so a hung kubeconform doesn't pin a worker.
@@ -76,6 +85,12 @@ class Kubeconform:
         strict: bool = True,
         extra_args: list[str] | None = None,
     ) -> KubeconformReport:
+        """Validate all manifests under `manifests_dir`; return the parsed report.
+
+        Defaults: default schemas + datreeio CRD catalog, CRDs skipped,
+        strict mode on. Never raises on validation failures (check=False) —
+        those land in the report; unparseable output raises.
+        """
         locations = (
             schema_locations
             if schema_locations is not None
@@ -106,6 +121,7 @@ def _parse(
     returncode: int,
     stderr: str,
 ) -> KubeconformReport:
+    """Parse kubeconform JSON stdout into a report; raise on unparseable output."""
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as exc:
@@ -136,6 +152,7 @@ def _parse(
 
 
 def _normalize_status(raw: str) -> ResourceStatus:
+    """Map kubeconform status strings to our ResourceStatus; unknowns become 'error'."""
     # kubeconform emits statusValid/statusInvalid/statusError/statusSkipped/
     # statusEmpty. Unknown statuses get bucketed to "error" (never dropped)
     # and we log so a kubeconform version bump that adds a new status is

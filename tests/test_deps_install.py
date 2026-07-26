@@ -1,40 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from pathlib import Path
-
 import pytest
 
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
-from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.services.validate import deps_install
-
-
-class FakeRunner(CommandRunner):
-    """Records calls and replays a configured returncode sequence.
-
-    Mirrors the test seam pattern used in test_helm_template / test_helm_resolver.
-    """
-
-    def __init__(self, *, returncodes: list[int] | None = None) -> None:
-        self.calls: list[tuple[str, ...]] = []
-        self._returncodes = list(returncodes) if returncodes else []
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        rc = self._returncodes.pop(0) if self._returncodes else 0
-        if rc != 0:
-            raise ExternalCommandError(f"command failed: {' '.join(args)}")
-        return CommandResult(args=tuple(args), returncode=rc, stdout="", stderr="")
-
+from chart_manager.services.tools import install as deps_install
+from tests.conftest import FakeCommandRunner, Reply
 
 # --- install_one ------------------------------------------------------
 
@@ -51,7 +20,7 @@ class FakeRunner(CommandRunner):
 def test_install_one_invokes_mise_for_every_pinned_version(
     tool: str, versions: tuple[str, ...]
 ) -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
 
     results = deps_install.install_one(runner, tool)
 
@@ -65,12 +34,12 @@ def test_install_one_invokes_mise_for_every_pinned_version(
 
 def test_install_one_unknown_tool_raises() -> None:
     with pytest.raises(ValueError, match="unknown tool"):
-        deps_install.install_one(FakeRunner(), "terraform")
+        deps_install.install_one(FakeCommandRunner(), "terraform")
 
 
 def test_install_one_failure_warns_with_release_url_and_does_not_raise() -> None:
     # kyverno currently pins a single version; force that single call to fail.
-    runner = FakeRunner(returncodes=[1])
+    runner = FakeCommandRunner().script(Reply(returncode=1))
     warnings: list[str] = []
 
     results = deps_install.install_one(runner, "kyverno", on_warn=warnings.append)
@@ -88,7 +57,7 @@ def test_install_one_failure_warns_with_release_url_and_does_not_raise() -> None
 
 def test_install_one_uv_url_omits_v_prefix() -> None:
     """uv release tags don't carry the `v` prefix — guard against regression."""
-    runner = FakeRunner(returncodes=[1])
+    runner = FakeCommandRunner().script(Reply(returncode=1))
     warnings: list[str] = []
 
     deps_install.install_one(runner, "uv", on_warn=warnings.append)
@@ -103,7 +72,7 @@ def test_install_one_uv_url_omits_v_prefix() -> None:
 
 
 def test_install_all_invokes_every_tool_and_version() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
 
     results = deps_install.install_all(runner)
 
@@ -130,7 +99,7 @@ def test_install_all_partial_failure_aggregates_and_continues() -> None:
         + len(deps_install.KYVERNO_VERSIONS)
         + len(deps_install.UV_VERSIONS)
     )
-    runner = FakeRunner(returncodes=[1] + [0] * (total_versions - 1))
+    runner = FakeCommandRunner().script(Reply(returncode=1))
     warnings: list[str] = []
 
     results = deps_install.install_all(runner, on_warn=warnings.append)

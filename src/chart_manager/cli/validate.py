@@ -1,5 +1,11 @@
 """`chart-manager validate` sub-app.
 
+Thin CLI shell over `services/validate/app.ValidateApp`: flag shape and
+help text, progress-display choice, output-format dispatch, and the
+mapping from domain errors to Typer's `BadParameter`. Everything that
+changes the *answer* — worklist construction, row assembly, helm binding,
+workers, run identity, artifact retention — lives in the service.
+
 Commands register themselves onto a Typer app passed in by cli/main.py.
 This `register(app)` pattern keeps cli/main.py free of validate-specific
 imports and lets the sub-app grow (render/schema/policy/run/clean/deps-install)
@@ -7,56 +13,137 @@ without touching main.py.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import shutil
 import sys
-import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
 
-from chart_manager.integrations.git import Git
-from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.integrations.kyverno import Kyverno
-from chart_manager.plumbing.charts import ChartRepository
-from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
-from chart_manager.plumbing.validate_models import RowResult, RunResult, WorklistRow
-from chart_manager.plumbing.validate_spec import ValidateSpec
-from chart_manager.services.validate import deps_install as deps_install_mod
-from chart_manager.services.validate.progress import (
+from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
-    NullDisplay,
     PlainNarrationDisplay,
-    ProgressDisplay,
 )
-from chart_manager.services.validate.rendering import (
+from chart_manager.cli.validate_render import (
     advisory_details,
     failure_details,
-    to_json,
-    to_markdown,
     to_text_table,
 )
-from chart_manager.services.validate.runner import RowConfig, ValidateRunner
-from chart_manager.services.validate.worklist import (
-    WorklistBuildResult,
-    build_single_row,
-    build_worklist,
-    discover_policies,
+from chart_manager.composition import Container
+from chart_manager.plumbing.errors import ChartNotFoundError
+from chart_manager.plumbing.validate_models import PHASE_ORDER, RunResult
+from chart_manager.services.tools import install as deps_install_mod
+from chart_manager.services.validate.app import (
+    ALL_PHASES,
+    RunOutcome,
+    RunRequest,
+    SingleRequest,
+    ValidateApp,
+    ValidateInputError,
+    resolve_workers,
 )
+from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.validate.wire import to_json, to_markdown
 
 _FORMATS = ("text", "md", "json", "all")
 _PROGRESS_MODES = ("auto", "live", "plain", "none")
+# Maps a domain error's `hint` (an input name) onto the flag that carries it.
+_PARAM_HINTS = {
+    "changed_files": "--changed-files",
+    "phases": "--phases",
+    "helm_version": "--helm-version / --helm-bin",
+}
+
+
+def _validate_format(value: str) -> str:
+    """Return `value` if it is a known --format, else raise BadParameter."""
+    if value not in _FORMATS:
+        raise typer.BadParameter(
+            f"unknown format: {value} (allowed: {', '.join(_FORMATS)})",
+            param_hint="--format",
+        )
+    return value
+
+
+# --- Shared option declarations -------------------------------------------
+#
+# render/schema/policy are three distinct verbs with three distinct request
+# shapes, but they take the same twelve flags. Declaring those flags inline
+# in each signature meant three copies of every help string, and the copies
+# had already drifted (see the --kube-version note on `schema`/`policy`).
+# `Annotated` aliases are the documented Typer idiom for this and produce
+# byte-identical `--help`: Typer reads the `typer.Option` out of the
+# annotation's metadata, so position, type and default are unchanged.
+#
+# Defaults deliberately stay at the call site — an alias that also carried a
+# default would have to become a `= Field(...)`-style sentinel, and Typer
+# would no longer see a required parameter as required (--chart/--env are
+# required precisely because the call sites give them no default).
+ChartOption = Annotated[
+    str,
+    typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."),
+]
+EnvOption = Annotated[
+    str,
+    typer.Option(
+        "--env",
+        help=(
+            "Environment label. Used for the namespace default (lab-<env>) and output path. "
+            "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
+            "pass --values explicitly to overlay per-env values. Use `validate run` for "
+            "spec-driven multi-row execution."
+        ),
+    ),
+]
+ValuesOption = Annotated[
+    list[Path],
+    typer.Option(
+        "--values",
+        help=(
+            "Values file (repeatable, applied in order). "
+            "Defaults to <chart>/values.yaml only if no --values flags are passed."
+        ),
+    ),
+]
+NamespaceOption = Annotated[
+    str | None,
+    typer.Option("--namespace", help="Kubernetes namespace. Defaults to lab-<env>."),
+]
+ReleaseOption = Annotated[
+    str | None,
+    typer.Option("--release", help="Helm release name. Defaults to the chart name."),
+]
+HelmVersionOption = Annotated[
+    str | None,
+    typer.Option("--helm-version", help="Resolve helm via `mise where helm@<version>`."),
+]
+HelmBinOption = Annotated[
+    Path | None,
+    typer.Option("--helm-bin", help="Explicit path to a helm binary."),
+]
+OutOption = Annotated[
+    Path | None,
+    typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
+]
+KeepOption = Annotated[
+    bool,
+    typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
+]
 FormatOption = Annotated[
     str,
     typer.Option(
         "--format",
         help="Output format: text (default), md, json, or all.",
+        # Validated at parse time, not at emission time. `_validate_format`
+        # is only reachable from inside `_emit_result`, which runs *after*
+        # the whole helm/kubeconform/kyverno pipeline -- so a typo cost a
+        # full validate run, and the BadParameter it raised unwound past
+        # `app.cleanup(outcome)`, orphaning the rendered tree on disk.
+        callback=_validate_format,
     ),
 ]
 GithubStepSummaryOption = Annotated[
@@ -72,16 +159,13 @@ GithubStepSummaryOption = Annotated[
         ),
     ),
 ]
-
-
-def _default_workers() -> int:
-    cpu = os.cpu_count() or 2
-    return max(2, min(cpu, 8))
+RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 
 console = Console()
 
 
 def register(app: typer.Typer) -> None:
+    """Attach the validate subcommands to the given Typer app."""
     app.command("render")(render)
     app.command("schema")(schema)
     app.command("policy")(policy)
@@ -90,143 +174,68 @@ def register(app: typer.Typer) -> None:
     app.command("deps-install")(deps_install)
 
 
+def _container() -> Container:
+    """Build the composition root for one CLI invocation."""
+    return Container()
+
+
+def _make_app(progress: ProgressDisplay | None = None) -> ValidateApp:
+    """Build the ValidateApp (module-level so tests can override)."""
+    return _container().validate_app(progress=progress, on_warn=_warn)
+
+
+def _warn(message: str) -> None:
+    """Print a service-emitted operator warning."""
+    console.print(f"[yellow]{message}[/yellow]")
+
+
 def render(
-    chart: Annotated[str, typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'.")],
-    env: Annotated[
-        str,
-        typer.Option(
-            "--env",
-            help=(
-                "Environment label. Used for the namespace default (lab-<env>) and output path. "
-                "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
-                "pass --values explicitly to overlay per-env values. Use `validate run` for "
-                "spec-driven multi-row execution."
-            ),
-        ),
-    ],
-    values: Annotated[
-        list[Path],
-        typer.Option(
-            "--values",
-            help=(
-                "Values file (repeatable, applied in order). "
-                "Defaults to <chart>/values.yaml only if no --values flags are passed."
-            ),
-        ),
-    ] = [],
-    namespace: Annotated[
-        str | None,
-        typer.Option("--namespace", help="Kubernetes namespace. Defaults to lab-<env>."),
-    ] = None,
-    release: Annotated[
-        str | None,
-        typer.Option("--release", help="Helm release name. Defaults to the chart name."),
-    ] = None,
-    helm_version: Annotated[
-        str | None,
-        typer.Option("--helm-version", help="Resolve helm via `mise where helm@<version>`."),
-    ] = None,
-    helm_bin: Annotated[
-        Path | None,
-        typer.Option("--helm-bin", help="Explicit path to a helm binary."),
-    ] = None,
-    out: Annotated[
-        Path | None,
-        typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
-    ] = None,
-    keep: Annotated[
-        bool,
-        typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
-    ] = False,
+    chart: ChartOption,
+    env: EnvOption,
+    values: ValuesOption = [],
+    namespace: NamespaceOption = None,
+    release: ReleaseOption = None,
+    helm_version: HelmVersionOption = None,
+    helm_bin: HelmBinOption = None,
+    out: OutOption = None,
+    keep: KeepOption = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
+    root: RootOption = Path("."),
 ) -> None:
     """Render one chart x env via `helm template` and print a status row."""
-    if helm_version is not None and helm_bin is not None:
-        raise typer.BadParameter(
-            "--helm-version and --helm-bin are mutually exclusive",
-            param_hint="--helm-version / --helm-bin",
-        )
-
-    repo_root = root.resolve()
-    chart_path, chart_label = _resolve_chart_path(repo_root, chart)
-    resolved_values = _resolve_values(chart_path, values)
-    resolved_namespace = namespace or f"lab-{env}"
-    resolved_release = release or chart_label
-
-    # An explicit --out means the user named the directory deliberately; treat
-    # that as an implicit --keep so we don't surprise-delete their target.
-    user_specified_out = out is not None
-    out_dir = out.resolve() if out is not None else _default_out_dir(repo_root)
-    effective_keep = keep or user_specified_out
-
-    runner_cmd = CommandRunner()
-    helm = Helm(runner=runner_cmd, version=helm_version, binary=helm_bin)
-    runner = ValidateRunner(helm=helm, output_root=out_dir)
-
-    row = build_single_row(
-        chart=chart_label,
-        env=env,
-        namespace=resolved_namespace,
-        release=resolved_release,
-    )
-    configs = [RowConfig(row=row, chart_path=chart_path, values=resolved_values)]
-
-    result = runner.run(configs)
-
-    _emit_result(
-        result,
+    _guard_helm_selection(helm_version, helm_bin)
+    _run_single(
+        SingleRequest(
+            chart=chart,
+            env=env,
+            root=root,
+            values=tuple(values),
+            namespace=namespace,
+            release=release,
+            helm_version=helm_version,
+            helm_bin=helm_bin,
+            out=out,
+            keep=keep,
+            phases=ALL_PHASES,
+        ),
         fmt=fmt,
-        out_dir=out_dir,
         github_step_summary=github_step_summary,
     )
 
-    exit_code = result.exit_code()
-    _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
-    sys.exit(exit_code)
-
 
 def schema(
-    chart: Annotated[str, typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'.")],
-    env: Annotated[
-        str,
-        typer.Option(
-            "--env",
-            help=(
-                "Environment label. Used for the namespace default (lab-<env>) and output path. "
-                "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
-                "pass --values explicitly to overlay per-env values. Use `validate run` for "
-                "spec-driven multi-row execution."
-            ),
-        ),
-    ],
-    values: Annotated[
-        list[Path],
-        typer.Option(
-            "--values",
-            help=(
-                "Values file (repeatable, applied in order). "
-                "Defaults to <chart>/values.yaml only if no --values flags are passed."
-            ),
-        ),
-    ] = [],
-    namespace: Annotated[
-        str | None,
-        typer.Option("--namespace", help="Kubernetes namespace. Defaults to lab-<env>."),
-    ] = None,
-    release: Annotated[
-        str | None,
-        typer.Option("--release", help="Helm release name. Defaults to the chart name."),
-    ] = None,
-    helm_version: Annotated[
-        str | None,
-        typer.Option("--helm-version", help="Resolve helm via `mise where helm@<version>`."),
-    ] = None,
-    helm_bin: Annotated[
-        Path | None,
-        typer.Option("--helm-bin", help="Explicit path to a helm binary."),
-    ] = None,
+    chart: ChartOption,
+    env: EnvOption,
+    values: ValuesOption = [],
+    namespace: NamespaceOption = None,
+    release: ReleaseOption = None,
+    helm_version: HelmVersionOption = None,
+    helm_bin: HelmBinOption = None,
+    # --kube-version / --schema-location are NOT hoisted to shared aliases:
+    # `policy` declares the same two flags with shorter help text, and
+    # unifying them would change `--help` output. The wording drift is real
+    # and worth fixing, but it is a deliberate UX change, not a refactor.
     kube_version: Annotated[
         str | None,
         typer.Option(
@@ -249,114 +258,45 @@ def schema(
             ),
         ),
     ] = [],
-    out: Annotated[
-        Path | None,
-        typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
-    ] = None,
-    keep: Annotated[
-        bool,
-        typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
-    ] = False,
+    out: OutOption = None,
+    keep: KeepOption = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
+    root: RootOption = Path("."),
 ) -> None:
     """Render one chart x env then validate manifests with kubeconform."""
-    if helm_version is not None and helm_bin is not None:
-        raise typer.BadParameter(
-            "--helm-version and --helm-bin are mutually exclusive",
-            param_hint="--helm-version / --helm-bin",
-        )
-
-    repo_root = root.resolve()
-    chart_path, chart_label = _resolve_chart_path(repo_root, chart)
-    resolved_values = _resolve_values(chart_path, values)
-    resolved_namespace = namespace or f"lab-{env}"
-    resolved_release = release or chart_label
-
-    user_specified_out = out is not None
-    out_dir = out.resolve() if out is not None else _default_out_dir(repo_root)
-    effective_keep = keep or user_specified_out
-
-    runner_cmd = CommandRunner()
-    helm = Helm(runner=runner_cmd, version=helm_version, binary=helm_bin)
-    kubeconform = Kubeconform(runner=runner_cmd)
-    runner = ValidateRunner(
-        helm=helm,
-        output_root=out_dir,
-        kubeconform=kubeconform,
-    )
-
-    row = build_single_row(
-        chart=chart_label,
-        env=env,
-        namespace=resolved_namespace,
-        release=resolved_release,
-    )
-    configs = [
-        RowConfig(
-            row=row,
-            chart_path=chart_path,
-            values=resolved_values,
+    _guard_helm_selection(helm_version, helm_bin)
+    _run_single(
+        SingleRequest(
+            chart=chart,
+            env=env,
+            root=root,
+            values=tuple(values),
+            namespace=namespace,
+            release=release,
+            helm_version=helm_version,
+            helm_bin=helm_bin,
             kubernetes_version=kube_version,
-            schema_locations=list(schema_location) if schema_location else None,
-        )
-    ]
-
-    result = runner.run(configs)
-
-    _emit_result(
-        result,
+            schema_locations=tuple(schema_location),
+            out=out,
+            keep=keep,
+            phases=ALL_PHASES,
+        ),
         fmt=fmt,
-        out_dir=out_dir,
         github_step_summary=github_step_summary,
     )
 
-    exit_code = result.exit_code()
-    _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
-    sys.exit(exit_code)
-
 
 def policy(
-    chart: Annotated[str, typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'.")],
-    env: Annotated[
-        str,
-        typer.Option(
-            "--env",
-            help=(
-                "Environment label. Used for the namespace default (lab-<env>) and output path. "
-                "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
-                "pass --values explicitly to overlay per-env values. Use `validate run` for "
-                "spec-driven multi-row execution."
-            ),
-        ),
-    ],
-    values: Annotated[
-        list[Path],
-        typer.Option(
-            "--values",
-            help=(
-                "Values file (repeatable, applied in order). "
-                "Defaults to <chart>/values.yaml only if no --values flags are passed."
-            ),
-        ),
-    ] = [],
-    namespace: Annotated[
-        str | None,
-        typer.Option("--namespace", help="Kubernetes namespace. Defaults to lab-<env>."),
-    ] = None,
-    release: Annotated[
-        str | None,
-        typer.Option("--release", help="Helm release name. Defaults to the chart name."),
-    ] = None,
-    helm_version: Annotated[
-        str | None,
-        typer.Option("--helm-version", help="Resolve helm via `mise where helm@<version>`."),
-    ] = None,
-    helm_bin: Annotated[
-        Path | None,
-        typer.Option("--helm-bin", help="Explicit path to a helm binary."),
-    ] = None,
+    chart: ChartOption,
+    env: EnvOption,
+    values: ValuesOption = [],
+    namespace: NamespaceOption = None,
+    release: ReleaseOption = None,
+    helm_version: HelmVersionOption = None,
+    helm_bin: HelmBinOption = None,
+    # See the note on `schema`: these two carry shorter help text here, so
+    # they stay inline until someone decides which wording wins.
     kube_version: Annotated[
         str | None,
         typer.Option(
@@ -382,83 +322,35 @@ def policy(
             ),
         ),
     ] = [],
-    out: Annotated[
-        Path | None,
-        typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
-    ] = None,
-    keep: Annotated[
-        bool,
-        typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
-    ] = False,
+    out: OutOption = None,
+    keep: KeepOption = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
+    root: RootOption = Path("."),
 ) -> None:
     """Render -> schema -> policy for one chart x env via kyverno."""
-    if helm_version is not None and helm_bin is not None:
-        raise typer.BadParameter(
-            "--helm-version and --helm-bin are mutually exclusive",
-            param_hint="--helm-version / --helm-bin",
-        )
-
-    repo_root = root.resolve()
-    chart_path, chart_label = _resolve_chart_path(repo_root, chart)
-    resolved_values = _resolve_values(chart_path, values)
-    resolved_namespace = namespace or f"lab-{env}"
-    resolved_release = release or chart_label
-
-    user_specified_out = out is not None
-    out_dir = out.resolve() if out is not None else _default_out_dir(repo_root)
-    effective_keep = keep or user_specified_out
-
-    # Explicit flags override discovery; empty list falls back to defaults.
-    if policy_dir:
-        resolved_policy_paths = [
-            p if p.is_absolute() else (repo_root / p).resolve() for p in policy_dir
-        ]
-    else:
-        resolved_policy_paths = discover_policies(repo_root, chart_label)
-
-    runner_cmd = CommandRunner()
-    helm = Helm(runner=runner_cmd, version=helm_version, binary=helm_bin)
-    kubeconform = Kubeconform(runner=runner_cmd)
-    kyverno = Kyverno(runner=runner_cmd)
-    runner = ValidateRunner(
-        helm=helm,
-        output_root=out_dir,
-        kubeconform=kubeconform,
-        kyverno=kyverno,
-    )
-
-    row = build_single_row(
-        chart=chart_label,
-        env=env,
-        namespace=resolved_namespace,
-        release=resolved_release,
-    )
-    configs = [
-        RowConfig(
-            row=row,
-            chart_path=chart_path,
-            values=resolved_values,
+    _guard_helm_selection(helm_version, helm_bin)
+    _run_single(
+        SingleRequest(
+            chart=chart,
+            env=env,
+            root=root,
+            values=tuple(values),
+            namespace=namespace,
+            release=release,
+            helm_version=helm_version,
+            helm_bin=helm_bin,
             kubernetes_version=kube_version,
-            schema_locations=list(schema_location) if schema_location else None,
-            policy_paths=resolved_policy_paths,
-        )
-    ]
-
-    result = runner.run(configs)
-
-    _emit_result(
-        result,
+            schema_locations=tuple(schema_location),
+            policy_dirs=tuple(policy_dir),
+            discover_policies=True,
+            out=out,
+            keep=keep,
+            phases=ALL_PHASES,
+        ),
         fmt=fmt,
-        out_dir=out_dir,
         github_step_summary=github_step_summary,
     )
-
-    exit_code = result.exit_code()
-    _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
-    sys.exit(exit_code)
 
 
 def run(
@@ -495,14 +387,8 @@ def run(
             help="Comma-separated subset of render,schema,policy. Default: all three.",
         ),
     ] = "render,schema,policy",
-    out: Annotated[
-        Path | None,
-        typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
-    ] = None,
-    keep: Annotated[
-        bool,
-        typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
-    ] = False,
+    out: OutOption = None,
+    keep: KeepOption = False,
     workers: Annotated[
         int,
         typer.Option(
@@ -575,7 +461,7 @@ def run(
     ] = 300.0,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
+    root: RootOption = Path("."),
 ) -> None:
     """Build worklist from validate-spec.yaml + git, then run all phases.
 
@@ -589,134 +475,103 @@ def run(
             param_hint="--progress",
         )
 
-    repo_root = root.resolve()
-    chart_filter = set(chart)
-    env_filter = set(env)
-
-    changed_files_list = _resolve_changed_files(
-        repo_root,
-        all_charts=all_charts,
-        changed_files_path=changed_files,
-        base=base,
-    )
-
-    build = build_worklist(
-        root=repo_root,
-        changed_files=changed_files_list,
-        all_charts=all_charts,
-    )
-
-    rows = build.rows
-    if chart_filter:
-        rows = tuple(r for r in rows if r.chart in chart_filter)
-    if env_filter:
-        rows = tuple(r for r in rows if r.env in env_filter)
-
-    # Output dir: an explicit --out is treated as implicit --keep so we
-    # don't surprise-delete a user-named directory.
-    user_specified_out = out is not None
-    out_dir = out.resolve() if out is not None else _default_out_dir(repo_root)
-    effective_keep = keep or user_specified_out
-
-    runner_cmd = CommandRunner()
-
-    # --verbose forces plain progress (Live can't share the terminal with
-    # streaming subprocess output) and disables capture in Helm so the
-    # operator sees raw helm chatter.
-    helm_verbose = bool(verbose)
+    # --verbose streams raw subprocess stdout/stderr. Live can't share the
+    # terminal with that, and >1 worker interleaves the streams into
+    # illegible noise — the service forces serial; we say so.
     if verbose and progress in ("auto", "live"):
         progress = "plain"
-
-    # Specs may pin a helm version per chart; group rows by their helm
-    # binding so we don't construct N runners with the same defaults.
-    helm_default = Helm(runner=runner_cmd, verbose=helm_verbose)
-    kubeconform = Kubeconform(runner=runner_cmd)
-    kyverno = Kyverno(runner=runner_cmd)
-
-    grouped: dict[tuple[str | None, str | None], list[RowConfig]] = {}
-    for row in rows:
-        spec = build.specs.get(row.chart)
-        if spec is None:
-            continue
-        cfg = _row_config_for(repo_root, row, spec)
-        key = (spec.helm_version, spec.helm_bin)
-        grouped.setdefault(key, []).append(cfg)
-
-    resolved_workers = _default_workers() if workers == 0 else max(1, workers)
-    # --verbose streams raw subprocess stdout/stderr; with >1 worker those
-    # streams interleave into illegible noise and defeat the point of
-    # --verbose (which exists for debugging hangs). Force serial and warn
-    # rather than silently producing garbled output.
-    if verbose and resolved_workers > 1:
+    if verbose and resolve_workers(workers) > 1:
         console.print(
             "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
             "streamed subprocess output readable"
         )
-        resolved_workers = 1
-    all_cfgs: list[RowConfig] = [c for cfgs in grouped.values() for c in cfgs]
+
     display = _resolve_display(progress, fmt=fmt)
-    # The display API takes WorklistRow (not RowConfig) so the progress
-    # module has no upward dependency on the runner package.
-    display.start([cfg.row for cfg in all_cfgs])
-    on_event = display.on_event
-
-    aggregated_rows: list[RowResult] = []
-    try:
-        for (helm_version, helm_bin), cfgs in grouped.items():
-            helm = (
-                helm_default
-                if helm_version is None and helm_bin is None
-                else Helm(
-                    runner=runner_cmd,
-                    version=helm_version,
-                    binary=helm_bin,
-                    verbose=helm_verbose,
-                )
-            )
-            runner_inst = ValidateRunner(
-                helm=helm,
-                output_root=out_dir,
-                kubeconform=kubeconform,
-                kyverno=kyverno,
-                max_workers=resolved_workers,
-                on_event=on_event,
-                # 0 means unbounded per CLI semantics; convert to None at the
-                # runner/integration boundary so subprocess.run gets the
-                # right sentinel.
-                row_timeout=row_timeout if row_timeout > 0 else None,
-                dep_update_timeout=dep_update_timeout if dep_update_timeout > 0 else None,
-            )
-            sub = runner_inst.run(cfgs, enabled_phases=enabled_phases)
-            aggregated_rows.extend(sub.rows)
-    finally:
-        display.stop()
-
-    # Re-sort the aggregated rows so output is deterministic even across
-    # helm-binding groups.
-    aggregated_rows.sort(key=lambda r: (r.row.chart, r.row.env))
-
-    result = RunResult(
-        rows=tuple(aggregated_rows),
-        rendered_root=out_dir,
-        spec_errors=build.spec_errors,
-    )
-
-    _emit_result(
-        result,
-        fmt=fmt,
-        out_dir=out_dir,
-        extra_warnings=tuple(build.warnings),
-        timings=timings,
+    request = RunRequest(
+        root=root,
+        charts=tuple(chart),
+        envs=tuple(env),
+        base=base,
+        changed_files=changed_files,
+        all_charts=all_charts,
+        phases=enabled_phases,
+        out=out,
+        keep=keep,
+        workers=workers,
         verbose=verbose,
-        github_step_summary=github_step_summary,
+        row_timeout=row_timeout,
+        dep_update_timeout=dep_update_timeout,
     )
 
-    if fmt in ("text", "all"):
-        _print_summary(result, build, enabled_phases)
+    app = _make_app(display)
+    try:
+        outcome = app.run(request)
+    except ValidateInputError as exc:
+        raise _bad_parameter(exc) from exc
 
-    exit_code = result.exit_code()
-    _maybe_cleanup(out_dir, exit_code=exit_code, keep=effective_keep)
-    sys.exit(exit_code)
+    # Retention runs however emission ends. It is still ordered *after* the
+    # summary (with --format all the sidecars are written into the render
+    # dir), but a raise from _emit_result must not skip it and orphan the
+    # rendered tree on disk.
+    try:
+        _emit_result(
+            outcome.result,
+            fmt=fmt,
+            out_dir=outcome.out_dir,
+            extra_warnings=outcome.warnings,
+            timings=timings,
+            verbose=verbose,
+            github_step_summary=github_step_summary,
+        )
+
+        if fmt in ("text", "all"):
+            _print_summary(outcome)
+    finally:
+        app.cleanup(outcome)
+    sys.exit(outcome.exit_code)
+
+
+def _run_single(
+    request: SingleRequest,
+    *,
+    fmt: str,
+    github_step_summary: bool,
+) -> None:
+    """Execute a one-row request, emit it, apply retention, and exit."""
+    app = _make_app()
+    try:
+        outcome = app.single(request)
+    except ChartNotFoundError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--chart") from exc
+    except ValidateInputError as exc:
+        raise _bad_parameter(exc) from exc
+
+    try:
+        _emit_result(
+            outcome.result,
+            fmt=fmt,
+            out_dir=outcome.out_dir,
+            github_step_summary=github_step_summary,
+        )
+    finally:
+        app.cleanup(outcome)
+    sys.exit(outcome.exit_code)
+
+
+def _guard_helm_selection(helm_version: str | None, helm_bin: Path | None) -> None:
+    """Reject --helm-version together with --helm-bin."""
+    if helm_version is not None and helm_bin is not None:
+        raise typer.BadParameter(
+            "--helm-version and --helm-bin are mutually exclusive",
+            param_hint="--helm-version / --helm-bin",
+        )
+
+
+def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:
+    """Map a rejected service input onto the flag that carries it."""
+    return typer.BadParameter(
+        str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint)
+    )
 
 
 def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
@@ -753,15 +608,6 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
     return PlainNarrationDisplay() if fmt != "json" else NullDisplay()
 
 
-def _validate_format(value: str) -> str:
-    if value not in _FORMATS:
-        raise typer.BadParameter(
-            f"unknown format: {value} (allowed: {', '.join(_FORMATS)})",
-            param_hint="--format",
-        )
-    return value
-
-
 def _emit_result(
     result: RunResult,
     *,
@@ -786,10 +632,24 @@ def _emit_result(
     """
     fmt = _validate_format(fmt)
 
+    # Both projections are pure functions of (result, timings), and both have
+    # more than one consumer: markdown feeds --format md, the `all` sidecar,
+    # and the step summary; JSON feeds --format json and the sidecar. Memoize
+    # rather than compute eagerly — the default `text` path needs neither, and
+    # recomputing was the previous behavior (markdown up to 3x per run). The
+    # caches are closures, so they die with this call; nothing is retained.
+    @functools.cache
+    def markdown_text() -> str:
+        return to_markdown(result, include_timings=timings)
+
+    @functools.cache
+    def json_text() -> str:
+        return json.dumps(to_json(result), indent=2) + "\n"
+
     if fmt == "json":
-        sys.stdout.write(json.dumps(to_json(result, include_timings=timings), indent=2) + "\n")
+        sys.stdout.write(json_text())
     elif fmt == "md":
-        sys.stdout.write(to_markdown(result, include_timings=timings))
+        sys.stdout.write(markdown_text())
     else:  # text or all
         console.print(to_text_table(result, include_timings=timings))
         for block in failure_details(result):
@@ -802,8 +662,8 @@ def _emit_result(
     if fmt == "all":
         # Best-effort: don't fail the run if the rendered tree was deleted.
         for filename, payload in (
-            ("summary.md", to_markdown(result, include_timings=timings)),
-            ("summary.json", json.dumps(to_json(result, include_timings=timings), indent=2) + "\n"),
+            ("summary.md", markdown_text()),
+            ("summary.json", json_text()),
         ):
             sidecar = out_dir / filename
             try:
@@ -827,7 +687,7 @@ def _emit_result(
             try:
                 # GitHub aggregates step summaries: append, do not truncate.
                 with open(step_summary_path, "a", encoding="utf-8") as fh:
-                    fh.write(to_markdown(result, include_timings=timings))
+                    fh.write(markdown_text())
             except OSError as exc:
                 console.print(
                     f"[yellow]warning: could not write GITHUB_STEP_SUMMARY ({exc})[/yellow]"
@@ -835,89 +695,43 @@ def _emit_result(
 
 
 def _parse_phases(raw: str) -> frozenset[str]:
-    valid = {"render", "schema", "policy"}
+    """Parse the comma-separated --phases value into a validated frozenset."""
     parts = {p.strip() for p in raw.split(",") if p.strip()}
     if not parts:
         raise typer.BadParameter("--phases must list at least one phase", param_hint="--phases")
-    unknown = parts - valid
+    unknown = parts - ALL_PHASES
     if unknown:
         raise typer.BadParameter(
-            f"unknown phase(s): {', '.join(sorted(unknown))}; valid: render,schema,policy",
+            # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
+            # order the user would type them into --phases, which is also
+            # the order the flag's default and help text use.
+            f"unknown phase(s): {', '.join(sorted(unknown))}; "
+            f"valid: {','.join(PHASE_ORDER)}",
             param_hint="--phases",
         )
     return frozenset(parts)
 
 
-def _resolve_changed_files(
-    repo_root: Path,
-    *,
-    all_charts: bool,
-    changed_files_path: Path | None,
-    base: str,
-) -> list[str] | None:
-    if all_charts:
-        return None
-    if changed_files_path is not None:
-        try:
-            text = changed_files_path.read_text()
-        except OSError as exc:
-            raise typer.BadParameter(
-                f"cannot read --changed-files: {exc}", param_hint="--changed-files"
-            ) from exc
-        return [line for line in text.splitlines() if line.strip()]
-    git = Git(repo_root)
-    try:
-        return git.changed_files(base=base)
-    except ChartManagerError as exc:
-        console.print(f"[yellow]warn:[/yellow] git diff failed ({exc}); falling back to --all")
-        return None
-
-
-def _row_config_for(
-    repo_root: Path,
-    row: WorklistRow,
-    spec: ValidateSpec,
-) -> RowConfig:
-    chart_path = (repo_root / "charts" / row.chart).resolve()
-    env_spec = spec.environments[row.env]
-    values = [
-        (chart_path / v).resolve() for v in env_spec.values
-    ]
-    policy_paths = list(discover_policies(repo_root, row.chart))
-    for extra in spec.policies.extra:
-        extra_path = Path(extra)
-        if not extra_path.is_absolute():
-            extra_path = (repo_root / extra).resolve()
-        if extra_path.is_dir() and extra_path not in policy_paths:
-            policy_paths.append(extra_path)
-    return RowConfig(
-        row=row,
-        chart_path=chart_path,
-        values=values,
-        kubernetes_version=spec.kubernetes_version,
-        schema_locations=spec.schema_locations or None,
-        policy_paths=policy_paths,
-    )
-
-
-def _print_summary(
-    result: RunResult,
-    build: WorklistBuildResult,
-    enabled_phases: frozenset[str],
-) -> None:
+def _print_summary(outcome: RunOutcome) -> None:
     """Print a one-line tally when any silent skips/errors are in play."""
+    result = outcome.result
     bits: list[str] = []
-    if build.spec_errors:
-        bits.append(f"{len(build.spec_errors)} spec error(s)")
-        for err in build.spec_errors:
+    if result.spec_errors:
+        bits.append(f"{len(result.spec_errors)} spec error(s)")
+        for err in result.spec_errors:
             console.print(f"[red]spec error:[/red] {err}")
-    if build.chart_count_unvalidated:
-        bits.append(f"{build.chart_count_unvalidated} chart(s) unvalidated")
+    if outcome.charts_unvalidated:
+        bits.append(f"{outcome.charts_unvalidated} chart(s) unvalidated")
+    # Only a phase the caller *asked for* can be an anomaly worth reporting.
+    # `--phases render` marks schema and policy NOT_RUN by design, so counting
+    # every NOT_RUN made a deliberately narrowed run always print
+    # "summary: 2 phase(s) NOT_RUN" — training the reader to ignore the one
+    # line that exists to flag silent skips.
     not_run = sum(
         1
         for row in result.rows
-        for phase in row.phases.values()
-        if phase.status == "NOT_RUN"
+        for name, phase in row.phases.items()
+        if phase.status == "NOT_RUN" and name in outcome.enabled_phases
     )
     if not_run:
         bits.append(f"{not_run} phase(s) NOT_RUN")
@@ -928,7 +742,7 @@ def _print_summary(
 
 
 def clean(
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
+    root: RootOption = Path("."),
 ) -> None:
     """Remove the entire .chart-manager/rendered/ tree."""
     target = (root.resolve() / ".chart-manager" / "rendered")
@@ -987,7 +801,7 @@ def deps_install(
             param_hint="--tool",
         )
 
-    runner_cmd = CommandRunner()
+    runner_cmd = _container().command_runner()
     if all_tools or not tool:
         results = deps_install_mod.install_all(runner_cmd, on_warn=console.print)
     else:
@@ -1010,55 +824,3 @@ def deps_install(
     console.print(f"summary: {total - failed}/{total} installed")
     if failed:
         raise typer.Exit(1)
-
-
-def _resolve_chart_path(repo_root: Path, chart_arg: str) -> tuple[Path, str]:
-    """Resolve a --chart argument into (absolute chart dir, display label).
-
-    A bare name is resolved through ChartRepository. A value containing
-    '/' is treated as a path (relative to repo root, or absolute) — this
-    is the M1b escape hatch for fixture charts that live outside charts/.
-    """
-    if "/" in chart_arg:
-        candidate = Path(chart_arg)
-        if not candidate.is_absolute():
-            candidate = (repo_root / candidate).resolve()
-        if not (candidate / "Chart.yaml").is_file():
-            raise typer.BadParameter(
-                f"no Chart.yaml at {candidate}", param_hint="--chart"
-            )
-        return candidate, candidate.name
-
-    repo = ChartRepository(repo_root)
-    try:
-        chart_obj = repo.get(chart_arg)
-    except ChartNotFoundError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--chart") from exc
-    return chart_obj.path, chart_obj.name
-
-
-def _resolve_values(chart_path: Path, values: list[Path]) -> list[Path]:
-    if values:
-        resolved: list[Path] = []
-        for value in values:
-            resolved.append(value if value.is_absolute() else (chart_path / value).resolve())
-        return resolved
-    default = chart_path / "values.yaml"
-    return [default.resolve()] if default.is_file() else []
-
-
-def _default_out_dir(repo_root: Path) -> Path:
-    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
-    return (repo_root / ".chart-manager" / "rendered" / run_id).resolve()
-
-
-def _maybe_cleanup(out_dir: Path, *, exit_code: int, keep: bool) -> None:
-    # Keep on: --keep, any failure, or DEBUG=true. Never crash cleanup.
-    if keep or exit_code != 0 or os.environ.get("DEBUG", "").lower() == "true":
-        return
-    if not out_dir.exists():
-        return
-    try:
-        shutil.rmtree(out_dir)
-    except OSError as exc:
-        console.print(f"[yellow]warning: cleanup failed: {exc}[/yellow]")

@@ -7,56 +7,8 @@ across the absent/stopped/running tri-state.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from pathlib import Path
-
-from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
-
-# Predicate signature for FakeRunner's response table: receives the argv
-# tuple of an invocation and decides whether this scripted response wins.
-Predicate = Callable[[tuple[str, ...]], bool]
-
-
-class FakeRunner(CommandRunner):
-    """Record-and-replay runner: scripted responses keyed by the leading argv."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, ...]] = []
-        # Each entry is (predicate, CommandResult). First matching predicate
-        # wins. Predicates take the argv tuple.
-        self._responses: list[tuple[Predicate, CommandResult]] = []
-
-    def respond(
-        self, predicate: Predicate, *, stdout: str = "", returncode: int = 0
-    ) -> None:
-        self._responses.append(
-            (
-                predicate,
-                CommandResult(args=(), returncode=returncode, stdout=stdout, stderr=""),
-            )
-        )
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        argv = tuple(args)
-        self.calls.append(argv)
-        for predicate, result in self._responses:
-            if predicate(argv):
-                return CommandResult(
-                    args=argv,
-                    returncode=result.returncode,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                )
-        return CommandResult(args=argv, returncode=0, stdout="", stderr="")
+from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
+from tests.conftest import FakeCommandRunner, Predicate
 
 
 def _is_docker_ps(running_only: bool) -> Predicate:
@@ -80,7 +32,7 @@ def _is_kind_get_clusters(argv: tuple[str, ...]) -> bool:
 
 
 def test_stop_cluster_stops_all_node_containers() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     # docker ps (running only) returns multi-node cluster's containers.
     runner.respond(
         _is_docker_ps(running_only=True),
@@ -109,7 +61,7 @@ def test_stop_cluster_stops_all_node_containers() -> None:
 
 
 def test_stop_cluster_returns_false_when_no_containers() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_docker_ps(running_only=True), stdout="")
     kind = Kind(runner=runner)
 
@@ -118,7 +70,7 @@ def test_stop_cluster_returns_false_when_no_containers() -> None:
 
 
 def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_docker_ps(running_only=True), returncode=1)
     kind = Kind(runner=runner)
 
@@ -129,7 +81,7 @@ def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
 
 
 def test_start_cluster_starts_stopped_containers() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     # docker ps -a returns stopped containers too.
     runner.respond(
         _is_docker_ps(running_only=False),
@@ -150,7 +102,7 @@ def test_start_cluster_starts_stopped_containers() -> None:
 
 
 def test_start_cluster_returns_false_when_no_containers() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_docker_ps(running_only=False), stdout="")
     kind = Kind(runner=runner)
 
@@ -166,7 +118,7 @@ def test_ensure_cluster_starts_stopped_cluster() -> None:
     stopped -- ensure_cluster must detect that and start them rather than
     no-op'ing or trying to re-create.
     """
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
     # Running query returns empty -> stopped.
     runner.respond(_is_docker_ps(running_only=True), stdout="")
@@ -195,7 +147,7 @@ def test_ensure_cluster_starts_only_stopped_nodes_in_partial_state() -> None:
     "with -a" and "without -a" listings and issues `docker start` only
     on the stopped subset.
     """
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
     # Running set: control-plane only.
     runner.respond(
@@ -219,7 +171,7 @@ def test_ensure_cluster_starts_only_stopped_nodes_in_partial_state() -> None:
 
 
 def test_ensure_cluster_noop_when_already_running() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
     runner.respond(
         _is_docker_ps(running_only=True),
@@ -240,7 +192,7 @@ def test_ensure_cluster_noop_when_already_running() -> None:
 
 
 def test_ensure_cluster_creates_when_absent() -> None:
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="")  # no clusters
     kind = Kind(runner=runner)
 
@@ -250,3 +202,67 @@ def test_ensure_cluster_creates_when_absent() -> None:
     assert len(create_calls) == 1
     assert "--name" in create_calls[0]
     assert "chart-manager" in create_calls[0]
+
+
+# ----- daemon addressing ----------------------------------------------------
+# kind names its cluster with `--name` on every subcommand, so cluster
+# identity was never ambient here. The docker daemon was: `Kind` inherited
+# whatever DOCKER_HOST the process had. These pin the scoped-env contract.
+
+
+def _exercise(kind: Kind) -> None:
+    """Touch every kind/docker argv-building path."""
+    kind.clusters()
+    kind.stop_cluster("a")
+    kind.start_cluster("a")
+    kind.delete_cluster("a")
+    kind.container_host_ports("a")
+
+
+def test_docker_host_is_scoped_onto_every_invocation() -> None:
+    runner = FakeCommandRunner(stdout="a\n")
+    _exercise(Kind(runner=runner, docker_host="tcp://remote:2375"))
+
+    assert runner.records
+    for record in runner.records:
+        assert record.env == {"DOCKER_HOST": "tcp://remote:2375"}, record.args
+
+
+def test_docker_host_default_passes_no_env_at_all() -> None:
+    # None must be indistinguishable from the pre-Wave-4 behavior: the child
+    # inherits the process environment untouched.
+    runner = FakeCommandRunner(stdout="a\n")
+    _exercise(Kind(runner=runner))
+
+    assert runner.records
+    assert {record.env for record in runner.records} == {None}
+
+
+def test_two_instances_drive_two_daemons_from_one_runner() -> None:
+    runner = FakeCommandRunner(stdout="a\n")
+    Kind(runner=runner, docker_host="unix:///a.sock").clusters()
+    Kind(runner=runner, docker_host="unix:///b.sock").clusters()
+
+    assert [record.env for record in runner.records] == [
+        {"DOCKER_HOST": "unix:///a.sock"},
+        {"DOCKER_HOST": "unix:///b.sock"},
+    ]
+
+
+def test_instance_timeout_is_threaded_to_every_invocation() -> None:
+    runner = FakeCommandRunner(stdout="a\n")
+    _exercise(Kind(runner=runner, timeout=15.0))
+
+    assert {record.timeout for record in runner.records} == {15.0}
+
+
+def test_timeout_default_is_unbounded() -> None:
+    runner = FakeCommandRunner(stdout="a\n")
+    _exercise(Kind(runner=runner))
+
+    assert {record.timeout for record in runner.records} == {None}
+
+
+def test_kind_context_is_the_one_home_for_the_naming_convention() -> None:
+    # Two services derived this with their own f-string before it lived here.
+    assert kind_context("chart-manager") == "kind-chart-manager"

@@ -2,28 +2,72 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
+from chart_manager.cli.validate_render import (
+    advisory_details,
+    failure_details,
+    to_text_table,
+)
 from chart_manager.plumbing.validate_models import (
     PhaseResult,
     RowResult,
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.validate.rendering import (
+from chart_manager.services.validate.wire import (
     JSON_SCHEMA_VERSION,
-    advisory_details,
-    failure_details,
     to_json,
     to_markdown,
-    to_text_table,
 )
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "golden"
 RUN_RESULT_GOLDEN = GOLDEN_DIR / "run-result.md.golden"
+RUN_RESULT_JSON_GOLDEN = GOLDEN_DIR / "run-result.json.golden"
+
+
+# ---- layering guard --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("module", "attrs"),
+    [
+        ("chart_manager.services.validate.wire", ("to_json", "to_markdown")),
+        ("chart_manager.services.validate.app", ("ValidateApp", "RunRequest")),
+        (
+            "chart_manager.services.validate.progress",
+            ("ProgressDisplay", "NullDisplay"),
+        ),
+    ],
+)
+def test_service_module_does_not_import_rich(module: str, attrs: tuple[str, ...]) -> None:
+    """The service layer must be usable where there is no terminal.
+
+    A REST worker or Slack handler importing `to_json` — or driving the
+    pipeline through `ValidateApp` — must not drag a TUI library into the
+    process. The Rich widgets live behind ports: `cli/validate_render.py`
+    for results, `cli/validate_progress.py` for narration. Run in a
+    subprocess because this test module itself imports rich, so
+    `sys.modules` here is already poisoned.
+    """
+    probe = (
+        f"import sys; import {module} as m; "
+        f"assert all(getattr(m, a) for a in {attrs!r}); "
+        "leaked = sorted(m for m in sys.modules if m == 'rich' or m.startswith('rich.')); "
+        "print(','.join(leaked))"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "", f"{module} leaked rich: {proc.stdout.strip()}"
 
 
 def _mixed_run_result() -> RunResult:
@@ -309,6 +353,22 @@ def test_to_json_shape_and_schema_version() -> None:
     assert data["spec_errors"] == [
         "charts/broken/validate-spec.yaml: unknown major version 99"
     ]
+
+
+def test_to_json_bytes_match_golden() -> None:
+    """Byte golden for the wire payload, serialized exactly as the CLI does.
+
+    `validate run --format json` writes json.dumps(..., indent=2) + "\\n"; a
+    diff here is a breaking change for every downstream jq consumer.
+
+    Regenerate with: REGEN_GOLDEN=1 uv run pytest tests/test_validate_rendering.py
+    """
+    actual = json.dumps(to_json(_mixed_run_result()), indent=2) + "\n"
+    if os.environ.get("REGEN_GOLDEN"):
+        GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+        RUN_RESULT_JSON_GOLDEN.write_text(actual)
+        pytest.fail(f"regenerated golden at {RUN_RESULT_JSON_GOLDEN}")
+    assert actual == RUN_RESULT_JSON_GOLDEN.read_text()
 
 
 def test_to_json_round_trips_through_json_module() -> None:

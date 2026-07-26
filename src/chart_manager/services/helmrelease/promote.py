@@ -1,3 +1,4 @@
+"""Promote a chart to an environment: clone the flux repo, edit version drift, open a PR."""
 from __future__ import annotations
 
 import tempfile
@@ -7,14 +8,15 @@ from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
 
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
-from chart_manager.services.events.lifecycle import PromotionPhase
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
+from .state import PROMOTE_PHASE, PromoteStatus
+from .telemetry import emit_non_fatal
 
 CloneFn = Callable[[str, Path, str], None]
 DowngradeConfirmFn = Callable[[list[HelmReleaseMatch], str], bool]
@@ -22,6 +24,8 @@ DowngradeConfirmFn = Callable[[list[HelmReleaseMatch], str], bool]
 
 @dataclass(frozen=True)
 class PromoteRequest:
+    """Inputs for one promotion: which chart/version into which env of which flux repo."""
+
     flux_repo: str
     path: Path
     environment: str
@@ -33,18 +37,53 @@ class PromoteRequest:
 
 @dataclass(frozen=True)
 class PromoteResult:
+    """Outcome of a promote: the one terminal state plus what matched/changed.
+
+    `status` is the whole state machine. The four boolean properties below are
+    compatibility shims over it, kept because seven assertions in
+    `tests/test_helmrelease_promote_service.py` read them and because a
+    caller asking "did this abort?" reads better than a comparison against an
+    enum member. They are derived, never stored, so the pair
+    (`already_open=True`, `pull_request=None`) that the old five-boolean
+    encoding permitted is now unrepresentable.
+    """
+
+    status: PromoteStatus
     matches: list[HelmReleaseMatch]
     changed_files: list[Path] = field(default_factory=list)
     branch: str | None = None
     pull_request: PullRequest | None = None
-    no_changes: bool = False
-    dry_run: bool = False
-    already_open: bool = False
-    aborted: bool = False
     downgrades: list[HelmReleaseMatch] = field(default_factory=list)
+
+    @property
+    def no_changes(self) -> bool:
+        """True when every match was already at the target version."""
+        return self.status is PromoteStatus.NO_CHANGES
+
+    @property
+    def dry_run(self) -> bool:
+        """True when the run planned a PR but wrote nothing.
+
+        Note this is the *outcome*, not the request flag: a `--dry-run`
+        invocation that finds no drift reports NO_CHANGES, because "nothing
+        to do" is what happened. The old encoding set both booleans; no
+        caller distinguished them and both suppress the lifecycle event.
+        """
+        return self.status is PromoteStatus.DRY_RUN
+
+    @property
+    def already_open(self) -> bool:
+        """True when a PR for this exact branch was already open."""
+        return self.status is PromoteStatus.ALREADY_OPEN
+
+    @property
+    def aborted(self) -> bool:
+        """True when a downgrade was detected and the confirm callback declined."""
+        return self.status is PromoteStatus.ABORTED
 
 
 def _default_clone(url: str, target: Path, branch: str) -> None:
+    """Default clone strategy: shallow `git clone` of one branch."""
     Git.clone(url, target, branch=branch)
 
 
@@ -59,7 +98,9 @@ class PromoteService:
         clone_fn: CloneFn = _default_clone,
         confirm_downgrade: DowngradeConfirmFn | None = None,
         events: EventWriter | None = None,
+        strict_events: bool = False,
     ) -> None:
+        """Wire git/github factories, clone + downgrade-confirm strategies, and event writer."""
         self._git_factory = git_factory
         self._github_factory = github_factory
         self._clone_fn = clone_fn
@@ -70,8 +111,15 @@ class PromoteService:
 
         # lazy store
         self._events = events or EventWriter()
+        # Telemetry is non-fatal by default (mirrors `cli/events.py:_emit`):
+        # the emission happens *after* the PR is already open, so an
+        # unconfigured events backend must not turn a successful promotion
+        # into a traceback. Opt in to `strict_events` where the event is
+        # itself the deliverable (e.g. a backfill job).
+        self._strict_events = strict_events
 
     def promote(self, request: PromoteRequest) -> PromoteResult:
+        """Clone into a temp dir, promote in-tree, emit the lifecycle event, and return."""
         with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
             workdir = Path(tmp) / "flux"
             self._clone_fn(request.flux_repo, workdir, request.base_branch)
@@ -80,29 +128,39 @@ class PromoteService:
         return result
 
     def _emit_promotion(self, request: PromoteRequest, result: PromoteResult) -> None:
-        if result.dry_run or result.no_changes:
-            return # no real state transition to record
-        if result.aborted:
-            phase = PromotionPhase.ABANDONED
-        elif result.already_open:
-            phase = PromotionPhase.AWAITING_MERGE
-        elif result.pull_request is not None:
-            phase = PromotionPhase.FLUX_PR_OPEN
-        else:
-            return # nothing actionable
+        """Map the terminal state to a PromotionPhase event.
+
+        One table lookup, not an if-chain: the CLI printer decodes the same
+        status in `cli/helmrelease.py` and the two used to walk the flags in
+        different orders, so a new terminal state could be handled by one and
+        silently dropped by the other. Statuses mapping to None (dry-run, no
+        changes) are not real transitions and must leave no mark.
+        """
+        phase = PROMOTE_PHASE[result.status]
+        if phase is None:
+            return
         pr = result.pull_request
-        self._events.promote(
-            chart_name=request.chart_name,
-            chart_version=request.version,
-            environment=request.environment,
-            phase=phase,
-            pr_url=pr.url if pr else None,
-            promotion_correlation_id=pr.url if pr else None,
+        emit_non_fatal(
+            lambda: self._events.promote(
+                chart_name=request.chart_name,
+                chart_version=request.version,
+                environment=request.environment,
+                phase=phase,
+                pr_url=pr.url if pr else None,
+                promotion_correlation_id=pr.url if pr else None,
+            ),
+            strict=self._strict_events,
+            what="promotion",
         )
 
     def _promote_in_workdir(
         self, request: PromoteRequest, workdir: Path
     ) -> PromoteResult:
+        """Scan for drift, optionally confirm downgrades, edit files, and open a PR.
+
+        Returns early (no PR) for: path escape guard, no matches (raises),
+        no drift, dry-run, aborted downgrade, or an already-open PR.
+        """
         workdir_resolved = workdir.resolve()
         scan_root = (workdir_resolved / request.path).resolve()
         # A `--path ../../` typo would silently scan (and edit) files outside
@@ -117,7 +175,9 @@ class PromoteService:
             )
         drift = [m for m in matches if m.current_version != request.version]
         if not drift:
-            return PromoteResult(matches=matches, no_changes=True, dry_run=request.dry_run)
+            # NO_CHANGES wins over DRY_RUN even when --dry-run was passed:
+            # a dry run that found nothing to plan did not plan anything.
+            return PromoteResult(status=PromoteStatus.NO_CHANGES, matches=matches)
 
         downgrades = [
             m for m in drift if _is_downgrade(m.current_version, request.version)
@@ -136,10 +196,10 @@ class PromoteService:
 
         if request.dry_run:
             return PromoteResult(
+                status=PromoteStatus.DRY_RUN,
                 matches=matches,
                 changed_files=changed_files,
                 branch=branch,
-                dry_run=True,
                 downgrades=downgrades,
             )
 
@@ -152,9 +212,9 @@ class PromoteService:
                 )
             if not self._confirm_downgrade(downgrades, request.version):
                 return PromoteResult(
+                    status=PromoteStatus.ABORTED,
                     matches=matches,
                     branch=branch,
-                    aborted=True,
                     downgrades=downgrades,
                 )
 
@@ -164,10 +224,10 @@ class PromoteService:
         existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
         if existing is not None:
             return PromoteResult(
+                status=PromoteStatus.ALREADY_OPEN,
                 matches=matches,
                 branch=branch,
                 pull_request=existing,
-                already_open=True,
                 downgrades=downgrades,
             )
 
@@ -195,17 +255,25 @@ class PromoteService:
             raise ChartManagerError(
                 f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
             ) from exc
+        # PUSHED vs PR_OPENED is decided here, once. The CLI used to derive
+        # it from `pull_request.url` being truthy, which put a second decoder
+        # of the same state in the surface layer.
         return PromoteResult(
+            status=PromoteStatus.PR_OPENED if pr.url else PromoteStatus.PUSHED,
             matches=matches,
             changed_files=changed_files,
             branch=branch,
             pull_request=pr,
             downgrades=downgrades,
         )
-        
+
 
 
 def _is_downgrade(current: str | None, target: str) -> bool:
+    """True if `current` is a higher semver than `target`.
+
+    Non-comparable strings are never treated as downgrades.
+    """
     # Non-version strings (e.g. "latest", a git SHA, an unset field) are not
     # comparable — don't gate on them; the operator chose those identifiers
     # explicitly and we have no signal that this is unsafe.
@@ -218,16 +286,19 @@ def _is_downgrade(current: str | None, target: str) -> bool:
 
 
 def _branch_name(request: PromoteRequest) -> str:
+    """Deterministic promotion branch name (same request => same branch => idempotent PR)."""
     return f"promote/{request.environment}/{request.chart_name}-{request.version}"
 
 
 def _pr_title(request: PromoteRequest) -> str:
+    """Conventional-commit PR title for the promotion."""
     return f"chore({request.environment}): promote {request.chart_name} to {request.version}"
 
 
 def _pr_body(
     request: PromoteRequest, drift: list[HelmReleaseMatch], workdir: Path
 ) -> str:
+    """Render the PR body listing each HelmRelease's old -> new version."""
     lines = [
         f"Promote `{request.chart_name}` to `{request.version}` in `{request.environment}`.",
         "",

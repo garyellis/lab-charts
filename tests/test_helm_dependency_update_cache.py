@@ -9,36 +9,19 @@ within a single process.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
-
-
-class FakeRunner(CommandRunner):
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, ...]] = []
-
-    def run(
-        self,
-        args: Sequence[str],
-        *,
-        cwd: Path | None = None,
-        check: bool = True,
-        capture: bool = True,
-        timeout: float | None = None,
-    ) -> CommandResult:
-        self.calls.append(tuple(args))
-        return CommandResult(args=tuple(args), returncode=0, stdout="", stderr="")
+from chart_manager.plumbing import chart_deps
+from tests.conftest import FakeCommandRunner
 
 
 @pytest.fixture(autouse=True)
 def _clear_mise_cache() -> None:
-    helm_module._resolve_via_mise.cache_clear()
+    helm_module._clear_mise_cache()
 
 
 def _write_chart(path: Path) -> None:
@@ -83,7 +66,7 @@ def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> 
     # Force Chart.yaml to be older than Chart.lock.
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     ran = helm.dependency_update_if_stale(chart)
@@ -101,7 +84,7 @@ def test_dependency_update_if_stale_runs_when_chart_yaml_is_newer(tmp_path: Path
     # Stale lock: Chart.yaml just edited, lock predates it.
     _mtime(chart / "Chart.lock", seconds_ago=60)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     ran = helm.dependency_update_if_stale(chart)
@@ -115,7 +98,7 @@ def test_dependency_update_if_stale_runs_when_lock_missing(tmp_path: Path) -> No
     _write_chart(chart)
     # No Chart.lock -> must run.
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     assert helm.dependency_update_if_stale(chart) is True
@@ -128,7 +111,7 @@ def test_dependency_update_if_stale_runs_when_charts_dir_missing(tmp_path: Path)
     (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
     # Lock fresh but no `charts/` -> deps were never materialized; must run.
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     assert helm.dependency_update_if_stale(chart) is True
@@ -159,7 +142,7 @@ def test_dependency_update_if_stale_runs_when_charts_dir_partial(tmp_path: Path)
     _materialize_dep(chart, name="foo")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     assert helm.dependency_update_if_stale(chart) is True
@@ -179,7 +162,7 @@ def test_dependency_update_if_stale_runs_when_lock_malformed(tmp_path: Path) -> 
     (chart / "charts").mkdir()
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     assert helm.dependency_update_if_stale(chart) is True
@@ -195,7 +178,7 @@ def test_lock_dep_count_returns_none_on_malformed_yaml(tmp_path: Path) -> None:
     lock = tmp_path / "Chart.lock"
     lock.write_text("not: valid: yaml: :::\n")
 
-    assert helm_module._lock_dep_count(lock) is None
+    assert chart_deps.lock_dep_count(lock) is None
 
 
 def test_lock_dep_count_counts_declared_deps(tmp_path: Path) -> None:
@@ -211,7 +194,7 @@ def test_lock_dep_count_counts_declared_deps(tmp_path: Path) -> None:
         "digest: sha256:abc\n"
     )
 
-    assert helm_module._lock_dep_count(lock) == 3
+    assert chart_deps.lock_dep_count(lock) == 3
 
 
 def test_dependency_update_if_stale_per_instance_cache_dedupes(tmp_path: Path) -> None:
@@ -220,7 +203,7 @@ def test_dependency_update_if_stale_per_instance_cache_dedupes(tmp_path: Path) -
     # No lock -> first call would run; we just want to confirm the second
     # call is a no-op regardless of freshness.
 
-    runner = FakeRunner()
+    runner = FakeCommandRunner()
     helm = Helm(runner=runner)
 
     assert helm.dependency_update_if_stale(chart) is True

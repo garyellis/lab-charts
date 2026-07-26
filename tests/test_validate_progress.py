@@ -1,8 +1,10 @@
-"""Tests for ProgressDisplay implementations.
+"""Tests for the validate progress port and its Rich adapters.
 
-We inspect underlying state (cell maps, output buffers) rather than the
-rendered Rich Live output — Live writes ANSI sequences to a real terminal
-emulator, which is not what these tests should be coupled to.
+`NullDisplay` is the service-side port default; the live table and plain
+narrator are CLI adapters. We inspect underlying state (cell maps, output
+buffers) rather than the rendered Rich Live output — Live writes ANSI
+sequences to a real terminal emulator, which is not what these tests
+should be coupled to.
 """
 from __future__ import annotations
 
@@ -10,12 +12,12 @@ import io
 
 from rich.console import Console
 
-from chart_manager.plumbing.validate_models import WorklistRow
-from chart_manager.services.validate.progress import (
+from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
-    NullDisplay,
     PlainNarrationDisplay,
 )
+from chart_manager.plumbing.validate_models import WorklistRow
+from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
 
 
 def _rows() -> list[WorklistRow]:
@@ -27,6 +29,12 @@ def _rows() -> list[WorklistRow]:
 
 def _row(chart: str) -> WorklistRow:
     return WorklistRow(chart=chart, env="dev", release=chart, namespace="lab-dev")
+
+
+def test_every_display_satisfies_the_port() -> None:
+    """The CLI adapters must remain substitutable for the service-side port."""
+    for display in (NullDisplay(), PlainNarrationDisplay(), LiveTableDisplay()):
+        assert isinstance(display, ProgressDisplay)
 
 
 def test_null_display_is_a_noop() -> None:
@@ -75,8 +83,12 @@ def test_live_table_cell_state_tracks_events() -> None:
         assert d._cells[("alloy", "dev")]["render"] == "PASS"
         assert d._cells[("grafana", "dev")]["render"] == "FAIL"
         assert d._cells[("alloy", "dev")]["schema"] == "…"
-        # elapsed populated once a non-running event lands.
-        assert d._cells[("alloy", "dev")]["elapsed"].endswith("s")
+        # The "wall" cell (rendered under the "Wall" column) is populated once
+        # a non-running event lands. It is wall-clock since the row's first
+        # `running` event, not the sum of measured phase times the final
+        # table's "Elapsed" column shows — hence the key rename from
+        # "elapsed", which implied the two were the same number.
+        assert d._cells[("alloy", "dev")]["wall"].endswith("s")
     finally:
         d.stop()
 

@@ -1,28 +1,32 @@
-"""Thin kubectl-backed client for reading Flux HelmRelease state.
+"""Client for reading Flux HelmRelease state, built on the kubectl adapter.
 
 All methods are read-only, stateless, and safe under Python-thread
 concurrency; the caller owns kubeconfig/context and any external
 rate-limiting (recommended bound ~8 concurrent calls per kubeconfig due
 to exec-auth-plugin token-cache races on EKS/GKE). No retries, no waits
 -- the service layer owns budgets.
+
+Nothing here invokes the `flux` binary: HelmReleases are ordinary custom
+resources, so every query is a `kubectl get`. That is why this composes
+`Kubectl` rather than holding its own `CommandRunner` -- while it did, the
+codebase had two adapters wrapping the same CLI with different context,
+timeout and JSON-parse conventions.
 """
 from __future__ import annotations
 
-import json
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.integrations.kubectl import Kubectl
 
-_LOG = logging.getLogger(__name__)
 _FLUX_GROUP_PREFIX = "helm.toolkit.fluxcd.io/"
 
 
 @dataclass(frozen=True)
 class HelmReleaseRef:
+    """Identity of one HelmRelease plus its derived helm release name/namespaces."""
+
     name: str
     namespace: str
     api_version: str
@@ -33,6 +37,8 @@ class HelmReleaseRef:
 
 @dataclass(frozen=True)
 class ConditionSnapshot:
+    """One entry from `status.conditions`, normalized to strings + parsed timestamp."""
+
     type: str
     status: str
     reason: str
@@ -42,6 +48,8 @@ class ConditionSnapshot:
 
 @dataclass(frozen=True)
 class HelmReleaseStatus:
+    """Point-in-time snapshot of a HelmRelease's spec/status fields we care about."""
+
     ref: HelmReleaseRef
     observed_at: datetime
     generation: int
@@ -55,6 +63,7 @@ class HelmReleaseStatus:
     conditions: tuple[ConditionSnapshot, ...]
 
     def condition(self, type_: str) -> ConditionSnapshot | None:
+        """Return the first condition of the given type, or None."""
         for cond in self.conditions:
             if cond.type == type_:
                 return cond
@@ -62,19 +71,24 @@ class HelmReleaseStatus:
 
     @property
     def ready(self) -> ConditionSnapshot | None:
+        """The Ready condition, or None."""
         return self.condition("Ready")
 
     @property
     def released(self) -> ConditionSnapshot | None:
+        """The Released condition, or None."""
         return self.condition("Released")
 
     @property
     def test_success(self) -> ConditionSnapshot | None:
+        """The TestSuccess condition, or None."""
         return self.condition("TestSuccess")
 
 
 @dataclass(frozen=True)
 class OwnedWorkload:
+    """Replica counts for one Deployment/StatefulSet/DaemonSet owned by a release."""
+
     kind: str
     namespace: str
     name: str
@@ -85,21 +99,25 @@ class OwnedWorkload:
 
 @dataclass(frozen=True)
 class WorkloadRollout:
+    """An OwnedWorkload plus a converged verdict (generation observed, all replicas up)."""
+
     workload: OwnedWorkload
     converged: bool
     generation: int
     observed_generation: int
 
 
-class Flux:
-    def __init__(
-        self,
-        runner: CommandRunner | None = None,
-        *,
-        context: str | None = None,
-    ) -> None:
-        self.runner = runner or CommandRunner()
-        self._context = context
+class HelmReleaseClient:
+    """Read-only queries against Flux HelmReleases and their owned workloads.
+
+    Narrow by design: only the four queries that encode HelmRelease shape
+    live here. Generic pod and event operations belong to `Kubectl`, which
+    is also what addresses the cluster for this client.
+    """
+
+    def __init__(self, kubectl: Kubectl | None = None) -> None:
+        """Bind the kubectl adapter that addresses the target cluster."""
+        self._kubectl = kubectl if kubectl is not None else Kubectl()
 
     def list(
         self,
@@ -107,13 +125,14 @@ class Flux:
         namespace: str | None = None,
         timeout: float | None = None,
     ) -> list[HelmReleaseRef]:
+        """List HelmReleases (all namespaces by default); unparseable items are skipped."""
         args = ["kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io"]
         if namespace is None:
             args.append("-A")
         else:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
-        payload = self._get_json(self._with_context(args), timeout=timeout)
+        payload = self._kubectl.get_json(args, timeout=timeout)
         refs: list[HelmReleaseRef] = []
         for item in payload.get("items", []) or []:
             ref = _ref_from_item(item)
@@ -127,13 +146,13 @@ class Flux:
         *,
         timeout: float | None = None,
     ) -> HelmReleaseStatus:
+        """Fetch one HelmRelease and snapshot its status (stamped with wall-clock time)."""
         args = [
             "kubectl", "-n", ref.namespace, "get",
             "helmreleases.helm.toolkit.fluxcd.io", ref.name, "-o", "json",
         ]
-        result = self.runner.run(self._with_context(args), timeout=timeout)
+        payload = self._kubectl.get_json(args, timeout=timeout)
         observed_at = datetime.now(UTC)
-        payload = _parse_json(result.stdout)
         return _status_from_item(payload, ref, observed_at)
 
     def list_owned_workloads(
@@ -142,6 +161,7 @@ class Flux:
         *,
         timeout: float | None = None,
     ) -> list[WorkloadRollout]:
+        """List workloads labeled as owned by this release, with rollout convergence."""
         selector = (
             f"helm.toolkit.fluxcd.io/name={ref.name},"
             f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
@@ -150,7 +170,7 @@ class Flux:
             "kubectl", "get", "deployment,statefulset,daemonset",
             "-A", "-l", selector, "-o", "json",
         ]
-        payload = self._get_json(self._with_context(args), timeout=timeout)
+        payload = self._kubectl.get_json(args, timeout=timeout)
         rollouts: list[WorkloadRollout] = []
         for item in payload.get("items", []) or []:
             rollout = _rollout_from_item(item)
@@ -164,6 +184,11 @@ class Flux:
         *,
         timeout: float | None = None,
     ) -> list[tuple[str, str, str]]:
+        """Return (namespace, name, phase) for this release's helm test hook pods.
+
+        Queries the target namespace for both `helm.sh/hook=test` and the
+        legacy `test-success` label, deduping pods that carry both.
+        """
         base = (
             f"helm.toolkit.fluxcd.io/name={ref.name},"
             f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
@@ -175,7 +200,7 @@ class Flux:
                 "kubectl", "-n", ref.target_namespace, "get", "pods",
                 "-l", f"{base},helm.sh/hook={hook}", "-o", "json",
             ]
-            payload = self._get_json(self._with_context(args), timeout=timeout)
+            payload = self._kubectl.get_json(args, timeout=timeout)
             for item in payload.get("items", []) or []:
                 metadata = item.get("metadata") or {}
                 ns = str(metadata.get("namespace") or "")
@@ -190,126 +215,13 @@ class Flux:
                 pods.append((ns, name, phase))
         return pods
 
-    def delete_pod(
-        self,
-        namespace: str,
-        name: str,
-        *,
-        timeout: float | None = None,
-    ) -> None:
-        self.runner.run(
-            self._with_context([
-                "kubectl", "-n", namespace, "delete", "pod", name,
-                "--ignore-not-found",
-            ]),
-            timeout=timeout,
-        )
-
-    def namespace_events(
-        self,
-        namespace: str,
-        *,
-        timeout: float | None = None,
-    ) -> str:
-        result = self.runner.run(
-            self._with_context([
-                "kubectl", "get", "events", "-n", namespace,
-                "--sort-by=.lastTimestamp",
-            ]),
-            check=False,
-            timeout=timeout,
-        )
-        return result.stdout + result.stderr
-
-    def workload_events(
-        self,
-        kind: str,
-        namespace: str,
-        name: str,
-        *,
-        timeout: float | None = None,
-    ) -> str:
-        result = self.runner.run(
-            self._with_context([
-                "kubectl", "get", "events", "-n", namespace,
-                "--field-selector",
-                f"involvedObject.name={name},involvedObject.kind={kind}",
-                "--sort-by=.lastTimestamp",
-            ]),
-            check=False,
-            timeout=timeout,
-        )
-        return result.stdout + result.stderr
-
-    def pod_logs(
-        self,
-        namespace: str,
-        name: str,
-        *,
-        container: str | None = None,
-        tail: int = 200,
-        previous: bool = False,
-        timeout: float | None = None,
-    ) -> str:
-        args = [
-            "kubectl", "-n", namespace, "logs", name,
-            f"--tail={tail}",
-        ]
-        if container is not None:
-            args.extend(["-c", container])
-        if previous:
-            args.append("--previous")
-        result = self.runner.run(self._with_context(args), check=False, timeout=timeout)
-        if result.returncode == 0:
-            return result.stdout
-        stderr = result.stderr or ""
-        if "NotFound" in stderr or "not found" in stderr:
-            _LOG.warning(
-                "pod logs unavailable",
-                extra={
-                    "namespace": namespace,
-                    "pod": name,
-                    "reason": stderr.strip()[:200],
-                },
-            )
-            return ""
-        raise ExternalCommandError(
-            f"command failed ({result.returncode}): {' '.join(args)}\n{stderr.strip()}",
-            stderr=stderr,
-            returncode=result.returncode,
-        )
-
-    def _get_json(
-        self,
-        args: list[str],
-        *,
-        timeout: float | None,
-    ) -> dict[str, Any]:
-        result = self.runner.run(args, timeout=timeout)
-        return _parse_json(result.stdout)
-
-    def _with_context(self, args: list[str]) -> list[str]:
-        if self._context is None:
-            return args
-        return [*args, "--context", self._context]
-
-
-def _parse_json(stdout: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(stdout or "{}")
-    except json.JSONDecodeError as exc:
-        snippet = (stdout or "")[:200]
-        raise ChartManagerError(
-            f"failed to parse kubectl JSON output: {exc}; payload[:200]={snippet!r}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise ChartManagerError(
-            f"kubectl JSON payload was not an object: {stdout[:200]!r}"
-        )
-    return payload
-
 
 def _ref_from_item(item: Any) -> HelmReleaseRef | None:
+    """Build a HelmReleaseRef from a raw item, deriving the helm release name.
+
+    Returns None for non-Flux or malformed items. Encodes the helm-controller
+    naming rule (releaseName > targetNamespace-name > name).
+    """
     if not isinstance(item, dict):
         return None
     api_version = item.get("apiVersion", "")
@@ -357,6 +269,7 @@ def _status_from_item(
     ref: HelmReleaseRef,
     observed_at: datetime,
 ) -> HelmReleaseStatus:
+    """Extract the fields we track from a HelmRelease object into a status snapshot."""
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else {}
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
@@ -368,6 +281,7 @@ def _status_from_item(
 
     history = status.get("history") if isinstance(status.get("history"), list) else []
     history_chart_version: str | None = None
+    # status.history is newest-first; [0] is the latest release attempt.
     if history and isinstance(history[0], dict):
         raw = history[0].get("chartVersion")
         history_chart_version = str(raw) if raw is not None else None
@@ -382,6 +296,7 @@ def _status_from_item(
         ref=ref,
         observed_at=observed_at,
         generation=int(metadata.get("generation") or 0),
+        # -1 sentinel = controller has not observed any generation yet.
         observed_generation=int(status.get("observedGeneration", -1)),
         resource_version=str(metadata.get("resourceVersion") or ""),
         suspended=bool(spec.get("suspend")),
@@ -394,6 +309,7 @@ def _status_from_item(
 
 
 def _condition_from_item(item: dict[str, Any]) -> ConditionSnapshot:
+    """Normalize one raw condition dict into a ConditionSnapshot."""
     return ConditionSnapshot(
         type=str(item.get("type") or ""),
         status=str(item.get("status") or ""),
@@ -404,8 +320,10 @@ def _condition_from_item(item: dict[str, Any]) -> ConditionSnapshot:
 
 
 def _parse_iso8601(value: Any) -> datetime | None:
+    """Parse a k8s timestamp to aware-UTC datetime; None if missing/unparseable."""
     if not isinstance(value, str) or not value:
         return None
+    # Python <3.11 fromisoformat rejects a trailing "Z"; rewrite it to +00:00.
     raw = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
         parsed = datetime.fromisoformat(raw)
@@ -417,6 +335,13 @@ def _parse_iso8601(value: Any) -> datetime | None:
 
 
 def _rollout_from_item(item: Any) -> WorkloadRollout | None:
+    """Map a workload object to a WorkloadRollout; None for unsupported kinds.
+
+    Converged = controller observed the current generation AND ready/available
+    both equal desired. Replica fields differ per kind (DaemonSets have no
+    spec.replicas; StatefulSets may omit availableReplicas, so ready is the
+    fallback).
+    """
     if not isinstance(item, dict):
         return None
     kind = str(item.get("kind") or "")
@@ -469,6 +394,7 @@ def _rollout_from_item(item: Any) -> WorkloadRollout | None:
 
 
 def _opt_str(value: Any) -> str | None:
+    """str() the value, passing None through."""
     if value is None:
         return None
     return str(value)

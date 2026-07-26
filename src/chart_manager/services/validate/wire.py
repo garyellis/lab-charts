@@ -1,17 +1,32 @@
-"""Output renderers for RunResult.
+"""Versioned wire contract for `validate` results.
 
-Each renderer is a pure function over RunResult. CLI/CI integration
-(stdout writes, $GITHUB_STEP_SUMMARY, file emission) lives in the CLI
-layer so renderers stay easy to snapshot-test.
+This module is the single source of truth for the machine-readable
+projections of a `RunResult`: the jq-friendly JSON payload and the
+GitHub-flavored markdown summary. Every surface -- the CLI's `--format
+json|md`, a REST endpoint, a PR-comment bot, a Slack app -- projects through
+these functions so they cannot diverge while all claiming the same
+`JSON_SCHEMA_VERSION`.
+
+**Editing this module is a breaking change.** Adding a key is additive and
+safe at the current version; renaming, removing, or retyping a key requires
+bumping `JSON_SCHEMA_VERSION`.
+
+Deliberately Rich-free and I/O-free. Nothing here may import `rich`: an HTTP
+server has no terminal, and `to_json` must not drag a TUI library into a
+worker process. Terminal rendering (Rich tables, color styles, console
+markup) lives in `cli/validate_render.py`; a test in
+`tests/test_validate_rendering.py` asserts that importing this module leaves
+`rich` out of `sys.modules`.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from rich.table import Table
-from rich.text import Text
-
-from chart_manager.plumbing.validate_models import PhaseResult, RunResult
+from chart_manager.plumbing.validate_models import (
+    PHASE_ORDER,
+    PhaseResult,
+    RunResult,
+)
 
 # Stable, jq-friendly JSON shape. Bump on breaking changes only; additive
 # fields are safe at this version.
@@ -24,37 +39,20 @@ _MD_STATUS_EMOJI = {
     "NOT_RUN": "·",  # middle dot
 }
 
-_PHASE_ORDER: tuple[str, ...] = ("render", "schema", "policy")
-
-_STATUS_STYLE = {
-    "PASS": "green",
-    "FAIL": "red",
-    "SKIP": "dim",
-    "NOT_RUN": "dim",
-}
+__all__ = [
+    "JSON_SCHEMA_VERSION",
+    "row_elapsed_text",
+    "to_json",
+    "to_markdown",
+]
 
 
-def to_text_table(result: RunResult, *, include_timings: bool = False) -> Table:
-    columns = ["Chart", "Env", "Release", "Render", "Schema", "Policy"]
-    if include_timings:
-        columns.append("Elapsed")
-    table = Table(*columns, title="validate")
-    for row_result in result.rows:
-        cells: list[str | Text] = [
-            row_result.row.chart,
-            row_result.row.env,
-            row_result.row.release,
-            _cell(row_result.phases.get("render")),
-            _cell(row_result.phases.get("schema")),
-            _cell(row_result.phases.get("policy")),
-        ]
-        if include_timings:
-            cells.append(Text(_row_elapsed_text(row_result), style="dim"))
-        table.add_row(*cells)
-    return table
+def row_elapsed_text(row_result) -> str:
+    """Sum the row's phase timings; empty string when nothing was timed.
 
-
-def _row_elapsed_text(row_result) -> str:
+    Shared by the markdown table and the terminal table so the "Elapsed"
+    column reads identically in both.
+    """
     total = 0.0
     any_timed = False
     for phase in row_result.phases.values():
@@ -62,48 +60,6 @@ def _row_elapsed_text(row_result) -> str:
             total += phase.elapsed_seconds
             any_timed = True
     return f"{total:.1f}s" if any_timed else ""
-
-
-def failure_details(result: RunResult) -> list[str]:
-    """One block per failed phase, suitable for printing under the table."""
-    blocks: list[str] = []
-    for row_result in result.rows:
-        for phase_name, phase in row_result.phases.items():
-            if phase.status != "FAIL":
-                continue
-            detail = phase.detail or ""
-            header = (
-                f"[red]{row_result.row.chart}/{row_result.row.env}[/red] "
-                f"[bold]{phase_name}[/bold]"
-            )
-            artifacts = "\n".join(f"  artifact: {a}" for a in phase.artifacts)
-            block = header + ("\n" + detail if detail else "")
-            if artifacts:
-                block += "\n" + artifacts
-            blocks.append(block)
-    return blocks
-
-
-def advisory_details(result: RunResult) -> list[str]:
-    """One block per PASS phase that carries advisory detail (e.g. kyverno warns)."""
-    blocks: list[str] = []
-    for row_result in result.rows:
-        for phase_name, phase in row_result.phases.items():
-            if phase.status != "PASS" or not phase.detail:
-                continue
-            header = (
-                f"[yellow]{row_result.row.chart}/{row_result.row.env}[/yellow] "
-                f"[bold]{phase_name}[/bold]"
-            )
-            blocks.append(header + "\n" + phase.detail)
-    return blocks
-
-
-def _cell(phase: PhaseResult | None) -> Text:
-    if phase is None:
-        return Text("-", style="dim")
-    style = _STATUS_STYLE.get(phase.status, "")
-    return Text(phase.status, style=style)
 
 
 def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
@@ -137,7 +93,7 @@ def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
             _md_cell(row_result.phases.get("policy")),
         ]
         if include_timings:
-            cells.append(_row_elapsed_text(row_result))
+            cells.append(row_elapsed_text(row_result))
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
 
@@ -169,7 +125,7 @@ def to_markdown(result: RunResult, *, include_timings: bool = False) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def to_json(result: RunResult, *, include_timings: bool = False) -> dict[str, object]:
+def to_json(result: RunResult) -> dict[str, object]:
     """Render a RunResult as a stable, jq-friendly dict.
 
     Uses str(Path) for any path so json.dumps works without a custom
@@ -179,10 +135,10 @@ def to_json(result: RunResult, *, include_timings: bool = False) -> dict[str, ob
     `elapsed_seconds` is always present (null when the phase didn't run)
     so downstream tooling can rely on the key existing regardless of
     --timings. Rounded to ms so two runs of the same workload diff
-    cleanly. `include_timings` is retained for parity with the text/md
-    renderers but no longer affects JSON shape.
+    cleanly. There is deliberately no `include_timings` switch: JSON
+    always emits them, and a no-op flag on a versioned wire contract
+    invites a consumer to depend on it.
     """
-    _ = include_timings  # JSON always emits; flag kept for renderer parity.
     rows_out: list[dict[str, object]] = []
     passing_rows = 0
     failing_rows = 0
@@ -230,12 +186,14 @@ def to_json(result: RunResult, *, include_timings: bool = False) -> dict[str, ob
 
 
 def _md_cell(phase: PhaseResult | None) -> str:
+    """Map a phase status to its markdown emoji cell."""
     if phase is None:
         return _MD_STATUS_EMOJI["NOT_RUN"]
     return _MD_STATUS_EMOJI.get(phase.status, phase.status)
 
 
 def _markdown_tally(result: RunResult) -> str:
+    """Build the bold one-line tally; any FAIL makes a row failing."""
     n_rows = len(result.rows)
     passing = 0
     failing = 0
@@ -252,6 +210,7 @@ def _markdown_tally(result: RunResult) -> str:
 
 
 def _markdown_failure_blocks(result: RunResult) -> list[list[str]]:
+    """Collect a <details> block for every failed phase."""
     blocks: list[list[str]] = []
     for row_result in result.rows:
         for phase_name in _phase_iter(row_result.phases):
@@ -267,6 +226,7 @@ def _markdown_failure_blocks(result: RunResult) -> list[list[str]]:
 
 
 def _markdown_advisory_blocks(result: RunResult) -> list[list[str]]:
+    """Collect a <details> block for every PASS phase carrying advisory detail."""
     blocks: list[list[str]] = []
     for row_result in result.rows:
         for phase_name in _phase_iter(row_result.phases):
@@ -307,6 +267,7 @@ def _md_details_block(*, summary: str, detail: str, artifacts: tuple[Path, ...])
 
 
 def _html_escape(value: str) -> str:
+    """Escape &, <, > for safe interpolation into raw HTML."""
     return (
         value.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -329,6 +290,7 @@ def _safe_fence(body: str) -> str:
 
 
 def _markdown_warnings(result: RunResult) -> list[str]:
+    """Render spec errors as markdown bullets; empty list when none."""
     out: list[str] = []
     if result.spec_errors:
         out.append(f"- {len(result.spec_errors)} spec error(s):")
@@ -339,6 +301,6 @@ def _markdown_warnings(result: RunResult) -> list[str]:
 
 def _phase_iter(phases) -> list[str]:
     """Iterate phases in a stable order: render, schema, policy, then any extras."""
-    ordered = [p for p in _PHASE_ORDER if p in phases]
-    extras = sorted(p for p in phases if p not in _PHASE_ORDER)
+    ordered = [p for p in PHASE_ORDER if p in phases]
+    extras = sorted(p for p in phases if p not in PHASE_ORDER)
     return ordered + extras

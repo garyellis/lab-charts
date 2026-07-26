@@ -1,9 +1,15 @@
+"""kind cluster lifecycle via the `kind` and `docker` CLIs."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import (
+    CommandResult,
+    CommandRunner,
+    SubprocessRunner,
+)
 from chart_manager.plumbing.errors import ChartManagerError
 
 # kind labels every node container it creates with this label whose value
@@ -13,17 +19,56 @@ from chart_manager.plumbing.errors import ChartManagerError
 KIND_CLUSTER_LABEL = "io.x-k8s.kind.cluster"
 
 
+def kind_context(cluster_name: str) -> str:
+    """The kubeconfig context `kind create cluster --name <n>` writes.
+
+    kind prefixes every context it creates with `kind-`. Two services need
+    to address a cluster they know only by kind cluster name, and each had
+    grown its own `f"kind-{name}"`: a naming convention owned by kind,
+    hardcoded twice inside `services/`, where a rename would have to find
+    both. This is the one place that convention lives.
+    """
+    return f"kind-{cluster_name}"
+
+
 class Kind:
-    def __init__(self, runner: CommandRunner | None = None) -> None:
-        self.runner = runner or CommandRunner()
+    """Manage kind clusters and their docker node containers.
+
+    Deliberately NOT given a `context=` like `Helm`/`Kubectl`: kind
+    addresses a cluster with `--name` on every subcommand, so cluster
+    identity is already a per-call argument here and a second, instance-level
+    way to say it would be a false symmetry with two sources of truth.
+
+    What *was* ambient is the docker daemon the node containers live on.
+    `docker_host` scopes that to this adapter via `DOCKER_HOST` on each
+    invocation, so one process can manage kind clusters on two daemons
+    without touching its own environment. None = the ambient daemon, which
+    is exactly today's behavior.
+    """
+
+    def __init__(
+        self,
+        runner: CommandRunner | None = None,
+        *,
+        docker_host: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        """Bind a runner and pin every invocation to a daemon and timeout."""
+        self.runner = runner or SubprocessRunner()
+        self._env = {"DOCKER_HOST": docker_host} if docker_host is not None else None
+        # Per-subprocess wall-clock cap. None = unbounded (today's behavior);
+        # nothing else bounds `docker ps` or a `kind create cluster`.
+        self.timeout = timeout
 
     def clusters(self) -> list[str]:
-        result = self.runner.run(["kind", "get", "clusters"], check=False)
+        """Return known cluster names; [] if `kind` fails (e.g. not installed)."""
+        result = self._run(["kind", "get", "clusters"], check=False)
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     def ensure_cluster(self, name: str, *, config: Path | None = None) -> None:
+        """Converge to a running cluster: create if absent, start stopped nodes, else no-op."""
         # `kind get clusters` lists clusters whose node containers exist on
         # the host docker daemon, regardless of whether those containers are
         # currently running. So "present" is a tri-state -- but with multi-
@@ -45,19 +90,20 @@ class Kind:
                 # an already-running container is a no-op but emits a
                 # warning; restricting to the actually-stopped set keeps
                 # output clean and the operation truthful.
-                self.runner.run(
+                self._run(
                     ["docker", "start", *stopped_nodes], capture=False
                 )
             return
         args = ["kind", "create", "cluster", "--name", name]
         if config is not None:
             args.extend(["--config", str(config)])
-        self.runner.run(args, capture=False)
+        self._run(args, capture=False)
 
     def delete_cluster(self, name: str) -> bool:
+        """Delete the cluster; False if it didn't exist."""
         if name not in self.clusters():
             return False
-        self.runner.run(["kind", "delete", "cluster", "--name", name], capture=False)
+        self._run(["kind", "delete", "cluster", "--name", name], capture=False)
         return True
 
     def stop_cluster(self, name: str) -> bool:
@@ -74,7 +120,7 @@ class Kind:
         names = self._node_container_names(name, include_stopped=False)
         if not names:
             return False
-        self.runner.run(["docker", "stop", *names], capture=False)
+        self._run(["docker", "stop", *names], capture=False)
         return True
 
     def start_cluster(self, name: str) -> bool:
@@ -89,22 +135,15 @@ class Kind:
         names = self._node_container_names(name, include_stopped=True)
         if not names:
             return False
-        self.runner.run(["docker", "start", *names], capture=False)
+        self._run(["docker", "start", *names], capture=False)
         return True
 
-    def has_running_node(self, name: str) -> bool:
-        """True iff at least one node container for the cluster is running.
-
-        Note this is intentionally NOT "the cluster is healthy" -- a
-        multi-node cluster can have a running control-plane and a stopped
-        worker and this still returns True. Callers that need partial-state
-        repair should diff `_node_container_names(include_stopped=True)`
-        against `_node_container_names(include_stopped=False)` directly
-        (see `ensure_cluster`).
-        """
-        return bool(self._node_container_names(name, include_stopped=False))
-
     def control_plane_ip(self, name: str) -> str:
+        """Return the control-plane container's IP on the `kind` docker network.
+
+        Note: relies on the `<name>-control-plane` naming convention, unlike
+        the label-based discovery used elsewhere in this class.
+        """
         # cilium replaces kube-proxy and needs the API server reachable
         # without a Service VIP. On kind the control-plane container's
         # IP on the `kind` docker network is what cluster-internal
@@ -112,7 +151,7 @@ class Kind:
         # `kubectl get endpoints` so this works before the cluster has
         # a CNI and pods/endpoints can reconcile.
         container = f"{name}-control-plane"
-        result = self.runner.run(
+        result = self._run(
             [
                 "docker",
                 "inspect",
@@ -153,7 +192,7 @@ class Kind:
             return set()
         host_ports: set[int] = set()
         for container in node_names:
-            result = self.runner.run(
+            result = self._run(
                 ["docker", "inspect", container],
                 check=False,
             )
@@ -181,6 +220,23 @@ class Kind:
 
     # ----- internals --------------------------------------------------------
 
+    def _run(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+        capture: bool = True,
+    ) -> CommandResult:
+        """Every kind/docker invocation, scoped to this adapter's daemon and cap.
+
+        One funnel rather than `env=`/`timeout=` repeated at nine call sites:
+        an invocation added later that forgets them silently escapes back to
+        the ambient docker daemon, which is the bug this class was fixed for.
+        """
+        return self.runner.run(
+            args, check=check, capture=capture, timeout=self.timeout, env=self._env
+        )
+
     def _node_container_names(self, name: str, *, include_stopped: bool) -> list[str]:
         """List node container names for the cluster.
 
@@ -200,7 +256,7 @@ class Kind:
                 "{{.Names}}",
             ]
         )
-        result = self.runner.run(args, check=False)
+        result = self._run(args, check=False)
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]

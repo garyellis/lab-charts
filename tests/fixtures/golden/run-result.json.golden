@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "exit_code": 3,
+  "rendered_root": "/abs/render-root",
+  "summary": {
+    "rows": 3,
+    "passing_rows": 1,
+    "failing_rows": 1,
+    "spec_errors": 1
+  },
+  "rows": [
+    {
+      "chart": "grafana",
+      "env": "dev",
+      "release": "grafana",
+      "namespace": "lab-dev",
+      "phases": {
+        "render": {
+          "status": "PASS",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "schema": {
+          "status": "PASS",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "policy": {
+          "status": "PASS",
+          "detail": "warnings:\nrequire-non-root/audit: Pod/grafana: container runs as 0",
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        }
+      }
+    },
+    {
+      "chart": "schema-violator",
+      "env": "dev",
+      "release": "schema-violator",
+      "namespace": "lab-dev",
+      "phases": {
+        "render": {
+          "status": "PASS",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "schema": {
+          "status": "FAIL",
+          "detail": "Deployment/schema-violator (/abs/path/Deployment.yaml): at '/spec/replicas': got string, want null or integer",
+          "artifacts": [
+            "/abs/path/Deployment.yaml"
+          ],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "policy": {
+          "status": "SKIP",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        }
+      }
+    },
+    {
+      "chart": "future-app",
+      "env": "dev",
+      "release": "future-app",
+      "namespace": "lab-dev",
+      "phases": {
+        "render": {
+          "status": "NOT_RUN",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "schema": {
+          "status": "NOT_RUN",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        },
+        "policy": {
+          "status": "NOT_RUN",
+          "detail": null,
+          "artifacts": [],
+          "error_type": null,
+          "elapsed_seconds": null
+        }
+      }
+    }
+  ],
+  "spec_errors": [
+    "charts/broken/validate-spec.yaml: unknown major version 99"
+  ]
+}

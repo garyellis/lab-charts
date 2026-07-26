@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rich.console import Console
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
@@ -131,7 +130,6 @@ def _service(
         kind=kind,  # type: ignore[arg-type]
         kubectl=_FakeKubectl(),  # type: ignore[arg-type]
         expose=_FakeExpose(),  # type: ignore[arg-type]
-        console=Console(quiet=True),
     )
 
 

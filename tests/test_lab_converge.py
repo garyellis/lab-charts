@@ -15,19 +15,20 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
-from rich.console import Console
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
+from chart_manager.plumbing.charts import Chart
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import ProfileSpec, TestSpec as _TestSpec
-from chart_manager.plumbing.charts import Chart
-from chart_manager.services import cluster_bootstrap, lab as lab_module
+from chart_manager.plumbing.spec import ProfileSpec
+from chart_manager.plumbing.spec import TestSpec as _TestSpec
+from chart_manager.services import lab as lab_module
 from chart_manager.services.lab import (
     LabService,
     LabSyncOptions,
     LabUpOptions,
 )
+from chart_manager.services.progress import ProgressEvent
 
 
 class _RecordingHelm:
@@ -141,14 +142,34 @@ class _FakeExpose:
         return None
 
 
-def _service(tmp_path: Path, *, helm: _RecordingHelm, kind: _FakeKind) -> LabService:
+class _Recorder:
+    """Collect progress events and flatten them to text for substring asserts."""
+
+    def __init__(self) -> None:
+        self.events: list[ProgressEvent] = []
+
+    def __call__(self, event: ProgressEvent) -> None:
+        self.events.append(event)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
+
+
+def _service(
+    tmp_path: Path,
+    *,
+    helm: _RecordingHelm,
+    kind: _FakeKind,
+    progress: _Recorder | None = None,
+) -> LabService:
     return LabService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
         kubectl=_FakeKubectl(),  # type: ignore[arg-type]
         expose=_FakeExpose(),  # type: ignore[arg-type]
-        console=Console(quiet=True),
+        progress=progress,
     )
 
 
@@ -244,35 +265,25 @@ def test_up_lists_cilium_once_even_when_plan_includes_it(
     _stub_plan_and_repo(monkeypatch, service, plan=plan, charts=charts)
     _disable_cilium_bootstrap(monkeypatch)
 
-    summary: lab_module._RunSummary | None = None
-    real_print = service._print_summary
+    result = service.up(LabUpOptions())
 
-    def _capture(s: lab_module._RunSummary) -> None:
-        nonlocal summary
-        summary = s
-        real_print(s)
-
-    monkeypatch.setattr(service, "_print_summary", _capture)
-
-    service.up(LabUpOptions())
-
-    assert summary is not None
     cilium_entries = [
-        row
-        for row in (*summary.applied, *summary.no_change)
-        if row[0] == "cilium"
+        entry
+        for entry in (*result.applied, *result.no_change)
+        if entry.chart == "cilium"
     ]
     assert len(cilium_entries) == 1, (
-        f"cilium should appear once in summary; got {cilium_entries}"
+        f"cilium should appear once in the result; got {cilium_entries}"
     )
     # grafana should also have been applied -- proves the plan iteration
     # didn't get filtered too aggressively.
     grafana_entries = [
-        row
-        for row in (*summary.applied, *summary.no_change)
-        if row[0] == "grafana"
+        entry
+        for entry in (*result.applied, *result.no_change)
+        if entry.chart == "grafana"
     ]
     assert len(grafana_entries) == 1
+    assert result.ok
 
 
 # ----- skip-installed restores prior behavior -------------------------------
@@ -386,3 +397,182 @@ def test_sync_requires_at_least_one_chart_name(tmp_path: Path) -> None:
 
     with pytest.raises(ChartManagerError):
         service.sync(LabSyncOptions(chart_names=()))
+
+
+# ----- down / delete return results -----------------------------------------
+
+
+class _StoppableKind(_FakeKind):
+    """Kind fake whose stop/delete verbs report a configurable outcome."""
+
+    def __init__(self, *, changed: bool) -> None:
+        super().__init__()
+        self._changed = changed
+
+    def stop_cluster(self, _name: str) -> bool:
+        return self._changed
+
+    def delete_cluster(self, _name: str) -> bool:
+        return self._changed
+
+
+class _ReapingExpose:
+    def __init__(self, pid: int | None) -> None:
+        self._pid = pid
+        self.stop_calls: list[str] = []
+
+    def stop(self, cluster_name: str) -> int | None:
+        self.stop_calls.append(cluster_name)
+        return self._pid
+
+
+def _lifecycle_service(
+    tmp_path: Path, *, kind: _StoppableKind, expose: _ReapingExpose
+) -> LabService:
+    return LabService(
+        tmp_path,
+        helm=_RecordingHelm(),  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
+        kubectl=_FakeKubectl(),  # type: ignore[arg-type]
+        expose=expose,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("verb", ["down", "delete"])
+def test_lifecycle_verb_reports_the_change_and_reaps_the_port_forward(
+    tmp_path: Path, verb: str
+) -> None:
+    expose = _ReapingExpose(pid=4242)
+    service = _lifecycle_service(
+        tmp_path, kind=_StoppableKind(changed=True), expose=expose
+    )
+
+    result = getattr(service, verb)("chart-manager")
+
+    assert result.ok
+    assert result.cluster_name == "chart-manager"
+    assert result.changed is True
+    assert result.port_forward_pid == 4242
+    # The port-forward is reaped inside the same lifecycle boundary; a
+    # kubectl forward whose apiserver just went away is dead weight.
+    assert expose.stop_calls == ["chart-manager"]
+
+
+@pytest.mark.parametrize("verb", ["down", "delete"])
+def test_lifecycle_verb_reports_an_absent_cluster_as_unchanged(
+    tmp_path: Path, verb: str
+) -> None:
+    expose = _ReapingExpose(pid=None)
+    service = _lifecycle_service(
+        tmp_path, kind=_StoppableKind(changed=False), expose=expose
+    )
+
+    result = getattr(service, verb)("chart-manager")
+
+    assert result.changed is False
+    assert result.port_forward_pid is None
+
+
+def test_lifecycle_verb_narrates_through_the_progress_callback(tmp_path: Path) -> None:
+    progress = _Recorder()
+    service = LabService(
+        tmp_path,
+        helm=_RecordingHelm(),  # type: ignore[arg-type]
+        kind=_StoppableKind(changed=True),  # type: ignore[arg-type]
+        kubectl=_FakeKubectl(),  # type: ignore[arg-type]
+        expose=_ReapingExpose(pid=None),  # type: ignore[arg-type]
+        progress=progress,
+    )
+
+    service.down("chart-manager")
+
+    assert "Stopping sandbox cluster chart-manager" in progress.text
+
+
+# ----- LabResult.ok ---------------------------------------------------------
+
+
+def test_up_result_is_not_ok_when_a_chart_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A chart that isn't in the repository fails resolution; continue-on-error
+    # means the run completes and the failure lands in the result.
+    helm = _RecordingHelm()
+    service = _service(tmp_path, helm=helm, kind=_FakeKind())
+    plan = [
+        PlanEntry(chart="missing", profile="minimal"),
+        PlanEntry(chart="grafana", profile="minimal"),
+    ]
+    _stub_plan_and_repo(
+        monkeypatch, service, plan=plan, charts={"grafana": _stub_chart("grafana")}
+    )
+    _disable_cilium_bootstrap(monkeypatch)
+
+    result = service.up(LabUpOptions())
+
+    assert not result.ok
+    assert [f.chart for f in result.failed] == ["missing"]
+    # Continue-on-error: the chart after the failure still converged.
+    assert [e.chart for e in result.applied] == ["cilium", "grafana"]
+
+
+def test_up_narration_goes_to_the_progress_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress = _Recorder()
+    service = _service(
+        tmp_path, helm=_RecordingHelm(), kind=_FakeKind(), progress=progress
+    )
+    _stub_plan_and_repo(
+        monkeypatch,
+        service,
+        plan=[PlanEntry(chart="grafana", profile="minimal")],
+        charts={"grafana": _stub_chart("grafana")},
+    )
+    _disable_cilium_bootstrap(monkeypatch)
+
+    service.up(LabUpOptions())
+
+    assert "Ensuring sandbox cluster chart-manager" in progress.text
+    assert "Applying grafana:minimal -> observability" in progress.text
+    assert "Waiting for workloads grafana" in progress.text
+
+
+# ----- continue-on-error covers profile resolution too -----------------------
+
+
+def test_an_unknown_profile_fails_one_row_instead_of_aborting_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`spec.profile()` raises SpecError, and it used to sit outside every try.
+
+    A chart whose `requires:` names a renamed profile aborted the whole
+    converge partway through -- contradicting the continue-on-error
+    contract `_install_plan` documents, and leaving later charts
+    uninstalled with no row explaining why.
+    """
+    helm = _RecordingHelm()
+    service = _service(tmp_path, helm=helm, kind=_FakeKind())
+    plan = [
+        PlanEntry(chart="stale", profile="renamed-away"),
+        PlanEntry(chart="grafana", profile="minimal"),
+    ]
+    _stub_plan_and_repo(
+        monkeypatch,
+        service,
+        plan=plan,
+        charts={
+            # Has only a `minimal` profile, so "renamed-away" raises.
+            "stale": _stub_chart("stale"),
+            "grafana": _stub_chart("grafana"),
+        },
+    )
+    _disable_cilium_bootstrap(monkeypatch)
+
+    result = service.up(LabUpOptions())
+
+    assert not result.ok
+    assert [f.chart for f in result.failed] == ["stale"]
+    assert "renamed-away" in result.failed[0].error
+    # The run continued: the chart after the bad profile still converged.
+    assert "grafana" in [e.chart for e in result.applied]

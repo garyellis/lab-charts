@@ -8,11 +8,14 @@ import pytest
 
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.events.lifecycle import PromotionPhase
 from chart_manager.services.helmrelease import (
     PromoteRequest,
+    PromoteResult,
     PromoteService,
+    PromoteStatus,
 )
 
 _HR_TEMPLATE = """\
@@ -62,7 +65,7 @@ def _cloner(fixture: Path, captured: list[Path] | None = None):
 
 class _FakeGit(Git):
     def __init__(self, root: Path) -> None:
-        super().__init__(root, runner=CommandRunner())
+        super().__init__(root, runner=SubprocessRunner())
         self.calls: list[tuple[str, ...]] = []
 
     def checkout_new_branch(self, branch: str, *, base: str | None = None) -> None:
@@ -84,7 +87,7 @@ class _FakeGit(Git):
 
 class _FakeGithub(Github):
     def __init__(self, repo_root: Path) -> None:
-        super().__init__(repo_root, runner=CommandRunner())
+        super().__init__(repo_root, runner=SubprocessRunner())
         self.created: list[tuple[str, str, str, str]] = []
         self.existing_pr: PullRequest | None = None
 
@@ -153,7 +156,7 @@ def test_promote_raises_when_chart_not_found(tmp_path: Path) -> None:
         version="0.1.1",
     )
 
-    with pytest.raises(ChartManagerError, match="certz-manager.*not found"):
+    with pytest.raises(ChartManagerError, match=r"certz-manager.*not found"):
         _service(fixture).promote(req)
 
 
@@ -567,3 +570,189 @@ def test_non_semver_current_version_does_not_gate(tmp_path: Path) -> None:
     )
     assert result.pull_request is not None
     assert result.downgrades == []
+
+
+# ----- telemetry failure policy ---------------------------------------------
+#
+# The promotion event is emitted *after* the PR is already open, so an
+# unconfigured/unreachable events backend must not turn a successful
+# promotion into a traceback. Mirrors `cli/events.py:_emit`.
+
+
+class _ExplodingEvents:
+    """EventWriter stand-in whose writes always fail (unconfigured backend)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def promote(self, **_kwargs: object) -> None:
+        self.calls += 1
+        raise KeyError("COSMOS_ENDPOINT")
+
+
+def test_event_emission_failure_does_not_break_the_promotion(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    fixture = tmp_path / "flux"
+    _write_hr(fixture, "envs/dev/loki.yaml", chart="loki", version="1.0.0")
+    events = _ExplodingEvents()
+    service = PromoteService(
+        git_factory=_FakeGit,
+        github_factory=_FakeGithub,
+        clone_fn=_cloner(fixture),
+        events=events,  # type: ignore[arg-type]
+    )
+
+    result = service.promote(
+        PromoteRequest(
+            flux_repo=_FAKE_URL,
+            path=Path("envs/dev"),
+            environment="dev",
+            chart_name="loki",
+            version="2.0.0",
+        )
+    )
+
+    assert events.calls == 1
+    assert result.pull_request is not None
+    assert "non-fatal" in caplog.text
+
+
+def test_strict_events_surfaces_the_emission_failure(tmp_path: Path) -> None:
+    # Opt-in for callers where the event IS the deliverable (e.g. a backfill).
+    fixture = tmp_path / "flux"
+    _write_hr(fixture, "envs/dev/loki.yaml", chart="loki", version="1.0.0")
+    service = PromoteService(
+        git_factory=_FakeGit,
+        github_factory=_FakeGithub,
+        clone_fn=_cloner(fixture),
+        events=_ExplodingEvents(),  # type: ignore[arg-type]
+        strict_events=True,
+    )
+
+    with pytest.raises(KeyError):
+        service.promote(
+            PromoteRequest(
+                flux_repo=_FAKE_URL,
+                path=Path("envs/dev"),
+                environment="dev",
+                chart_name="loki",
+                version="2.0.0",
+            )
+        )
+
+
+# ----- the terminal-state model ---------------------------------------------
+#
+# `PromoteResult.status` replaced five independent booleans that encoded six
+# real states and were decoded in two different orders (`_emit_promotion` and
+# the CLI printer). The booleans survive as properties over `status`, so the
+# assertions above still hold; these pin the status itself and the one phase
+# table both decoders now share.
+
+
+class _RecordingEvents:
+    """EventWriter stand-in that records the phase of every emitted event."""
+
+    def __init__(self) -> None:
+        self.phases: list[PromotionPhase] = []
+
+    def promote(self, *, phase: PromotionPhase, **_kwargs: object) -> None:
+        self.phases.append(phase)
+
+
+def _promote_with_events(
+    fixture: Path,
+    *,
+    target_version: str,
+    confirm_downgrade: object = None,
+    dry_run: bool = False,
+    existing_pr: PullRequest | None = None,
+) -> tuple[PromoteResult, _RecordingEvents]:
+    def github_factory(root: Path) -> _FakeGithub:
+        gh = _FakeGithub(root)
+        gh.existing_pr = existing_pr
+        return gh
+
+    events = _RecordingEvents()
+    service = PromoteService(
+        git_factory=_FakeGit,
+        github_factory=github_factory,
+        clone_fn=_cloner(fixture),
+        confirm_downgrade=confirm_downgrade,  # type: ignore[arg-type]
+        events=events,  # type: ignore[arg-type]
+    )
+    result = service.promote(
+        PromoteRequest(
+            flux_repo=_FAKE_URL,
+            path=Path("prod/"),
+            environment="prod",
+            chart_name="loki",
+            version=target_version,
+            dry_run=dry_run,
+        )
+    )
+    return result, events
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "dry_run", "existing", "confirm", "status", "phases"),
+    [
+        ("0.1.2", "0.1.2", False, False, None, PromoteStatus.NO_CHANGES, []),
+        ("0.1.2", "0.1.2", True, False, None, PromoteStatus.NO_CHANGES, []),
+        ("0.1.1", "0.1.2", True, False, None, PromoteStatus.DRY_RUN, []),
+        (
+            "0.2.0",
+            "0.1.0",
+            False,
+            False,
+            False,
+            PromoteStatus.ABORTED,
+            [PromotionPhase.ABANDONED],
+        ),
+        (
+            "0.1.1",
+            "0.1.2",
+            False,
+            True,
+            None,
+            PromoteStatus.ALREADY_OPEN,
+            [PromotionPhase.AWAITING_MERGE],
+        ),
+        (
+            "0.1.1",
+            "0.1.2",
+            False,
+            False,
+            None,
+            PromoteStatus.PR_OPENED,
+            [PromotionPhase.FLUX_PR_OPEN],
+        ),
+    ],
+)
+def test_terminal_status_and_emitted_phase(
+    tmp_path: Path,
+    current: str,
+    target: str,
+    dry_run: bool,
+    existing: bool,
+    confirm: bool | None,
+    status: PromoteStatus,
+    phases: list[PromotionPhase],
+) -> None:
+    fixture = tmp_path / "fixture"
+    _write_hr(fixture, "prod/loki.yaml", chart="loki", version=current)
+    result, events = _promote_with_events(
+        fixture,
+        target_version=target,
+        dry_run=dry_run,
+        existing_pr=(
+            PullRequest(url="https://github.com/org/flux/pull/7", number=7)
+            if existing
+            else None
+        ),
+        confirm_downgrade=(lambda _d, _t: confirm) if confirm is not None else None,
+    )
+
+    assert result.status is status
+    assert events.phases == phases

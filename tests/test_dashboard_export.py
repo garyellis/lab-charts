@@ -1,4 +1,11 @@
-from chart_manager.services.grafana.dashboard_export import normalize_dashboard
+from typing import Any
+
+from chart_manager.services.grafana.dashboard_export import (
+    ExportRequest,
+    GrafanaExporter,
+    canonical_json,
+    normalize_dashboard,
+)
 
 
 def test_strips_churn_keys_and_forces_editable() -> None:
@@ -85,3 +92,54 @@ def test_normalize_does_not_mutate_input() -> None:
     normalize_dashboard(raw)
 
     assert raw == before
+
+
+# ----- canonical_json -------------------------------------------------------
+#
+# The git-normalization contract (sorted keys, 2-space indent, trailing
+# newline) used to live in `cli/main.py`'s export handler. It has to be
+# owned by the exporter so a committed dashboard and a fresh export of the
+# same dashboard are byte-identical no matter which surface wrote it.
+
+
+def test_canonical_json_sorts_keys_and_indents_two_spaces() -> None:
+    payload = canonical_json({"uid": "u", "editable": True, "annotations": {"b": 1, "a": 2}})
+
+    assert payload == (
+        "{\n"
+        '  "annotations": {\n'
+        '    "a": 2,\n'
+        '    "b": 1\n'
+        "  },\n"
+        '  "editable": true,\n'
+        '  "uid": "u"\n'
+        "}\n"
+    )
+
+
+def test_canonical_json_ends_with_exactly_one_newline() -> None:
+    payload = canonical_json({"uid": "u"})
+
+    assert payload.endswith("}\n")
+    assert not payload.endswith("}\n\n")
+
+
+def test_canonical_json_is_stable_across_key_insertion_order() -> None:
+    a = canonical_json({"uid": "u", "title": "T"})
+    b = canonical_json({"title": "T", "uid": "u"})
+
+    assert a == b
+
+
+def test_export_returns_the_canonical_payload_of_the_normalized_dashboard() -> None:
+    class _StubExporter(GrafanaExporter):
+        def fetch(self, request: ExportRequest) -> dict[str, Any]:
+            return {"uid": "u", "editable": True}
+
+    # `fetch` is overridden, so no kubectl call is reachable -- this test
+    # covers the export -> canonical_json seam only.
+    payload = _StubExporter(kubectl=None).export(  # type: ignore[arg-type]
+        ExportRequest(uid="u", cluster_name="c", namespace="observability")
+    )
+
+    assert payload == canonical_json({"uid": "u", "editable": True})

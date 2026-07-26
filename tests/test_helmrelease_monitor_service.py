@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from chart_manager.integrations.flux import (
+from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
     HelmReleaseStatus,
@@ -107,8 +107,8 @@ def _workload(name: str = "loki-app", *, converged: bool = True) -> WorkloadRoll
 
 
 @dataclass
-class _FakeFlux:
-    """Configurable flux double. Records all calls; per-method scripted behavior."""
+class _FakeCluster:
+    """Configurable cluster double. Records all calls; per-method scripted behavior."""
 
     list_result: list[HelmReleaseRef] = field(default_factory=list)
     list_exc: BaseException | None = None
@@ -226,7 +226,7 @@ class _Wall:
 
 
 def _make_service(
-    flux: _FakeFlux,
+    cluster: _FakeCluster,
     *,
     clock: Callable[[], float] | None = None,
     now: Callable[[], datetime] | None = None,
@@ -235,7 +235,12 @@ def _make_service(
     sleep: Callable[[float], None] | None = None,
 ) -> MonitorService:
     return MonitorService(
-        flux,  # type: ignore[arg-type]
+        cluster,  # type: ignore[arg-type]
+        # Passed as *both* collaborators: the pod/event operations moved
+        # from the HelmRelease client onto `Kubectl`, and one double
+        # standing in for both keeps every `calls` assertion below on a
+        # single recorder instead of splitting it across two fakes.
+        kubectl=cluster,  # type: ignore[arg-type]
         sleep=sleep or (lambda _t: None),
         clock=clock or _Clock(),
         now=now or _Wall(),
@@ -297,8 +302,8 @@ def test_request_validation_rejects_zero_concurrency() -> None:
 
 
 def test_flux_list_failure_propagates() -> None:
-    flux = _FakeFlux(list_exc=ExternalCommandError("boom", stderr="boom"))
-    service = _make_service(flux)
+    cluster = _FakeCluster(list_exc=ExternalCommandError("boom", stderr="boom"))
+    service = _make_service(cluster)
     with pytest.raises(ExternalCommandError):
         service.monitor(_req())
 
@@ -306,14 +311,14 @@ def test_flux_list_failure_propagates() -> None:
 def test_zero_match_returns_synthetic_no_match_outcome() -> None:
     a = _ref("a", "ns1")
     b = _ref("b", "ns2")
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[a, b],
         statuses={
             ("ns1", "a"): [_status(a, desired_chart_name="other")],
             ("ns2", "b"): [_status(b, desired_chart_version="9.9.9")],
         },
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     assert len(result.outcomes) == 1
     [o] = result.outcomes
     assert o.verdict == "no-match"
@@ -351,12 +356,12 @@ def test_generation_lag_then_ready() -> None:
         history_chart_version=VERSION,
         conditions=(_ready(WALL_BASE),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [laggy, history_lag, converged]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
     phases = [t.phase for t in o.recent_transitions]
@@ -369,16 +374,16 @@ def test_stale_ready_with_converged_gen_and_history_is_immediately_ready() -> No
         ref,
         conditions=(_ready(WALL_BASE - timedelta(hours=1)),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [stale]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
     assert all(t.phase != "StaleReady" for t in o.recent_transitions)
-    get_status_calls = [c for c in flux.calls if c[0] == "get_status"]
+    get_status_calls = [c for c in cluster.calls if c[0] == "get_status"]
     assert len(get_status_calls) <= 2
 
 
@@ -388,12 +393,12 @@ def test_no_stale_ready_phase_emitted_anywhere() -> None:
         ref,
         conditions=(_ready(WALL_BASE - timedelta(hours=1)),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [stale]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     for o in result.outcomes:
         assert all(t.phase != "StaleReady" for t in o.recent_transitions)
         if o.diagnostics is not None:
@@ -406,16 +411,16 @@ def test_old_but_healthy_hr_ready_on_first_poll() -> None:
         ref,
         conditions=(_ready(WALL_BASE - timedelta(days=1)),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [ancient]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
     assert all(t.phase != "StaleReady" for t in o.recent_transitions)
-    get_status_calls = [c for c in flux.calls if c[0] == "get_status"]
+    get_status_calls = [c for c in cluster.calls if c[0] == "get_status"]
     assert len(get_status_calls) <= 2
 
 
@@ -427,12 +432,12 @@ def test_history_version_mismatch_blocks_ready() -> None:
         conditions=(_ready(WALL_BASE),),
     )
     match = _status(ref, conditions=(_ready(WALL_BASE),))
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [mismatch, match]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
 
@@ -440,7 +445,7 @@ def test_history_version_mismatch_blocks_ready() -> None:
 def test_workload_not_converged_then_converges() -> None:
     ref = _ref()
     s = _status(ref, conditions=(_ready(WALL_BASE),))
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [s]},
         workloads={
@@ -451,7 +456,7 @@ def test_workload_not_converged_then_converges() -> None:
             ]
         },
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
 
@@ -466,17 +471,17 @@ def test_terminal_install_failed_fails_fast() -> None:
         conditions=(_cond("Ready", "False", reason="InstallFailed", message="bad"),),
     )
     # Second status would be ready -- if monitor called it, the test fails.
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [bad, _ready_status(ref)]},
     )
     initial_get_status_count = 0
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "InstallFailed"
     # Only the upfront filter call should have happened.
-    get_status_calls = [c for c in flux.calls if c[0] == "get_status"]
+    get_status_calls = [c for c in cluster.calls if c[0] == "get_status"]
     assert len(get_status_calls) == 1 + initial_get_status_count
 
 
@@ -486,8 +491,8 @@ def test_retry_exhausted_is_terminal() -> None:
         ref,
         conditions=(_cond("Ready", "False", reason="RetryExhausted"),),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [bad]})
-    result = _make_service(flux).monitor(_req())
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [bad]})
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "RetryExhausted"
@@ -502,8 +507,8 @@ def test_stalled_fails_fast() -> None:
             _cond("Stalled", "True", message="stuck"),
         ),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [bad]})
-    result = _make_service(flux).monitor(_req())
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [bad]})
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "Stalled"
@@ -527,12 +532,12 @@ def test_test_success_false_terminal_only_after_released() -> None:
             _cond("Released", "True"),
         ),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [pre_release, post_release]},
         workloads={("loki", "loki"): [(_workload(converged=False),)]},
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "TestFailed"
@@ -549,11 +554,11 @@ def test_per_hr_timeout_yields_timed_out() -> None:
         observed_generation=1,
         conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [waiting]})
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [waiting]})
     # Per-HR=300s, total=900s. Stay at 0 until the watcher has recorded the
     # initial transition, then jump to a value above per-HR but below total.
     clock = _StepClock(warmup=5, step=400.0)
-    service = _make_service(flux, clock=clock)
+    service = _make_service(cluster, clock=clock)
     result = service.monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "timed-out"
@@ -585,12 +590,12 @@ def test_total_timeout_cancels_remaining() -> None:
     workloads: dict[tuple[str, str], list[tuple[WorkloadRollout, ...]]] = {
         (refs[0].namespace, refs[0].name): [(_workload(),)],
     }
-    flux = _FakeFlux(list_result=refs, statuses=statuses, workloads=workloads)
+    cluster = _FakeCluster(list_result=refs, statuses=statuses, workloads=workloads)
     # Force total timeout: clock advances quickly so total budget (900s) trips
     # after a handful of ticks.
     clock = _Clock(start=0.0, step=500.0)
     service = _make_service(
-        flux, clock=clock, sleep=lambda _t: None
+        cluster, clock=clock, sleep=lambda _t: None
     )
     result = service.monitor(_req(concurrency=3))
     verdicts = sorted(o.verdict for o in result.outcomes)
@@ -607,17 +612,17 @@ def test_total_timeout_cancels_remaining() -> None:
 def test_suspended_short_circuits() -> None:
     ref = _ref()
     susp = _status(ref, suspended=True, conditions=(_ready(WALL_BASE),))
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [susp]})
-    flux.namespace_events_raises = True  # would blow up if diagnostics ran
-    flux.workload_events_raises = True
-    result = _make_service(flux).monitor(_req())
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [susp]})
+    cluster.namespace_events_raises = True  # would blow up if diagnostics ran
+    cluster.workload_events_raises = True
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "skipped-suspended"
     assert result.ok is True
-    get_status_calls = [c for c in flux.calls if c[0] == "get_status"]
+    get_status_calls = [c for c in cluster.calls if c[0] == "get_status"]
     assert len(get_status_calls) == 1
-    assert not any(c[0] == "list_owned_workloads" for c in flux.calls)
-    assert not any(c[0] == "namespace_events" for c in flux.calls)
+    assert not any(c[0] == "list_owned_workloads" for c in cluster.calls)
+    assert not any(c[0] == "namespace_events" for c in cluster.calls)
 
 
 # ----- ring dedupe ---------------------------------------------------------
@@ -639,11 +644,11 @@ def test_recent_transitions_deduped() -> None:
         conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
     )
     seq: list[HelmReleaseStatus] = [progressing] * 10 + [bumped] * 2
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): seq})
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): seq})
     # Stay at 0 long enough to consume the full status sequence, then jump
     # past per-HR to terminate the watcher.
     clock = _StepClock(warmup=50, step=400.0)
-    result = _make_service(flux, clock=clock).monitor(_req())
+    result = _make_service(cluster, clock=clock).monitor(_req())
     [o] = result.outcomes
     phases = [t.phase for t in o.recent_transitions]
     # Initial entry is GenerationLag; after observed catches up but history
@@ -666,7 +671,7 @@ def test_disappeared_distinguished_from_transient() -> None:
         observed_generation=1,
         conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={
             ("loki", "loki"): [
@@ -678,7 +683,7 @@ def test_disappeared_distinguished_from_transient() -> None:
             ]
         },
     )
-    result = _make_service(flux).monitor(_req())
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "failed"
     assert o.reason == "Disappeared"
@@ -692,7 +697,7 @@ def test_transient_poll_error_logs_and_continues() -> None:
         observed_generation=1,
         conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={
             ("loki", "loki"): [
@@ -703,7 +708,7 @@ def test_transient_poll_error_logs_and_continues() -> None:
         },
     )
     clock = _Clock(start=0.0, step=200.0)  # trip per-hr after several ticks
-    result = _make_service(flux, clock=clock).monitor(_req())
+    result = _make_service(cluster, clock=clock).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "timed-out"
     phases = [t.phase for t in o.recent_transitions]
@@ -715,7 +720,7 @@ def test_transient_poll_error_logs_and_continues() -> None:
 
 def test_diagnostics_skipped_for_ready_outcomes() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [_ready_status(ref)]},
         workloads={("loki", "loki"): [(_workload(),)]},
@@ -727,9 +732,9 @@ def test_diagnostics_skipped_for_ready_outcomes() -> None:
     def boom_wl(*a: Any, **k: Any) -> str:
         raise AssertionError("workload_events should not be called for ready outcomes")
 
-    flux.namespace_events = boom_ns  # type: ignore[method-assign]
-    flux.workload_events = boom_wl  # type: ignore[method-assign]
-    result = _make_service(flux).monitor(_req())
+    cluster.namespace_events = boom_ns  # type: ignore[method-assign]
+    cluster.workload_events = boom_wl  # type: ignore[method-assign]
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
     assert o.diagnostics is None
@@ -741,13 +746,43 @@ def test_diagnostics_composed_for_failed_outcomes() -> None:
         ref,
         conditions=(_cond("Ready", "False", reason="InstallFailed", message="bad"),),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [bad]})
-    result = _make_service(flux).monitor(_req())
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [bad]})
+    result = _make_service(cluster).monitor(_req())
     [o] = result.outcomes
     assert o.diagnostics is not None
     assert "## loki/loki - failed: InstallFailed" in o.diagnostics
     assert "### Status" in o.diagnostics
     assert "### Events (namespace loki)" in o.diagnostics
+
+
+def test_diagnostics_events_come_from_the_target_namespace() -> None:
+    """Events must be read from where the workloads run.
+
+    When `spec.targetNamespace` differs from the HelmRelease's own
+    namespace, reading `ref.namespace` reported events from a namespace
+    holding none of the resources listed in the same report. The default
+    fixture cannot catch this -- it sets both namespaces to the same value.
+    """
+    ref = HelmReleaseRef(
+        name="loki",
+        namespace="cluster-system",
+        api_version="helm.toolkit.fluxcd.io/v2",
+        release_name="loki",
+        storage_namespace="cluster-system",
+        target_namespace="observability",
+    )
+    bad = _status(
+        ref,
+        conditions=(_cond("Ready", "False", reason="InstallFailed", message="bad"),),
+    )
+    cluster = _FakeCluster(list_result=[ref], statuses={("cluster-system", "loki"): [bad]})
+
+    [o] = _make_service(cluster).monitor(_req()).outcomes
+
+    assert o.diagnostics is not None
+    assert "### Events (namespace observability)" in o.diagnostics
+    events_calls = [c for c in cluster.calls if c[0] == "namespace_events"]
+    assert [c[1] for c in events_calls] == [("observability",)]
 
 
 # ----- progress callback ---------------------------------------------------
@@ -776,14 +811,14 @@ def test_progress_callback_invoked_per_distinct_transition() -> None:
         history_chart_version=VERSION,
         conditions=(_ready(WALL_BASE),),
     )
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [laggy, history_lag, final]},
         workloads={("loki", "loki"): [(_workload(),)]},
     )
     calls: list[tuple[HelmReleaseRef, Transition]] = []
     result = _make_service(
-        flux, progress=lambda r, t: calls.append((r, t))
+        cluster, progress=lambda r, t: calls.append((r, t))
     ).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
@@ -793,7 +828,7 @@ def test_progress_callback_invoked_per_distinct_transition() -> None:
 
 def test_progress_callback_exception_does_not_break_watcher() -> None:
     ref = _ref()
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[ref],
         statuses={("loki", "loki"): [_ready_status(ref)]},
         workloads={("loki", "loki"): [(_workload(),)]},
@@ -802,7 +837,7 @@ def test_progress_callback_exception_does_not_break_watcher() -> None:
     def bad(_ref: HelmReleaseRef, _t: Transition) -> None:
         raise RuntimeError("callback crash")
 
-    result = _make_service(flux, progress=bad).monitor(_req())
+    result = _make_service(cluster, progress=bad).monitor(_req())
     [o] = result.outcomes
     assert o.verdict == "ready"
 
@@ -816,9 +851,9 @@ def test_per_poll_timeout_plumbed_to_flux_calls() -> None:
         ref,
         conditions=(_cond("Ready", "False", reason="InstallFailed", message="m"),),
     )
-    flux = _FakeFlux(list_result=[ref], statuses={("loki", "loki"): [bad]})
-    _make_service(flux).monitor(_req(per_poll_timeout="7s"))
-    for name, _args, kwargs in flux.calls:
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [bad]})
+    _make_service(cluster).monitor(_req(per_poll_timeout="7s"))
+    for name, _args, kwargs in cluster.calls:
         if name in ("list", "get_status", "list_owned_workloads", "namespace_events", "workload_events"):
             assert kwargs.get("timeout") == 7.0
 
@@ -841,9 +876,9 @@ def test_concurrency_runs_in_parallel() -> None:
         )
         statuses[(ref.namespace, ref.name)] = [laggy, _ready_status(ref)]
         workloads[(ref.namespace, ref.name)] = [(_workload(),)]
-    flux = _FakeFlux(list_result=refs, statuses=statuses, workloads=workloads)
+    cluster = _FakeCluster(list_result=refs, statuses=statuses, workloads=workloads)
     barrier = threading.Barrier(3, timeout=5)
-    orig_get_status = flux.get_status
+    orig_get_status = cluster.get_status
     second_call_threads: list[int] = []
     call_count = {"n": 0}
     cc_lock = threading.Lock()
@@ -862,8 +897,8 @@ def test_concurrency_runs_in_parallel() -> None:
                 second_call_threads.append(threading.get_ident())
         return result
 
-    flux.get_status = get_status  # type: ignore[method-assign]
-    service = _make_service(flux)
+    cluster.get_status = get_status  # type: ignore[method-assign]
+    service = _make_service(cluster)
     service.monitor(_req(concurrency=3))
     assert len(set(second_call_threads)) >= 2
 
@@ -875,14 +910,14 @@ def test_jitter_applied_once_before_first_tick() -> None:
     for ref in refs:
         statuses[(ref.namespace, ref.name)] = [_ready_status(ref)]
         workloads[(ref.namespace, ref.name)] = [(_workload(),)]
-    flux = _FakeFlux(list_result=refs, statuses=statuses, workloads=workloads)
+    cluster = _FakeCluster(list_result=refs, statuses=statuses, workloads=workloads)
     rand_calls: list[tuple[float, float]] = []
 
     def rand(lo: float, hi: float) -> float:
         rand_calls.append((lo, hi))
         return 0.0
 
-    service = _make_service(flux, rand=rand)
+    service = _make_service(cluster, rand=rand)
     service.monitor(_req(concurrency=3, poll_interval=2.0))
     assert len(rand_calls) == 3
     assert all(call == (0.0, 2.0) for call in rand_calls)
@@ -895,8 +930,8 @@ def test_outcomes_sorted_by_ns_name() -> None:
     for ref in refs:
         statuses[(ref.namespace, ref.name)] = [_ready_status(ref)]
         workloads[(ref.namespace, ref.name)] = [(_workload(),)]
-    flux = _FakeFlux(list_result=refs, statuses=statuses, workloads=workloads)
-    result = _make_service(flux).monitor(_req(concurrency=3))
+    cluster = _FakeCluster(list_result=refs, statuses=statuses, workloads=workloads)
+    result = _make_service(cluster).monitor(_req(concurrency=3))
     assert [(o.ref.namespace, o.ref.name) for o in result.outcomes] == [
         ("a", "aaa"),
         ("a", "mmm"),
@@ -922,7 +957,7 @@ def test_fail_fast_cancels_in_flight_watchers_on_first_failure() -> None:
         conditions=(_cond("Ready", "False", reason="InstallFailed", message="bad"),),
     )
     slow_ready = _ready_status(slow_ref)
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[fail_ref, slow_ref],
         statuses={
             ("ns", "aaa"): [bad],
@@ -930,7 +965,7 @@ def test_fail_fast_cancels_in_flight_watchers_on_first_failure() -> None:
         },
         workloads={("ns", "zzz"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req(concurrency=1, fail_fast=True))
+    result = _make_service(cluster).monitor(_req(concurrency=1, fail_fast=True))
     by_name = {(o.ref.namespace, o.ref.name): o for o in result.outcomes}
     assert by_name[("ns", "aaa")].verdict == "failed"
     assert by_name[("ns", "zzz")].verdict == "timed-out"
@@ -945,7 +980,7 @@ def test_fail_fast_disabled_lets_subsequent_watchers_complete() -> None:
         conditions=(_cond("Ready", "False", reason="InstallFailed"),),
     )
     ok = _ready_status(ok_ref)
-    flux = _FakeFlux(
+    cluster = _FakeCluster(
         list_result=[fail_ref, ok_ref],
         statuses={
             ("ns", "aaa"): [bad],
@@ -953,7 +988,7 @@ def test_fail_fast_disabled_lets_subsequent_watchers_complete() -> None:
         },
         workloads={("ns", "zzz"): [(_workload(),)]},
     )
-    result = _make_service(flux).monitor(_req(concurrency=1, fail_fast=False))
+    result = _make_service(cluster).monitor(_req(concurrency=1, fail_fast=False))
     by_name = {(o.ref.namespace, o.ref.name): o for o in result.outcomes}
     assert by_name[("ns", "aaa")].verdict == "failed"
     assert by_name[("ns", "zzz")].verdict == "ready"

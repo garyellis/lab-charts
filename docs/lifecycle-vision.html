@@ -154,6 +154,7 @@
   }
   .phase.ok { border-color: rgba(63,185,80,.45); color: var(--built); }
   .phase.bad { border-color: rgba(248,81,73,.5); color: #f85149; }
+  .phase.unemitted { border-style: dashed; color: var(--muted); opacity: .75; }
   .phase-arrow { color: var(--muted); font-size: 12px; }
   .spinenote { font-size: 13px; color: var(--muted); margin-top: 14px; }
 
@@ -315,7 +316,7 @@ cards in the next section.</p>
   <rect class="sv-box b-external" x="990" y="460" width="190" height="120" rx="8"/>
   <text class="sv-title" x="1085" y="484" text-anchor="middle">prod cluster</text>
   <text class="sv-sub" x="1085" y="504" text-anchor="middle">Flux rollout</text>
-  <text class="sv-title sv-ok" x="1085" y="537" text-anchor="middle">reached_prod ✓</text>
+  <text class="sv-title sv-ok" x="1085" y="537" text-anchor="middle">promoted (prod) ✓</text>
   <text class="sv-sub" x="1085" y="555" text-anchor="middle">loop closed · lead time known</text>
 
   <!-- promotion loop arrows (planned) -->
@@ -335,7 +336,7 @@ cards in the next section.</p>
 
   <rect class="sv-box b-built" x="70" y="720" width="1110" height="58" rx="8"/>
   <text class="sv-title" x="90" y="743">Lifecycle audit trail — chart-manager events → DynamoDB / Cosmos DB</text>
-  <text class="sv-sub" x="90" y="764">one correlation id per rollout: detected → flux_pr_open → rollout_complete → helm_test_passed → promoted → reached_prod (+ failure phases)</text>
+  <text class="sv-sub" x="90" y="764">one correlation id (chart@version) per env: flux_pr_open → waiting_for_rollout → rollout_complete → helm_test_running → helm_test_passed → promoted (+ abandoned / helm_test_failed)</text>
 
   <!-- numbered badges (match stage cards) -->
   <g class="sv-num"><circle cx="640" cy="45" r="11"/><text x="640" y="49">1</text></g>
@@ -348,9 +349,9 @@ cards in the next section.</p>
   <g class="sv-num"><circle cx="310" cy="616" r="11"/><text x="310" y="620">8</text></g>
 </svg>
 <div class="diagram-caption">
-  Read it top-to-bottom: a new upstream version enters at the top-left and exits as <code>reached_prod</code>
-  at the bottom-right. Dashed purple = designed but not built. The dotted green lines show stages that emit
-  audit events today.
+  Read it top-to-bottom: a new upstream version enters at the top-left and exits as <code>promoted</code>
+  in each environment, prod last. Dashed purple = designed but not built. The dotted green lines show stages
+  that emit audit events today.
 </div>
 </div>
 
@@ -422,7 +423,7 @@ version has reached prod. Nothing auto-merges — humans approve every PR; every
     <div class="parts">
       <div class="part"><span class="pd built"></span>chart-manager helmrelease promote</div>
       <div class="part"><span class="pd built"></span>services/helmrelease/{scanner,editor,promote}</div>
-      <div class="part"><span class="pd built"></span>integrations/{git,github,flux}</div>
+      <div class="part"><span class="pd built"></span>integrations/{git,github,helmrelease}</div>
     </div>
   </div>
 
@@ -440,12 +441,13 @@ version has reached prod. Nothing auto-merges — humans approve every PR; every
   <div class="stage partial">
     <div class="num">7</div>
     <h3>Validate rollout <span class="badge partial">Partial</span></h3>
-    <div class="what">Wait for HelmRelease Ready, run helm tests, hold a soak window. The CLI gates exist;
+    <div class="what">Wait for HelmRelease Ready, run helm tests, hold a soak window. The CLI gates exist and,
+      when given <code>--environment</code>, emit the rollout and helm-test phases of the promotion timeline;
       the always-on watcher applying the full promotion contract (digest dedupe, soak, job checks) is designed,
       not built.</div>
     <div class="parts">
-      <div class="part"><span class="pd built"></span>chart-manager helmrelease monitor</div>
-      <div class="part"><span class="pd built"></span>chart-manager helmrelease test</div>
+      <div class="part"><span class="pd built"></span>chart-manager helmrelease monitor --environment</div>
+      <div class="part"><span class="pd built"></span>chart-manager helmrelease test --environment</div>
       <div class="part"><span class="pd planned"></span>promotion watcher + contract.py</div>
     </div>
   </div>
@@ -490,7 +492,7 @@ at that env — nothing past it moves.</p>
   </div>
   <div class="env prod">
     <h4>prod</h4>
-    <div class="envnote"><code>reached_prod</code> event closes the loop<br>duration is measured end-to-end</div>
+    <div class="envnote"><code>promoted</code> in prod closes the loop<br>duration is measured end-to-end</div>
   </div>
 </div>
 
@@ -541,11 +543,13 @@ in lab-charts CI today on every PR; the third runs per env after rollout.</p>
 <h2><span class="n">5</span>The audit trail spine</h2>
 <p class="h2sub">Every stage emits a typed lifecycle event keyed by correlation id, so one upstream release is
 traceable from bump PR to prod. Capture is <b>built</b> — <code>chart-manager events build|promote</code> with
-DynamoDB and Cosmos DB backends. The query layer (dashboards, lead-time metrics) is the deferred Phase 5.</p>
+DynamoDB and Cosmos DB backends. <code>promote</code>, <code>monitor</code> and <code>test</code> emit the phases themselves —
+9 of the 11 declared <code>PromotionPhase</code> members — so a promotion's duration is computable end to end.
+The query layer (dashboards, lead-time metrics) is the deferred Phase 5.</p>
 
 <div class="spine">
   <div class="phases">
-    <span class="phase">detected</span><span class="phase-arrow">→</span>
+    <span class="phase unemitted">detected</span><span class="phase-arrow">→</span>
     <span class="phase">flux_pr_open</span><span class="phase-arrow">→</span>
     <span class="phase">awaiting_merge</span><span class="phase-arrow">→</span>
     <span class="phase">waiting_for_rollout</span><span class="phase-arrow">→</span>
@@ -553,7 +557,7 @@ DynamoDB and Cosmos DB backends. The query layer (dashboards, lead-time metrics)
     <span class="phase">helm_test_running</span><span class="phase-arrow">→</span>
     <span class="phase ok">helm_test_passed</span><span class="phase-arrow">→</span>
     <span class="phase ok">promoted</span><span class="phase-arrow">→</span>
-    <span class="phase ok">reached_prod</span>
+    <span class="phase unemitted">reached_prod</span>
   </div>
   <div class="phases" style="margin-top:10px; min-width:0;">
     <span class="phase bad">helm_test_failed</span>
@@ -561,9 +565,26 @@ DynamoDB and Cosmos DB backends. The query layer (dashboards, lead-time metrics)
     <span class="spinenote" style="margin:0 0 0 10px;">← failure phases; captured so failed promotions are first-class data, not lost logs</span>
   </div>
   <div class="spinenote">
+    <b>Dashed = declared but deliberately never emitted.</b> <code>detected</code> belongs to whatever watches Renovate,
+    which is the still-unbuilt ingestion stage — emitting it from here would misattribute the observation.
+    <code>reached_prod</code> needs a model of which environment <em>ends</em> the chain; this repo has none, and faking one
+    per-invocation would corrupt the timeline it describes. A consumer that knows its own environment ordering derives it
+    from the <code>promoted</code> events today. Both stay in the enum because the enum is the shared vocabulary
+    (rationale in <code>DESIGN.md</code>).
+  </div>
+  <div class="spinenote">
+    <b>Who emits what:</b> <code>helmrelease promote</code> → <code>flux_pr_open</code> · <code>awaiting_merge</code> ·
+    <code>abandoned</code>; <code>helmrelease monitor</code> → <code>waiting_for_rollout</code> ·
+    <code>rollout_complete</code> · <code>abandoned</code>; <code>helmrelease test</code> →
+    <code>helm_test_running</code> · <code>helm_test_passed</code> · <code>promoted</code> ·
+    <code>helm_test_failed</code>. Monitor and test emit only when the run names an <code>--environment</code>;
+    an ad-hoc terminal run emits nothing rather than writing a placeholder environment into a real timeline.
+  </div>
+  <div class="spinenote">
     Answers the DESIGN.md questions directly: <em>how long from renovate PR to all envs?</em> and
-    <em>which promotions failed, where, and why?</em> Per-env timestamps on one correlation id make lead time a query,
-    not an archaeology project.
+    <em>which promotions failed, where, and why?</em> Duration is
+    <code>promoted.timestamp − flux_pr_open.timestamp</code> grouped by (correlation id, environment);
+    per-env timestamps on one correlation id make lead time a query, not an archaeology project.
   </div>
 </div>
 
@@ -589,7 +610,7 @@ controller stay thin, logic lives in <code>chart-manager</code> and is runnable 
     </tr>
     <tr>
       <td>Sandbox (kind) test + local lab</td>
-      <td class="mono">services/{sandbox,lab,dependencies}.py · integrations/kind.py</td>
+      <td class="mono">services/{sandbox,dependencies}.py · services/lab/ · integrations/kind.py</td>
       <td><span class="badge built">Built</span></td>
       <td><code>sandbox test</code> is the CI integration test; <code>sandbox up</code> converges the full stack locally.</td>
     </tr>
@@ -609,7 +630,8 @@ controller stay thin, logic lives in <code>chart-manager</code> and is runnable 
       <td>Lifecycle events</td>
       <td class="mono">cli/events.py · services/events/ · integrations/{aws,azure}</td>
       <td><span class="badge built">Built</span></td>
-      <td>Typed PromotionPhase model; EventWriter; DynamoDB + Cosmos DB adapters; JSONL fallback.</td>
+      <td>Typed PromotionPhase model; EventWriter; DynamoDB + Cosmos DB adapters selected by <code>EVENTS_BACKEND</code>.
+        <code>promote</code>, <code>monitor</code> and <code>test</code> emit automatically; emission is non-fatal by default.</td>
     </tr>
     <tr>
       <td>Image/chart ingestion<span class="sub">the "renovate wrapper"</span></td>
@@ -691,8 +713,10 @@ controller stay thin, logic lives in <code>chart-manager</code> and is runnable 
     <div class="tick">5</div>
     <div>
       <h4>Phase 5 — Lifecycle audit <span class="badge partial">Partial</span></h4>
-      <p>Event capture is ahead of schedule — the writer, phase model, and DynamoDB/Cosmos backends exist and the
-      promote path already emits. The query/reporting layer (deploy counts, lead time, failure rates) is deferred by design.</p>
+      <p>Event capture is ahead of schedule — the writer, phase model, and DynamoDB/Cosmos backends exist, and
+      <code>promote</code>, <code>monitor</code> and <code>test</code> all emit, so a promotion's duration is computable
+      end to end from <code>flux_pr_open</code> to <code>promoted</code>. The query/reporting layer (deploy counts,
+      lead time, failure rates) is deferred by design.</p>
     </div>
   </div>
 </div>

@@ -1,3 +1,4 @@
+"""In-place version edits for HelmRelease YAML files."""
 from __future__ import annotations
 
 import io
@@ -15,11 +16,14 @@ from .scanner import is_helmrelease
 
 @dataclass(frozen=True)
 class EditResult:
+    """Result of editing one file: how many docs were rewritten."""
+
     path: Path
     changed_docs: int
 
 
 def _editor_yaml() -> YAML:
+    """Build a round-trip YAML instance tuned for minimal-diff edits."""
     yaml = YAML(typ="rt")
     yaml.preserve_quotes = True
     # Match common Flux repo formatting: don't rewrap long lines, keep the
@@ -65,6 +69,7 @@ def set_version(
 
 
 def _chart_spec_inner(doc: Any) -> dict[str, Any] | None:
+    """Return the `.spec.chart.spec` mapping, or None if the shape is absent."""
     if not isinstance(doc, dict):
         return None
     spec = doc.get("spec")

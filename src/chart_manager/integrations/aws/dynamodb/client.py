@@ -1,8 +1,12 @@
+"""DynamoDB access via boto3, with a DYNAMODB_ENDPOINT override for dynamodb-local."""
+
 import os
 
 import boto3
 
+
 def get_dynamodb_resource():
+    """Build a boto3 DynamoDB resource; DYNAMODB_ENDPOINT switches to local mode."""
     region = os.environ.get('AWS_REGION', 'us-east-1')
     endpoint = os.environ.get('DYNAMODB_ENDPOINT')
 
@@ -21,6 +25,11 @@ def get_dynamodb_resource():
 
 
 def get_table(table_name: str, partition_key: str, sort_key: str):
+    """Create the table (string HASH+RANGE keys, on-demand billing) if missing; return it.
+
+    If the table already exists, its key schema is NOT verified against the
+    given keys — a mismatch surfaces later at query time.
+    """
     resource = get_dynamodb_resource()
     client = resource.meta.client
 

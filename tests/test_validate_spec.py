@@ -200,3 +200,65 @@ def test_empty_environments_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(SpecError, match="at least one"):
         load_validate_spec(spec)
+
+
+# ----- chart-relative path enforcement --------------------------------------
+#
+# ProfileSpec (test-spec.yaml) rejected escaping values paths from the start;
+# EnvironmentSpec and PoliciesSpec did not, despite resolving their entries
+# against the chart directory the same way. `chart_dir / "/etc/passwd"` is
+# `/etc/passwd`, so the omission let a spec read outside its own chart.
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["/etc/passwd", "../../secrets.yaml", "envs/../../../etc/hosts"],
+)
+def test_environment_values_must_stay_inside_the_chart(tmp_path: Path, bad: str) -> None:
+    spec = _write_spec(
+        tmp_path,
+        f"""
+version: 1
+environments:
+  dev:
+    values: ["{bad}"]
+""",
+    )
+    with pytest.raises(SpecError) as exc:
+        load_validate_spec(spec)
+    assert "chart-relative" in str(exc.value)
+
+
+def test_policy_extra_paths_must_stay_inside_the_chart(tmp_path: Path) -> None:
+    spec = _write_spec(
+        tmp_path,
+        """
+version: 1
+environments:
+  dev: {}
+policies:
+  extra: ["../../../policies"]
+""",
+    )
+    with pytest.raises(SpecError) as exc:
+        load_validate_spec(spec)
+    assert "chart-relative" in str(exc.value)
+
+
+def test_ordinary_relative_paths_are_still_accepted(tmp_path: Path) -> None:
+    spec = _write_spec(
+        tmp_path,
+        """
+version: 1
+release_name: grafana
+namespace_template: "lab-${env}"
+environments:
+  dev:
+    values: ["values.yaml", "envs/dev.yaml"]
+policies:
+  extra: ["policies/extra"]
+""",
+    )
+    model = load_validate_spec(spec)
+    assert model.environments["dev"].values == ["values.yaml", "envs/dev.yaml"]
+    assert model.policies.extra == ["policies/extra"]

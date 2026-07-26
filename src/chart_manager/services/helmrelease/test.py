@@ -12,35 +12,41 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import ClassVar, Literal
+from functools import partial
+from typing import ClassVar
 
-from chart_manager.integrations.flux import Flux, HelmReleaseRef, HelmReleaseStatus
 from chart_manager.integrations.helm import Helm
+from chart_manager.integrations.helmrelease import (
+    HelmReleaseClient,
+    HelmReleaseRef,
+    HelmReleaseStatus,
+)
+from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease._common import (
+from chart_manager.plumbing.text import truncate_bytes
+from chart_manager.services.events.writer import EventWriter
+from chart_manager.services.helmrelease import report
+from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
+from chart_manager.services.helmrelease.matching import filter_matched_statuses
+from chart_manager.services.helmrelease.state import (
     NO_MATCH_REF,
+    PASSING_VERDICTS,
+    Reason,
+    ReasonLike,
+    Stage,
     Transition,
-    filter_matched_statuses,
-    truncate_bytes,
-    truncate_lines,
+    Verdict,
+    run_verdict,
 )
+from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
 _LOG = logging.getLogger(__name__)
-
-TestVerdict = Literal[
-    "passed",
-    "failed",
-    "timed-out",
-    "skipped-not-ready",
-    "skipped-suspended",
-    "no-match",
-]
 
 # Pod phases that mean a previous helm-test run is still live; we MUST NOT
 # run helm again (helm would recreate-conflict or, worse, kill the live
@@ -50,8 +56,6 @@ _IN_FLIGHT_PHASES = frozenset({"Pending", "Running", "Unknown", ""})
 _STALE_PHASES = frozenset({"Succeeded", "Failed"})
 
 _PHASE_LOG_MAX = 5
-_EVENTS_LINE_CAP = 80
-_PASSED_VERDICTS: frozenset[TestVerdict] = frozenset({"passed", "skipped-suspended"})
 
 _NO_TESTS_PATTERN = re.compile(r"no tests (to run|for chart|found)", re.IGNORECASE)
 _HELM_UNAVAILABLE_PATTERN = re.compile(
@@ -62,6 +66,8 @@ _HELM_UNAVAILABLE_PATTERN = re.compile(
 
 @dataclass(frozen=True)
 class TestRequest:
+    """Inputs and tunables for a `helm test` run over matching HelmReleases."""
+
     # Tell pytest to skip collection of this Test*-named class.
     __test__: ClassVar[bool] = False
 
@@ -84,8 +90,13 @@ class TestRequest:
     # concurrency: each helm test creates 1+ test pods. concurrency=4
     # against 4 HRs with multi-pod suites may create 8-16 pods concurrently
     # on the cluster; tune down on small clusters.
+    # Which promotion target these tests verify. None (the default, and what
+    # an ad-hoc `helmrelease test` passes) means the run emits no lifecycle
+    # events at all -- see services/helmrelease/telemetry.py.
+    environment: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate the tunables; raise ChartManagerError on any out-of-range value."""
         if not self.chart_name:
             raise ChartManagerError("chart_name must be non-empty")
         if not self.version:
@@ -127,6 +138,8 @@ class TestRequest:
 
 @dataclass(frozen=True)
 class TestPodSnapshot:
+    """Captured logs + phase for one test pod, gathered for failure diagnostics."""
+
     __test__: ClassVar[bool] = False
 
     namespace: str
@@ -138,11 +151,13 @@ class TestPodSnapshot:
 
 @dataclass(frozen=True)
 class TestOutcome:
+    """Result of testing one HelmRelease: verdict, helm output, pods, and diagnostics."""
+
     __test__: ClassVar[bool] = False
 
     ref: HelmReleaseRef
-    verdict: TestVerdict
-    reason: str
+    verdict: Verdict
+    reason: ReasonLike
     helm_test_returncode: int | None
     helm_test_stdout: str | None
     helm_test_stderr: str | None
@@ -155,6 +170,8 @@ class TestOutcome:
 
 @dataclass(frozen=True)
 class TestResult:
+    """Aggregate result across all tested HelmReleases."""
+
     __test__: ClassVar[bool] = False
 
     outcomes: tuple[TestOutcome, ...]
@@ -163,17 +180,21 @@ class TestResult:
 
     @property
     def ok(self) -> bool:
+        """True only if there were outcomes and every one passed."""
         return bool(self.outcomes) and all(
-            o.verdict in _PASSED_VERDICTS for o in self.outcomes
+            o.verdict in PASSING_VERDICTS for o in self.outcomes
         )
 
     @property
     def failures(self) -> tuple[TestOutcome, ...]:
-        return tuple(o for o in self.outcomes if o.verdict not in _PASSED_VERDICTS)
+        """Outcomes whose verdict is not a passing one."""
+        return tuple(o for o in self.outcomes if o.verdict not in PASSING_VERDICTS)
 
 
 @dataclass
 class _ParsedRequest:
+    """The request's duration strings parsed once into seconds."""
+
     per_poll_sec: float
     per_hr_sec: float
     total_sec: float
@@ -184,6 +205,8 @@ class _ParsedRequest:
 # the phase methods without dragging 8 positional args.
 @dataclass
 class _RunContext:
+    """Mutable per-HelmRelease state threaded through the test pipeline methods."""
+
     ref: HelmReleaseRef
     initial_status: HelmReleaseStatus
     parsed: _ParsedRequest
@@ -191,33 +214,59 @@ class _RunContext:
     started_mono: float
     total_deadline: float
     cancel_event: threading.Event
-    phase_log: list[Transition] = field(default_factory=list)
+    # `deque(maxlen=)` rather than a hand-rolled slice-off: MonitorService's
+    # ring already worked this way, and two implementations of "keep the last
+    # N transitions" is one more than the concept needs.
+    phase_log: deque[Transition] = field(
+        default_factory=lambda: deque(maxlen=_PHASE_LOG_MAX)
+    )
 
 
 class TestService:
+    """Run `helm test` across matching HelmReleases concurrently, with reaping + diagnostics."""
+
     __test__ = False
 
     def __init__(
         self,
-        flux: Flux | None = None,
+        client: HelmReleaseClient | None = None,
         helm: Helm | None = None,
         *,
-        sleep: Callable[[float], None] = time.sleep,
+        kubectl: Kubectl | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+        events: EventWriter | None = None,
+        strict_events: bool = False,
     ) -> None:
-        self._flux = flux or Flux()
+        """Wire the HelmRelease/kubectl/helm clients and injectable clock/now/progress hooks."""
+        self._client = client or HelmReleaseClient()
+        # Two cluster adapters, not one: HelmRelease queries are Flux domain
+        # knowledge; reaping test pods, scraping their logs and dumping
+        # namespace events are plain kubectl. Both must address the same
+        # cluster -- `Container` builds them from one `Settings.kube_context`.
+        self._kubectl = kubectl or Kubectl()
         # verbose=False prevents 4 concurrent helm test stdout streams from
         # interleaving into garbage; the service captures and returns
         # stdout/stderr on the result instead.
         self._helm = helm or Helm(verbose=False)
-        self._sleep = sleep
         self._clock = clock
         self._now = now
         self._progress = progress
+        # Same non-fatal policy as PromoteService and MonitorService: the
+        # tests have already run by the time these are written, so an
+        # unconfigured events backend must not turn a green suite into a
+        # traceback. `strict` is for callers where the event is the deliverable.
+        self._events = events or EventWriter()
+        self._strict_events = strict_events
 
     def test(self, request: TestRequest) -> TestResult:
+        """Test every matching HelmRelease in parallel; return an aggregate TestResult.
+
+        Yields a single `no-match` outcome when nothing matches. A worker
+        raising ExternalCommandError/ChartManagerError cancels the rest and
+        propagates; other crashes are wrapped as ChartManagerError.
+        """
         start = self._clock()
         parsed = _ParsedRequest(
             per_poll_sec=parse_duration(request.per_poll_timeout),
@@ -227,7 +276,7 @@ class TestService:
         )
 
         matched = filter_matched_statuses(
-            self._flux,
+            self._client,
             namespace=request.namespace,
             chart_name=request.chart_name,
             version=request.version,
@@ -240,8 +289,8 @@ class TestService:
                 outcomes=(
                     TestOutcome(
                         ref=NO_MATCH_REF,
-                        verdict="no-match",
-                        reason="NoHelmReleasesMatched",
+                        verdict=Verdict.NO_MATCH,
+                        reason=Reason.NO_HELMRELEASES_MATCHED,
                         helm_test_returncode=None,
                         helm_test_stdout=None,
                         helm_test_stderr=None,
@@ -256,41 +305,68 @@ class TestService:
                 total_timed_out=False,
             )
 
+        # Emitted after the zero-match return: a run with nothing to test
+        # opened no interval, so bracketing it would put a HELM_TEST_RUN on
+        # the timeline that nothing will ever close.
+        telemetry = PromotionTelemetry(
+            writer=self._events,
+            chart_name=request.chart_name,
+            version=request.version,
+            environment=request.environment,
+            strict=self._strict_events,
+        )
+        telemetry.started(Stage.HELM_TEST, matched=len(matched))
+
         total_deadline = start + parsed.total_sec
         cancel_event = threading.Event()
         outcomes: list[TestOutcome] = []
 
-        with ThreadPoolExecutor(max_workers=request.concurrency) as ex:
-            futures = [
-                ex.submit(
-                    self._test_one, status, parsed, request, total_deadline, cancel_event
-                )
-                for status in matched
-            ]
-            for fut in as_completed(futures):
-                try:
-                    outcomes.append(fut.result())
-                except ExternalCommandError:
-                    cancel_event.set()
-                    raise
-                except ChartManagerError:
-                    cancel_event.set()
-                    raise
-                except BaseException as exc:
-                    cancel_event.set()
-                    raise ChartManagerError(
-                        f"test watcher crashed: {exc!r}"
-                    ) from exc
-                if self._clock() >= total_deadline:
-                    cancel_event.set()
+        try:
+            run_fanout(
+                matched,
+                concurrency=request.concurrency,
+                clock=self._clock,
+                total_deadline=total_deadline,
+                cancel_event=cancel_event,
+                outcomes=outcomes,
+                work=lambda status: self._test_one(
+                    status, parsed, request, total_deadline, cancel_event
+                ),
+                crash_label="test watcher",
+                # No `cancel_on`: unlike monitor there is no --fail-fast here.
+                # A failing chart's tests say nothing about its peers', and the
+                # operator wants the whole matrix, not the first red cell.
+            )
+        except Exception:
+            # An infrastructure failure still ends the interval opened above.
+            # Without this the timeline keeps a HELM_TEST_RUN that nothing
+            # ever closes -- the exact defect this wiring exists to remove.
+            #
+            # `Exception`, not `BaseException`: Ctrl-C must kill a long
+            # parallel run immediately, and this handler would put a network
+            # write in front of the exit. An interrupted run genuinely has no
+            # terminal state to report.
+            telemetry.finished(
+                Stage.HELM_TEST,
+                Verdict.FAILED,
+                total=len(matched),
+                failures=len(matched) - len(outcomes),
+            )
+            raise
 
-        outcomes.sort(key=lambda o: (o.ref.namespace, o.ref.name))
         elapsed = self._clock() - start
-        return TestResult(
-            outcomes=tuple(outcomes),
+        result = TestResult(
+            outcomes=sorted_by_ref(outcomes),
             total_duration_seconds=elapsed,
             total_timed_out=cancel_event.is_set(),
         )
+        telemetry.finished(
+            Stage.HELM_TEST,
+            run_verdict((o.verdict for o in result.outcomes), success=Verdict.PASSED),
+            total=len(result.outcomes),
+            failures=len(result.failures),
+        )
+        return result
 
     # --- per-HR pipeline ---------------------------------------------------
 
@@ -302,6 +378,7 @@ class TestService:
         total_deadline: float,
         cancel_event: threading.Event,
     ) -> TestOutcome:
+        """Run the full pipeline for one HelmRelease: preflight -> reap -> helm test."""
         ctx = _RunContext(
             ref=initial_status.ref,
             initial_status=initial_status,
@@ -322,47 +399,52 @@ class TestService:
             return reap
 
         if ctx.cancel_event.is_set() or self._clock() >= ctx.total_deadline:
-            return self._finalize_timed_out(ctx, "TotalBudgetExhausted")
+            return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
 
         return self._run_helm(ctx)
 
     def _preflight(self, ctx: _RunContext) -> TestOutcome | None:
+        """Skip if suspended/not-released/generation-lagging; None means proceed."""
         s = ctx.initial_status
         if s.suspended:
             return self._finalize(
                 ctx,
-                verdict="skipped-suspended",
-                reason="Suspended",
+                verdict=Verdict.SKIPPED_SUSPENDED,
+                reason=Reason.SUSPENDED,
                 last_status=s,
             )
         released = s.released
         if released is None or released.status != "True":
             return self._finalize(
                 ctx,
-                verdict="skipped-not-ready",
-                reason="NotReleased",
+                verdict=Verdict.SKIPPED_NOT_READY,
+                reason=Reason.NOT_RELEASED,
                 last_status=s,
             )
         if s.observed_generation != s.generation:
             return self._finalize(
                 ctx,
-                verdict="skipped-not-ready",
-                reason="GenerationLag",
+                verdict=Verdict.SKIPPED_NOT_READY,
+                reason=Reason.GENERATION_LAG,
                 last_status=s,
             )
         if ctx.cancel_event.is_set() or self._clock() >= ctx.total_deadline:
-            return self._finalize_timed_out(ctx, "TotalBudgetExhausted")
+            return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
         return None
 
     def _reap(self, ctx: _RunContext) -> TestOutcome | None:
+        """Clear leftover test pods; fail if any are in-flight or won't delete.
+
+        Returns None when the caller should proceed.
+        """
         self._fire(ctx, "Reaping", "checking for existing test pods")
         try:
-            pods = self._flux.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
+            pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
         except ExternalCommandError as exc:
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="ReapListFailed",
+                verdict=Verdict.FAILED,
+                reason=Reason.REAP_LIST_FAILED,
                 last_status=ctx.initial_status,
                 inline_diagnostics=str(exc),
             )
@@ -371,8 +453,8 @@ class TestService:
         if in_flight:
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="TestPodInFlight",
+                verdict=Verdict.FAILED,
+                reason=Reason.TEST_POD_IN_FLIGHT,
                 last_status=ctx.initial_status,
                 in_flight=tuple(in_flight),
             )
@@ -380,20 +462,21 @@ class TestService:
         residual: list[str] = []
         for ns, name, _phase in [p for p in pods if p[2] in _STALE_PHASES]:
             try:
-                self._flux.delete_pod(ns, name, timeout=ctx.parsed.per_poll_sec)
+                self._kubectl.delete_pod(ns, name, timeout=ctx.parsed.per_poll_sec)
             except ExternalCommandError:
                 residual.append(f"{ns}/{name}")
         if residual:
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="ReapIncomplete",
+                verdict=Verdict.FAILED,
+                reason=Reason.REAP_INCOMPLETE,
                 last_status=ctx.initial_status,
                 residual=tuple(residual),
             )
         return None
 
     def _run_helm(self, ctx: _RunContext) -> TestOutcome:
+        """Invoke `helm test` (subprocess cap bounded by the total deadline) and classify."""
         self._fire(
             ctx,
             "Running",
@@ -407,7 +490,7 @@ class TestService:
             ctx.parsed.per_hr_sec + ctx.parsed.subprocess_slack_sec, remaining_total
         )
         if subprocess_cap <= 0:
-            return self._finalize_timed_out(ctx, "TotalBudgetExhausted")
+            return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
 
         try:
             result = self._helm.test(
@@ -421,9 +504,9 @@ class TestService:
             msg = str(exc)
             if "timed out" in msg:
                 reason = (
-                    "TotalBudgetExhausted"
+                    Reason.TOTAL_BUDGET_EXHAUSTED
                     if self._clock() >= ctx.total_deadline
-                    else "PerHRBudgetExhausted"
+                    else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
                 return self._finalize_timed_out(ctx, reason)
             # Defensive: with check=False the runner shouldn't raise on
@@ -431,8 +514,8 @@ class TestService:
             # so we still produce a structured outcome.
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="HelmUnavailable",
+                verdict=Verdict.FAILED,
+                reason=Reason.HELM_UNAVAILABLE,
                 last_status=ctx.initial_status,
                 helm_result=None,
                 inline_diagnostics=msg,
@@ -441,6 +524,7 @@ class TestService:
         return self._classify(ctx, result)
 
     def _classify(self, ctx: _RunContext, result: CommandResult) -> TestOutcome:
+        """Map helm's rc/stderr to a verdict (rc 0 passes; 'no tests' also passes)."""
         stderr = result.stderr or ""
         rc = result.returncode
 
@@ -448,21 +532,21 @@ class TestService:
             self._fire(ctx, "Finished", "passed")
             return self._finalize(
                 ctx,
-                verdict="passed",
-                reason="AllTestsPassed",
+                verdict=Verdict.PASSED,
+                reason=Reason.ALL_TESTS_PASSED,
                 last_status=ctx.initial_status,
                 helm_result=result,
             )
 
         # Charts with no `helm.sh/hook=test` templates report rc != 0 with
         # a stderr line matching one of these phrasings. Treat as passed,
-        # no diagnostics, no Flux event calls.
+        # no diagnostics, no cluster event calls.
         if _NO_TESTS_PATTERN.search(stderr):
             self._fire(ctx, "Finished", "no tests defined")
             return self._finalize(
                 ctx,
-                verdict="passed",
-                reason="NoTestsDefined",
+                verdict=Verdict.PASSED,
+                reason=Reason.NO_TESTS_DEFINED,
                 last_status=ctx.initial_status,
                 helm_result=result,
             )
@@ -471,8 +555,8 @@ class TestService:
             self._fire(ctx, "Finished", "helm unavailable")
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="HelmUnavailable",
+                verdict=Verdict.FAILED,
+                reason=Reason.HELM_UNAVAILABLE,
                 last_status=ctx.initial_status,
                 helm_result=result,
             )
@@ -481,8 +565,8 @@ class TestService:
             self._fire(ctx, "Finished", "test pod conflict")
             return self._finalize(
                 ctx,
-                verdict="failed",
-                reason="TestPodConflict",
+                verdict=Verdict.FAILED,
+                reason=Reason.TEST_POD_CONFLICT,
                 last_status=ctx.initial_status,
                 helm_result=result,
             )
@@ -490,18 +574,19 @@ class TestService:
         self._fire(ctx, "Finished", f"failed (rc={rc})")
         return self._finalize(
             ctx,
-            verdict="failed",
-            reason="TestFailed",
+            verdict=Verdict.FAILED,
+            reason=Reason.TEST_FAILED,
             last_status=ctx.initial_status,
             helm_result=result,
         )
 
     # --- finalize / diagnostics -------------------------------------------
 
-    def _finalize_timed_out(self, ctx: _RunContext, reason: str) -> TestOutcome:
+    def _finalize_timed_out(self, ctx: _RunContext, reason: Reason) -> TestOutcome:
+        """Finalize with the `timed-out` verdict for a budget-exhaustion reason."""
         return self._finalize(
             ctx,
-            verdict="timed-out",
+            verdict=Verdict.TIMED_OUT,
             reason=reason,
             last_status=ctx.initial_status,
         )
@@ -510,14 +595,15 @@ class TestService:
         self,
         ctx: _RunContext,
         *,
-        verdict: TestVerdict,
-        reason: str,
+        verdict: Verdict,
+        reason: ReasonLike,
         last_status: HelmReleaseStatus | None,
         helm_result: CommandResult | None = None,
         in_flight: tuple[tuple[str, str, str], ...] = (),
         residual: tuple[str, ...] = (),
         inline_diagnostics: str | None = None,
     ) -> TestOutcome:
+        """Assemble the TestOutcome, composing diagnostics for non-passing verdicts."""
         rc = helm_result.returncode if helm_result is not None else None
         stdout = (
             truncate_bytes(helm_result.stdout or "", ctx.request.helm_test_stdout_max_bytes)
@@ -530,17 +616,30 @@ class TestService:
             else None
         )
 
+        # Measured before diagnostics: composing them lists test pods and
+        # scrapes up to two log streams per pod plus namespace events, all on
+        # the failure path. Folding that into the reported duration inflates
+        # exactly the outcomes whose timing matters most.
+        duration_seconds = self._clock() - ctx.started_mono
+
         diagnostics: str | None = None
         test_pods: tuple[TestPodSnapshot, ...] = ()
 
-        if verdict in _PASSED_VERDICTS:
+        if verdict.is_passing:
             pass
-        elif verdict == "skipped-not-ready":
+        elif verdict is Verdict.SKIPPED_NOT_READY:
             diagnostics = (
                 "HelmRelease has not been Released; "
                 "run `chart-manager helmrelease monitor` first."
             )
         else:
+            # Every caller hands us ctx.initial_status -- the status as it
+            # was *before* `helm test` ran -- so the report's TestSuccess
+            # row showed the previous reconcile's value, which is actively
+            # misleading in the one artifact read after a failure. Refresh
+            # once, on the failure path only, and keep the pre-run status if
+            # the cluster can no longer be reached.
+            last_status = self._refresh_status(ctx) or last_status
             diagnostics, test_pods = self._compose_diagnostics(
                 ctx=ctx,
                 verdict=verdict,
@@ -563,35 +662,41 @@ class TestService:
             last_status=last_status,
             phase_log=tuple(ctx.phase_log),
             diagnostics=diagnostics,
-            duration_seconds=self._clock() - ctx.started_mono,
+            duration_seconds=duration_seconds,
         )
+
+    def _refresh_status(self, ctx: _RunContext) -> HelmReleaseStatus | None:
+        """Re-read the HelmRelease status for failure reporting; None if unavailable.
+
+        Best-effort by design: this runs while composing a failure report,
+        so a cluster that has become unreachable must not replace the
+        diagnostics with an exception.
+        """
+        try:
+            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec)
+        except ExternalCommandError:
+            return None
 
     def _compose_diagnostics(
         self,
         *,
         ctx: _RunContext,
-        verdict: TestVerdict,
-        reason: str,
+        verdict: Verdict,
+        reason: ReasonLike,
         last_status: HelmReleaseStatus | None,
         helm_result: CommandResult | None,
         in_flight: tuple[tuple[str, str, str], ...],
         residual: tuple[str, ...],
         inline: str | None,
     ) -> tuple[str, tuple[TestPodSnapshot, ...]]:
-        ns = ctx.ref.namespace or "(none)"
-        name = ctx.ref.name or "(none)"
-        parts: list[str] = [f"## {ns}/{name} - {verdict}: {reason}"]
+        """Render a markdown failure report and (for test failures) snapshot pod logs."""
+        parts: list[str] = [report.header(ctx.ref, verdict, reason)]
 
         if last_status is not None:
-            parts.append("\n### Status")
-            for cond_type in ("Ready", "Released", "TestSuccess"):
-                cond = last_status.condition(cond_type)
-                if cond is None:
-                    parts.append(f"- {cond_type}: (absent)")
-                else:
-                    parts.append(
-                        f"- {cond_type}: {cond.status} ({cond.reason}) - {cond.message}"
-                    )
+            # No "Stalled" row, unlike monitor's report: nothing here branches
+            # on it. A test verdict comes from helm's exit code, and Stalled
+            # describes the reconciler that ran before helm was invoked.
+            parts.extend(report.conditions(last_status, ("Ready", "Released", "TestSuccess")))
 
         if in_flight:
             parts.append("\n### In-flight test pods")
@@ -608,7 +713,7 @@ class TestService:
             parts.append(inline)
 
         test_pods: tuple[TestPodSnapshot, ...] = ()
-        if reason in ("TestFailed", "TestPodConflict"):
+        if reason in (Reason.TEST_FAILED, Reason.TEST_POD_CONFLICT):
             test_pods = self._snapshot_test_pods(ctx)
             if test_pods:
                 parts.append("\n### Test pod logs")
@@ -622,7 +727,15 @@ class TestService:
 
         if ctx.ref.target_namespace:
             parts.append(f"\n### Events (namespace {ctx.ref.target_namespace})")
-            parts.append(self._safe_events(ctx))
+            parts.append(
+                report.safe_events(
+                    partial(
+                        self._kubectl.namespace_events,
+                        ctx.ref.target_namespace,
+                        timeout=ctx.parsed.per_poll_sec,
+                    )
+                )
+            )
 
         if helm_result is not None and (helm_result.stdout or helm_result.stderr):
             parts.append("\n### helm test output")
@@ -639,14 +752,15 @@ class TestService:
         return "\n".join(parts), test_pods
 
     def _snapshot_test_pods(self, ctx: _RunContext) -> tuple[TestPodSnapshot, ...]:
+        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs."""
         try:
-            pods = self._flux.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
+            pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
         except ExternalCommandError:
             return ()
         snapshots: list[TestPodSnapshot] = []
         for pod_ns, pod_name, phase in pods[: ctx.request.diagnostics_pod_cap]:
             try:
-                logs = self._flux.pod_logs(
+                logs = self._kubectl.pod_logs(
                     pod_ns,
                     pod_name,
                     tail=ctx.request.pod_log_tail,
@@ -661,7 +775,7 @@ class TestService:
             # response just means "no logs yet", not a restarted container.
             if not logs and phase in _STALE_PHASES:
                 try:
-                    previous = self._flux.pod_logs(
+                    previous = self._kubectl.pod_logs(
                         pod_ns,
                         pod_name,
                         tail=ctx.request.pod_log_tail,
@@ -685,22 +799,12 @@ class TestService:
             )
         return tuple(snapshots)
 
-    def _safe_events(self, ctx: _RunContext) -> str:
-        try:
-            blob = self._flux.namespace_events(
-                ctx.ref.target_namespace, timeout=ctx.parsed.per_poll_sec
-            )
-        except ExternalCommandError as exc:
-            return f"<events unavailable: {exc}>"
-        return truncate_lines(blob, _EVENTS_LINE_CAP)
-
     # --- progress ---------------------------------------------------------
 
     def _fire(self, ctx: _RunContext, phase: str, detail: str) -> None:
+        """Record a phase transition (ring-buffered) and fire the progress callback safely."""
         t = Transition(at=self._now(), phase=phase, detail=detail)
         ctx.phase_log.append(t)
-        if len(ctx.phase_log) > _PHASE_LOG_MAX:
-            del ctx.phase_log[0 : len(ctx.phase_log) - _PHASE_LOG_MAX]
         if self._progress is None:
             return
         try:

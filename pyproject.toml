@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3",
+  "pytest-cov>=6.0",
   "ruff>=0.8",
   "mypy>=1.13",
   "types-PyYAML>=6.0",
@@ -39,7 +40,7 @@ packages = ["src/chart_manager"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["integration: requires helm/kubeconform/conftest on PATH"]
+markers = ["integration: requires helm/kubeconform/kyverno on PATH"]
 addopts = "-m 'not integration'"
 
 # Line length 100 instead of default 88: the existing codebase has many
@@ -51,17 +52,69 @@ line-length = 100
 extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+# TID251 (flake8-tidy-imports banned-api) is selected by code rather than as
+# the whole TID family: TID252/TID253 are unrelated to the layering contract
+# below and would add unowned findings to the existing lint backlog.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
+
+# --- layer contract: cli/ must not import integrations/ ------------------
+#
+# The surface layer (cli/, and any future REST/GraphQL/RPC/Slack surface)
+# talks to services/ and plumbing/ only. Adapters are assembled in the
+# composition root, `chart_manager.composition`, which is the single module
+# outside integrations/ and services/ allowed to reach for an adapter. That
+# is what lets a second surface be ~10 lines of container calls instead of a
+# re-implementation of the CLI's wiring.
+#
+# The ban is declared globally and lifted per-directory below, so the default
+# for any NEW top-level package is "may not import integrations" -- a new
+# surface is guarded on the day it is created, without editing this table.
+#
+# TID251 matches every import form against the package prefix:
+#   from chart_manager.integrations.kubectl import Kubectl  -> flagged
+#   from chart_manager.integrations import helm             -> flagged
+#   import chart_manager.integrations.kubectl               -> flagged
+#
+# Enforced in CI by `uv run ruff check --select TID251 src/` (see the
+# `layering` job in .github/workflows/ci.yaml and `mise run lint-layering`).
+# The companion invariants -- services/ must not import rich/typer, and
+# sys.exit belongs to cli/ only -- are enforced in tests/test_layering.py.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"chart_manager.integrations".msg = """not importable from this layer. \
+Surfaces (cli/ and friends) depend on services/ + plumbing/ only; build \
+configured adapters in `chart_manager.composition.Container` and pass the \
+service in. If you need an integrations *type* for an annotation, re-export \
+it from the owning service package (see HelmReleaseRef in \
+services/helmrelease/__init__.py) rather than widening this rule."""
 
 [tool.ruff.lint.per-file-ignores]
 # Tests use `assert` (the whole point), frequently bind unused
 # loop variables in parametrize patterns, and embed long fixture-string
 # literals/long stub signatures that don't benefit from rewrapping.
-"tests/**/*.py" = ["S101", "B011", "E501"]
+# TID251: tests exercise adapters directly (fake CommandRunners against
+# Helm/Kubectl/HelmReleaseClient) and assert on integration-level types;
+# not a layer.
+"tests/**/*.py" = ["S101", "B011", "E501", "TID251"]
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
 "src/chart_manager/cli/*.py" = ["B006", "E501"]
+# UP042 (str+Enum -> StrEnum) is correct advice that must not be taken here.
+# `BuildPhase`/`PromotionPhase` values are already persisted in DynamoDB and
+# Cosmos. Under `str, Enum`, `str(PromotionPhase.MERGED)` is
+# "PromotionPhase.MERGED"; under `StrEnum` it is "merged". Switching would
+# change the serialized shape of rows that already exist, so the exemption is
+# deliberate and belongs with the data, not in a lint backlog. Revisit only
+# alongside a migration of the stored events.
+"src/chart_manager/services/events/lifecycle.py" = ["UP042"]
+# TID251 lift: the layers that are *supposed* to reach for adapters.
+# integrations/ is the adapter layer itself; services/ owns the ports that
+# wrap adapters; composition.py is the composition root, by definition the
+# one place outside those two that wires them. Note cli/ is deliberately
+# absent -- that is the whole point of the rule.
+"src/chart_manager/integrations/**/*.py" = ["TID251"]
+"src/chart_manager/services/**/*.py" = ["TID251"]
+"src/chart_manager/composition.py" = ["TID251"]
 
 [tool.ruff.format]
 # Defaults: double-quote, 4-space indent, LF endings.

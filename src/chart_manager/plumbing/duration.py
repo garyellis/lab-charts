@@ -1,3 +1,4 @@
+"""Parse kube-style duration strings into seconds."""
 from __future__ import annotations
 
 from chart_manager.plumbing.errors import ChartManagerError

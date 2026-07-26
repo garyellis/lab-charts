@@ -1,37 +1,52 @@
-"""Pretty/JSON renderers and live progress driver for `helmrelease monitor/test`.
+"""Terminal renderers and live progress driver for `helmrelease monitor/test`.
 
 Module-level functions, no Renderer protocol/ABC -- the CLI handler picks one
 of four functions based on (command, mode). _PrettyProgressDriver is the
 only stateful piece, used as a context manager during pretty runs to hold a
 Rich Live table; thread-safe under the monitor/test executor.
+
+Everything here is terminal-shaped: Rich tables, color styles, panels, and
+the encoder settings for the CLI's JSON stream. The *payload* those JSON
+writers emit is not defined here -- it is a versioned wire contract owned by
+`services.helmrelease.wire`, so an HTTP/Slack/RPC surface can return the same
+bytes without importing anything under `cli/`.
 """
 from __future__ import annotations
 
 import json
 import logging
 import threading
-from datetime import datetime
 from typing import IO, Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from chart_manager.integrations.flux import HelmReleaseRef
 from chart_manager.services.helmrelease import (
     NO_MATCH_REF,
-    MonitorOutcome,
+    PASSING_VERDICTS,
+    HelmReleaseRef,
     MonitorResult,
-    TestOutcome,
     TestResult,
     Transition,
+    monitor_to_dict,
+    test_to_dict,
 )
 
 _LOG = logging.getLogger(__name__)
-_SCHEMA_VERSION = 1
+
+# Encoder settings for the JSON stream. Compact + sorted keys makes the
+# output diffable and jq-friendly; `default=str` is a backstop for any
+# stray non-JSON scalar the wire layer did not stringify.
+_JSON_DUMP_KWARGS: dict[str, Any] = {
+    "sort_keys": True,
+    "separators": (",", ":"),
+    "default": str,
+}
 
 
 def _fmt_duration(seconds: float) -> str:
+    """Format seconds compactly: 1.2s, 3m04s, 1h02m03s."""
     if seconds < 60:
         return f"{seconds:.1f}s"
     minutes, sec = divmod(int(seconds), 60)
@@ -41,87 +56,8 @@ def _fmt_duration(seconds: float) -> str:
     return f"{hours}h{minutes:02d}m{sec:02d}s"
 
 
-def _serialize_condition(c: Any) -> dict[str, Any]:
-    return {
-        "type": c.type,
-        "status": c.status,
-        "reason": c.reason,
-        "message": c.message,
-        "last_transition_time": (
-            c.last_transition_time.isoformat() if c.last_transition_time else None
-        ),
-    }
-
-
-def _serialize_transition(t: Transition) -> dict[str, Any]:
-    return {
-        "at": t.at.isoformat() if isinstance(t.at, datetime) else str(t.at),
-        "phase": t.phase,
-        "detail": t.detail,
-    }
-
-
-def _serialize_workload_rollout(w: Any) -> dict[str, Any]:
-    wl = w.workload
-    return {
-        "kind": wl.kind,
-        "namespace": wl.namespace,
-        "name": wl.name,
-        "desired": wl.desired,
-        "ready": wl.ready,
-        "available": wl.available,
-        "generation": w.generation,
-        "observed_generation": w.observed_generation,
-        "converged": w.converged,
-    }
-
-
-def _serialize_monitor_outcome(o: MonitorOutcome) -> dict[str, Any]:
-    status = o.last_status
-    return {
-        "namespace": o.ref.namespace,
-        "name": o.ref.name,
-        "verdict": o.verdict,
-        "reason": o.reason,
-        "duration_seconds": o.duration_seconds,
-        "conditions": (
-            [_serialize_condition(c) for c in status.conditions] if status else []
-        ),
-        "observed_generation": status.observed_generation if status else None,
-        "generation": status.generation if status else None,
-        "history_chart_version": status.history_chart_version if status else None,
-        "workloads": [_serialize_workload_rollout(w) for w in o.last_workloads],
-        "recent_transitions": [_serialize_transition(t) for t in o.recent_transitions],
-        "diagnostics": o.diagnostics,
-    }
-
-
-def _serialize_test_outcome(o: TestOutcome) -> dict[str, Any]:
-    return {
-        "namespace": o.ref.namespace,
-        "name": o.ref.name,
-        "verdict": o.verdict,
-        "reason": o.reason,
-        "duration_seconds": o.duration_seconds,
-        "helm_test_returncode": o.helm_test_returncode,
-        "helm_test_stdout": o.helm_test_stdout,
-        "helm_test_stderr": o.helm_test_stderr,
-        "test_pods": [
-            {
-                "namespace": p.namespace,
-                "name": p.name,
-                "phase": p.phase,
-                "logs": p.logs,
-                "previous_logs": p.previous_logs,
-            }
-            for p in o.test_pods
-        ],
-        "phase_log": [_serialize_transition(t) for t in o.phase_log],
-        "diagnostics": o.diagnostics,
-    }
-
-
 def _summary_line(*, ok_count: int, total: int, duration: float) -> str:
+    """Build the 'N/M ready in Xs' headline string."""
     return f"{ok_count}/{total} ready in {_fmt_duration(duration)}"
 
 
@@ -132,6 +68,9 @@ def render_monitor_pretty(
     chart: str,
     version: str,
 ) -> None:
+    """Render monitor results as headline + table + failure panels."""
+    # NO_MATCH_REF is a sentinel outcome meaning zero HRs matched; identity
+    # check drops it from the table.
     real_outcomes = tuple(o for o in result.outcomes if o.ref is not NO_MATCH_REF)
     if not real_outcomes:
         console.print(
@@ -139,7 +78,10 @@ def render_monitor_pretty(
         )
         return
 
-    ok_count = sum(1 for o in real_outcomes if o.verdict in ("ready", "skipped-suspended"))
+    # Imported, not re-stated: `result.ok` (which drives the exit code) folds
+    # the same set. Hardcoding the tuple here is how the headline count and
+    # the exit code came to be able to disagree about a newly added verdict.
+    ok_count = sum(1 for o in real_outcomes if o.verdict in PASSING_VERDICTS)
     summary = _summary_line(
         ok_count=ok_count, total=len(real_outcomes), duration=result.total_duration_seconds
     )
@@ -162,7 +104,7 @@ def render_monitor_pretty(
     console.print(table)
 
     for o in real_outcomes:
-        if o.verdict in ("ready", "skipped-suspended"):
+        if o.verdict in PASSING_VERDICTS:
             continue
         if not o.diagnostics:
             continue
@@ -185,17 +127,11 @@ def render_monitor_json(
     chart: str,
     version: str,
 ) -> None:
-    payload = {
-        "schema_version": _SCHEMA_VERSION,
-        "command": "monitor",
-        "chart": chart,
-        "version": version,
-        "ok": result.ok,
-        "total_timed_out": result.total_timed_out,
-        "duration_seconds": result.total_duration_seconds,
-        "outcomes": [_serialize_monitor_outcome(o) for o in result.outcomes],
-    }
-    json.dump(payload, file, sort_keys=True, separators=(",", ":"), default=str)
+    """Write the monitor result as a single JSON line to `file`.
+
+    Transport only: the payload comes from `services.helmrelease.wire`.
+    """
+    json.dump(monitor_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
     file.write("\n")
     file.flush()
 
@@ -207,6 +143,8 @@ def render_test_pretty(
     chart: str,
     version: str,
 ) -> None:
+    """Render test results as headline + table + failure panels."""
+    # Same NO_MATCH_REF sentinel filtering as render_monitor_pretty.
     real_outcomes = tuple(o for o in result.outcomes if o.ref is not NO_MATCH_REF)
     if not real_outcomes:
         console.print(
@@ -214,7 +152,7 @@ def render_test_pretty(
         )
         return
 
-    ok_count = sum(1 for o in real_outcomes if o.verdict in ("passed", "skipped-suspended"))
+    ok_count = sum(1 for o in real_outcomes if o.verdict in PASSING_VERDICTS)
     headline_style = "green" if result.ok else "red"
     summary = (
         f"{ok_count}/{len(real_outcomes)} passed in "
@@ -235,7 +173,7 @@ def render_test_pretty(
     console.print(table)
 
     for o in real_outcomes:
-        if o.verdict in ("passed", "skipped-suspended"):
+        if o.verdict in PASSING_VERDICTS:
             continue
         if not o.diagnostics:
             continue
@@ -258,22 +196,17 @@ def render_test_json(
     chart: str,
     version: str,
 ) -> None:
-    payload = {
-        "schema_version": _SCHEMA_VERSION,
-        "command": "test",
-        "chart": chart,
-        "version": version,
-        "ok": result.ok,
-        "total_timed_out": result.total_timed_out,
-        "duration_seconds": result.total_duration_seconds,
-        "outcomes": [_serialize_test_outcome(o) for o in result.outcomes],
-    }
-    json.dump(payload, file, sort_keys=True, separators=(",", ":"), default=str)
+    """Write the test result as a single JSON line to `file`.
+
+    Transport only: the payload comes from `services.helmrelease.wire`.
+    """
+    json.dump(test_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
     file.write("\n")
     file.flush()
 
 
 def _verdict_style(verdict: str) -> str:
+    """Map a verdict string to a Rich color style (unknown verdicts are red)."""
     if verdict in ("ready", "passed"):
         return "green"
     if verdict in ("skipped-suspended", "skipped-not-ready"):
@@ -292,9 +225,9 @@ class _PrettyProgressDriver:
     and logged -- a render bug must never break the underlying run.
     """
 
-    def __init__(self, console: Console, *, is_test: bool) -> None:
+    def __init__(self, console: Console) -> None:
+        """Prepare state; the Live table itself is created in __enter__."""
         self._console = console
-        self._is_test = is_test
         self._lock = threading.Lock()
         self._state: dict[tuple[str, str], Transition] = {}
         # Lazy-imported so importing helmrelease_render in non-pretty paths
@@ -305,6 +238,7 @@ class _PrettyProgressDriver:
         self._live: Any | None = None
 
     def __enter__(self) -> _PrettyProgressDriver:
+        """Start the Rich Live table."""
         self._live = self._Live(
             self._render(),
             console=self._console,
@@ -315,11 +249,13 @@ class _PrettyProgressDriver:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        """Stop the Live table."""
         if self._live is not None:
             self._live.__exit__(*exc)
             self._live = None
 
     def __call__(self, ref: HelmReleaseRef, transition: Transition) -> None:
+        """Progress callback: record the latest transition and refresh the table."""
         try:
             with self._lock:
                 self._state[(ref.namespace, ref.name)] = transition
@@ -329,6 +265,7 @@ class _PrettyProgressDriver:
             _LOG.exception("progress driver update failed")
 
     def _render(self) -> Table:
+        """Build the current progress table, sorted by (namespace, name)."""
         table = Table("Namespace", "Name", "Phase", "Detail")
         for (ns, name) in sorted(self._state.keys()):
             t = self._state[(ns, name)]

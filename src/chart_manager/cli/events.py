@@ -8,15 +8,28 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 import typer
 
+from chart_manager.composition import Container
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.writer import EventWriter
 
 _LOG = logging.getLogger(__name__)
+
+
+def _make_event_writer() -> EventWriter:
+    """Build the lifecycle-event writer (module-level so tests can override).
+
+    Comes from the composition root rather than `EventWriter()` inline: the
+    container memoizes the writer, so the EventStore it lazily resolves (and
+    the Cosmos/DynamoDB client behind it) is built once per container instead
+    of once per emitted event. Harmless in a process-per-invocation CLI,
+    load-bearing for a long-lived server fronting the same capability.
+    """
+    return Container().event_writer()
 
 
 def _parse_at(at: str | None) -> datetime | None:
@@ -27,12 +40,20 @@ def _parse_at(at: str | None) -> datetime | None:
         ts = datetime.fromisoformat(at)
     except ValueError as exc:
         raise typer.BadParameter(f"invalid --at timestamp {at!r}: {exc}") from exc
-    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
-def _emit(strict: bool, summary: str, fn: Callable[[EventWriter], None]) -> None:
+def _emit(
+    writer: EventWriter, strict: bool, summary: str, fn: Callable[[EventWriter], None]
+) -> None:
+    """Run an emit callback; swallow+warn on failure unless `strict` (telemetry is non-fatal).
+
+    The writer is built by the caller, but backend resolution still happens
+    lazily on first write -- i.e. inside `fn` and therefore inside this
+    try/except -- so a misconfigured EVENTS_BACKEND stays non-fatal.
+    """
     try:
-        fn(EventWriter())
-    except Exception as exc: # noqa BLE001 - telemetry must not break the build
+        fn(writer)
+    except Exception as exc:  # telemetry must not break the build
         if strict:
             raise
         _LOG.warning(f"event emissions failed (non-fatal): {exc}")
@@ -49,8 +70,10 @@ def build(
     at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp (default: now). For backfill/seeding.")] = None,
     strict: Annotated[bool, typer.Option(help="Fail the step on emit error.")] = False,
     ) -> None:
+    """Emit a build-lifecycle event (charts repo CI)."""
     timestamp = _parse_at(at)
     _emit(
+        _make_event_writer(),
         strict,
         f"build:{phase.value} for {chart}@{version}",
         lambda w: w.build(
@@ -75,6 +98,7 @@ def promote(
     """Emit a promotion-lifecycle event (flux repo CI)."""
     timestamp = _parse_at(at)
     _emit(
+        _make_event_writer(),
         strict,
         f"promote:{phase.value} for {chart}@{version} -> {environment}",
         lambda w: w.promote(
@@ -86,6 +110,7 @@ def promote(
     )
 
 def register(app: typer.Typer) -> None:
+    """Attach the build/promote commands to the given Typer app."""
     app.command("build")(build)
     app.command("promote")(promote)
 

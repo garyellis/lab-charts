@@ -1,15 +1,21 @@
+"""Thin wrapper around the `helm` CLI: install/upgrade, template, lint, test, list."""
+
 from __future__ import annotations
 
 import json
 import threading
+from collections.abc import MutableMapping
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import Any, Literal
+from weakref import WeakKeyDictionary
 
-import yaml
-
-from chart_manager.plumbing.commands import CommandResult, CommandRunner
+from chart_manager.plumbing.chart_deps import (
+    chart_has_dependencies,
+    deps_are_fresh,
+    is_local_chart,
+)
+from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
@@ -55,6 +61,8 @@ class UpgradeResult:
 
 
 class Helm:
+    """Run helm subcommands through a CommandRunner, with per-instance context/timeout."""
+
     def __init__(
         self,
         runner: CommandRunner | None = None,
@@ -65,7 +73,8 @@ class Helm:
         timeout: float | None = None,
         context: str | None = None,
     ) -> None:
-        self.runner = runner or CommandRunner()
+        """Resolve the helm binary (explicit path > mise version > PATH) and set defaults."""
+        self.runner = runner or SubprocessRunner()
         self._helm_bin = _resolve(self.runner, version, binary)
         self._context = context
         # verbose=True preserves the pre-existing stream-to-terminal contract
@@ -87,6 +96,7 @@ class Helm:
         self._deps_updated_lock = threading.Lock()
 
     def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
+        """Run `helm dependency update`, at most once per chart per instance."""
         resolved = chart_path.resolve()
         with self._deps_updated_lock:
             if resolved in self._deps_updated:
@@ -114,22 +124,16 @@ class Helm:
         The per-instance `_deps_updated` cache is still consulted first so
         a chart only updates once per process even when stale.
 
-        Freshness criteria (all must hold to skip):
-          * Chart.lock exists
-          * charts/ directory exists (where deps were materialized)
-          * Chart.lock mtime >= Chart.yaml mtime
-
-        Any other shape (missing lock, missing charts/, Chart.yaml newer
-        than the lock) falls through to running the update. We deliberately
-        do NOT parse Chart.lock contents -- the mtime gate is good enough
-        for the lab path's interactive iteration loop, and parsing would
-        re-introduce most of the cost we're trying to avoid.
+        Freshness is decided by `deps_are_fresh` (see its docstring): lock
+        and charts/ must exist, the lock must be no older than Chart.yaml,
+        and the lock's dependency count must match the artifacts materialized
+        under charts/. Any other shape falls through to running the update.
         """
         resolved = chart_path.resolve()
         with self._deps_updated_lock:
             if resolved in self._deps_updated:
                 return False
-            if _deps_are_fresh(resolved):
+            if deps_are_fresh(resolved):
                 # Mark as updated so subsequent calls in this process skip
                 # the freshness probe entirely.
                 self._deps_updated.add(resolved)
@@ -143,6 +147,7 @@ class Helm:
             return True
 
     def lint(self, chart_path: Path, values: list[Path]) -> None:
+        """Run `helm lint` with the given values overlays; raises on lint failure."""
         # See note in upgrade_install on --skip-schema-validation; we use
         # null overrides in values-ci.yaml to wipe inherited map keys past
         # strict subchart schemas.
@@ -255,6 +260,7 @@ class Helm:
         timeout: str = "10m",
         wait: bool = True,
     ) -> None:
+        """Run a plain `helm upgrade` (no --install, no outcome classification)."""
         args = [
             self._helm_bin,
             "upgrade",
@@ -283,12 +289,18 @@ class Helm:
         kube_version: str | None = None,
         skip_tests: bool = True,
     ) -> Path:
+        """Render the chart into `output_dir` via `helm template`; return that dir.
+
+        Local charts with dependencies get a `dependency update` first. On
+        render failure, reruns with --debug to capture detail, then raises
+        ExternalCommandError (partial output is left in `output_dir`).
+        """
         # Resolve to absolute up-front so the path in error messages is
         # actionable from any cwd (engineers need to be able to `ls` it).
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if _is_local_chart(chart_ref) and _chart_has_dependencies(Path(chart_ref)):
+        if is_local_chart(chart_ref) and chart_has_dependencies(Path(chart_ref)):
             self.dependency_update(Path(chart_ref))
 
         base_args = [
@@ -329,7 +341,12 @@ class Helm:
         debug_args = [*base_args, "--debug"]
         # Always capture the debug rerun's output so we can embed it in the
         # raised error (verbose mode still streams the first attempt above).
-        debug_result = self.runner.run(self._with_context(debug_args), check=False, capture=True)
+        # Bounded by the same timeout as the first attempt: this rerun happens
+        # when helm is already misbehaving, which is the last moment to enter
+        # an unbounded wait.
+        debug_result = self.runner.run(
+            self._with_context(debug_args), check=False, capture=True, timeout=self.timeout
+        )
         stderr = (debug_result.stderr or result.stderr or "").strip()
         raise ExternalCommandError(
             f"helm template failed for {release} ({chart_ref}); "
@@ -453,13 +470,16 @@ class Helm:
         return payload
 
     def status(self, release: str, *, namespace: str) -> str:
+        """Return combined stdout+stderr of `helm status`; never raises (check=False)."""
         result = self.runner.run(
             self._with_context([self._helm_bin, "status", release, "--namespace", namespace]),
             check=False,
+            timeout=self.timeout,
         )
         return result.stdout + result.stderr
 
     def _with_context(self, args: list[str]) -> list[str]:
+        """Append --kube-context when this instance is pinned to one."""
         if self._context is None:
             return args
         return [*args, "--kube-context", self._context]
@@ -470,6 +490,7 @@ def _resolve(
     version: str | None,
     binary: str | Path | None,
 ) -> str:
+    """Pick the helm binary: explicit path > mise-managed version > bare `helm`."""
     if binary is not None:
         return str(binary)
     if version is None:
@@ -477,117 +498,43 @@ def _resolve(
     return _resolve_via_mise(runner, version)
 
 
-@cache
+#: Memo for `mise where helm@<version>`, keyed by the runner that resolved
+#: it and then by version. Weak on the runner so an entry dies with the
+#: runner it belongs to. The previous `@cache` on a function whose first
+#: parameter was the runner was process-global and never evicted, so it held
+#: a strong reference to every CommandRunner ever passed -- invisible in a
+#: process-per-invocation CLI, an unbounded leak in a long-lived server that
+#: builds a container (and a runner) per request.
+#:
+#: Runner identity stays part of the key: instances sharing one runner share
+#: the memo, and one with its own runner pays its own one-shot `mise where`.
+_MISE_HELM_PATHS: MutableMapping[CommandRunner, dict[str, str]] = WeakKeyDictionary()
+# `@cache` got its atomicity from lru_cache's C-level lock; a plain dict
+# needs this to be safe from the validate runner's worker threads.
+_MISE_HELM_LOCK = threading.Lock()
+
+
 def _resolve_via_mise(runner: CommandRunner, version: str) -> str:
-    # CPython's lru_cache is protected by a C-level lock, so this is safe
-    # to call from concurrent worker threads. Keyed positionally on
-    # (runner, version): `runner` hashes by identity, which is exactly what
-    # we want — instances sharing one CommandRunner share the cache; ones
-    # with their own runner each pay a one-shot `mise where`.
+    """Locate a pinned helm version via `mise where`; memoized per (runner, version)."""
+    with _MISE_HELM_LOCK:
+        by_version = _MISE_HELM_PATHS.get(runner)
+        if by_version is not None and version in by_version:
+            return by_version[version]
     result = runner.run(["mise", "where", f"helm@{version}"], check=True)
-    return f"{result.stdout.strip()}/bin/helm"
+    resolved = f"{result.stdout.strip()}/bin/helm"
+    with _MISE_HELM_LOCK:
+        _MISE_HELM_PATHS.setdefault(runner, {})[version] = resolved
+    return resolved
 
 
-def _is_local_chart(chart_ref: str | Path) -> bool:
-    ref = str(chart_ref)
-    if ref.startswith(("oci://", "http://", "https://")):
-        return False
-    return Path(ref).exists()
-
-
-def _chart_has_dependencies(chart_path: Path) -> bool:
-    chart_yaml = chart_path / "Chart.yaml"
-    if not chart_yaml.is_file():
-        return False
-    try:
-        data = yaml.safe_load(chart_yaml.read_text()) or {}
-    except (yaml.YAMLError, OSError):
-        # Defer the actual error to `helm template`, which will surface a
-        # clear chart-loading message. We only return False so we don't
-        # spuriously call `helm dependency update` on an unparseable chart.
-        return False
-    if not isinstance(data, dict):
-        return False
-    deps = data.get("dependencies") or []
-    return isinstance(deps, list) and bool(deps)
-
-
-def _lock_dep_count(lock_path: Path) -> int | None:
-    """Return the number of dependencies declared in a Chart.lock.
-
-    Returns None when the lock cannot be parsed, has no `dependencies:`
-    key, or yields a non-list value -- any of which forces the caller to
-    re-run `helm dependency update` rather than trust a stale or
-    malformed lock. We never raise from this helper because it's a hint
-    for a freshness gate, not a contract.
-    """
-    try:
-        data = yaml.safe_load(lock_path.read_text()) or {}
-    except (yaml.YAMLError, OSError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    deps = data.get("dependencies")
-    if not isinstance(deps, list):
-        return None
-    return len(deps)
-
-
-def _deps_are_fresh(chart_path: Path) -> bool:
-    """Return True if Chart.lock looks newer than Chart.yaml AND charts/ is consistent.
-
-    Four-condition gate, all must hold to skip the update:
-      * Chart.lock exists
-      * charts/ directory exists (`helm dependency update` writes deps there)
-      * Chart.lock mtime >= Chart.yaml mtime
-      * Chart.lock's `dependencies:` count matches the number of subchart
-        artifacts under charts/ (subdirectories + .tgz tarballs). A partial
-        materialization (interrupted update, manually pruned charts/)
-        defeats the mtime check on its own.
-
-    Any failure to stat / parse (race against a delete, malformed lock,
-    permission error) returns False so the caller falls through to a real
-    `helm dependency update` -- we never want this gate to mask a missing
-    or partially-installed dependency.
-    """
-    chart_yaml = chart_path / "Chart.yaml"
-    chart_lock = chart_path / "Chart.lock"
-    charts_dir = chart_path / "charts"
-    try:
-        if not chart_lock.is_file():
-            return False
-        if not charts_dir.is_dir():
-            return False
-        if not chart_yaml.is_file():
-            # No Chart.yaml is an upstream bug; let `helm dependency update`
-            # produce its own error rather than silently skipping.
-            return False
-        if chart_lock.stat().st_mtime < chart_yaml.stat().st_mtime:
-            return False
-    except OSError:
-        return False
-
-    expected = _lock_dep_count(chart_lock)
-    if expected is None:
-        # Malformed or missing dependencies key -> force a real update so
-        # helm can produce a clean lock and error message.
-        return False
-
-    # Count materialized deps: helm writes each dependency either as a
-    # subdirectory (local repo or expanded chart) or as a .tgz tarball
-    # under charts/. Either form counts toward consistency with the lock.
-    try:
-        materialized = sum(
-            1
-            for entry in charts_dir.iterdir()
-            if entry.is_dir() or (entry.is_file() and entry.suffix == ".tgz")
-        )
-    except OSError:
-        return False
-    return materialized == expected
+def _clear_mise_cache() -> None:
+    """Drop every memoized helm path. Test seam; no production caller."""
+    with _MISE_HELM_LOCK:
+        _MISE_HELM_PATHS.clear()
 
 
 def _values_args(values: list[Path]) -> list[str]:
+    """Expand values file paths into repeated `--values` CLI args."""
     args: list[str] = []
     for value in values:
         args.extend(["--values", str(value)])
@@ -595,6 +542,7 @@ def _values_args(values: list[Path]) -> list[str]:
 
 
 def _set_args(sets: dict[str, str]) -> list[str]:
+    """Expand key/value overrides into repeated `--set key=value` CLI args."""
     args: list[str] = []
     for key, value in sets.items():
         args.extend(["--set", f"{key}={value}"])

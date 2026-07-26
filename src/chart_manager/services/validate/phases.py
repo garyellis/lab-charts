@@ -26,8 +26,8 @@ def render(
 ) -> PhaseResult:
     """Render one (chart, env) into output_root/<chart>/<env>/.
 
-    Output layout matches the worklist row keys so downstream phases
-    (schema/policy in M2/M3) can locate manifests by row identity.
+    Output layout matches the worklist row keys so the downstream phases
+    (schema, policy) can locate manifests by row identity alone.
     """
     out_dir = (output_root / row.chart / row.env).resolve()
     try:
@@ -152,6 +152,7 @@ def policy(
 
 
 def _format_policy_findings(findings: tuple[PolicyResult, ...]) -> str:
+    """Render kyverno findings as one `policy/rule: kind/name: msg` line each."""
     lines: list[str] = []
     for f in findings:
         msg = f.message or ""
@@ -162,6 +163,7 @@ def _format_policy_findings(findings: tuple[PolicyResult, ...]) -> str:
 
 
 def _has_manifests(path: Path) -> bool:
+    """True if `path` contains at least one real (non-symlink) .yaml/.yml file."""
     # os.walk with followlinks=False avoids infinite recursion on cyclic
     # symlinks. Path.rglob follows symlinked directories by default, which
     # is unsafe against a rendered tree that could contain user-controlled
@@ -178,6 +180,7 @@ def _has_manifests(path: Path) -> bool:
 
 
 def _format_findings(resources: tuple[ResourceResult, ...]) -> str:
+    """Render kubeconform findings as one `kind/name (file): msg` line each."""
     lines: list[str] = []
     for r in resources:
         msg = r.msg or ""
