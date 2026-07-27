@@ -39,6 +39,7 @@ mise run validate -- --chart grafana --env dev
 | `uv run chart-manager lifecycle status <name> --workflow cluster-test --profile minimal --live` | Merge cached evidence with read-only Helm and Kubernetes observations. |
 | `uv run chart-manager lifecycle impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
 | `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
+| `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
 For the full flag surface on validate, run `uv run chart-manager validate run --help`.
 
@@ -93,6 +94,9 @@ files out to every declared environment.
 
 ## Going deeper
 
+- [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — authenticated,
+  isolated Renovate upgrades, dependency coverage, versioning, and callback
+  security.
 - [`docs/MENTAL_MODEL.md`](docs/MENTAL_MODEL.md) — how the pieces fit together.
 - [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent,
   compiled action plans, evidence, and synthesized status.
