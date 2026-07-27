@@ -225,7 +225,7 @@
 <header>
   <div class="hrow">
     <h1><code>chart-manager</code> System Explorer</h1>
-    <div class="hsub">surfaces · composition root · services · integrations · plumbing · communication paths · productionization &nbsp;—&nbsp; re-verified after the layering refactor <b>and the cleanup waves</b> (defect sweep · promotion status model · per-request cluster addressing) · deep-linkable (hash routes)</div>
+    <div class="hsub">surfaces · composition root · services · integrations · plumbing · communication paths · productionization &nbsp;—&nbsp; re-verified after the layering refactor, cleanup waves, <b>and lifecycle plan/evidence/status implementation</b> · deep-linkable (hash routes)</div>
     <nav class="tabs" id="topnav">
       <button data-tab="overview">Overview</button>
       <button data-tab="commands">Commands</button>
@@ -244,17 +244,17 @@
 <!-- ================================================================ OVERVIEW -->
 <section class="tab" id="tab-overview">
   <h2>The mental model in three pictures</h2>
-  <p class="lead">chart-manager is a <b>Helm chart lifecycle tool</b>. Picture 1: the lifecycle it serves. Picture 2: the layered architecture that implements it — four layers plus a composition root. Then use the Services / Integrations tabs for one dedicated section per component, and Flows for the end-to-end sequences. <b>The promotion/lifecycle model those services encode is specified in <code>DESIGN.md</code></b>; this page documents the code that implements it.</p>
+  <p class="lead">chart-manager is a <b>Helm chart lifecycle tool</b>. Picture 1: the lifecycle it serves. Picture 2: the layered architecture that implements it — four layers plus a composition root. Then use the Services / Integrations tabs for one dedicated section per component, and Flows for the end-to-end sequences. <b>The executable desired-state contract is documented in <code>docs/chart-lifecycle-spec.md</code></b>; promotion intent remains in <code>DESIGN.md</code>. This page documents the code that implements both.</p>
 
   <div class="stats">
     <div class="stat"><div class="v">~15.4k</div><div class="k">lines python</div></div>
-    <div class="stat"><div class="v">27</div><div class="k">cli commands</div></div>
-    <div class="stat"><div class="v">57</div><div class="k">service modules</div></div>
+    <div class="stat"><div class="v">34</div><div class="k">cli commands</div></div>
+    <div class="stat"><div class="v">69</div><div class="k">service modules</div></div>
     <div class="stat"><div class="v">10</div><div class="k">integrations</div></div>
     <div class="stat"><div class="v">9</div><div class="k">external binaries</div></div>
     <div class="stat"><div class="v">2</div><div class="k">cloud SDKs</div></div>
     <div class="stat"><div class="v">1</div><div class="k">composition root</div></div>
-    <div class="stat"><div class="v">747</div><div class="k">unit/service tests · passing</div></div>
+    <div class="stat"><div class="v">890</div><div class="k">tests · passing</div></div>
   </div>
 
   <h3 class="sub">① The chart lifecycle — every service exists for one stage</h3>
@@ -265,7 +265,7 @@
     <div class="sarrow">▸</div>
     <div class="stage s-teal"><div class="phase">dynamic gate</div><div class="name">Sandbox test</div><div class="cmd">sandbox test·up</div><div class="svc"><span class="ref" data-tip="services/clusters/ephemeral.py:67 — class EphemeralTestClusterService">Sandbox</span>·<span class="ref" data-tip="services/clusters/development/service.py:66 — class DevelopmentClusterService">Lab</span>·<span class="ref" data-tip="services/expose.py:107 — class ExposeService">Expose</span></div></div>
     <div class="sarrow">▸</div>
-    <div class="stage s-amber"><div class="phase">ci gate</div><div class="name">CI install/upgrade</div><div class="cmd">ci changed·install·upgrade</div><div class="svc"><span class="ref" data-tip="services/ci.py:13 — class CiService">CiService</span></div></div>
+    <div class="stage s-amber"><div class="phase">ci gate</div><div class="name">Impact → matrix</div><div class="cmd">lifecycle impact · ci cluster-test-matrix</div><div class="svc"><span class="ref" data-tip="services/lifecycle/impact.py — LifecycleImpactService">LifecycleImpact</span> · <span class="ref" data-tip="services/ci.py — class CiService">CiService</span></div></div>
     <div class="sarrow">▸</div>
     <div class="stage stub"><div class="phase">publish</div><div class="name">OCI push</div><div class="cmd">—</div><div class="svc"><span class="ref" data-tip="no module: integrations/oci.py was an 11-line stub with zero callers and was deleted rather than carried">no code</span></div></div>
     <div class="sarrow">▸</div>
@@ -274,23 +274,26 @@
     <div class="stage s-purple"><div class="phase">verify</div><div class="name">Monitor + test</div><div class="cmd">helmrelease monitor·test</div><div class="svc"><span class="ref" data-tip="services/helmrelease/monitor.py:169 — class MonitorService">Monitor</span>·<span class="ref" data-tip="services/helmrelease/test.py:225 — class TestService">TestService</span></div></div>
   </div>
   <div class="lifecycle" style="margin-top:2px">
+    <div class="stage s-blue" style="flex:1"><div class="phase">cross-cutting · desired → executable → observed</div><div class="name">Lifecycle intent → action DAG → evidence → synthesized status</div><div class="cmd">lifecycle plan · graph · doctor · impact · status [--live]</div><div class="svc"><span class="ref" data-tip="services/lifecycle/compiler.py — LifecycleCompiler">compiler</span> → <span class="ref" data-tip="services/lifecycle/cluster_executor.py — ClusterActionExecutor">executor</span> → <span class="ref" data-tip="services/lifecycle/evidence.py — LocalEvidenceRepository">append-only local evidence</span> → <span class="ref" data-tip="services/lifecycle/status.py — project_status">current | stale | unknown projection</span> · authored YAML is never mutated with runtime status</div></div>
+  </div>
+  <div class="lifecycle" style="margin-top:2px">
     <div class="stage s-pink" style="flex:1"><div class="phase">cross-cutting · promote · monitor · test all emit</div><div class="name">Lifecycle events → audit trail</div><div class="cmd">events build · events promote · <span style="opacity:.8">+ automatic from the hr services</span></div><div class="svc"><span class="ref" data-tip="services/events/writer.py:12 — class EventWriter">EventWriter</span> → <span class="ref" data-tip="services/events/store.py:12 — class EventStore(Protocol)">EventStore(Protocol)</span> → <span class="ref" data-tip="services/events/adapters/cosmos.py:5 — class CosmosEventStore">Cosmos</span> | <span class="ref" data-tip="services/events/adapters/dynamodb.py:9 — class DynamoDBEventStore">DynamoDB</span> · key = chart@version · <b>9 of 11 <code>PromotionPhase</code> members now emitted</b> (was 3), so the "renovate PR → all envs" duration is computable end to end (DESIGN.md)</div></div>
   </div>
 
   <h3 class="sub">② The four layers plus a composition root — imports only flow down (machine-enforced)</h3>
   <div class="layerstack">
-    <div class="lrow lc-cli"><div class="lname">cli/</div><div class="lbody">8 groups, 27 commands, 7 modules, 2,480 ln. Actual shape today: parse flags → build a frozen Request → call one service → render a returned result. Single error-catch in <span class="ref" data-tip="cli/main.py:649 — def main()"><code>main()</code></span>, which now maps <span class="ref" data-tip="cli/main.py:660 — except MissingToolError → exit 127"><code>MissingToolError</code></span> to exit 127 rather than sniffing a bare <code>FileNotFoundError</code>. <span class="pill p-green">✓ 26 of 27 commands portable</span> <a href="#commands/verdict" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Commands tab: per-command verdict</a></div></div>
+    <div class="lrow lc-cli"><div class="lname">cli/</div><div class="lbody">9 groups, 34 commands, 9 modules. Actual shape today: parse flags → call a service/compiler → render a returned result. The lifecycle group adds five read-oriented projections with text/JSON/YAML output; <code>status --live</code> is explicitly cluster-addressed. Single error-catch remains in <code>main()</code>. <span class="pill p-green">lifecycle surfaces are portable</span> <a href="#commands/lifecycle" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Commands tab: lifecycle</a></div></div>
     <div class="ldivider">▼ requests in, frozen results out · no integrations import (ruff TID251 — and <b>zero</b> import sites remain)</div>
     <div class="lrow lc-comp"><div class="lname">composition.py</div><div class="lbody">The <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>. <span class="ref" data-tip="composition.py:84 — @dataclass(frozen) Settings(kube_context, docker_host, command_timeout, event_source)">Settings</span> (frozen: <code>kube_context</code>, <code>docker_host</code>, <code>command_timeout</code>, <code>event_source</code>) + <span class="ref" data-tip="composition.py:125 — class Container(settings=None)">Container</span> → adapters <span class="ref" data-tip="composition.py:141 — command_runner() (memoized SubprocessRunner)">command_runner</span> · <span class="ref" data-tip="composition.py:147 — helmrelease_client() → HelmReleaseClient(self.kubectl())">helmrelease_client</span> · <span class="ref" data-tip="composition.py:156 — helm(verbose=True)">helm</span> · <span class="ref" data-tip="composition.py:164 — kubectl() — context + timeout from Settings">kubectl</span> · <span class="ref" data-tip="composition.py:172 — kind() — docker_host + timeout from Settings">kind</span>; capabilities <span class="ref" data-tip="composition.py:182 — event_writer() (memoized: one EventStore per container)">event_writer</span> · <span class="ref" data-tip="composition.py:194 — monitor_service(progress=None)">monitor_service</span> · <span class="ref" data-tip="composition.py:212 — test_service(progress=None)">test_service</span> · <span class="ref" data-tip="composition.py:230 — promote_service(confirm_downgrade=None)">promote_service</span> · <span class="ref" data-tip="composition.py:245 — expose_service(state_dir=None)">expose_service</span> · <span class="ref" data-tip="composition.py:249 — grafana_exporter()">grafana_exporter</span> · <span class="ref" data-tip="composition.py:253 — lab_service(root, progress=None)">lab_service</span> · <span class="ref" data-tip="composition.py:271 — sandbox_service(root, progress=None)">sandbox_service</span> · <span class="ref" data-tip="composition.py:283 — ci_service(root)">ci_service</span> · <span class="ref" data-tip="composition.py:287 — validate_app(progress=None, on_warn=None)">validate_app</span>. 298 ln, no module-level singleton — the CLI builds one per process, a server one per startup.</div></div>
     <div class="ldivider">▼ constructor-injected adapters — <b>required</b>, not <code>or Helm()</code> fallbacks</div>
-    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">57 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. <code>services/domain/</code> owns Helm chart metadata, managed charts, cluster-test configuration and dependency graphs; <code>services/manifest_validation/</code> owns validation-only schemas and outcomes. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
+    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">69 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. The new <code>services/lifecycle/</code> context owns the versioned action graph, input digests, impact reasoning, doctor diagnostics, cluster execution, append-only evidence, live observers and freshness-aware status. <code>services/domain/</code> still owns authored chart/test configuration; runtime facts never flow back into it. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
     <div class="ldivider">▼ typed results; one intentional shared-policy edge</div>
     <div class="lrow lc-int"><div class="lname">integrations/</div><div class="lbody">One class per external tool: <span class="ref" data-tip="integrations/helm.py:63 — class Helm">helm</span> · <span class="ref" data-tip="integrations/kubectl.py:24 — class Kubectl">kubectl</span> · <span class="ref" data-tip="integrations/kind.py:34 — class Kind">kind</span> · <span class="ref" data-tip="integrations/helmrelease.py:110 — class HelmReleaseClient (was integrations/flux.py: class Flux)">helmrelease</span> · <span class="ref" data-tip="integrations/git.py:12 — class Git">git</span> · <span class="ref" data-tip="integrations/github.py:21 — class Github">github</span> · <span class="ref" data-tip="integrations/kubeconform.py:53 — class Kubeconform">kubeconform</span> · <span class="ref" data-tip="integrations/kyverno.py:80 — class Kyverno">kyverno</span> · <span class="ref" data-tip="integrations/aws/dynamodb/client.py">aws/dynamodb</span> · <span class="ref" data-tip="integrations/azure/cosmos/client.py">azure/cosmos</span>. Typed results; <code>Helm</code> intentionally consumes the shared chart-dependency freshness policy rather than duplicating it in the adapter. <b>All four kube-facing adapters take the same addressing arguments</b> — see the <a href="#integrations/helmrelease" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">HelmReleaseClient panel</a>.</div></div>
     <div class="ldivider">▼ every subprocess goes through one chokepoint</div>
     <div class="lrow lc-plumb"><div class="lname">plumbing/</div><div class="lbody">Generic, domain-neutral building blocks only: <span class="ref" data-tip="plumbing/commands.py — CommandRunner Protocol · SubprocessRunner">subprocess kernel</span> · <span class="ref" data-tip="plumbing/errors.py — shared exception taxonomy">errors</span> · <span class="ref" data-tip="plumbing/duration.py — parse_duration">duration parsing</span> · <span class="ref" data-tip="plumbing/paths.py — ensure_relative">relative-path validation</span> · <span class="ref" data-tip="plumbing/yaml_files.py — load_yaml_file">generic YAML loading</span> · <span class="ref" data-tip="plumbing/text.py — truncate_lines · truncate_bytes">text caps</span>. Chart, Helm dependency and validation policy no longer live here. <span class="pill p-green">boundary corrected</span> <a href="#plumbing/commands" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Plumbing tab</a></div></div>
   </div>
 
-  <div class="callout good" style="margin-top:18px"><b>The boundaries are machine-enforced.</b> Ruff <code>TID251</code> guards adapter imports; service import tests keep Rich and Typer out of capabilities; AST checks keep process exits in the CLI; and dedicated layering tests prevent chart- or validation-domain modules from drifting back into <code>plumbing/</code>. The completed cleanup baseline is <b>747 unit/service tests + 4 external-tool integration tests passing</b>, with Ruff and mypy clean.</div>
+  <div class="callout good" style="margin-top:18px"><b>The boundaries are machine-enforced.</b> Ruff <code>TID251</code> guards adapter imports; service import tests keep Rich and Typer out of capabilities; AST checks keep process exits in the CLI; and dedicated layering tests prevent chart- or validation-domain modules from drifting back into <code>plumbing/</code>. Current verification: <b>890 tests passing, 5 explicitly deselected</b>, with Ruff, mypy, actionlint and diff checks clean.</div>
 
   <div class="callout info" style="margin-top:10px"><b>How to read the rest:</b> the <b>Commands</b> tab is the entry surface. The <b>Services</b> tab covers the shared chart domain and each bounded service, including the validation lifecycle. The <b>Integrations</b> tab documents external adapters. The <b>Plumbing</b> tab now distinguishes genuinely generic utilities from the service-domain panels retained under the same deep-link routes. The <b>Matrix</b> and <b>Flows</b> show cross-layer communication; <b>Productionize</b> evaluates the current, already-cleaned package shape.</div>
 </section>
@@ -300,7 +303,7 @@
   <div class="split">
     <div class="side" id="cmd-side">
       <div class="grp">The surface</div>
-      <button data-item="surface">all 27 commands</button>
+      <button data-item="surface">all 34 commands</button>
       <div class="grp">Command groups</div>
       <button data-item="charts">charts</button>
       <button data-item="deps">deps</button>
@@ -309,6 +312,7 @@
       <button data-item="helmrelease">helmrelease</button>
       <button data-item="events">events</button>
       <button data-item="ci">ci</button>
+      <button data-item="lifecycle">lifecycle</button>
       <button data-item="grafana">grafana</button>
       <div class="grp">Architecture</div>
       <button data-item="verdict">⚠ layering verdict</button>
@@ -319,22 +323,23 @@
 
       <!-- surface -->
       <div class="panel" id="cmd-surface">
-        <div class="phead"><h2>The command surface</h2><span class="loc">cli/ · 7 files · 2,480 ln · 8 groups · 27 commands</span><span class="pill p-purple">entry points</span></div>
-        <p class="oneliner">Every way a human or a pipeline can enter the system today. One Typer app in <span class="ref" data-tip="cli/main.py:106 — app = typer.Typer(no_args_is_help=True)">cli/main.py</span>; three groups delegate to sub-modules through a <code>register(app)</code> hook, the rest are declared inline. The right-hand column is the question this tab exists to answer: <b>could a non-CLI surface reach this outcome?</b> After the layering refactor the answer is <b>yes for 26 of 27</b> — the remaining residue is named below and on the <a href="#commands/fix" style="color:var(--blue)">shipped/remaining</a> panel.</p>
+        <div class="phead"><h2>The command surface</h2><span class="loc">cli/ · 9 files · 3,132 ln · 9 groups · 34 commands</span><span class="pill p-purple">entry points</span></div>
+        <p class="oneliner">Every way a human or a pipeline can enter the system today. One Typer app in <span class="ref" data-tip="cli/main.py — app = typer.Typer(no_args_is_help=True)">cli/main.py</span>; four groups delegate to sub-modules through a <code>register(app)</code> hook, the rest are declared inline. Lifecycle adds five projections over service-owned contracts rather than embedding execution policy in the CLI.</p>
 
         <div class="comm">
           <div class="comm-title">App wiring — where each group's handlers live, and where its Rich half lives</div>
-          <div class="cnode c-cli">cli/main.py<small>app = Typer() · 668 ln</small></div>
+          <div class="cnode c-cli">cli/main.py<small>app = Typer() · 758 ln</small></div>
           <div class="carrow">▸<small>add_typer</small></div>
           <div class="cgroup">
             <div class="cnode c-cli">charts · deps<small>inline · 5 cmds</small></div>
-            <div class="cnode c-cli">sandbox · ci · grafana<small>inline · 12 cmds</small></div>
+            <div class="cnode c-cli">sandbox · ci · grafana<small>inline · 14 cmds</small></div>
           </div>
           <div class="carrow">▸<small>register(app)</small></div>
           <div class="cgroup">
             <div class="cnode c-cli">cli/validate.py<small>5 cmds · 755 ln</small></div>
             <div class="cnode c-cli">cli/helmrelease.py<small>3 cmds · 360 ln</small></div>
             <div class="cnode c-cli">cli/events.py<small>2 cmds · 118 ln</small></div>
+            <div class="cnode c-cli">cli/lifecycle.py<small>5 cmds · 500 ln</small></div>
           </div>
           <div class="carrow">▸<small>renders via</small></div>
           <div class="cgroup">
@@ -352,7 +357,7 @@
           <thead><tr><th class="mono">command</th><th class="mono">handler</th><th>calls · returns</th><th class="mono">portable?</th></tr></thead>
           <tbody>
             <tr><td class="mono">charts list</td><td class="mono"><span class="ref" data-tip="cli/main.py — list_charts(root)">main.py</span></td><td><code>ChartCatalogService.list_entries</code> → Helm metadata + root/section capability status + profiles → Rich table; malformed present config makes the command fail</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
-            <tr><td class="mono">charts config</td><td class="mono"><span class="ref" data-tip="cli/main.py — show_config(chart, root)">main.py</span></td><td><code>ChartCatalogService.get_config</code> → normalized <code>ChartManagerConfig.model_dump(by_alias=True)</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">charts lifecycle</td><td class="mono"><span class="ref" data-tip="cli/main.py — show_lifecycle(chart, root)">main.py</span></td><td><code>ChartCatalogService.get_lifecycle</code> → canonical standalone <code>ChartLifecycle.model_dump(by_alias=True)</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">deps plan</td><td class="mono"><span class="ref" data-tip="cli/main.py:251 — dependency_plan(chart, root, profile)">main.py:251</span></td><td><code>InstallPlanService.install_plan</code> → <code>[InstallPlanEntry]</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">deps checks</td><td class="mono"><span class="ref" data-tip="cli/main.py:264 — dependency_checks(chart, root, profile)">main.py:264</span></td><td><b>was type A</b> → now <code>InstallPlanService.plan_checks</code> → <code>[PlanChecks]</code>; the implicit helm-test rule lives on <code>ClusterTestProfile.effective_checks()</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">deps dependent-tests</td><td class="mono"><span class="ref" data-tip="cli/main.py:287 — dependent_tests(chart, root)">main.py:287</span></td><td><code>InstallPlanService.dependent_tests</code> → <code>[ClusterTestRef]</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
@@ -364,8 +369,15 @@
             <tr><td class="mono">sandbox expose</td><td class="mono"><span class="ref" data-tip="cli/main.py:552 — kind_expose(cluster_name, service, port, stop)">main.py:552</span></td><td><b>was type A</b> → now <code>ExposeService.start/stop</code> → <code>ExposeStatus.urls: (ExposedUrl, …)</code>; ports, apps-domain and scheme all resolved in the service</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">sandbox test</td><td class="mono"><span class="ref" data-tip="cli/main.py:591 — sandbox_test(...)">main.py:591</span></td><td><b>was type B</b> → now <code>EphemeralTestClusterService.run(EphemeralTestRequest)</code> → <code>EphemeralTestResult(installed, tested, namespaces)</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">ci changed</td><td class="mono"><span class="ref" data-tip="cli/main.py:619 — ci_changed(root, base)">main.py:619</span></td><td><code>CiService.changed_charts(base)</code> → list</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">ci cluster-test-charts</td><td class="mono"><span class="ref" data-tip="cli/main.py — ci_cluster_test_charts">main.py</span></td><td><code>CiService.cluster_test_charts()</code> → enabled chart names</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">ci cluster-test-matrix</td><td class="mono"><span class="ref" data-tip="cli/main.py — ci_cluster_test_matrix">main.py</span></td><td>diff, <code>--all</code>, or repeated <code>--chart</code> → exact GitHub matrix <code>{"include":[{"chart","profile"}]}</code>; lifecycle impact owns fanout, dependencies and default profiles</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">ci install</td><td class="mono"><span class="ref" data-tip="cli/main.py:629 — ci_install(chart, root, profile, namespace)">main.py:629</span></td><td><code>CiService.install_source_chart</code> (raises on failure)</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">ci upgrade</td><td class="mono"><span class="ref" data-tip="cli/main.py:639 — ci_upgrade(chart, oci_ref, ...)">main.py:639</span></td><td><code>CiService.upgrade_from_oci</code> (raises on failure)</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">lifecycle plan</td><td class="mono"><span class="ref" data-tip="cli/lifecycle.py — plan">lifecycle.py</span></td><td><code>LifecycleCompiler</code> → versioned ordered action plan; text, JSON or YAML</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">lifecycle graph</td><td class="mono"><span class="ref" data-tip="cli/lifecycle.py — graph">lifecycle.py</span></td><td>action and typed-edge projection of the compiled plan</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">lifecycle impact</td><td class="mono"><span class="ref" data-tip="cli/lifecycle.py — impact">lifecycle.py</span></td><td>changed paths → validation rows + exact chart/profile cluster-test rows, each with reasons and spec diagnostics</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">lifecycle doctor</td><td class="mono"><span class="ref" data-tip="cli/lifecycle.py — doctor">lifecycle.py</span></td><td>repository-wide lifecycle input, reference and cycle diagnostics</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
+            <tr><td class="mono">lifecycle status</td><td class="mono"><span class="ref" data-tip="cli/lifecycle.py — status">lifecycle.py</span></td><td>compiled plan + cached evidence + optional cluster-scoped read-only live observations → current/stale/unknown conditions</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">grafana export-dashboard</td><td class="mono"><span class="ref" data-tip="cli/main.py:181 — grafana_export_dashboard(uid, ...)">main.py:181</span></td><td><b>was type A</b> → now <code>GrafanaExporter.export(ExportRequest)</code> → the normalized <code>str</code>; <code>canonical_json</code> owns the git contract</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">grafana lint-dashboards</td><td class="mono"><span class="ref" data-tip="cli/main.py:219 — grafana_lint_dashboards(root, path)">main.py:219</span></td><td><b>was type A</b> → now <code>lint_paths</code> → <code>LintResult(.ok, .files_scanned, .files_with_findings)</code></td><td class="mono"><span class="pill p-green">yes</span></td></tr>
             <tr><td class="mono">validate render</td><td class="mono"><span class="ref" data-tip="cli/validate.py:192 — render(...)">validate.py:192</span></td><td><b>was type A</b> → now <code>ManifestValidationService.single(SingleRequest)</code> → <code>RunOutcome</code>. <b>Note: still runs all three phases</b> — see below</td><td class="mono"><span class="pill p-green">yes</span></td></tr>
@@ -382,7 +394,7 @@
         </table>
         </div>
 
-        <div class="callout good"><b>The re-derived tally: 26 of 27 portable.</b> Two failure modes were tracked. <b>A · orchestration above the line</b> — the CLI did work a service should own, so a second surface had to copy it: <b>was 10, now 1</b> (<code>validate clean</code>). <b>B · presentation below the line</b> — the CLI was thin but the service returned <code>None</code> and reported only by printing Rich: <b>was 5, now 0</b>. Every service that used to hold a <code>Console</code> now returns a frozen result and narrates through an injected callback. Full argument on the <a href="#commands/verdict" style="color:var(--blue)">layering verdict</a> panel; what shipped and what is left on <a href="#commands/fix" style="color:var(--blue)">shipped / remaining</a>.</div>
+        <div class="callout good"><b>The current tally: 33 of 34 portable.</b> Two failure modes were tracked. <b>A · orchestration above the line</b> — the CLI did work a service should own, so a second surface had to copy it: <b>was 10, now 1</b> (<code>validate clean</code>). <b>B · presentation below the line</b> — the CLI was thin but the service returned <code>None</code> and reported only by printing Rich: <b>was 5, now 0</b>. All seven newly counted lifecycle/CI commands are service-backed projections.</div>
 
         <div class="callout warn"><b>Finding: <code>validate render</code> invokes kubeconform.</b> The three single-row commands do <i>not</i> differ by phase. All three build a <code>SingleRequest</code> with <code>phases=ALL_PHASES</code> (<span class="ref" data-tip="cli/validate.py:220 · :283 · :349 — phases=ALL_PHASES on all three SingleRequest literals">validate.py:220 · 283 · 349</span>), so <code>runner.run(configs)</code> activates render, schema <i>and</i> policy; <code>render</code>/<code>schema</code> merely pass no policy dirs, so the policy phase reports SKIP. Verified live: <code>validate render --chart tests/fixtures/charts/passing-app --env dev</code> prints <code>Render PASS | Schema PASS | Policy SKIP</code>. This is a latent bug, <b>deliberately preserved rather than silently fixed</b>: scoping <code>render</code> to <code>{"render"}</code> would flip a chart that renders but fails kubeconform from exit 1 to exit 0, weakening a CI gate as a side effect of a naming cleanup. The <code>phases</code> field is fully plumbed through <code>SingleRequest</code> → <code>ManifestValidationRunner.run(enabled_phases=…)</code>, so it is a one-line change per command whenever the owner decides which behavior is intended.</div>
       </div>
@@ -394,8 +406,8 @@
         <div class="api"><span class="m">charts list</span>   <span class="r">--root PATH=.</span>
             <span class="r">→ ChartCatalogService.list_charts() + get_chart(name) → Rich table (Chart, Version, Dependencies, Profiles)</span>
 
-<span class="m">charts config</span> <span class="s">CHART</span>  <span class="r">--root PATH=.</span>
-            <span class="r">→ ChartCatalogService.get_chart(chart).spec.model_dump(by_alias=True) → console.print_json</span></div>
+<span class="m">charts lifecycle</span> <span class="s">CHART</span>  <span class="r">--root PATH=.</span>
+            <span class="r">→ ChartCatalogService.get_lifecycle(chart).model_dump(by_alias=True) → canonical resource JSON</span></div>
         <div class="two-col">
           <div class="block"><h4>What the CLI owns</h4><ul>
             <li class="good">Table layout and column choice — pure presentation</li>
@@ -411,7 +423,7 @@
       <!-- deps -->
       <div class="panel" id="cmd-deps">
         <div class="phead"><h2><code>chart-manager deps</code></h2><span class="loc">cli/main.py 192–249 · 3 commands</span><span class="pill p-amber">1 of 3 orchestrating</span></div>
-        <p class="oneliner">Resolve the enabled <code>clusterTests</code> section of <code>chart-manager.yaml</code> into an ordered install plan and its dependent-test targets. <code>plan</code> and <code>dependent-tests</code> are clean; <code>checks</code> is where a domain rule leaked into the CLI.</p>
+        <p class="oneliner">Resolve the enabled <code>spec.clusterTest</code> section of <code>chart-lifecycle.yaml</code> into an ordered install plan and its dependent-test targets. <code>plan</code> and <code>dependent-tests</code> are clean; <code>checks</code> is where a domain rule leaked into the CLI.</p>
         <div class="api"><span class="m">deps plan</span>     <span class="s">CHART</span>  <span class="r">--root PATH=.  --profile TEXT=minimal</span>
             <span class="r">→ InstallPlanService.install_plan(chart, profile) → table (Order, Chart, Profile, Target)</span>
 
@@ -579,12 +591,45 @@ for entry in service.install_plan(chart, profile):
         </div>
       </div>
 
+      <!-- lifecycle -->
+      <div class="panel" id="cmd-lifecycle">
+        <div class="phead"><h2><code>chart-manager lifecycle</code></h2><span class="loc">cli/lifecycle.py · 500 ln · 5 commands</span><span class="pill p-blue">desired + observed</span></div>
+        <p class="oneliner">One consistent inspection surface over the full flow. The authored chart configuration supplies desired intent; the compiler derives executable actions and typed dependencies; evidence is recorded separately; status is synthesized at read time. No command writes runtime fields into <code>chart-lifecycle.yaml</code>.</p>
+        <div class="api"><span class="m">lifecycle plan</span>   <span class="s">CHART</span> <span class="r">--workflow validation|cluster-test --profile … --format text|json|yaml</span>
+<span class="m">lifecycle graph</span>  <span class="s">CHART</span> <span class="r">--workflow … --profile … --format …</span>
+<span class="m">lifecycle impact</span> <span class="r">--changed-file PATH… | --changed-files FILE --format …</span>
+<span class="m">lifecycle doctor</span> <span class="r">--format …</span>
+<span class="m">lifecycle status</span> <span class="s">CHART</span> <span class="r">--workflow … --profile … [--live --cluster-name NAME --context CONTEXT] --format …</span></div>
+        <div class="two-col">
+          <div class="block"><h4>Pure projections</h4>
+            <ul>
+              <li><code>plan</code> exposes deterministic action IDs, input digests, targets and typed edges</li>
+              <li><code>graph</code> removes execution detail while preserving dependency identity</li>
+              <li><code>impact</code> explains every selected validation environment and cluster-test profile</li>
+              <li><code>doctor</code> reports bad paths, references and dependency cycles before execution</li>
+            </ul>
+          </div>
+          <div class="block"><h4>Status semantics</h4>
+            <ul>
+              <li><code>current</code> means evidence matches the action's present input digest</li>
+              <li><code>stale</code> means evidence exists but its input digest no longer matches</li>
+              <li><code>unknown</code> is first-class: absent, skipped or unobservable work never becomes green</li>
+              <li><code>--live</code> is read-only, cluster-scoped and authoritative for missing releases/workloads; it cannot fall back to another cluster's cached PASS</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout good"><b>Separation of concerns:</b> <code>apiVersion: lifecycle.cmg.io/v1alpha1</code> plan/status wire shapes are generated from frozen service models. Local evidence is append-only beneath <code>.chart-manager/state/evidence/v1alpha1</code>, uses safe atomic writes, and is deliberately excluded from authored chart files.</div>
+      </div>
+
       <!-- ci -->
       <div class="panel" id="cmd-ci">
-        <div class="phead"><h2><code>chart-manager ci</code></h2><span class="loc">cli/main.py 504–532 · 3 commands</span><span class="pill p-green">thin</span></div>
-        <p class="oneliner">Three helpers for the GitHub Actions chart pipeline: which charts changed, install from source, upgrade from the published OCI artifact. Each is a single service call.</p>
+        <div class="phead"><h2><code>chart-manager ci</code></h2><span class="loc">cli/main.py · 5 commands</span><span class="pill p-green">thin</span></div>
+        <p class="oneliner">Five helpers for the GitHub Actions chart pipeline. The important boundary is now typed: GitHub Actions asks Chart Manager for an exact chart/profile matrix instead of maintaining its own regex fanout policy.</p>
         <div class="api"><span class="m">ci changed</span>   <span class="r">--root PATH=.  --base TEXT=origin/main</span>
              <span class="r">→ CiService.changed_charts(base) → one chart name per line</span>
+
+<span class="m">ci cluster-test-charts</span> <span class="r">→ every chart with enabled spec.clusterTest</span>
+<span class="m">ci cluster-test-matrix</span> <span class="r">--base SHA | --all | --chart NAME… → compact {"include":[{"chart","profile"}]}</span>
 
 <span class="m">ci install</span>   <span class="s">CHART</span>  <span class="r">--root  --profile TEXT=minimal  --namespace TEXT=observability</span>
              <span class="r">→ CiService.install_source_chart(chart, profile, namespace)</span>
@@ -595,7 +640,8 @@ for entry in service.install_plan(chart, profile):
           <div class="block"><h4>Correct as written</h4><ul>
             <li class="good">No decisions in the callback — arguments pass straight through</li>
             <li class="good"><code>CiService</code> imports no Rich; failures raise <code>ChartManagerError</code> and land in the single <code>main()</code> catch</li>
-            <li class="good"><code>ci changed</code> prints one name per line, which is the right machine contract for a shell <code>for</code> loop</li>
+            <li class="good"><code>cluster-test-matrix</code> is the GitHub-ready machine contract. It preserves non-default dependent profiles and emits a safe <code>{"include":[]}</code> no-op</li>
+            <li class="good">Unknown explicitly requested charts and charts without enabled cluster tests fail loudly instead of being silently removed</li>
           </ul></div>
           <div class="block"><h4>Watch</h4><ul>
             <li><code>install</code>/<code>upgrade</code> return <code>None</code>. Acceptable — success/failure is carried by the exception, so an HTTP surface maps cleanly to 204/500. Unlike sandbox, there is no partial-success accounting to lose</li>
@@ -672,7 +718,7 @@ for entry in service.install_plan(chart, profile):
         </div>
 
         <div class="reco"><b>Bottom line, as assessed:</b> the target — front the same capabilities with REST, GraphQL, RPC, or a Slack app — was the correct reason to act, but the work was <b>not</b> "move orchestration out of the CLI". It was two moves of similar size, plus a third the original cut missed. <b>(1)</b> Pull the 11 type-A commands' decisions into services, concentrated in <code>cli/validate.py</code> and four commands in <code>cli/main.py</code>. <b>(2)</b> Pull presentation out of <code>DevelopmentClusterService</code>, <code>EphemeralTestClusterService</code>, <code>cluster_bootstrap</code> and give them frozen results. <b>(3)</b> Extract the wire contracts — the move test ① alone would have missed, because a JSON serializer looks like presentation right up until a second surface needs the identical bytes.
-        <br><br><b>What actually shipped:</b> all three, plus a named composition root and mechanical enforcement. <b>26 of 27 commands are now reachable from any surface</b> — the remaining residue is <code>validate clean</code>, named on the <a href="#commands/fix" style="color:var(--blue)">fix</a> panel. The CLI kept exactly what a CLI should own: flags, tables, and an exit code. The claim that this stays true is no longer a promise — <code>tests/test_layering.py</code> and ruff <code>TID251</code> fail the build when it stops being true.</div>
+        <br><br><b>What actually shipped:</b> all three, plus a named composition root and mechanical enforcement. <b>33 of 34 commands are now reachable from any surface</b> — the remaining residue is <code>validate clean</code>, named on the <a href="#commands/fix" style="color:var(--blue)">fix</a> panel. The five lifecycle commands reinforce the boundary: the CLI only selects projections and formats; compilation, impact, diagnostics, evidence and status live below it.</div>
       </div>
 
       <!-- fix -->
@@ -713,8 +759,9 @@ for entry in service.install_plan(chart, profile):
   <div class="split">
     <div class="side" id="svc-side">
       <div class="grp">Domain contracts</div>
-      <button data-item="testspec">chart-manager.yaml · clusterTests</button>
-      <button data-item="validatespec">chart-manager.yaml · manifestValidation</button>
+      <button data-item="testspec">chart-lifecycle.yaml · spec.clusterTest</button>
+      <button data-item="validatespec">chart-lifecycle.yaml · spec.validation</button>
+      <button data-item="lifecycle">lifecycle/ compiler + evidence</button>
       <div class="grp">Local cluster ops</div>
       <button data-item="sandbox">EphemeralTestClusterService</button>
       <button data-item="lab">DevelopmentClusterService</button>
@@ -739,26 +786,30 @@ for entry in service.install_plan(chart, profile):
 
       <!-- testspec -->
       <div class="panel" id="svc-testspec">
-        <div class="phead"><h2>chart-manager.yaml → <code>clusterTests</code> → <span class="ref" data-tip="services/domain/cluster_tests.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span></h2><span class="loc">services/chart_config.py · cluster_test_catalog.py · domain/cluster_tests.py · install_plan.py</span><span class="pill p-blue">composed capability</span></div>
-        <p class="oneliner">The optional per-chart <b>dynamic test capability</b>: which profiles exist, what each profile requires, which values files it layers, and whether <code>helm test</code> runs. The root envelope and this section both default to <code>enabled: true</code>; either can disable the capability. Sandbox / Lab / CI operate only on an enabled section.</p>
+        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.clusterTest</code> → <span class="ref" data-tip="services/domain/cluster_tests.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span></h2><span class="loc">services/chart_config.py · cluster_test_catalog.py · domain/cluster_tests.py · install_plan.py</span><span class="pill p-blue">composed capability</span></div>
+        <p class="oneliner">The optional per-chart <b>dynamic test capability</b>: which profiles exist, what each profile requires, which values files it layers, and whether <code>helm test</code> runs. <code>spec.enabled</code> and <code>spec.clusterTest.enabled</code> both default true; either can disable the capability. Sandbox / Lab / CI operate only on an enabled section.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to executable plan</div>
-          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + chart-manager.yaml</div>
+          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + chart-lifecycle.yaml</div>
           <div class="carrow">▸<small>strict loaders</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get; services/chart_config.py — load_optional_chart_manager_config">ChartRepository → ChartManagerConfig</span><small>Helm-only discovery, then strict optional capability loading</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get; services/chart_config.py — load_optional_chart_lifecycle">ChartRepository → ChartLifecycle</span><small>Helm-only discovery, then strict optional capability loading</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/domain/cluster_tests.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span>.model_validate<small>extra=&quot;forbid&quot; — any typo raises</small></div>
           <div class="carrow">▸<small>via</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/cluster_test_catalog.py — class ClusterTestCatalog">ClusterTestCatalog</span>.get(name)<small>requires root + clusterTests enabled; composes ClusterTestChart</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/cluster_test_catalog.py — class ClusterTestCatalog">ClusterTestCatalog</span>.get(name)<small>requires root + spec.clusterTest enabled; composes ClusterTestChart</small></div>
           <div class="carrow">▸<small>requires DFS</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/domain/install_plan.py — class DependencyResolver">DependencyResolver</span>.install_plan<small>→ ordered [InstallPlanEntry]</small></div>
         </div>
 
-        <div class="yml-title">A real unified config, annotated — <code>charts/harbor/chart-manager.yaml</code> (clusterTests excerpt)</div>
-        <div class="yml"><span class="k">version:</span> <span class="v">1</span>                              <span class="a">→ ChartManagerConfig.version</span>  <span class="c">(Literal[1], required)</span>
-<span class="k">enabled:</span> <span class="v">true</span>                           <span class="a">→ ChartManagerConfig.enabled</span>
-<span class="k">clusterTests:</span>                         <span class="a">→ ChartManagerConfig.cluster_tests: ClusterTestSpec | None</span>
-  <span class="k">enabled:</span> <span class="v">true</span>                         <span class="a">→ ClusterTestSpec.enabled</span>
+        <div class="yml-title">A real standalone resource, annotated — <code>charts/harbor/chart-lifecycle.yaml</code> (<code>spec.clusterTest</code> excerpt)</div>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>      <span class="a">→ exact supported API</span>
+<span class="k">kind:</span> <span class="v">ChartLifecycle</span>                         <span class="a">→ exact resource kind</span>
+<span class="k">metadata:</span>
+  <span class="k">name:</span> <span class="v">harbor</span>                              <span class="a">→ must match directory + Chart.yaml name</span>
+<span class="k">spec:</span>
+  <span class="k">enabled:</span> <span class="v">true</span>                           <span class="a">→ ChartLifecycleSpec.enabled</span>
+  <span class="k">clusterTest:</span>                              <span class="a">→ ChartLifecycleSpec.cluster_test: ClusterTestSpec | None</span>
+    <span class="k">enabled:</span> <span class="v">true</span>                       <span class="a">→ ClusterTestSpec.enabled</span>
   <span class="k">profiles:</span>                             <span class="a">→ ClusterTestSpec.profiles: dict[str, ClusterTestProfile]</span>  <span class="c">(required when section is present)</span>
   <span class="hl"><span class="k">minimal:</span></span>                              <span class="c">profile names are free-form dict keys; "minimal" is only special as ClusterTestRef's default</span>
     <span class="k">description:</span> <span class="v">Install an ephemeral Harbor on kind and verify its API…</span>
@@ -791,9 +842,11 @@ for entry in service.install_plan(chart, profile):
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th>yaml key</th><th class="mono">model field</th><th>type / default</th><th>validation</th></tr></thead>
           <tbody>
-            <tr><td class="mono">version</td><td class="mono">ChartManagerConfig.version</td><td><code>Literal[1]</code> — required</td><td>the single envelope version is strictly enforced</td></tr>
-            <tr><td class="mono">enabled</td><td class="mono">ChartManagerConfig.enabled</td><td><code>bool</code> = true</td><td>false disables every configured capability</td></tr>
-            <tr><td class="mono">clusterTests.enabled</td><td class="mono">ClusterTestSpec.enabled</td><td><code>bool</code> = true</td><td>false disables cluster tests without disabling manifest validation</td></tr>
+            <tr><td class="mono">apiVersion</td><td class="mono">ChartLifecycle.api_version</td><td><code>Literal["lifecycle.cmg.io/v1alpha1"]</code></td><td>exact; no numeric or legacy version accepted</td></tr>
+            <tr><td class="mono">kind</td><td class="mono">ChartLifecycle.kind</td><td><code>Literal["ChartLifecycle"]</code></td><td>exact resource-kind boundary</td></tr>
+            <tr><td class="mono">metadata.name</td><td class="mono">ChartLifecycleMetadata.name</td><td><code>str</code> — required</td><td>must equal chart directory and Chart.yaml name</td></tr>
+            <tr><td class="mono">spec.enabled</td><td class="mono">ChartLifecycleSpec.enabled</td><td><code>bool</code> = true</td><td>false disables every configured capability</td></tr>
+            <tr><td class="mono">spec.clusterTest.enabled</td><td class="mono">ClusterTestSpec.enabled</td><td><code>bool</code> = true</td><td>false disables cluster tests without disabling manifest validation</td></tr>
             <tr><td class="mono">profiles</td><td class="mono">ClusterTestSpec.profiles</td><td><code>dict[str, ClusterTestProfile]</code> — <b>required</b></td><td>lookup via <span class="ref" data-tip="services/domain/cluster_tests.py — ClusterTestSpec.profile(name) → SpecError with sorted profile list">.profile(name)</span>: unknown name ⇒ <code>SpecError: unknown profile 'x'. available profiles: minimal, routed</code></td></tr>
             <tr><td class="mono">dependentTests</td><td class="mono">ClusterTestSpec.dependent_tests</td><td><code>list[ClusterTestRef]</code> = []</td><td>strict authored camelCase; legacy snake_case keys are rejected</td></tr>
             <tr><td class="mono">profiles.*.namespace</td><td class="mono">ClusterTestProfile.namespace</td><td><code>str | None</code> = None</td><td>None ⇒ installer's default namespace</td></tr>
@@ -802,16 +855,16 @@ for entry in service.install_plan(chart, profile):
             <tr><td class="mono">profiles.*.helmTest</td><td class="mono">ClusterTestProfile.helm_test</td><td><code>bool</code> = true</td><td>false ⇒ install only, skip rollout-wait + helm test (Sandbox path)</td></tr>
             <tr><td class="mono">profiles.*.checks</td><td class="mono">ClusterTestProfile.checks</td><td><code>list[ClusterCheckSpec]</code> = []</td><td>ClusterCheckSpec: <code>name</code> required, <code>type</code>=&quot;helm-test&quot;, <code>description</code> optional</td></tr>
             <tr><td class="mono">profiles.*.timeout</td><td class="mono">ClusterTestProfile.timeout</td><td><code>str</code> = &quot;10m&quot;</td><td>helm-style duration, forwarded verbatim to helm/kubectl</td></tr>
-            <tr><td class="mono"><i>anything else</i></td><td class="mono">—</td><td>—</td><td><b>the envelope and every section model use <code>extra=&quot;forbid&quot;</code></b> — a typo like <code>helmtest:</code> fails the whole load with <code>SpecError: invalid chart-manager configuration &lt;path&gt;: …</code></td></tr>
+            <tr><td class="mono"><i>anything else</i></td><td class="mono">—</td><td>—</td><td><b>the resource and every section model use <code>extra=&quot;forbid&quot;</code></b> — old keys and typos fail with <code>SpecError: invalid ChartLifecycle resource &lt;path&gt;: …</code></td></tr>
           </tbody>
         </table></div>
 
         <h3 class="sub">Loading path in detail — what raises where</h3>
         <div class="seq">
           <div class="sq"><div class="who"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get(name)">ChartRepository.get(name)</span></div><div class="what">loads only generic <code>HelmChart</code> metadata and checks metadata name against the directory. Library charts and charts with no chart-manager capability remain discoverable.</div></div>
-          <div class="sq"><div class="who"><span class="ref" data-tip="services/chart_config.py — load_optional_chart_manager_config(path)">load_optional_chart_manager_config</span></div><div class="what">absent file ⇒ <code>None</code>; a present file is strict, versioned once at the root, and accepts only authored camelCase keys. Legacy split filenames are not loaded.</div></div>
-          <div class="sq"><div class="who">ChartManagerConfig.model_validate</div><div class="what">requires <code>version: 1</code>; forbids unknown keys; an enabled envelope must declare <code>manifestValidation</code> or <code>clusterTests</code>. YAML, shape, and Pydantic failures become one <code>SpecError: invalid chart-manager configuration …</code> boundary.</div></div>
-          <div class="sq"><div class="who"><span class="ref" data-tip="services/cluster_test_catalog.py — ClusterTestCatalog.get(name)">ClusterTestCatalog.get(name)</span></div><div class="what">loads the Helm chart, requires effective <code>clusterTests</code> status to be enabled, then composes <code>ClusterTestChart(chart, spec)</code>. <code>enabled_names()</code> supplies the CI catalog and fails loudly on malformed present config.</div></div>
+          <div class="sq"><div class="who"><span class="ref" data-tip="services/chart_config.py — load_optional_chart_lifecycle(path)">load_optional_chart_lifecycle</span></div><div class="what">absent file ⇒ <code>None</code>; a present resource is strict and accepts only the v1alpha1 envelope plus authored camelCase spec keys. Other filenames are outside this API and are not inspected.</div></div>
+          <div class="sq"><div class="who">ChartLifecycle.model_validate</div><div class="what">requires exact <code>apiVersion</code>, <code>kind</code>, <code>metadata.name</code> and <code>spec</code>; forbids unknown keys; enabled spec requires validation or clusterTest. YAML, shape, identity and Pydantic failures become one <code>SpecError: invalid ChartLifecycle resource …</code> boundary.</div></div>
+          <div class="sq"><div class="who"><span class="ref" data-tip="services/cluster_test_catalog.py — ClusterTestCatalog.get(name)">ClusterTestCatalog.get(name)</span></div><div class="what">loads the Helm chart, requires effective <code>spec.clusterTest</code> status to be enabled, then composes <code>ClusterTestChart(chart, spec)</code>. <code>enabled_names()</code> supplies the CI catalog and fails loudly on malformed present config.</div></div>
           <div class="sq"><div class="who">spec.profile(profile)</div><div class="what">unknown profile ⇒ the helpful error listing <em>sorted available profiles</em> — the CLI surfaces it verbatim</div></div>
           <div class="sq"><div class="who">repository.value_paths(chart, profile)</div><div class="what">every values file must exist on disk ⇒ else <code>SpecError: missing values file(s) for harbor:routed: …</code> — caught at plan-walk time, before helm runs</div></div>
           <div class="sq"><div class="who">DependencyResolver.install_plan</div><div class="what">DFS over <code>requires</code> (below) ⇒ ordered <span class="ref" data-tip="services/domain/install_plan.py — @dataclass(frozen) InstallPlanEntry(chart, profile, target=False)">InstallPlanEntry</span> list, dependencies first, target last</div></div>
@@ -845,18 +898,18 @@ for entry in service.install_plan(chart, profile):
             <p style="font-size:12px;color:var(--muted);margin-top:6px">istio-base is required twice (directly by istio-gateway, transitively via istiod) but emitted once — the permanent-mark short-circuit at work. This exact plan is what <code>sandbox test harbor --profile routed</code> installs, in this order.</p>
           </div>
         </div>
-        <div class="callout info"><b>Who consumes ClusterTestSpec:</b> EphemeralTestClusterService + DevelopmentClusterService (install plans, namespaces, helm-test gate) · CiService (<code>install</code>/<code>upgrade</code> use profile values + timeout) · cluster_bootstrap (cilium's <code>minimal</code> profile) · InstallPlanService (<code>deps plan/checks/dependent-tests</code> just print it). Static validation consumes the sibling <a href="#services/manifest_validationspec" style="color:var(--blue)"><code>manifestValidation</code> section</a> from the same envelope, never <code>clusterTests</code>.</div>
+        <div class="callout info"><b>Who consumes ClusterTestSpec:</b> EphemeralTestClusterService + DevelopmentClusterService (install plans, namespaces, helm-test gate) · CiService (<code>install</code>/<code>upgrade</code> use profile values + timeout) · cluster_bootstrap (cilium's <code>minimal</code> profile) · InstallPlanService (<code>deps plan/checks/dependent-tests</code> just print it). Static validation consumes the sibling <a href="#services/manifest_validationspec" style="color:var(--blue)"><code>spec.validation</code> section</a> from the same envelope, never <code>spec.clusterTest</code>.</div>
       </div>
 
       <!-- validatespec -->
       <div class="panel" id="svc-validatespec">
-        <div class="phead"><h2>chart-manager.yaml → <code>manifestValidation</code> → <span class="ref" data-tip="services/manifest_validation/spec.py — class ManifestValidationSpec(BaseModel)">ManifestValidationSpec</span></h2><span class="loc">services/chart_config.py · manifest_validation/spec.py · catalog.py · planner.py · compiler.py</span><span class="pill p-green">composed capability</span></div>
-        <p class="oneliner">The optional per-chart <b>static validation capability</b>: which envs exist, which values overlays each renders with, what namespace to template against, and which changed files trigger which envs. The root envelope and section must both be enabled. Consulted by <code>validate run</code> only — single-row commands take explicit inputs and do not read it.</p>
+        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.validation</code> → <span class="ref" data-tip="services/manifest_validation/spec.py — class ManifestValidationSpec(BaseModel)">ManifestValidationSpec</span></h2><span class="loc">services/chart_config.py · manifest_validation/spec.py · catalog.py · planner.py · compiler.py</span><span class="pill p-green">composed capability</span></div>
+        <p class="oneliner">The optional per-chart <b>static validation capability</b>: which envs exist, which values overlays each renders with, what namespace to template against, and which changed files trigger which envs. <code>spec.enabled</code> and <code>spec.validation.enabled</code> must both be true. Consulted by <code>validate run</code> only — single-row commands take explicit inputs and do not read it.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to worklist rows</div>
-          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + chart-manager.yaml</div>
+          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + chart-lifecycle.yaml</div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/chart_config.py — ChartManagerConfig · load_optional_chart_manager_config">strict unified loader</span><small>version 1 · root/section enablement</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/chart_config.py — ChartLifecycle · load_optional_chart_lifecycle">strict resource loader</span><small>v1alpha1 · identity + capability enablement</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/manifest_validation/models.py — ManifestValidationTarget(chart: HelmChart, spec, spec_path)">ManifestValidationTarget</span><small>composition over shared HelmChart</small></div>
           <div class="carrow">▸<small>catalog + changed files</small></div>
@@ -867,10 +920,14 @@ for entry in service.install_plan(chart, profile):
           <div class="cnode c-svc2">ManifestValidationRunner<small>WorklistRow ×N · render → schema → policy</small></div>
         </div>
 
-        <div class="yml-title">Real unified config ① — <code>charts/grafana/chart-manager.yaml</code> (<code>manifestValidation</code> excerpt; uat/prod elided)</div>
-        <div class="yml"><span class="k">version:</span> <span class="v">1</span>                          <span class="a">→ ChartManagerConfig.version</span>
-<span class="k">enabled:</span> <span class="v">true</span>                       <span class="a">→ ChartManagerConfig.enabled</span>
-<span class="k">manifestValidation:</span>                  <span class="a">→ ChartManagerConfig.manifest_validation</span>
+        <div class="yml-title">Real standalone resource ① — <code>charts/grafana/chart-lifecycle.yaml</code> (<code>spec.validation</code> excerpt; uat/prod elided)</div>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+<span class="k">kind:</span> <span class="v">ChartLifecycle</span>
+<span class="k">metadata:</span>
+  <span class="k">name:</span> <span class="v">grafana</span>
+<span class="k">spec:</span>
+  <span class="k">enabled:</span> <span class="v">true</span>
+  <span class="k">validation:</span>                       <span class="a">→ ChartLifecycleSpec.validation</span>
   <span class="k">enabled:</span> <span class="v">true</span>                     <span class="a">→ ManifestValidationSpec.enabled</span>
   <span class="k">releaseName:</span> <span class="v">grafana</span>               <span class="a">→ release_name</span>  <span class="c">(required; authored keys are camelCase)</span>
   <span class="hl"><span class="k">namespaceTemplate:</span> <span class="v">"lab-${env}"</span></span>    <span class="a">→ namespace_template</span>  <span class="c">(${env} substituted per row)</span>
@@ -890,9 +947,12 @@ for entry in service.install_plan(chart, profile):
   <span class="k">"values-prod.yaml":</span> <span class="v">[prod]</span>
   <span class="k">"values-ci.yaml":</span>   <span class="v">[ci]</span></div>
 
-        <div class="yml-title">Real unified config ② — <code>charts/arc/chart-manager.yaml</code> (<code>manifestValidation</code> uses explicit namespace)</div>
-        <div class="yml"><span class="k">version:</span> <span class="v">1</span>
-<span class="k">manifestValidation:</span>
+        <div class="yml-title">Real standalone resource ② — <code>charts/arc/chart-lifecycle.yaml</code> (<code>spec.validation</code> uses explicit namespace)</div>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+<span class="k">kind:</span> <span class="v">ChartLifecycle</span>
+<span class="k">metadata:</span> {<span class="k">name:</span> <span class="v">arc</span>}
+<span class="k">spec:</span>
+  <span class="k">validation:</span>
   <span class="k">releaseName:</span> <span class="v">arc</span>
 <span class="k">environments:</span>
   <span class="k">ci:</span>
@@ -914,14 +974,14 @@ for entry in service.install_plan(chart, profile):
 <span class="k">triggerIgnores:</span> [<span class="v">README.md</span>]         <span class="c">intentional chart-relative exclusions; retained in diagnostics</span>
 <span class="k">unmatchedChanges:</span> <span class="v">warn</span>                 <span class="c">default; alternative is all-environments</span>
 <span class="k">policies:</span>
-  <span class="k">extra:</span> [<span class="v">policies/strict/</span>]         <span class="c">authoritative chart-relative paths; legacy repo-relative paths warn</span>
+  <span class="k">extra:</span> [<span class="v">policies/strict/</span>]         <span class="c">authoritative chart-relative paths only; escaping paths fail</span>
 </div>
 
         <h3 class="sub">The four model validators — what fails at load time</h3>
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th class="mono">validator</th><th>rule</th><th>error you'll see</th></tr></thead>
           <tbody>
-            <tr><td class="mono">ChartManagerConfig</td><td><code>version == 1</code>; enabled root declares at least one capability; all unknown keys forbidden</td><td><code>invalid chart-manager configuration …</code></td></tr>
+            <tr><td class="mono">ChartLifecycle</td><td>exact apiVersion/kind; metadata identity matches Helm chart; enabled spec declares at least one capability; all unknown keys forbidden</td><td><code>invalid ChartLifecycle resource …</code></td></tr>
             <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_helm_exclusive">_check_helm_exclusive</span></td><td>at most one of <code>helmVersion</code> / <code>helmBinary</code></td><td><code>helmVersion and helmBinary are mutually exclusive</code></td></tr>
             <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_environments">_check_environments</span></td><td>≥1 env; and without <code>namespaceTemplate</code>, every env needs <code>namespace</code></td><td><code>namespaceTemplate is unset; every environment must declare 'namespace'. missing: dev, test</code></td></tr>
             <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_triggers">_check_triggers</span></td><td>trigger values reference declared envs; <code>triggerIgnores</code> remains chart-relative</td><td><code>trigger 'values.yaml' references unknown environment(s): qa</code></td></tr>
@@ -931,7 +991,7 @@ for entry in service.install_plan(chart, profile):
         <h3 class="sub">Trigger resolution — changed file → env rows (<span class="ref" data-tip="services/manifest_validation/planner.py — build_worklist and _envs_for_chart_file">planner fanout</span>)</h3>
         <div class="seq">
           <div class="sq"><div class="who">repo-wide rules first</div><div class="what"><code>policies/**</code> edit ⇒ <b>every chart × every env</b> · validate-pipeline code paths (<code>src/chart_manager/services/manifest_validation/</code>, integrations <code>helm.py/kubeconform.py/kyverno.py</code>) ⇒ same full fanout · other <code>src/chart_manager/</code> paths ⇒ ignored</div></div>
-          <div class="sq"><div class="who">chart-wide files</div><div class="what"><code>Chart.yaml</code>, <code>chart-manager.yaml</code>, or chart policies ⇒ all chart envs, plus dependents from <span class="ref" data-tip="services/domain/install_plan.py — build_helm_dependency_index uses ChartRepository and typed metadata">the shared typed metadata index</span>; validation no longer reparses <code>Chart.yaml</code>.</div></div>
+          <div class="sq"><div class="who">chart-wide files</div><div class="what"><code>Chart.yaml</code>, <code>chart-lifecycle.yaml</code>, or chart policies ⇒ all chart envs, plus dependents from <span class="ref" data-tip="services/domain/install_plan.py — build_helm_dependency_index uses ChartRepository and typed metadata">the shared typed metadata index</span>; validation no longer reparses <code>Chart.yaml</code>.</div></div>
           <div class="sq"><div class="who">glob match — union semantics</div><div class="what">every matching trigger contributes (<code>fnmatch</code>, chart-relative posix path); overlapping globs like <code>values.yaml</code> + <code>*.yaml</code> union, not last-wins</div></div>
           <div class="sq"><div class="who">match-by-basename</div><div class="what"><code>Path.stem</code>: <code>envs/dev.yaml</code> ⇒ env <code>dev</code> — only if <code>dev</code> is declared in <code>environments</code>, otherwise dropped</div></div>
           <div class="sq alt"><div class="who">ignored or unmatched</div><div class="what"><code>triggerIgnores</code> records intentional exclusions. Every other unmatched change is retained in <code>SelectionResult.unmatched_changes</code>; <code>unmatchedChanges: warn</code> emits a diagnostic without rows, while <code>all-environments</code> additionally selects every environment.</div></div>
@@ -941,7 +1001,7 @@ for entry in service.install_plan(chart, profile):
         <div class="two-col">
           <div class="block"><h4>Missing / broken specs (per-chart degradation)</h4>
             <ul>
-              <li>no <code>chart-manager.yaml</code>, absent <code>manifestValidation</code>, or disabled root/section ⇒ <b>warn + skip chart</b> (counted in <code>chart_count_unvalidated</code>), run continues</li>
+              <li>no <code>chart-lifecycle.yaml</code>, absent <code>spec.validation</code>, or disabled root/section ⇒ <b>warn + skip chart</b> (counted in <code>chart_count_unvalidated</code>), run continues</li>
               <li>corrupt spec ⇒ retained by <code>ValidationCatalog</code>/<code>WorklistBuildResult.spec_errors</code> ⇒ whole run exits <b>3</b> (spec &gt; tool 2 &gt; fail 1 &gt; pass 0)</li>
             </ul>
           </div>
@@ -957,10 +1017,52 @@ for entry in service.install_plan(chart, profile):
         <div class="callout good"><b>Domain rule:</b> validation and managed-test configuration share <code>HelmChart</code> metadata through composition, not inheritance. <code>ManifestValidationTarget = HelmChart + ManifestValidationSpec</code>; <code>ClusterTestChart = HelmChart + ClusterTestSpec</code>. There is intentionally no shared <code>BaseSpec</code>: the two workflows evolve independently while consuming one authoritative Helm metadata source.</div>
       </div>
 
+      <!-- lifecycle -->
+      <div class="panel" id="svc-lifecycle">
+        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/lifecycle/">services/lifecycle/</span></h2><span class="loc">11 modules · versioned plan, evidence and status contracts</span><span class="pill p-blue">cross-cutting lifecycle</span></div>
+        <p class="oneliner">The normalization layer between authored chart intent and every execution surface. It compiles validation and cluster-test configuration into one deterministic action DAG, reasons about change impact, executes cluster actions, records immutable observations, and projects freshness-aware status without mutating source YAML.</p>
+
+        <div class="comm">
+          <div class="comm-title">Desired state, execution, and observation are separate data products</div>
+          <div class="cnode c-store">chart-lifecycle.yaml<small>authored desired intent</small></div>
+          <div class="carrow">▸<small>compile</small></div>
+          <div class="cnode c-svc">LifecyclePlan<small>actions + typed edges + digests</small></div>
+          <div class="carrow">▸<small>execute / validate</small></div>
+          <div class="cnode c-store">EvidenceRecord[]<small>append-only runtime facts</small></div>
+          <div class="carrow">▸<small>project</small></div>
+          <div class="cnode c-svc2">LifecycleStatus<small>current · stale · unknown</small></div>
+        </div>
+
+        <div class="two-col">
+          <div class="block"><h4>Compile + select</h4>
+            <div class="seq">
+              <div class="sq"><div class="who"><code>models.py</code></div><div class="what">frozen <code>LifecycleAction</code>, <code>LifecycleEdge</code>, <code>LifecyclePlan</code>; action kinds cover dependency update, render/schema/policy, namespace, install, readiness and Helm test</div></div>
+              <div class="sq"><div class="who"><code>compiler.py</code></div><div class="what">validation and cluster-test DAGs with deterministic IDs and input digests. Digests include chart content, policies, values, tool pins and relevant execution-engine source; generated dependency/cache directories are excluded</div></div>
+              <div class="sq"><div class="who"><code>impact.py</code></div><div class="what">changed path → exact validation chart/environment and cluster chart/profile selections with typed reasons; repository safety fanout is unioned with chart-specific <code>dependentTests</code></div></div>
+              <div class="sq"><div class="who"><code>doctor.py</code></div><div class="what">repository-wide paths, references and cycle diagnostics</div></div>
+            </div>
+          </div>
+          <div class="block"><h4>Execute + observe</h4>
+            <div class="seq">
+              <div class="sq"><div class="who"><code>cluster_executor.py</code></div><div class="what">topological fail-fast executor; records PASS/FAIL/SKIP for the complete DAG. Readiness is mandatory after install and release-scoped with <code>app.kubernetes.io/instance</code></div></div>
+              <div class="sq"><div class="who"><code>recording.py</code></div><div class="what">adapts validation render/schema/policy outcomes into evidence without changing the validation verdict if evidence persistence fails</div></div>
+              <div class="sq"><div class="who"><code>evidence.py</code></div><div class="what">versioned immutable records, cluster identity, safe append-only atomic local repository, corrupt-record diagnostics and symlink-boundary enforcement</div></div>
+              <div class="sq"><div class="who"><code>observers.py</code> + <code>status.py</code></div><div class="what">read-only Helm/Kubernetes facts plus cached evidence → per-action and per-kind conditions. Only explicit PASS is green; missing, skipped and unobservable remain unknown</div></div>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="sub">Dependency semantics</h3>
+        <div class="api"><span class="m">sequence</span>             <span class="r">— ordering within one chart/profile workflow</span>
+<span class="m">runtime-requirement</span>  <span class="r">— one chart must be ready/tested before another may proceed</span>
+<span class="m">test-impact</span>          <span class="r">— changes to one chart select another chart/profile's tests</span></div>
+        <div class="callout info"><b>Bootstrap boundary:</b> Cilium remains environment-owned. The safe default ephemeral path compiles the shared DAG and projects Cilium out after bootstrap so the generic executor cannot reinstall it without live control-plane settings. Lint, direct Cilium targets and dependent-test multi-plan fanout remain explicit legacy branches until those semantics become first-class lifecycle actions.</div>
+      </div>
+
       <!-- sandbox -->
       <div class="panel" id="svc-sandbox">
-        <div class="phead"><h2><span class="ref" data-tip="services/clusters/ephemeral.py:67 — class EphemeralTestClusterService">EphemeralTestClusterService</span></h2><span class="loc">services/clusters/ephemeral.py · 247 ln</span><span class="pill p-teal">local cluster ops</span></div>
-        <p class="oneliner">CI-shaped, <b>fail-fast</b> exercise of one chart on a kind cluster: install its full dependency plan, then run <code>helm test</code> per chart. The "does this chart actually work" gate.</p>
+        <div class="phead"><h2><span class="ref" data-tip="services/clusters/ephemeral.py — class EphemeralTestClusterService">EphemeralTestClusterService</span></h2><span class="loc">services/clusters/ephemeral.py · 420 ln</span><span class="pill p-teal">local cluster ops</span></div>
+        <p class="oneliner">CI-shaped, <b>fail-fast</b> exercise of one chart on a kind cluster. The safe default path now compiles and executes the shared lifecycle DAG, then records a complete action ledger. The "does this chart actually work" gate and the status surface therefore consume the same action identities.</p>
         <div class="comm">
           <div class="comm-title">Communication path</div>
           <div class="cnode c-cli">CLI<small>sandbox test · ensure</small></div>
@@ -977,8 +1079,9 @@ for entry in service.install_plan(chart, profile):
               <div class="sq"><div class="what"><span class="ref" data-tip="integrations/kind.py:70 — Kind.ensure_cluster(name, config)"><code>Kind.ensure_cluster</code></span> — absent/stopped/running all converge</div></div>
               <div class="sq"><div class="what"><span class="ref" data-tip="integrations/kubectl.py:204 — Kubectl.wait_apiserver_ready"><code>Kubectl.wait_apiserver_ready</code></span> — gates a documented docker-vs-apiserver race</div></div>
               <div class="sq"><div class="what"><span class="ref" data-tip="services/clusters/bootstrap.py:45 — bootstrap(cluster_name, *, helm, kind, kubectl, repository, progress, lint)"><code>cluster_bootstrap.bootstrap</code></span> — cilium CNI, shared with <code>sandbox up</code></div></div>
-              <div class="sq"><div class="what"><span class="ref" data-tip="services/domain/install_plan.py — DependencyResolver.install_plan"><code>resolver.install_plan</code></span> → per entry: dep-update (mtime-gated) → install → wait rollout → <code>helm test</code></div></div>
-              <div class="sq"><div class="what">on any failure: <code>_diagnostics_on_failure</code> dumps kubectl state, then re-raises (fail-fast)</div></div>
+              <div class="sq"><div class="what"><span class="ref" data-tip="services/lifecycle/compiler.py — LifecycleCompiler.compile_cluster_test"><code>LifecycleCompiler.compile_cluster_test</code></span> → project bootstrap-owned Cilium out → <code>ClusterActionExecutor.execute(fail_fast=True)</code></div></div>
+              <div class="sq"><div class="what">namespace → dependency update → install → release-owned readiness → optional Helm test; readiness remains present when <code>helmTest: false</code></div></div>
+              <div class="sq"><div class="what">every outcome is persisted as PASS/FAIL/SKIP with chart/profile/release/namespace, input digest and cluster identity before a failure reports diagnostics and raises</div></div>
             </div>
           </div>
           <div class="block"><h4>Notes</h4>
@@ -986,6 +1089,8 @@ for entry in service.install_plan(chart, profile):
               <li class="good">Optional dependent-test pass (<code>--dependent-tests</code>): re-runs plans of charts that declare this one in <code>dependentTests</code></li>
               <li class="good">Injectable constructor — <code>helm</code>/<code>kind</code>/<code>kubectl</code> are <b>required</b> keyword args; fully unit-tested</li>
               <li class="good">Returns a frozen <code>EphemeralTestResult</code> and narrates through an injected <code>progress</code> callback; no Rich</li>
+              <li class="good">Evidence failures are warnings and never rewrite the underlying execution verdict</li>
+              <li class="warn">Lint, direct Cilium and <code>--dependent-tests</code> retain the prior install-plan loop intentionally</li>
               <li class="good">The loop resembles DevelopmentClusterService, but its fail-fast, diagnostics and test semantics differ; keep both explicit and extract only after concrete drift</li>
             </ul>
             <div class="api"><span class="m">run</span>(EphemeralTestRequest) <span class="r">— chart, profile, ns, cluster, ensure, dependent tests, lint</span></div>
@@ -1001,15 +1106,15 @@ for entry in service.install_plan(chart, profile):
 <span class="m">include_dependent_tests</span>= <span class="s">False</span>  <span class="r">— also run the plans of charts naming this one in dependentTests</span>
 <span class="m">lint</span>           = <span class="s">False</span>  <span class="r">— helm lint with the profile's values before each install</span></div>
 
-        <h3 class="sub">Per-InstallPlanEntry decision walk (<span class="ref" data-tip="services/clusters/ephemeral.py:167 — EphemeralTestClusterService._install_plan">_install_plan</span>)</h3>
+        <h3 class="sub">Legacy-specialized decision walk (<span class="ref" data-tip="services/clusters/ephemeral.py — EphemeralTestClusterService._install_plan">_install_plan</span>; lint, direct Cilium and dependent-test fanout only)</h3>
         <div class="seq">
           <div class="sq"><div class="who">resolve entry</div><div class="what"><code>repository.get(chart)</code> + <code>spec.profile()</code> + <code>value_paths()</code> — any SpecError here <b>aborts the run</b> (fail-fast, unlike Lab)</div></div>
           <div class="sq"><div class="who">namespace</div><div class="what"><code>profile.namespace or options.namespace</code>; created once per run via the <code>namespaces_created</code> set — e.g. the harbor:routed plan touches <code>cert-manager</code>, <code>istio-system</code>, <code>istio-ingress</code>, <code>harbor</code></div></div>
           <div class="sq"><div class="who">install (dedup by <code>installed</code> set)</div><div class="what">release name = chart name · <span class="ref" data-tip="integrations/helm.py:111 — Helm.dependency_update_if_stale"><code>dependency_update_if_stale</code></span> (mtime-gated) · optional lint · <span class="ref" data-tip="integrations/helm.py:158 — Helm.upgrade_install → UpgradeResult"><code>upgrade_install(wait=False, timeout=profile.timeout)</code></span>. The set is seeded with <code>cilium</code> when bootstrap ran, so the plan won't reinstall it</div></div>
-          <div class="sq"><div class="who">verify (only if <code>profile.helm_test</code>)</div><div class="what"><span class="ref" data-tip="integrations/kubectl.py:375 — Kubectl.wait_workloads_ready"><code>wait_workloads_ready(ns, timeout)</code></span> → <span class="ref" data-tip="integrations/helm.py:356 — Helm.test"><code>helm.test(release)</code></span>; note the test gate runs <b>even for an already-installed release</b> — a dep shared by the main and dependent-test pass gets re-tested, only its install is skipped</div></div>
+          <div class="sq"><div class="who">verify (legacy branch)</div><div class="what"><span class="ref" data-tip="integrations/kubectl.py — Kubectl.wait_workloads_ready"><code>wait_workloads_ready(ns, timeout)</code></span> → optional <span class="ref" data-tip="integrations/helm.py — Helm.test"><code>helm.test(release)</code></span>. The compiled default path instead models readiness as an unconditional action and Helm test as a conditional successor</div></div>
           <div class="sq alt"><div class="who">failure path</div><div class="what"><span class="ref" data-tip="services/clusters/ephemeral.py — @contextmanager _diagnostics_on_failure(namespace)">_diagnostics_on_failure</span> catches <code>ExternalCommandError</code>, prints <code>Kubectl.diagnostics(ns)</code> (pods · events · describe), re-raises. <code>helm test</code> rc≠0 is promoted to <code>ChartManagerError: helm test failed for &lt;chart&gt;: …</code> with stderr attached — the single catch in <code>cli/main.py</code> turns it into exit 1</div></div>
         </div>
-        <div class="callout info"><b>Concrete run:</b> <code>chart-manager sandbox test harbor --profile routed</code> ⇒ ensure kind cluster <code>chart-manager</code> (using repo-root <code>kind-config.yaml</code> if present) → apiserver gate → cilium bootstrap into kube-system → install plan <code>cert-manager → istio-base → istiod → istio-gateway → harbor*</code> (walked on the <a href="#services/testspec" style="color:var(--blue)">cluster-test configuration panel</a>) → per chart: install, rollout-wait, helm test. First failure stops everything.</div>
+        <div class="callout info"><b>Concrete default run:</b> <code>chart-manager sandbox test grafana --profile minimal</code> ⇒ ensure kind cluster → apiserver gate → Cilium bootstrap → compile the cluster-test action DAG → remove the already-owned Cilium action → execute remaining actions in topological order → append evidence beneath <code>.chart-manager/state</code>. First failure skips blocked successors, persists the complete ledger, emits namespace diagnostics, then exits non-zero.</div>
       </div>
 
       <!-- lab -->
@@ -1251,7 +1356,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
             </ul>
           </div>
         </div>
-        <div class="callout info"><b>The optional <code>manifestValidation</code> capability has its own panel:</b> <a href="#services/manifest_validationspec" style="color:var(--blue);font-weight:700">Domain contracts → chart-manager.yaml / manifestValidation</a> — annotated examples, the field/validator table, trigger-resolution flow, and helm-binding grouping. Short version: one root <code>version: 1</code> envelope · root/section enablement · per-env values + namespace or <code>namespaceTemplate ${env}</code> · trigger globs and <code>unmatchedChanges</code> → env fanout · consulted by <code>validate run</code> only.</div>
+        <div class="callout info"><b>The optional <code>spec.validation</code> capability has its own panel:</b> <a href="#services/manifest_validationspec" style="color:var(--blue);font-weight:700">Domain contracts → chart-lifecycle.yaml / spec.validation</a> — annotated examples, the field/validator table, trigger-resolution flow, and helm-binding grouping. Short version: one root <code>version: 1</code> envelope · root/section enablement · per-env values + namespace or <code>namespaceTemplate ${env}</code> · trigger globs and <code>unmatchedChanges</code> → env fanout · consulted by <code>validate run</code> only.</div>
 
         <h3 class="sub">The data spine — <code>services/manifest_validation/models.py</code> (frozen stdlib dataclasses; pydantic stays at authored-YAML IO)</h3>
         <div class="two-col">
@@ -1271,7 +1376,7 @@ TIMEOUT=<span class="s">"10m"</span> · KIND_CONFIG_FILENAME=<span class="s">"ki
             <div class="ft-wrap"><table class="ft">
               <thead><tr><th>code</th><th>meaning</th><th>trigger</th></tr></thead>
               <tbody>
-                <tr><td class="mono">3</td><td>spec error</td><td>corrupt <code>chart-manager.yaml</code>, unsupported root version, or any phase with <code>error_type=&quot;spec&quot;</code></td></tr>
+                <tr><td class="mono">3</td><td>spec error</td><td>corrupt <code>chart-lifecycle.yaml</code>, unsupported root version, or any phase with <code>error_type=&quot;spec&quot;</code></td></tr>
                 <tr><td class="mono">2</td><td>tool crash</td><td>helm/kubeconform/kyverno runtime failure (<code>error_type=&quot;tool&quot;</code>) — not a verdict about the chart</td></tr>
                 <tr><td class="mono">1</td><td>validation FAIL</td><td>any phase status FAIL</td></tr>
                 <tr><td class="mono">0</td><td>pass</td><td>everything else</td></tr>
@@ -1689,15 +1794,15 @@ promo_correlation_id = flux-repo PR</div>
 
       <!-- ci -->
       <div class="panel" id="svc-ci">
-        <div class="phead"><h2><span class="ref" data-tip="services/ci.py:13 — class CiService">CiService</span></h2><span class="loc">services/ci.py · 98 ln</span><span class="pill p-amber">ci</span></div>
-        <p class="oneliner">CI-pipeline helpers: detect which charts a diff touched, install from source, and — the clever one — <b>rehearse the upgrade path</b> from the published OCI baseline to the local source.</p>
+        <div class="phead"><h2><span class="ref" data-tip="services/ci.py — class CiService">CiService</span></h2><span class="loc">services/ci.py · 185 ln</span><span class="pill p-amber">ci</span></div>
+        <p class="oneliner">CI-pipeline helpers: derive an exact chart/profile matrix from lifecycle impact, install from source, and <b>rehearse the upgrade path</b> from the published OCI baseline to the local source. GitHub Actions no longer owns a second chart-fanout algorithm.</p>
         <div class="comm">
           <div class="comm-title">Communication path</div>
-          <div class="cnode c-cli">CLI<small>ci changed · install · upgrade</small></div>
+          <div class="cnode c-cli">CLI / GHA<small>changed · cluster-test-matrix · install · upgrade</small></div>
           <div class="carrow">▸</div>
           <div class="cnode c-svc">CiService</div>
           <div class="carrow">▸</div>
-          <div class="cgroup"><div class="cnode c-int">Git<small>changed_charts</small></div><div class="cnode c-int">Helm</div><div class="cnode c-int">Kubectl<small>namespace</small></div></div>
+          <div class="cgroup"><div class="cnode c-svc2">LifecycleImpactService<small>typed selection + reasons</small></div><div class="cnode c-int">Git<small>changed_files</small></div><div class="cnode c-int">Helm</div><div class="cnode c-int">Kubectl<small>namespace</small></div></div>
           <div class="carrow">▸</div>
           <div class="cnode c-ext">git · helm · kubectl</div>
         </div>
@@ -1711,6 +1816,9 @@ promo_correlation_id = flux-repo PR</div>
           </div>
           <div class="block"><h4>Notes</h4>
             <div class="api"><span class="m">changed_charts</span>(base) <span class="r">→ [names] (diff ∩ known charts)</span>
+<span class="m">lifecycle_impact</span>(base) <span class="r">→ validation + cluster selections + reasons</span>
+<span class="m">cluster_test_matrix</span>(base) <span class="r">→ exact [(chart, profile)]</span>
+<span class="m">all_cluster_test_matrix</span>() / <span class="m">explicit_cluster_test_matrix</span>(charts)
 <span class="m">install_source_chart</span>(chart, profile, ns)
 <span class="m">upgrade_from_oci</span>(chart, profile, ns, oci_ref)</div>
             <ul style="margin-top:8px">
@@ -1722,11 +1830,12 @@ promo_correlation_id = flux-repo PR</div>
 
         <h3 class="sub">Method-by-method detail</h3>
         <div class="seq">
-          <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:30 — changed_charts(base='origin/main')">changed_charts(base)</span></div><div class="what"><span class="ref" data-tip="integrations/git.py — Git.changed_charts"><code>Git.changed_charts</code></span> maps diff paths to <code>charts/&lt;name&gt;/</code> prefixes, then intersects with <span class="ref" data-tip="services/domain/charts.py — ChartRepository.list_names"><code>ChartRepository.list_names()</code></span> — deleted or renamed chart dirs can't produce phantom work. Default base <code>origin/main</code></div></div>
+          <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py — cluster_test_matrix">cluster_test_matrix(base)</span></div><div class="what"><code>Git.changed_files</code> → <code>LifecycleImpactService.analyze</code> → exact <code>ClusterTestImpact(chart, profile, reasons)</code> rows. Repository-wide safety changes fan out to all defaults while simultaneous chart changes can still add non-default <code>dependentTests</code> profiles</div></div>
+          <div class="sq"><div class="who">all / explicit matrix</div><div class="what"><code>minimal</code> is preferred when declared, otherwise profile selection is deterministic. Explicit unknown or unavailable charts are reported as one complete <code>SpecError</code>; empty diff selection remains a legitimate no-op</div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:35 — install_source_chart(chart_name, profile, namespace)">install_source_chart</span></div><div class="what">cluster-test configuration-driven: profile's <code>values</code> + <code>timeout</code> → create ns → <span class="ref" data-tip="integrations/helm.py:98 — Helm.dependency_update"><code>dependency_update</code></span> (unconditional, not the mtime-gated variant — CI runners start cold) → <span class="ref" data-tip="integrations/helm.py:158 — Helm.upgrade_install"><code>upgrade_install</code></span> → <code>helm test</code> if <code>profile.helm_test</code>; rc≠0 ⇒ <code>ExternalCommandError</code> with stderr</div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="services/ci.py:60 — upgrade_from_oci(chart_name, profile, namespace, oci_ref)">upgrade_from_oci</span></div><div class="what">phase 1 installs the OCI ref <b>with the same profile values</b> (so the baseline release matches prod config, not chart defaults) — note: no dep-update needed, the published artifact is self-contained. Phase 2 dep-updates the <i>source</i> chart and <code>helm upgrade</code>s to it. Phase 3 <code>helm test</code>s the upgraded release</div></div>
         </div>
-        <div class="callout info"><b>What it deliberately doesn't do:</b> no kind/cluster management (assumes CI provides a cluster), no rollout waits (helm's own <code>--timeout</code> from the profile is the gate), no diagnostics dump. It is the thinnest of the cluster-touching services — 81 lines — and the model for &quot;chart-manager inside someone else's pipeline&quot;.</div>
+        <div class="callout info"><b>Workflow integration:</b> <code>.github/workflows/ci.yaml</code> invokes <code>ci cluster-test-matrix</code> for diff, all and explicit dispatch modes, expands <code>matrix.chart</code> + <code>matrix.profile</code>, passes that profile into <code>mise run kind-test</code>, and includes it in cluster names, artifacts and summaries. The old YAML regex fanout has been removed.</div>
       </div>
 
       <!-- grafana -->
@@ -1804,13 +1913,13 @@ promo_correlation_id = flux-repo PR</div>
         <p class="oneliner">Read-only facades over the shared chart domain. The CLI stays behind a service capability while the actual chart vocabulary lives in <code>services/domain/</code>.</p>
         <div class="comm">
           <div class="comm-title">Communication path</div>
-          <div class="cnode c-cli">CLI<small>charts list·config · deps plan·checks·dependent-tests</small></div>
+          <div class="cnode c-cli">CLI<small>charts list·lifecycle · deps plan·checks·dependent-tests</small></div>
           <div class="carrow">▸</div>
           <div class="cgroup"><div class="cnode c-svc">ChartCatalogService</div><div class="cnode c-svc">InstallPlanService</div></div>
           <div class="carrow">▸<small>passthrough</small></div>
           <div class="cgroup"><div class="cnode c-svc2">ChartRepository<small>services/domain</small></div><div class="cnode c-svc2">DependencyResolver<small>services/domain</small></div></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-store">charts/*/Chart.yaml<br>+ chart-manager.yaml / clusterTests</div>
+          <div class="cnode c-store">charts/*/Chart.yaml<br>+ chart-lifecycle.yaml / spec.clusterTest</div>
         </div>
         <div class="callout good"><b>Current convention:</b> keep these small query facades for surface isolation, while <code>services/domain/</code> owns behavior and types. No repository Protocol was introduced: the filesystem repository remains concrete until a second implementation creates a real abstraction need.</div>
 
@@ -1818,8 +1927,8 @@ promo_correlation_id = flux-repo PR</div>
         <div class="two-col">
           <div class="block"><h4><span class="ref" data-tip="services/chart_catalog.py:9 — class ChartCatalogService(root)">ChartCatalogService</span></h4>
             <div class="api"><span class="m">list_entries</span>()    <span class="r">→ Helm metadata + config/capability status + profiles</span>
-<span class="m">get_config</span>(name)   <span class="r">→ strict normalized ChartManagerConfig</span></div>
-            <p style="font-size:12px;color:var(--muted);margin-top:6px">Backs <code>charts list</code> and <code>charts config</code>. Invalid present configuration remains visible and makes the listing nonzero instead of silently shrinking it.</p>
+<span class="m">get_lifecycle</span>(name) <span class="r">→ strict standalone ChartLifecycle</span></div>
+            <p style="font-size:12px;color:var(--muted);margin-top:6px">Backs <code>charts list</code> and <code>charts lifecycle</code>. Invalid present configuration remains visible and makes the listing nonzero instead of silently shrinking it.</p>
           </div>
           <div class="block"><h4><span class="ref" data-tip="services/install_plan.py:21 — class InstallPlanService(root)">InstallPlanService</span></h4>
             <div class="api"><span class="m">install_plan</span>(chart, profile) <span class="r">→ resolver.install_plan → [InstallPlanEntry]</span>
@@ -2277,14 +2386,14 @@ promo_correlation_id = flux-repo PR</div>
       <!-- charts -->
       <div class="panel" id="plb-charts">
         <div class="phead"><h2>HelmChart · ClusterTestChart · ChartRepository</h2><span class="loc">services/domain/charts.py</span><span class="pill p-blue">shared chart domain</span></div>
-        <p class="oneliner">The filesystem gateway is Helm-only: <code>ChartRepository.get()</code> returns a <code>HelmChart</code>. <code>ClusterTestCatalog</code> separately loads the unified configuration and composes an enabled <code>ClusterTestChart</code>; <code>ChartCatalogService</code> provides best-effort operator-facing status.</p>
+        <p class="oneliner">The filesystem gateway is Helm-only: <code>ChartRepository.get()</code> returns a <code>HelmChart</code>. <code>ClusterTestCatalog</code> separately loads the standalone lifecycle resource and composes an enabled <code>ClusterTestChart</code>; <code>ChartCatalogService</code> provides best-effort operator-facing status.</p>
         <div class="comm">
           <div class="comm-title">Loading path</div>
-          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + optional chart-manager.yaml</div>
+          <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + optional chart-lifecycle.yaml</div>
           <div class="carrow">▸<small>scan / read</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/domain/charts.py — class ChartRepository(root)">ChartRepository</span><small>list_names · get · strict Helm metadata only</small></div>
           <div class="carrow">▸<small>strict load_chart_metadata</small></div>
-          <div class="cgroup"><div class="cnode c-svc2">HelmChart<small>path + ChartMetadata</small></div><div class="cnode c-svc2">ClusterTestCatalog<small>chart-manager.yaml / clusterTests</small></div></div>
+          <div class="cgroup"><div class="cnode c-svc2">HelmChart<small>path + ChartMetadata</small></div><div class="cnode c-svc2">ClusterTestCatalog<small>chart-lifecycle.yaml / spec.clusterTest</small></div></div>
           <div class="carrow">▸</div>
           <div class="cgroup"><div class="cnode c-svc2">DependencyResolver</div><div class="cnode c-svc2">Sandbox · Lab · Ci</div><div class="cnode c-svc2">ChartCatalogService</div></div>
         </div>
@@ -2301,23 +2410,23 @@ promo_correlation_id = flux-repo PR</div>
             <ul>
               <li><code>Chart.yaml</code> must exist ⇒ else <code>ChartNotFoundError: chart not found: &lt;name&gt;</code></li>
               <li><span class="ref" data-tip="services/domain/charts.py — raise SpecError(name-mismatch)">guard rail</span>: <code>Chart.yaml</code>'s <code>name:</code> must equal the directory name ⇒ else <code>SpecError</code> — catches copy-pasted chart dirs before helm ever sees them</li>
-              <li><code>ChartRepository.get()</code> returns a library-capable <code>HelmChart</code> without consulting chart-manager configuration</li>
-              <li><code>ClusterTestCatalog.get()</code> requires root and <code>clusterTests</code> enablement, then composes <code>ClusterTestChart</code>; unavailable capabilities fail precisely</li>
+              <li><code>ChartRepository.get()</code> returns a library-capable <code>HelmChart</code> without consulting lifecycle intent</li>
+              <li><code>ClusterTestCatalog.get()</code> requires root and <code>spec.clusterTest</code> enablement, then composes <code>ClusterTestChart</code>; unavailable capabilities fail precisely</li>
             </ul>
           </div>
         </div>
         <h3 class="sub"><span class="ref" data-tip="services/cluster_test_catalog.py — value_paths(chart, profile) → [Path]">ClusterTestCatalog.value_paths(chart, profile)</span> — values-file existence gate</h3>
-        <p style="font-size:13px;max-width:900px;margin-bottom:10px">Resolves the profile's <code>values:</code> list against the chart dir and checks <b>every file exists</b>, reporting all missing ones in a single <code>SpecError: missing values file(s) for &lt;chart&gt;:&lt;profile&gt;: …</code>. Runs at plan-walk time — a typo'd <code>values-ci.yaml</code> fails before any helm subprocess. The chart-relative-only rule is enforced by the nested <code>clusterTests</code> Pydantic model.</p>
+        <p style="font-size:13px;max-width:900px;margin-bottom:10px">Resolves the profile's <code>values:</code> list against the chart dir and checks <b>every file exists</b>, reporting all missing ones in a single <code>SpecError: missing values file(s) for &lt;chart&gt;:&lt;profile&gt;: …</code>. Runs at plan-walk time — a typo'd <code>values-ci.yaml</code> fails before any helm subprocess. The chart-relative-only rule is enforced by the nested <code>spec.clusterTest</code> Pydantic model.</p>
         <div class="callout good"><b>One metadata source:</b> <code>ChartMetadata</code> holds name, version, chart type and typed <code>ChartDependency</code>s (name/version/repository/alias). Graph and validation discovery consume this strict loader through <code>ChartRepository</code>; raw duplicate <code>Chart.yaml</code> parsing is gone.</div>
       </div>
 
       <!-- graph -->
       <div class="panel" id="plb-graph">
         <div class="phead"><h2>Dependency planning and freshness</h2><span class="loc">services/domain/install_plan.py · chart_deps.py</span><span class="pill p-blue">shared chart domain</span></div>
-        <p class="oneliner">Two unrelated graphs share the same <code>charts/</code> tree: the <b><code>clusterTests.profiles.*.requires</code> graph</b> in <code>chart-manager.yaml</code> (forward: what must install before X) walked by <code>DependencyResolver</code>, and the <b>Chart.yaml dependency index</b> (reverse: who consumes X) built by <code>build_helm_dependency_index</code>. Different sources, directions, and consumers.</p>
+        <p class="oneliner">Two unrelated graphs share the same <code>charts/</code> tree: the <b><code>spec.clusterTest.profiles.*.requires</code> graph</b> in <code>chart-lifecycle.yaml</code> (forward: what must install before X) walked by <code>DependencyResolver</code>, and the <b>Chart.yaml dependency index</b> (reverse: who consumes X) built by <code>build_helm_dependency_index</code>. Different sources, directions, and consumers.</p>
         <div class="comm">
           <div class="comm-title">Two sources, two directions</div>
-          <div class="cnode c-store">chart-manager.yaml<br>clusterTests.profiles.*.requires</div>
+          <div class="cnode c-store">chart-lifecycle.yaml<br>spec.clusterTest.profiles.*.requires</div>
           <div class="carrow">▸<small>via ClusterTestCatalog</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/domain/install_plan.py — DependencyResolver.install_plan(chart, profile)">install_plan</span><small>managed-chart DFS → ordered [InstallPlanEntry]</small></div>
           <div class="carrow">▸</div>
@@ -2374,7 +2483,7 @@ promo_correlation_id = flux-repo PR</div>
 
         <h3 class="sub">② build_helm_dependency_index — the reverse index for validate fanout</h3>
         <div class="seq">
-          <div class="sq"><div class="who">scan <code>&lt;root&gt;/charts/*</code></div><div class="what">loads typed <code>ChartMetadata</code> through <code>ChartRepository</code>; charts without <code>chart-manager.yaml</code>, including library charts, still enter the index</div></div>
+          <div class="sq"><div class="who">scan <code>&lt;root&gt;/charts/*</code></div><div class="what">loads typed <code>ChartMetadata</code> through <code>ChartRepository</code>; charts without <code>chart-lifecycle.yaml</code>, including library charts, still enter the index</div></div>
           <div class="sq"><div class="who">tolerance rules</div><div class="what">unreadable / invalid YAML ⇒ skip chart · non-dict document ⇒ skip · <code>dependencies</code> absent, null, or not a list ⇒ skip · dep entries that aren't dicts or lack <code>name</code> ⇒ skip. <b>Nothing raises</b> — a broken Chart.yaml costs that chart its index entry, never the run</div></div>
           <div class="sq"><div class="who">shape</div><div class="what"><code>dict[dep_name → set[dependent_dir_names]]</code> — key is the name <i>as written</i> in <code>dependencies[].name</code>, value is chart <i>directory</i> names. e.g. <code>{&quot;app-template&quot;: {&quot;grafana&quot;, &quot;harbor&quot;, …}}</code></div></div>
           <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/planner.py — dep_index = build_helm_dependency_index(root)">consumer: validate worklist</span></div><div class="what">an edit under a library chart fans out to every dependent chart's envs — the &quot;library-chart edits revalidate consumers&quot; behavior on the <a href="#services/manifest_validation" style="color:var(--blue)">validate panel</a></div></div>
@@ -2382,7 +2491,7 @@ promo_correlation_id = flux-repo PR</div>
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th></th><th class="mono">DependencyResolver</th><th class="mono">build_helm_dependency_index</th></tr></thead>
           <tbody>
-            <tr><td>source of truth</td><td><code>chart-manager.yaml</code> → <code>clusterTests.profiles.*.requires</code></td><td>Chart.yaml <code>dependencies[]</code> (helm's contract)</td></tr>
+            <tr><td>source of truth</td><td><code>chart-lifecycle.yaml</code> → <code>spec.clusterTest.profiles.*.requires</code></td><td>Chart.yaml <code>dependencies[]</code> (helm's contract)</td></tr>
             <tr><td>direction</td><td>forward — what X needs installed first</td><td>reverse — who consumes X</td></tr>
             <tr><td>missing/disabled cluster tests</td><td>precise capability error via <code>ClusterTestCatalog</code></td><td>irrelevant — reads Helm metadata only</td></tr>
             <tr><td>failure mode</td><td>raises (cycle, unknown chart/profile)</td><td>never raises — skip-and-continue</td></tr>
@@ -2423,7 +2532,7 @@ promo_correlation_id = flux-repo PR</div>
             <ul>
               <li><b><code>error_type</code></b> is set by the <i>phase function</i> alongside status — it's what separates a validation FAIL (exit 1) from a tool crash (<code>&quot;tool&quot;</code> → exit 2) from a spec parse error (<code>&quot;spec&quot;</code> → exit 3). Status says <i>what</i>, error_type says <i>why it's not the chart's fault</i></li>
               <li><b><code>elapsed_seconds</code></b> is populated by the <i>runner</i>, not the phase fn (wall-clock around the call) — surfaced only with <code>--timings</code></li>
-              <li><b><code>spec_errors</code></b> on RunResult holds spec-level failures that prevented rows from existing at all (corrupt <code>chart-manager.yaml</code>, unsupported root version) — a run can exit 3 with zero rows</li>
+              <li><b><code>spec_errors</code></b> on RunResult holds spec-level failures that prevented rows from existing at all (corrupt <code>chart-lifecycle.yaml</code>, unsupported root version) — a run can exit 3 with zero rows</li>
               <li class="good">all four are <code>frozen=True</code> — results are values; the runner's worker threads can share them without locks</li>
             </ul>
           </div>
@@ -2436,16 +2545,16 @@ promo_correlation_id = flux-repo PR</div>
         <div class="phead"><h2>Domain boundaries</h2><span class="loc">services/domain/ · services/manifest_validation/ · plumbing/</span><span class="pill p-green">enforced layering</span></div>
         <p class="oneliner">One authored envelope composes two independently owned capability schemas; this panel records their boundary with generic plumbing.</p>
         <div class="two-col">
-          <div class="block"><h4>domain/cluster_tests.py — owns <code>clusterTests</code></h4>
+          <div class="block"><h4>domain/cluster_tests.py — owns <code>spec.clusterTest</code></h4>
             <p style="font-size:13px"><code>services/domain/</code> owns <code>ClusterTestRef</code>, checks, profiles, <code>ClusterTestSpec</code>, typed Helm metadata, install-plan policy and dependency freshness. <code>ClusterTestCatalog</code> composes the enabled capability with <code>HelmChart</code>.</p>
-            <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/testspec" style="color:var(--blue);font-weight:700">Services → chart-manager.yaml / clusterTests</a></p>
+            <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/testspec" style="color:var(--blue);font-weight:700">Services → chart-lifecycle.yaml / spec.clusterTest</a></p>
           </div>
-          <div class="block"><h4>services/manifest_validation/spec.py — owns <code>manifestValidation</code></h4>
+          <div class="block"><h4>services/manifest_validation/spec.py — owns <code>spec.validation</code></h4>
             <p style="font-size:13px"><code>services/manifest_validation/</code> owns <code>ManifestValidationEnvironmentSpec</code>, <code>ManifestValidationPolicySpec</code>, <code>ManifestValidationSpec</code>, <code>ManifestValidationTarget</code>, selections and outcomes. It composes the shared <code>HelmChart</code>; it does not inherit from <code>ClusterTestSpec</code> or a common <code>BaseSpec</code>.</p>
-            <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/manifest_validationspec" style="color:var(--blue);font-weight:700">Services → chart-manager.yaml / manifestValidation</a></p>
+            <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/manifest_validationspec" style="color:var(--blue);font-weight:700">Services → chart-lifecycle.yaml / spec.validation</a></p>
           </div>
         </div>
-        <div class="callout info"><b>Why the schemas stay separate:</b> <code>services/chart_config.py</code> owns only the strict root envelope and capability status. Shared chart/test policy lives in <code>services/domain/</code>, validation-only policy lives in <code>services/manifest_validation/</code>, and plumbing contains only reusable mechanics. Composition avoids a vague shared base spec.</div>
+        <div class="callout info"><b>Why the schemas stay separate:</b> <code>services/chart_config.py</code> owns only the strict resource envelope, identity and capability status. Shared chart/test policy lives in <code>services/domain/</code>, validation-only policy lives in <code>services/manifest_validation/</code>, and plumbing contains only reusable mechanics. Composition avoids a vague shared base spec.</div>
       </div>
 
     </div>
@@ -2467,6 +2576,9 @@ promo_correlation_id = flux-repo PR</div>
       <tr><td class="rl"><a href="#services/lab">DevelopmentClusterService</a></td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr><td class="rl"><a href="#services/bootstrap">cluster_bootstrap</a></td><td><span class="dot d">●</span></td><td><span class="dot d">●</span></td><td><span class="dot d">●</span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr><td class="rl"><a href="#services/expose">ExposeService</a></td><td></td><td><span class="dot i">◍</span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr class="section"><td colspan="11">lifecycle plan, evidence and status</td></tr>
+      <tr><td class="rl"><a href="#services/lifecycle">compiler · impact · doctor · status · evidence</a></td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">pure filesystem/domain services — no concrete adapter imports; plans and projections are frozen values</td></tr>
+      <tr><td class="rl"><a href="#services/lifecycle">cluster_executor · observers</a></td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">structural Helm/Kubectl protocols are injected by EphemeralTestClusterService or the CLI composition root; live observers are read-only</td></tr>
       <tr class="section"><td colspan="11">ci</td></tr>
       <tr><td class="rl"><a href="#services/ci">CiService</a></td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td></td><td></td><td><span class="dot d">●</span></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr class="section"><td colspan="11">static validation</td></tr>
@@ -2486,12 +2598,12 @@ promo_correlation_id = flux-repo PR</div>
       <tr class="section"><td colspan="11">composition root — the only module outside integrations/ and services/ that may import an adapter</td></tr>
       <tr><td class="rl">composition.py</td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td><span class="dot i">◍</span></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr class="section"><td colspan="11">cli layer — <b>zero</b> integration imports (machine-checked)</td></tr>
-      <tr><td class="rl">cli/main.py · validate.py · helmrelease.py · events.py</td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">no adapter imports at all. Each calls <code>_container()</code> and asks for a configured service; the module-level <code>_make_*</code> factories survive as monkeypatch test seams</td></tr>
+      <tr><td class="rl">cli/main.py · lifecycle.py · validate.py · helmrelease.py · events.py</td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">no adapter imports at all. Each calls <code>_container()</code> and asks for a configured service; the module-level factories survive as monkeypatch test seams</td></tr>
       <tr><td class="rl">cli/helmrelease_render.py · validate_render.py · validate_progress.py</td><td colspan="10" style="text-align:left;color:var(--muted);font-size:11.5px">pure Rich renderers — no integrations, no subprocess, no wire contract (that lives in <code>services/*/wire.py</code>)</td></tr>
     </tbody>
   </table>
   </div>
-  <p class="mnote"><code>chart-manager.yaml</code> is parsed once by <code>services/chart_config.py</code>, then its optional <a href="#services/testspec" style="color:var(--blue)">clusterTests</a> and <a href="#services/manifest_validationspec" style="color:var(--blue)">manifestValidation</a> schemas are consumed by independent services. The file intentionally remains inside Helm archives so later lifecycle steps can use the same contract. Cross-service edges not shown in the grid: EphemeralTestClusterService → cluster bootstrap · DevelopmentClusterService → cluster bootstrap + ExposeService · PromoteService / MonitorService / TestService → <span class="ref" data-tip="services/events/writer.py:12 — class EventWriter">EventWriter</span>. Inside <code>integrations/</code>, <a href="#integrations/helmrelease" style="color:var(--blue)">HelmReleaseClient</a> composes Kubectl; <code>Helm</code> also consumes shared chart-dependency freshness policy from <code>services/domain/</code>. Per-command detail is on the <a href="#commands/surface" style="color:var(--blue)">Commands</a> tab.</p>
+  <p class="mnote"><code>chart-lifecycle.yaml</code> is parsed once by <code>services/chart_config.py</code>, then its optional <a href="#services/testspec" style="color:var(--blue)">spec.clusterTest</a> and <a href="#services/manifest_validationspec" style="color:var(--blue)">spec.validation</a> schemas are consumed by independent services and normalized by <a href="#services/lifecycle" style="color:var(--blue)">services/lifecycle/</a> into one executable graph vocabulary. The file intentionally remains inside Helm archives; runtime evidence and synthesized status remain outside it. Cross-service edges not shown in the grid: EphemeralTestClusterService → cluster bootstrap + lifecycle compiler/executor/evidence · validation CLI → lifecycle recorder · CiService → lifecycle impact · DevelopmentClusterService → cluster bootstrap + ExposeService · PromoteService / MonitorService / TestService → <span class="ref" data-tip="services/events/writer.py:12 — class EventWriter">EventWriter</span>.</p>
 </section>
 
 <!-- ================================================================ FLOWS -->
@@ -2553,9 +2665,9 @@ promo_correlation_id = flux-repo PR</div>
       <div class="sq"><div class="who"><span class="ref" data-tip="integrations/kind.py:70 — Kind.ensure_cluster">Kind.ensure_cluster</span></div><div class="what">absent → create · stopped → docker start · running → no-op</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="integrations/kubectl.py:204 — Kubectl.wait_apiserver_ready">Kubectl.wait_apiserver_ready</span></div><div class="what">gate the docker-up-vs-apiserver-ready race</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/clusters/bootstrap.py:45 — bootstrap(cluster_name, *, helm, kind, kubectl, repository, progress, lint)">cluster_bootstrap.bootstrap</span></div><div class="what">cilium CNI converge — "applied" | "no-change" | None</div></div>
-      <div class="sq"><div class="who"><span class="ref" data-tip="services/domain/install_plan.py — DependencyResolver.install_plan">DependencyResolver</span></div><div class="what">cluster-test configuration <code>requires</code> DFS → ordered <code>[InstallPlanEntry]</code></div></div>
-      <div class="sq"><div class="who">per entry: Helm + Kubectl</div><div class="what">dep-update (mtime-gated) → upgrade_install → wait_workloads_ready → helm test</div></div>
-      <div class="sq"><div class="who">on failure</div><div class="what"><span class="ref" data-tip="services/clusters/ephemeral.py — @contextmanager _diagnostics_on_failure"><code>_diagnostics_on_failure</code></span> dumps kubectl state → <code>ChartManagerError</code> → exit 1 <em>(single catch in main)</em></div></div>
+      <div class="sq"><div class="who"><span class="ref" data-tip="services/lifecycle/compiler.py — LifecycleCompiler.compile_cluster_test">LifecycleCompiler</span></div><div class="what"><code>requires</code> graph + profile intent → deterministic namespace/dependency/install/readiness/test action DAG; project bootstrap-owned Cilium out</div></div>
+      <div class="sq"><div class="who"><span class="ref" data-tip="services/lifecycle/cluster_executor.py — ClusterActionExecutor">ClusterActionExecutor</span></div><div class="what">topological fail-fast execution: dependency update → upgrade_install → release-scoped workload readiness → optional Helm test</div></div>
+      <div class="sq"><div class="who">evidence + failure</div><div class="what">persist PASS/FAIL/SKIP for every action with input digest and cluster identity → dump kubectl diagnostics for the failed namespace → <code>ChartManagerError</code> → exit 1</div></div>
     </div>
   </div>
 
@@ -2563,13 +2675,25 @@ promo_correlation_id = flux-repo PR</div>
     <h3 class="sub" style="margin-top:0">Flow 2 · <code>validate run</code> — the static gate</h3>
     <div class="seq">
       <div class="sq"><div class="who"><span class="ref" data-tip="cli/validate.py:356 — run(...) — flags only; builds a RunRequest">cli/validate.py</span></div><div class="what">flags → frozen <span class="ref" data-tip="services/manifest_validation/requests.py:94 — @dataclass(frozen) RunRequest"><code>RunRequest</code></span> → <span class="ref" data-tip="services/manifest_validation/app.py:226 — ManifestValidationService.run(request) -> RunOutcome"><code>ManifestValidationService.run</code></span></div></div>
-      <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/app.py:149 — class ManifestValidationService">ManifestValidationService</span></div><div class="what"><span class="ref" data-tip="integrations/git.py — Git.changed_files"><code>Git.changed_files</code></span> (or --all) → <span class="ref" data-tip="services/manifest_validation/planner.py — build_worklist"><code>build_worklist</code></span>: changed files + enabled <code>manifestValidation</code> sections + Chart.yaml reverse index → rows (chart × env); groups by authored Helm binding and constructs Helm/Kubeconform/Kyverno per group</div></div>
+      <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/app.py:149 — class ManifestValidationService">ManifestValidationService</span></div><div class="what"><span class="ref" data-tip="integrations/git.py — Git.changed_files"><code>Git.changed_files</code></span> (or --all) → <span class="ref" data-tip="services/manifest_validation/planner.py — build_worklist"><code>build_worklist</code></span>: changed files + enabled <code>spec.validation</code> sections + Chart.yaml reverse index → rows (chart × env); groups by authored Helm binding and constructs Helm/Kubeconform/Kyverno per group</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/runner.py:63 — class ManifestValidationRunner">ManifestValidationRunner</span></div><div class="what">ThreadPoolExecutor over rows; prefetch <code>helm dependency update</code> deduped by Helm's lock</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/phases.py — render()">phases.render</span> → <span class="ref" data-tip="integrations/helm.py:279 — Helm.template">Helm.template</span></div><div class="what">manifests to <code>output_root/&lt;chart&gt;/&lt;env&gt;/</code> — filesystem is the phase hand-off</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/phases.py — schema()">phases.schema</span> → <span class="ref" data-tip="integrations/kubeconform.py — Kubeconform.validate">Kubeconform</span></div><div class="what">FAIL ⇒ policy SKIPped (runner owns short-circuiting)</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/phases.py — policy()">phases.policy</span> → <span class="ref" data-tip="integrations/kyverno.py — Kyverno.apply">Kyverno</span></div><div class="what">failures gate; warnings advise (audit-mode)</div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/progress.py — ProgressDisplay Protocol; Rich impls in cli/validate_progress.py">progress display</span></div><div class="what">worker <code>on_event</code> → thread-safe live table on <b>stderr only</b></div></div>
       <div class="sq"><div class="who"><span class="ref" data-tip="services/manifest_validation/wire.py — JSON_SCHEMA_VERSION · to_json · to_markdown">wire</span> + <span class="ref" data-tip="cli/validate_render.py — Rich Table renderers">cli/validate_render.py</span></div><div class="what"><span class="ref" data-tip="services/manifest_validation/models.py:65 — RunResult"><code>RunResult</code></span> → markdown ($GITHUB_STEP_SUMMARY) / versioned JSON from <code>wire</code>; the Rich text table from the CLI renderer. <code>ManifestValidationService.cleanup</code> then applies the artifact-retention rule</div></div>
+      <div class="sq alt"><div class="who"><span class="ref" data-tip="services/lifecycle/recording.py — ManifestValidationEvidenceRecorder">evidence recorder</span></div><div class="what">terminal render/schema/policy results → append-only lifecycle evidence. Compile/write problems warn but never change the validation verdict; NOT_RUN phases are not fabricated as executed work</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3 class="sub" style="margin-top:0">Flow 2a · lifecycle impact → GHA matrix → status</h3>
+    <div class="seq">
+      <div class="sq"><div class="who">GitHub Actions prep</div><div class="what">compute the complete changed-file list once; dispatch mode selects diff, <code>--all</code>, or repeated explicit charts</div></div>
+      <div class="sq"><div class="who"><code>ci cluster-test-matrix</code></div><div class="what"><code>CiService</code> delegates to lifecycle impact; output is compact <code>{"include":[{"chart":"…","profile":"…"}]}</code></div></div>
+      <div class="sq"><div class="who">matrix sandbox jobs</div><div class="what">each chart/profile pair gets its own kind cluster, execution ledger, profile-qualified diagnostics artifact and step summary row</div></div>
+      <div class="sq"><div class="who"><code>lifecycle status</code></div><div class="what">recompile expected action digests → compare cached evidence → current/stale/unknown. With <code>--live</code>, query only the requested cluster and Helm release ownership boundary</div></div>
+      <div class="sq alt"><div class="who">authored spec</div><div class="what">remains unchanged throughout. Status is a synthesized <code>LifecycleStatus</code> document, never a field written back into chart YAML</div></div>
     </div>
   </div>
 
@@ -2677,7 +2801,7 @@ promo_correlation_id = flux-repo PR</div>
   <div class="steps">
     <div class="pstep"><div><h5>shared domain + plumbing</h5><p>Move the current boundaries intact; the split is complete and layering-tested. This gives every later package the same metadata, graph and error contracts.</p></div></div>
     <div class="pstep"><div><h5>operator safety + CI gates first</h5><p>Wire an explicit CLI cluster context into <code>Settings</code> and every <code>Container</code>. Then gate mypy, actionlint and formatting, remove stale CI backlog comments, and align the supported Python version. These prevent wrong-cluster actions and keep the clean baseline clean.</p></div></div>
-    <div class="pstep"><div><h5>integrations + their tests</h5><p>Carry the Helm dependency-policy edge deliberately. The baseline is <b>54 test modules, 747 default tests + 4 external-tool integration tests</b>; Ruff and mypy are clean. <code>tests/conftest.py:FakeCommandRunner</code> and <code>test_composition_addressing.py</code> are the highest-leverage portability guards.</p></div></div>
+    <div class="pstep"><div><h5>integrations + their tests</h5><p>Carry the Helm dependency-policy edge deliberately. The current repository gate is <b>895 passing tests, 5 explicitly deselected</b>; Ruff, mypy, actionlint and diff checks are clean. Lifecycle coverage includes compiler determinism, impact reasons, evidence safety, status freshness, live ownership, executor ordering and CI matrix projection.</p></div></div>
     <div class="pstep"><div><h5>manifest validation intact</h5><p>Move the flat <code>manifest_validation/</code> bounded context together: catalog, planner, compiler, models, spec, app, runner, phases, progress and wire. Callers already import the owning modules directly.</p></div></div>
     <div class="pstep"><div><h5>delivery + optional events</h5><p>Add promote JSON. If audit events remain, make them explicitly enabled, backend-lazy and pre-provisioned; add a typed query instead of scripts. Keep Lab and Sandbox separate—their execution semantics intentionally differ.</p></div></div>
     <div class="pstep"><div><h5>surfaces + adoption guide</h5><p>Adapt the existing thin handlers and renderers to the host, then publish one concise operator/developer guide matching the CI commands and cluster-selection contract. Add an API only when there is a caller.</p></div></div>

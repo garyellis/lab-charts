@@ -1,7 +1,7 @@
 [tools]
 actionlint = "1.7.12"
 # Match the package's declared minimum and the Ruff/mypy Python target.
-python = "3.12"
+python = "3.13"
 uv = "0.11.7"
 helm = "4.1.3"
 kubectl = "1.35.3"
