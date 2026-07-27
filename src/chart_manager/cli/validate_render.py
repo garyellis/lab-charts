@@ -7,7 +7,7 @@ carrying Rich console markup (`[red]...[/red]`) that only mean anything to a
 terminal and must not import this module.
 
 The machine-readable projections -- `to_json`, `to_markdown`,
-`JSON_SCHEMA_VERSION` -- live in `services.validate.wire` and import no Rich.
+`JSON_SCHEMA_VERSION` -- live in `services.manifest_validation.wire` and import no Rich.
 
 Note on `failure_details` / `advisory_details`: these return strings
 containing Rich markup, which is why they live here rather than in the wire
@@ -17,13 +17,14 @@ advisory data is already carried by `wire.to_json` (`rows[].phases[].detail`
 / `.artifacts`) and by the Failures/Advisories sections of
 `wire.to_markdown`, both markup-free.
 """
+
 from __future__ import annotations
 
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.plumbing.validate_models import PhaseResult, RunResult
-from chart_manager.services.validate.wire import row_elapsed_text
+from chart_manager.services.manifest_validation.models import PhaseResult, RunResult
+from chart_manager.services.manifest_validation.wire import row_elapsed_text
 
 #: Rich style per terminal phase status. Shared with `cli/validate_progress.py`
 #: so the live table and the final table can never disagree about what a FAIL
@@ -70,8 +71,7 @@ def failure_details(result: RunResult) -> list[str]:
                 continue
             detail = phase.detail or ""
             header = (
-                f"[red]{row_result.row.chart}/{row_result.row.env}[/red] "
-                f"[bold]{phase_name}[/bold]"
+                f"[red]{row_result.row.chart}/{row_result.row.env}[/red] [bold]{phase_name}[/bold]"
             )
             artifacts = "\n".join(f"  artifact: {a}" for a in phase.artifacts)
             block = header + ("\n" + detail if detail else "")

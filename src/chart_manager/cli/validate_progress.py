@@ -1,6 +1,6 @@
 """Rich adapters for the validate progress port.
 
-Terminal implementations of `services/validate/progress.ProgressDisplay`:
+Terminal implementations of `services/manifest_validation/progress.ProgressDisplay`:
 a live repainting table for interactive use and a one-line-per-event
 narrator for logs. They change how a run *looks*, never what it produces —
 which is why they sit here and not in `services/`.
@@ -12,6 +12,7 @@ holds an explicit lock, `PlainNarrationDisplay` guards its counters.
 `cli/validate.py:_resolve_display` picks between these and `NullDisplay`
 from --progress + --format + TTY status.
 """
+
 from __future__ import annotations
 
 import sys
@@ -25,8 +26,8 @@ from rich.table import Table
 from rich.text import Text
 
 from chart_manager.cli.validate_render import STATUS_STYLE
-from chart_manager.plumbing.validate_models import WorklistRow
-from chart_manager.services.validate.progress import ProgressDisplay
+from chart_manager.services.manifest_validation.models import WorklistRow
+from chart_manager.services.manifest_validation.progress import ProgressDisplay
 
 __all__ = ["LiveTableDisplay", "PlainNarrationDisplay"]
 
@@ -88,9 +89,7 @@ class PlainNarrationDisplay(ProgressDisplay):
                 self._done += 1
             counter = f"[{self._done}/{self._total}]"
             suffix = f" ({elapsed_s:.1f}s)" if elapsed_s is not None else ""
-            self.console.print(
-                f"{counter} {row.chart}/{row.env} {phase}…{status}{suffix}"
-            )
+            self.console.print(f"{counter} {row.chart}/{row.env} {phase}…{status}{suffix}")
 
     def stop(self) -> None:
         """No-op (nothing persistent to tear down)."""

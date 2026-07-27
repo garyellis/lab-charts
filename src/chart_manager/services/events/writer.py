@@ -1,5 +1,6 @@
 """EventWriter: the capability layer that builds lifecycle events and writes them to a store."""
 from datetime import UTC, datetime
+from typing import Any
 
 from chart_manager.services.events.lifecycle import (
     BuildPhase,
@@ -12,7 +13,12 @@ from chart_manager.services.events.store import EventStore, get_event_store
 class EventWriter:
     """Assemble PlatformLifecycleEvents and persist them via a lazily-resolved EventStore."""
 
-    def __init__(self, store: EventStore | None = None, *, source = "chart-manager") -> None:
+    def __init__(
+        self,
+        store: EventStore | None = None,
+        *,
+        source: str = "chart-manager",
+    ) -> None:
         """Optionally inject a store; otherwise it's resolved on first write."""
         self._store = store    # resolved lazily so constructing is free
         self._source = source
@@ -33,7 +39,7 @@ class EventWriter:
         images: tuple[str, ...] = (),
         pr_url: str | None = None,
         git_sha: str | None = None,
-        detail: dict | None = None,
+        detail: dict[str, Any] | None = None,
         timestamp: datetime | None = None,  # override now() for backfill/seeding
     ) -> None:
         """Build and write a build-lifecycle event for a chart."""
@@ -67,7 +73,7 @@ class EventWriter:
         build_correlation_id: str | None = None,      # optional denorm
         pr_url: str | None = None,
         git_sha: str | None = None,
-        detail: dict | None = None,
+        detail: dict[str, Any] | None = None,
         timestamp: datetime | None = None,  # override now() for backfill/seeding
     ) -> None:
        """Build and write a promotion-lifecycle event for a chart in an environment."""

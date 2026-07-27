@@ -62,15 +62,15 @@ def chart_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_chart(chart_root: Path) -> MakeChart:
-    """Write a minimal chart (Chart.yaml + values + test-spec.yaml) into `chart_root`.
+    """Write a minimal Helm chart with enabled cluster tests into ``chart_root``.
 
-    `profiles` is the raw test-spec profile mapping, so tests express
+    `profiles` is the raw cluster-test profile mapping, so tests express
     requirements exactly as a chart author would:
 
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
 
     Every values file any profile references is created empty, since
-    `ChartRepository.value_paths` requires them to exist.
+    `ClusterTestCatalog.value_paths` requires them to exist.
     """
 
     def build(
@@ -94,8 +94,22 @@ def make_chart(chart_root: Path) -> MakeChart:
         for value_file in sorted(referenced):
             (chart_dir / value_file).write_text("", encoding="utf-8")
 
-        (chart_dir / "test-spec.yaml").write_text(
-            yaml.safe_dump({"version": 1, "profiles": spec_profiles, "reverseTests": []}),
+        (chart_dir / "chart-lifecycle.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                    "kind": "ChartLifecycle",
+                    "metadata": {"name": name},
+                    "spec": {
+                        "enabled": True,
+                        "clusterTest": {
+                            "enabled": True,
+                            "profiles": spec_profiles,
+                            "dependentTests": [],
+                        },
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         return chart_dir

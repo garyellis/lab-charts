@@ -24,7 +24,7 @@ mise run setup
 mise run validate -- --chart grafana --env dev
 ```
 
-`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared in its `validate-spec.yaml`.
+`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `spec.validation` in its `chart-lifecycle.yaml`.
 
 ## Daily commands
 
@@ -35,6 +35,11 @@ mise run validate -- --chart grafana --env dev
 | `mise run kind-test -- <name> --profile minimal` | Spin up an ephemeral kind cluster, do a real `helm install` of the chart, run smoke checks, and tear the cluster down. |
 | `mise run charts` | List every chart wrapper the CLI knows about. |
 | `mise run test` | Run the Python unit tests for the CLI. |
+| `uv run chart-manager lifecycle plan <name> --workflow validation --profile dev` | Compile authored intent into the exact action DAG without executing it. |
+| `uv run chart-manager lifecycle status <name> --workflow cluster-test --profile minimal --live` | Merge cached evidence with read-only Helm and Kubernetes observations. |
+| `uv run chart-manager lifecycle impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
+| `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
+| `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
 For the full flag surface on validate, run `uv run chart-manager validate run --help`.
 
@@ -47,7 +52,10 @@ prep ──┬── validate
        └── sandbox-test (matrix: one job per changed chart)
 ```
 
-The fanout heuristic lives in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml).
+Validation selection and the sandbox chart/profile matrix are derived by the
+lifecycle impact service. The workflow consumes
+`chart-manager ci cluster-test-matrix` instead of maintaining a second fanout
+heuristic in YAML.
 
 ## Reproducing a CI failure
 
@@ -57,7 +65,26 @@ The fanout heuristic lives in [`.github/workflows/ci.yaml`](.github/workflows/ci
 
 ## Adding or editing a chart
 
-Each chart owns a `charts/<name>/validate-spec.yaml` that declares its environments, the values files composed for each environment, and the policy set to apply. See [`tests/fixtures/charts/passing-app/validate-spec.yaml`](tests/fixtures/charts/passing-app/validate-spec.yaml) for the canonical minimal example.
+Each managed chart owns one standalone
+`charts/<name>/chart-lifecycle.yaml` resource with
+`apiVersion: lifecycle.cmg.io/v1alpha1` and `kind: ChartLifecycle`.
+`spec.validation` declares environments, composed values, triggers, and
+policies. `spec.clusterTest` declares live-cluster install profiles and checks;
+`dependentTests` lists chart/profile tests that should rerun when this chart
+changes. Either capability can be absent or explicitly disabled, and
+`spec.enabled` pauses both.
+
+See
+[`tests/fixtures/charts/passing-app/chart-lifecycle.yaml`](tests/fixtures/charts/passing-app/chart-lifecycle.yaml)
+for a minimal validation example. The lifecycle resource intentionally remains
+in packaged charts so later lifecycle automation consumes the same
+authoritative intent.
+
+Changed chart files are selected through the existing `triggers:` glob-to-environment
+mapping. Intentional exclusions belong in the additive, chart-relative
+`triggerIgnores:` glob list. Files matching neither are reported as trigger
+coverage gaps; `unmatchedChanges: all-environments` additionally fans those
+files out to every declared environment.
 
 ## Troubleshooting
 
@@ -67,5 +94,10 @@ Each chart owns a `charts/<name>/validate-spec.yaml` that declares its environme
 
 ## Going deeper
 
+- [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — authenticated,
+  isolated Renovate upgrades, dependency coverage, versioning, and callback
+  security.
 - [`docs/MENTAL_MODEL.md`](docs/MENTAL_MODEL.md) — how the pieces fit together.
+- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent,
+  compiled action plans, evidence, and synthesized status.
 - [`docs/validate-pipeline-plan.md`](docs/validate-pipeline-plan.md) — design rationale for the validate pipeline.

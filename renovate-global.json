@@ -1,0 +1,9 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "allowShellExecutorForPostUpgradeCommands": false,
+  "allowedCommands": [
+    "^chart-manager upgrade-finalize --path (?:[A-Za-z0-9][A-Za-z0-9._-]*/)+[A-Za-z0-9][A-Za-z0-9._-]*$"
+  ],
+  "onboarding": false,
+  "requireConfig": "required"
+}

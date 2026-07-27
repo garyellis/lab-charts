@@ -42,18 +42,27 @@ container. Tests that `monkeypatch.setattr(module, "_make_x_service", ...)`
 keep working unchanged; tests that want real services with fake adapters can
 subclass `Container` or pass a `Settings`.
 """
+
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
+from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import HelmReleaseClient
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.ci import CiService
+from chart_manager.services.clusters.development import DevelopmentClusterService
+from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
@@ -65,18 +74,23 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.lab import LabService
+from chart_manager.services.manifest_validation.app import ManifestValidationService
+from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
-from chart_manager.services.sandbox import SandboxService
-from chart_manager.services.validate.app import ValidateApp
-from chart_manager.services.validate.progress import ProgressDisplay
+from chart_manager.services.upgrader import (
+    GitBaselineReader,
+    PullRequestLike,
+    UpgradeFinalizer,
+    UpgradePlan,
+    UpgradeService,
+)
 
 __all__ = ["Container", "HelmReleaseProgress", "Settings"]
 
 #: Narration callback shape shared by MonitorService and TestService.
 HelmReleaseProgress = Callable[[HelmReleaseRef, Transition], None]
 
-#: Operator-warning channel shape accepted by ValidateApp.
+#: Operator-warning channel shape accepted by ManifestValidationService.
 WarnCallback = Callable[[str], None]
 
 
@@ -95,8 +109,9 @@ class Settings:
       from the `EVENTS_BACKEND` environment variable at first write. Mirroring
       it here would create a second source of truth that nothing reads.
     * ``root`` -- the repository root is a per-invocation argument (`--root`),
-      not process configuration, so root-scoped services (`LabService`,
-      `SandboxService`, `ChartService`, ...) are constructed by their caller.
+      not process configuration, so root-scoped services (`DevelopmentClusterService`,
+      cluster lifecycle services, `ChartCatalogService`, ...) are constructed
+      by their caller.
     * ``helm_verbose`` -- see `Container.test_service`; that flag is a
       per-service policy, not a deployment knob.
     """
@@ -191,9 +206,7 @@ class Container:
             self._event_writer = EventWriter(source=self._settings.event_source)
         return self._event_writer
 
-    def monitor_service(
-        self, *, progress: HelmReleaseProgress | None = None
-    ) -> MonitorService:
+    def monitor_service(self, *, progress: HelmReleaseProgress | None = None) -> MonitorService:
         """Build the HelmRelease convergence monitor.
 
         Gets the same memoized writer as `promote_service`: a rollout's
@@ -250,16 +263,16 @@ class Container:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
         return GrafanaExporter(kubectl=self.kubectl())
 
-    def lab_service(
+    def development_cluster_service(
         self, root: Path, *, progress: ProgressCallback | None = None
-    ) -> LabService:
+    ) -> DevelopmentClusterService:
         """Build the full-stack lab converger for the repo at `root`.
 
         `root` is a per-invocation argument, not configuration -- see
         `Settings`. Every cluster-facing adapter is passed in, so there is
         no path by which the service can fall back to an unconfigured one.
         """
-        return LabService(
+        return DevelopmentClusterService(
             root,
             helm=self.helm(),
             kind=self.kind(),
@@ -268,11 +281,11 @@ class Container:
             progress=progress,
         )
 
-    def sandbox_service(
+    def ephemeral_test_cluster_service(
         self, root: Path, *, progress: ProgressCallback | None = None
-    ) -> SandboxService:
+    ) -> EphemeralTestClusterService:
         """Build the single-chart sandbox installer for the repo at `root`."""
-        return SandboxService(
+        return EphemeralTestClusterService(
             root,
             helm=self.helm(),
             kind=self.kind(),
@@ -289,10 +302,74 @@ class Container:
         *,
         progress: ProgressDisplay | None = None,
         on_warn: WarnCallback | None = None,
-    ) -> ValidateApp:
+    ) -> ManifestValidationService:
         """Build the validate pipeline entry point (render -> schema -> policy)."""
-        return ValidateApp(
+        return ManifestValidationService(
             progress=progress,
             on_warn=on_warn,
             command_runner=self.command_runner(),
         )
+
+    def upgrade_service(self, root: Path) -> UpgradeService:
+        """Build the chart-scoped Renovate orchestrator with one shared runner."""
+        resolved_root = root.resolve()
+        renovate = Renovate(self.command_runner())
+        repository = self._repository_slug(resolved_root)
+        github = Github(resolved_root, self.command_runner())
+
+        def request_factory(plan: UpgradePlan, *, dry_run: bool) -> RenovateRequest:
+            chart_config = plan.chart_path / "renovate.json"
+            return RenovateRequest(
+                repo_root=plan.repo_root,
+                repository=repository,
+                global_config_path=resolved_root / "renovate-global.json",
+                additional_config_path=chart_config if chart_config.is_file() else None,
+                runtime_overlay=plan.runtime_overlay,
+                dry_run="full" if dry_run else None,
+                token=os.environ.get("RENOVATE_TOKEN"),
+            )
+
+        def relevant_changes(paths: Sequence[Path]) -> Sequence[str]:
+            args = ["git", "status", "--porcelain=v1", "--untracked-files=all", "--"]
+            args.extend(str(path.relative_to(resolved_root)) for path in paths)
+            result = self.command_runner().run(args, cwd=resolved_root)
+            return tuple(
+                line[3:].strip()
+                for line in result.stdout.splitlines()
+                if len(line) > 3 and line[3:].strip()
+            )
+
+        def pull_request_lookup(branch: str) -> PullRequestLike | None:
+            return cast(PullRequestLike | None, github.find_open_pr_for_branch(branch))
+
+        return UpgradeService(
+            renovate=renovate,
+            request_factory=request_factory,
+            pull_request_lookup=pull_request_lookup,
+            relevant_changes=relevant_changes,
+            repository=repository,
+        )
+
+    def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:
+        """Build the trusted callback finalizer with the shared git runner."""
+        del root  # address is carried by FinalizeRequest; retained for surface symmetry.
+        return UpgradeFinalizer(baseline=GitBaselineReader(self.command_runner()))
+
+    def _repository_slug(self, root: Path) -> str:
+        """Read owner/repository from CI metadata or the configured origin."""
+        configured = os.environ.get("GITHUB_REPOSITORY")
+        if configured:
+            return configured
+        result = self.command_runner().run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=root,
+            check=False,
+        )
+        remote = result.stdout.strip()
+        match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", remote)
+        if result.returncode or match is None:
+            raise ChartManagerError(
+                "cannot determine Renovate repository; configure an origin remote "
+                "or set GITHUB_REPOSITORY"
+            )
+        return match.group(1)

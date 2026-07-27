@@ -6,8 +6,17 @@ from pathlib import Path
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.charts import ChartRepository
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import (
+    CapabilityUnavailableError,
+    ExternalCommandError,
+    SpecError,
+)
+from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.lifecycle.impact import (
+    ClusterTestImpact,
+    LifecycleImpact,
+    LifecycleImpactService,
+)
 
 
 class CiService:
@@ -22,24 +31,102 @@ class CiService:
         which this service already owns.
         """
         self.root = root
-        self.repository = ChartRepository(root)
+        self.cluster_tests = ClusterTestCatalog(root)
+        self.impact = LifecycleImpactService(root)
         self.git = Git(root)
         self.helm = helm
         self.kubectl = kubectl
 
     def changed_charts(self, base: str = "origin/main") -> list[str]:
-        """Chart names changed vs `base`, filtered to charts the repository knows."""
-        known = set(self.repository.list_names())
-        return [chart for chart in self.git.changed_charts(base) if chart in known]
+        """Compatibility projection of the typed cluster-test matrix.
+
+        This intentionally returns chart names because the existing CI command
+        consumes one name per line.  New consumers should use
+        :meth:`cluster_test_matrix` so a declared non-minimal dependent profile
+        is not silently discarded.
+        """
+        return sorted({entry.chart for entry in self.cluster_test_matrix(base)})
+
+    def lifecycle_impact(self, base: str = "origin/main") -> LifecycleImpact:
+        """Analyze the explicit Git diff and fail loudly on invalid intent."""
+        changed_files = self.git.changed_files(base)
+        impact = self.impact.analyze(changed_files)
+        if impact.spec_errors:
+            detail = "\n".join(f"- {error}" for error in impact.spec_errors)
+            raise SpecError(f"lifecycle impact analysis found spec errors:\n{detail}")
+        return impact
+
+    def cluster_test_matrix(
+        self,
+        base: str = "origin/main",
+    ) -> tuple[ClusterTestImpact, ...]:
+        """Return exact chart/profile matrix entries with selection reasons."""
+        return self.lifecycle_impact(base).cluster_tests
+
+    def all_cluster_test_matrix(self) -> tuple[ClusterTestImpact, ...]:
+        """Return every enabled chart with its spec-derived default profile."""
+        return tuple(
+            ClusterTestImpact(
+                chart=name,
+                profile=self._default_profile(name),
+                reasons=(),
+            )
+            for name in self.cluster_tests.enabled_names()
+        )
+
+    def explicit_cluster_test_matrix(
+        self,
+        charts: list[str] | tuple[str, ...],
+    ) -> tuple[ClusterTestImpact, ...]:
+        """Resolve explicitly requested charts or reject the complete bad set."""
+        requested = sorted(set(charts))
+        known = set(self.cluster_tests.repository.list_names())
+        unknown = [chart for chart in requested if chart not in known]
+        unavailable: list[str] = []
+        selected: list[ClusterTestImpact] = []
+        for chart in requested:
+            if chart in unknown:
+                continue
+            try:
+                profile = self._default_profile(chart)
+            except CapabilityUnavailableError:
+                unavailable.append(chart)
+                continue
+            selected.append(
+                ClusterTestImpact(
+                    chart=chart,
+                    profile=profile,
+                    reasons=(),
+                )
+            )
+        if unknown or unavailable:
+            details = []
+            if unknown:
+                details.append(f"unknown chart(s): {', '.join(unknown)}")
+            if unavailable:
+                details.append(
+                    "chart(s) without enabled cluster tests: "
+                    f"{', '.join(unavailable)}"
+                )
+            raise SpecError("invalid cluster-test chart request: " + "; ".join(details))
+        return tuple(selected)
+
+    def _default_profile(self, chart_name: str) -> str:
+        """Delegate shared default selection to lifecycle impact policy."""
+        return self.impact.default_cluster_test_profile(chart_name)
+
+    def cluster_test_charts(self) -> list[str]:
+        """Return every chart with enabled live-cluster tests."""
+        return self.cluster_tests.enabled_names()
 
     def install_source_chart(self, chart_name: str, profile: str, namespace: str) -> None:
         """Install the chart from local source, then run `helm test` if the profile enables it.
 
         Raises ExternalCommandError on a nonzero `helm test`.
         """
-        chart = self.repository.get(chart_name)
+        chart = self.cluster_tests.get(chart_name)
         profile_spec = chart.spec.profile(profile)
-        values = self.repository.value_paths(chart, profile)
+        values = self.cluster_tests.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)
         self.helm.dependency_update(chart.path)
         self.helm.upgrade_install(
@@ -70,9 +157,9 @@ class CiService:
         what's running in production rather than chart defaults. Runs
         `helm test` after the upgrade if the profile enables it.
         """
-        chart = self.repository.get(chart_name)
+        chart = self.cluster_tests.get(chart_name)
         profile_spec = chart.spec.profile(profile)
-        values = self.repository.value_paths(chart, profile)
+        values = self.cluster_tests.value_paths(chart, profile)
         self.kubectl.create_namespace(namespace)
         self.helm.upgrade_install(
             chart.name,

@@ -1,0 +1,17 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: passing-app
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: passing-app
+    environments:
+      dev:
+        namespace: lab-dev
+        values:
+          - values.yaml
+    triggers:
+      "values.yaml": [dev]
+    unmatchedChanges: warn

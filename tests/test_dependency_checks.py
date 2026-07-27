@@ -1,4 +1,4 @@
-"""DependencyService check resolution.
+"""InstallPlanService check resolution.
 
 `deps checks` used to walk the install plan in the CLI and reach through
 `service.repository` for each entry's profile. The traversal now belongs to
@@ -11,52 +11,61 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.charts import Chart
-from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import CheckSpec, ProfileSpec
-from chart_manager.plumbing.spec import TestSpec as _TestSpec
-from chart_manager.services.dependencies import DependencyService
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
+from chart_manager.services.domain.cluster_tests import (
+    ClusterCheckSpec,
+    ClusterTestProfile,
+    ClusterTestSpec,
+)
+from chart_manager.services.domain.install_plan import InstallPlanEntry
+from chart_manager.services.install_plan import InstallPlanService
 
 
-def _chart(name: str, profile: ProfileSpec) -> Chart:
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
-        spec=_TestSpec(profiles={"minimal": profile}, reverse_tests=[]),
+def _chart(name: str, profile: ClusterTestProfile) -> ClusterTestChart:
+    return ClusterTestChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
+        spec=ClusterTestSpec(profiles={"minimal": profile}, dependentTests=[]),
     )
 
 
 @pytest.fixture
-def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DependencyService:
-    """A DependencyService over an in-memory two-chart plan (no chart tree on disk)."""
-    svc = DependencyService(tmp_path)
+def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> InstallPlanService:
+    """An InstallPlanService over an in-memory two-chart plan."""
+    svc = InstallPlanService(tmp_path)
     charts = {
         "prometheus-operator": _chart(
             "prometheus-operator",
-            ProfileSpec(helm_test=True, checks=[]),
+            ClusterTestProfile(helmTest=True, checks=[]),
         ),
         "alloy": _chart(
             "alloy",
-            ProfileSpec(
-                helm_test=True,
-                checks=[CheckSpec(name="alloy-pods-ready", type="pod")],
+            ClusterTestProfile(
+                helmTest=True,
+                checks=[ClusterCheckSpec(name="alloy-pods-ready", type="pod")],
             ),
         ),
     }
-    monkeypatch.setattr(svc.repository, "get", lambda name: charts[name])
+    monkeypatch.setattr(svc.catalog, "get", lambda name: charts[name])
     monkeypatch.setattr(
         svc.resolver,
         "install_plan",
         lambda _c, _p: [
-            PlanEntry(chart="prometheus-operator", profile="minimal"),
-            PlanEntry(chart="alloy", profile="minimal"),
+            InstallPlanEntry(chart="prometheus-operator", profile="minimal"),
+            InstallPlanEntry(chart="alloy", profile="minimal"),
         ],
     )
     return svc
 
 
-def test_checks_for_includes_the_implicit_helm_test(service: DependencyService) -> None:
+def test_checks_for_includes_the_implicit_helm_test(service: InstallPlanService) -> None:
     assert [c.name for c in service.checks_for("alloy", "minimal")] == [
         "alloy-pods-ready",
         "helm-test",
@@ -64,7 +73,7 @@ def test_checks_for_includes_the_implicit_helm_test(service: DependencyService) 
 
 
 def test_plan_checks_walks_the_whole_install_plan_in_order(
-    service: DependencyService,
+    service: InstallPlanService,
 ) -> None:
     plan = service.plan_checks("alloy", "minimal")
 

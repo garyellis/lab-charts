@@ -1,0 +1,55 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: kube-state-metrics
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: kube-state-metrics
+    namespaceTemplate: "lab-${env}"
+    environments:
+      dev:
+        values:
+          - values.yaml
+          - values-dev.yaml
+      test:
+        values:
+          - values.yaml
+          - values-test.yaml
+      uat:
+        values:
+          - values.yaml
+          - values-uat.yaml
+      prod:
+        values:
+          - values.yaml
+          - values-prod.yaml
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":      [dev, test, uat, prod, ci]
+      "values-dev.yaml":  [dev]
+      "values-test.yaml": [test]
+      "values-uat.yaml":  [uat]
+      "values-prod.yaml": [prod]
+      "values-ci.yaml":   [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install kube-state-metrics with ServiceMonitor CRDs available.
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []

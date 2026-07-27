@@ -1,6 +1,6 @@
 """Coverage for `Kind.container_host_ports`.
 
-Used by LabService.up's port-mapping drift check: if kind-config.yaml
+Used by DevelopmentClusterService.up's port-mapping drift check: if kind-config.yaml
 declares extraPortMappings the user has since edited but the cluster was
 recreated only via `sandbox down` + `sandbox up`, the running container
 keeps the old port bindings. We surface the missing host ports as a

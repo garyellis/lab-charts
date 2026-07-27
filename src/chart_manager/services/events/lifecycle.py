@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -54,13 +55,12 @@ class PlatformLifecycleEvent:
     source: str
     pr_url: str | None
     git_sha: str | None
-    detail: dict | None
+    detail: dict[str, Any] | None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict with uuid and timestamp as strings (store-ready)."""
         d = asdict(self)
         d["uuid"] = str(self.uuid)
         d["timestamp"] = self.timestamp.isoformat()
         return d
-
 

@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.charts import ChartRepository
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from chart_manager.cli.main import app
+from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
+from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.domain.charts import ChartRepository
 
 from .conftest import REPO_ROOT, MakeChart
 
@@ -43,13 +51,166 @@ def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart)
         "prometheus-operator",
         profiles={"minimal": {"values": ["values.yaml", "values-ci.yaml"]}},
     )
-    repository = ChartRepository(chart_root)
-    chart = repository.get("prometheus-operator")
+    catalog = ClusterTestCatalog(chart_root)
+    chart = catalog.get("prometheus-operator")
 
-    paths = repository.value_paths(chart, "minimal")
+    paths = catalog.value_paths(chart, "minimal")
 
     chart_dir = (chart_root / "charts" / "prometheus-operator").resolve()
     assert paths == [chart_dir / "values.yaml", chart_dir / "values-ci.yaml"]
+
+
+def test_get_loads_library_chart_without_test_spec(chart_root: Path) -> None:
+    chart_dir = chart_root / "charts" / "common"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: common\nversion: 1.2.3\ntype: library\n",
+        encoding="utf-8",
+    )
+
+    chart = ChartRepository(chart_root).get("common")
+
+    assert chart.name == "common"
+    assert chart.metadata.version == "1.2.3"
+    assert chart.metadata.chart_type == "library"
+
+
+def test_cluster_test_catalog_requires_chart_manager_configuration(
+    chart_root: Path,
+) -> None:
+    chart_dir = chart_root / "charts" / "common"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: common\nversion: 1.2.3\ntype: library\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        CapabilityUnavailableError,
+        match=r"no clusterTest configuration in chart-lifecycle\.yaml",
+    ):
+        ClusterTestCatalog(chart_root).get("common")
+
+
+def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("enabled")
+    unmanaged = make_chart("unmanaged")
+    (unmanaged / "chart-lifecycle.yaml").unlink()
+    disabled = make_chart("disabled")
+    (disabled / "chart-lifecycle.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": "disabled"},
+                "spec": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    section_disabled = make_chart("section-disabled")
+    (section_disabled / "chart-lifecycle.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": "section-disabled"},
+                "spec": {
+                    "clusterTest": {
+                        "enabled": False,
+                        "profiles": {"minimal": {}},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ClusterTestCatalog(chart_root).enabled_names() == ["enabled"]
+
+
+def test_chart_catalog_retains_invalid_config_for_operator_visibility(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("broken")
+    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
+
+    entry = ChartCatalogService(chart_root).list_entries()[0]
+
+    assert entry.name == "broken"
+    assert entry.lifecycle_status == "invalid"
+    assert entry.error is not None
+
+
+def test_chart_catalog_rejects_lifecycle_identity_mismatch(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("actual")
+    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle["metadata"]["name"] = "other"
+    (chart / "chart-lifecycle.yaml").write_text(
+        yaml.safe_dump(lifecycle),
+        encoding="utf-8",
+    )
+
+    entry = ChartCatalogService(chart_root).list_entries()[0]
+
+    assert entry.lifecycle_status == "invalid"
+    assert entry.error is not None
+    assert "metadata.name 'other'" in entry.error
+    assert "Chart.yaml name 'actual'" in entry.error
+
+    with pytest.raises(SpecError, match=r"metadata\.name 'other'"):
+        ChartCatalogService(chart_root).get_lifecycle("actual")
+
+
+def test_charts_list_returns_nonzero_after_rendering_invalid_config(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("broken")
+    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["charts", "list", "--root", str(chart_root)])
+
+    assert result.exit_code == 1
+    assert "broken" in result.stdout
+    assert "invalid" in result.stdout
+
+
+def test_charts_lifecycle_prints_the_normalized_envelope(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("alloy")
+
+    result = CliRunner().invoke(
+        app,
+        ["charts", "lifecycle", "alloy", "--root", str(chart_root)],
+    )
+
+    assert result.exit_code == 0
+    assert '"apiVersion": "lifecycle.cmg.io/v1alpha1"' in result.stdout
+    assert '"kind": "ChartLifecycle"' in result.stdout
+    assert '"clusterTest"' in result.stdout
+    assert '"enabled": true' in result.stdout
+
+
+def test_get_rejects_invalid_dependency_shape(chart_root: Path) -> None:
+    chart_dir = chart_root / "charts" / "broken"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: broken\nversion: 1.2.3\ndependencies: wrong\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError, match="'dependencies' must be a list"):
+        ChartRepository(chart_root).get("broken")
 
 
 def test_the_repo_chart_tree_loads() -> None:

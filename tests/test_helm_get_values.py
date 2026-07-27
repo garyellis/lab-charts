@@ -1,6 +1,6 @@
 """Coverage for `Helm.get_values`.
 
-Drives the cilium-k8sServiceHost drift detection in `LabService.up`; if
+Drives the cilium-k8sServiceHost drift detection in `DevelopmentClusterService.up`; if
 helm's `get values -o json` contract drifts (or our parsing does) we want
 to catch it here, not as a confusing "drift detected but it's not" error
 in the lab installer.

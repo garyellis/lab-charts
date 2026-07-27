@@ -4,7 +4,7 @@
     around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservice_hosts` / `list_gateway_hosts`: best-effort
-    listings used by LabService and the `sandbox expose` CLI. Empty list
+    listings used by DevelopmentClusterService and the `sandbox expose` CLI. Empty list
     on missing CRD / parse error is the contract -- callers treat that
     as "no hosts yet" rather than as a hard error.
 """
@@ -240,6 +240,23 @@ def test_wait_workloads_ready_accepts_a_genuinely_empty_namespace() -> None:
 
     assert len(runner.calls) == 3
     assert not [c for c in runner.calls if "rollout" in c]
+
+
+def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
+    runner = _scripted([_ok("web"), _ok(), _ok(""), _ok("")])
+
+    Kubectl(runner=runner).wait_workloads_ready(
+        "shared",
+        selector="app.kubernetes.io/instance=grafana",
+    )
+
+    listings = [call for call in runner.calls if "get" in call]
+    assert len(listings) == 3
+    assert all(
+        call[call.index("-l") : call.index("-l") + 2]
+        == ("-l", "app.kubernetes.io/instance=grafana")
+        for call in listings
+    )
 
 
 # ----- cluster addressing ---------------------------------------------------

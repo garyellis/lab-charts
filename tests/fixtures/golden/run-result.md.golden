@@ -35,4 +35,4 @@ require-non-root/audit: Pod/grafana: container runs as 0
 ### Warnings
 
 - 1 spec error(s):
-  - charts/broken/validate-spec.yaml: unknown major version 99
+  - charts/broken/chart-lifecycle.yaml: unsupported apiVersion example.io/v99

@@ -1,6 +1,6 @@
 """`chart-manager validate` sub-app.
 
-Thin CLI shell over `services/validate/app.ValidateApp`: flag shape and
+Thin CLI shell over `services/manifest_validation/app.ManifestValidationService`: flag shape and
 help text, progress-display choice, output-format dispatch, and the
 mapping from domain errors to Typer's `BadParameter`. Everything that
 changes the *answer* — worklist construction, row assembly, helm binding,
@@ -8,9 +8,10 @@ workers, run identity, artifact retention — lives in the service.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
 This `register(app)` pattern keeps cli/main.py free of validate-specific
-imports and lets the sub-app grow (render/schema/policy/run/clean/deps-install)
-without touching main.py.
+imports and lets the sub-app grow (render/schema/policy/run/clean) without
+touching main.py.
 """
+
 from __future__ import annotations
 
 import functools
@@ -35,19 +36,19 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.plumbing.validate_models import PHASE_ORDER, RunResult
-from chart_manager.services.tools import install as deps_install_mod
-from chart_manager.services.validate.app import (
+from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
+from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
+    ManifestValidationService,
     RunOutcome,
     RunRequest,
     SingleRequest,
-    ValidateApp,
     ValidateInputError,
     resolve_workers,
 )
-from chart_manager.services.validate.progress import NullDisplay, ProgressDisplay
-from chart_manager.services.validate.wire import to_json, to_markdown
+from chart_manager.services.manifest_validation.models import PHASE_ORDER, RunResult
+from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.manifest_validation.wire import to_json, to_markdown
 
 _FORMATS = ("text", "md", "json", "all")
 _PROGRESS_MODES = ("auto", "live", "plain", "none")
@@ -85,7 +86,9 @@ def _validate_format(value: str) -> str:
 # required precisely because the call sites give them no default).
 ChartOption = Annotated[
     str,
-    typer.Option("--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."),
+    typer.Option(
+        "--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."
+    ),
 ]
 EnvOption = Annotated[
     str,
@@ -93,7 +96,7 @@ EnvOption = Annotated[
         "--env",
         help=(
             "Environment label. Used for the namespace default (lab-<env>) and output path. "
-            "Single-row commands (render/schema/policy) do NOT consult validate-spec.yaml — "
+            "Single-row commands (render/schema/policy) do NOT consult chart-lifecycle.yaml — "
             "pass --values explicitly to overlay per-env values. Use `validate run` for "
             "spec-driven multi-row execution."
         ),
@@ -127,7 +130,9 @@ HelmBinOption = Annotated[
 ]
 OutOption = Annotated[
     Path | None,
-    typer.Option("--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."),
+    typer.Option(
+        "--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."
+    ),
 ]
 KeepOption = Annotated[
     bool,
@@ -171,7 +176,6 @@ def register(app: typer.Typer) -> None:
     app.command("policy")(policy)
     app.command("run")(run)
     app.command("clean")(clean)
-    app.command("deps-install")(deps_install)
 
 
 def _container() -> Container:
@@ -179,14 +183,36 @@ def _container() -> Container:
     return Container()
 
 
-def _make_app(progress: ProgressDisplay | None = None) -> ValidateApp:
-    """Build the ValidateApp (module-level so tests can override)."""
+def _make_app(progress: ProgressDisplay | None = None) -> ManifestValidationService:
+    """Build the ManifestValidationService (module-level so tests can override)."""
     return _container().validate_app(progress=progress, on_warn=_warn)
 
 
 def _warn(message: str) -> None:
     """Print a service-emitted operator warning."""
     console.print(f"[yellow]{message}[/yellow]")
+
+
+def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
+    """Best-effort projection of validation phases into local lifecycle evidence.
+
+    Evidence is an observational side effect, not the validation deliverable:
+    an unavailable local state directory must never turn a truthful validation
+    result into a different process verdict.
+    """
+    try:
+        recording = ManifestValidationEvidenceRecorder(root).record(outcome)
+    except Exception as exc:
+        _warn(f"warning: lifecycle evidence was not recorded: {exc}")
+        return
+    for diagnostic in recording.diagnostics:
+        phase = f"/{diagnostic.phase}" if diagnostic.phase else ""
+        _warn(
+            "warning: lifecycle evidence "
+            f"{diagnostic.stage} failed for "
+            f"{diagnostic.chart}/{diagnostic.environment}{phase}: "
+            f"{diagnostic.message}"
+        )
 
 
 def render(
@@ -243,7 +269,8 @@ def schema(
             help=(
                 "Kubernetes version for kubeconform (e.g. 1.31.2). "
                 "Defaults to kubeconform's built-in default. "
-                "For multi-row runs this is sourced from validate-spec.yaml (kubernetes_version)."
+                "For multi-row runs this is sourced from chart-lifecycle.yaml "
+                "(spec.validation.kubernetesVersion)."
             ),
         ),
     ] = None,
@@ -254,7 +281,8 @@ def schema(
             help=(
                 "Override kubeconform schema search path (repeatable). "
                 "Default: ['default', datreeio CRDs catalog]. "
-                "For multi-row runs this is sourced from validate-spec.yaml (schema_locations)."
+                "For multi-row runs this is sourced from chart-lifecycle.yaml "
+                "(spec.validation.schemaLocations)."
             ),
         ),
     ] = [],
@@ -301,14 +329,14 @@ def policy(
         str | None,
         typer.Option(
             "--kube-version",
-            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from validate-spec.yaml.",
+            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from chart-lifecycle.yaml.",
         ),
     ] = None,
     schema_location: Annotated[
         list[str],
         typer.Option(
             "--schema-location",
-            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from validate-spec.yaml.",
+            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from chart-lifecycle.yaml.",
         ),
     ] = [],
     policy_dir: Annotated[
@@ -407,8 +435,7 @@ def run(
         typer.Option(
             "--progress",
             help=(
-                "Progress UI: auto (default; live in TTY+text, plain "
-                "otherwise), live, plain, none."
+                "Progress UI: auto (default; live in TTY+text, plain otherwise), live, plain, none."
             ),
         ),
     ] = "auto",
@@ -459,11 +486,21 @@ def run(
             ),
         ),
     ] = 300.0,
+    fail_fast: Annotated[
+        bool,
+        typer.Option(
+            "--fail-fast/--no-fail-fast",
+            help=(
+                "Stop after the first failed row and mark remaining rows NOT_RUN. "
+                "Default: continue and report every row."
+            ),
+        ),
+    ] = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build worklist from validate-spec.yaml + git, then run all phases.
+    """Build worklist from chart-lifecycle.yaml + git, then run all phases.
 
     Source of the changed-files list (in precedence order):
       --all > --changed-files > git diff against --base.
@@ -501,6 +538,7 @@ def run(
         verbose=verbose,
         row_timeout=row_timeout,
         dep_update_timeout=dep_update_timeout,
+        fail_fast=fail_fast,
     )
 
     app = _make_app(display)
@@ -509,16 +547,20 @@ def run(
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
 
+    _record_lifecycle_evidence(root, outcome)
+
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with --format all the sidecars are written into the render
     # dir), but a raise from _emit_result must not skip it and orphan the
     # rendered tree on disk.
     try:
         _emit_result(
-            outcome.result,
+            outcome,
             fmt=fmt,
             out_dir=outcome.out_dir,
             extra_warnings=outcome.warnings,
+            requested_charts=request.charts,
+            requested_environments=request.envs,
             timings=timings,
             verbose=verbose,
             github_step_summary=github_step_summary,
@@ -548,7 +590,7 @@ def _run_single(
 
     try:
         _emit_result(
-            outcome.result,
+            outcome,
             fmt=fmt,
             out_dir=outcome.out_dir,
             github_step_summary=github_step_summary,
@@ -569,9 +611,7 @@ def _guard_helm_selection(helm_version: str | None, helm_bin: Path | None) -> No
 
 def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:
     """Map a rejected service input onto the flag that carries it."""
-    return typer.BadParameter(
-        str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint)
-    )
+    return typer.BadParameter(str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint))
 
 
 def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
@@ -609,11 +649,13 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
 
 
 def _emit_result(
-    result: RunResult,
+    source: RunResult | RunOutcome,
     *,
     fmt: str,
     out_dir: Path,
     extra_warnings: tuple[str, ...] = (),
+    requested_charts: tuple[str, ...] = (),
+    requested_environments: tuple[str, ...] = (),
     timings: bool = False,
     verbose: bool = False,
     github_step_summary: bool = False,
@@ -631,6 +673,7 @@ def _emit_result(
     results without re-parsing markdown.
     """
     fmt = _validate_format(fmt)
+    result = source.result if isinstance(source, RunOutcome) else source
 
     # Both projections are pure functions of (result, timings), and both have
     # more than one consumer: markdown feeds --format md, the `all` sidecar,
@@ -640,11 +683,26 @@ def _emit_result(
     # caches are closures, so they die with this call; nothing is retained.
     @functools.cache
     def markdown_text() -> str:
-        return to_markdown(result, include_timings=timings)
+        return to_markdown(
+            source,
+            include_timings=timings,
+            requested_charts=requested_charts,
+            requested_environments=requested_environments,
+        )
 
     @functools.cache
     def json_text() -> str:
-        return json.dumps(to_json(result), indent=2) + "\n"
+        return (
+            json.dumps(
+                to_json(
+                    source,
+                    requested_charts=requested_charts,
+                    requested_environments=requested_environments,
+                ),
+                indent=2,
+            )
+            + "\n"
+        )
 
     if fmt == "json":
         sys.stdout.write(json_text())
@@ -705,8 +763,7 @@ def _parse_phases(raw: str) -> frozenset[str]:
             # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
             # order the user would type them into --phases, which is also
             # the order the flag's default and help text use.
-            f"unknown phase(s): {', '.join(sorted(unknown))}; "
-            f"valid: {','.join(PHASE_ORDER)}",
+            f"unknown phase(s): {', '.join(sorted(unknown))}; valid: {','.join(PHASE_ORDER)}",
             param_hint="--phases",
         )
     return frozenset(parts)
@@ -745,7 +802,7 @@ def clean(
     root: RootOption = Path("."),
 ) -> None:
     """Remove the entire .chart-manager/rendered/ tree."""
-    target = (root.resolve() / ".chart-manager" / "rendered")
+    target = root.resolve() / ".chart-manager" / "rendered"
     if not target.exists():
         console.print("nothing to clean")
         return
@@ -755,72 +812,3 @@ def clean(
         console.print(f"[red]error:[/red] cleanup failed: {exc}")
         raise typer.Exit(1) from exc
     console.print(f"cleaned: {target}")
-
-
-# Derived from the service registry so adding a tool there automatically
-# extends the CLI's allow-list — no second source of truth to drift.
-_DEPS_INSTALL_TOOLS = deps_install_mod.KNOWN_TOOLS
-
-
-def deps_install(
-    tool: Annotated[
-        list[str],
-        typer.Option(
-            "--tool",
-            help=(
-                "Tool(s) to install (repeatable). Allowed: "
-                f"{', '.join(_DEPS_INSTALL_TOOLS)}. "
-                "Defaults to --all when omitted."
-            ),
-        ),
-    ] = [],
-    all_tools: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Install every known tool. Mutually exclusive with --tool.",
-        ),
-    ] = False,
-) -> None:
-    """Install validate pipeline tool versions via mise.
-
-    Per-tool failures downgrade to warnings (with upstream release URLs)
-    but still flip the exit code so CI surfaces a partial install rather
-    than passing on soft warnings.
-    """
-    if tool and all_tools:
-        raise typer.BadParameter(
-            "--tool and --all are mutually exclusive",
-            param_hint="--tool / --all",
-        )
-    unknown = [t for t in tool if t not in _DEPS_INSTALL_TOOLS]
-    if unknown:
-        raise typer.BadParameter(
-            f"unknown tool(s): {', '.join(unknown)} "
-            f"(allowed: {', '.join(_DEPS_INSTALL_TOOLS)})",
-            param_hint="--tool",
-        )
-
-    runner_cmd = _container().command_runner()
-    if all_tools or not tool:
-        results = deps_install_mod.install_all(runner_cmd, on_warn=console.print)
-    else:
-        results = []
-        for t in tool:
-            results.extend(
-                deps_install_mod.install_one(runner_cmd, t, on_warn=console.print)
-            )
-
-    for r in results:
-        status = "ok" if r.success else "failed"
-        suffix = ""
-        if not r.success:
-            url = deps_install_mod.release_url(r.tool, r.version)
-            suffix = f" (release: {url})"
-        console.print(f"{r.tool}@{r.version}: {status}{suffix}")
-
-    failed = sum(1 for r in results if not r.success)
-    total = len(results)
-    console.print(f"summary: {total - failed}/{total} installed")
-    if failed:
-        raise typer.Exit(1)

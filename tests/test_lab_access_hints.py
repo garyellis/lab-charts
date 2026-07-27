@@ -1,4 +1,4 @@
-"""LabService access-hint resolution + cert/webhook gates + port-mapping drift.
+"""DevelopmentClusterService access-hint resolution + cert/webhook gates + port-mapping drift.
 
 Three concerns covered here:
   * `_access_hints`: empty / one / many VS results, with grafana
@@ -9,6 +9,7 @@ Three concerns covered here:
     (warning surfaced, run continues).
   * Port-mapping drift: matching no-op, mismatch produces a warning event.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,17 +18,21 @@ from typing import Any
 import pytest
 
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
-from chart_manager.plumbing.charts import Chart
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.plumbing.graph import PlanEntry
-from chart_manager.plumbing.spec import ProfileSpec
-from chart_manager.plumbing.spec import TestSpec as _TestSpec
-from chart_manager.services import lab as lab_module
-from chart_manager.services.lab import (
-    EntryOutcome,
-    LabService,
-    LabUpOptions,
+from chart_manager.services.clusters import development as lab_module
+from chart_manager.services.clusters.development import (
+    DevelopmentClusterEntryOutcome,
+    DevelopmentClusterService,
+    DevelopmentClusterUpRequest,
 )
+from chart_manager.services.domain.charts import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
+from chart_manager.services.domain.cluster_tests import ClusterTestProfile
+from chart_manager.services.domain.cluster_tests import ClusterTestSpec as _TestSpec
+from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
@@ -60,9 +65,7 @@ class _RecordingKubectl:
     def wait_workloads_ready(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
-    def wait_certificate_ready(
-        self, name: str, *, namespace: str, timeout: str = "120s"
-    ) -> None:
+    def wait_certificate_ready(self, name: str, *, namespace: str, timeout: str = "120s") -> None:
         self.cert_waits.append((name, namespace, timeout))
         if self._cert_raise is not None:
             raise self._cert_raise
@@ -172,8 +175,8 @@ def _service(
     kind: _Kind,
     kubectl: _RecordingKubectl,
     progress: _Recorder | None = None,
-) -> LabService:
-    return LabService(
+) -> DevelopmentClusterService:
+    return DevelopmentClusterService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
@@ -183,53 +186,51 @@ def _service(
     )
 
 
-def _stub_chart(name: str, *, namespace: str = "observability") -> Chart:
-    profile = ProfileSpec(
+def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestChart:
+    profile = ClusterTestProfile(
         description="stub",
         namespace=namespace,
         values=[],
         timeout="1m",
         requires=[],
-        helm_test=False,
+        helmTest=False,
         checks=[],
     )
-    spec = _TestSpec(profiles={"minimal": profile}, reverse_tests=[])
-    return Chart(
-        name=name,
-        path=Path(f"/tmp/{name}"),
-        chart_yaml={"name": name, "version": "0.0.0"},
+    spec = _TestSpec(profiles={"minimal": profile}, dependentTests=[])
+    return ClusterTestChart(
+        chart=HelmChart(
+            name=name,
+            path=Path(f"/tmp/{name}"),
+            metadata=ChartMetadata(name, "0.0.0", "application", ()),
+        ),
         spec=spec,
     )
 
 
 def _wire_repo(
     monkeypatch: pytest.MonkeyPatch,
-    service: LabService,
+    service: DevelopmentClusterService,
     *,
-    plan: list[PlanEntry],
-    charts: dict[str, Chart],
+    plan: list[InstallPlanEntry],
+    charts: dict[str, ClusterTestChart],
 ) -> None:
-    monkeypatch.setattr(
-        service.resolver, "install_plan", lambda _c, _p: list(plan)
-    )
+    monkeypatch.setattr(service.resolver, "install_plan", lambda _c, _p: list(plan))
 
-    def _get(name: str) -> Chart:
+    def _get(name: str) -> ClusterTestChart:
         return charts[name]
 
-    monkeypatch.setattr(service.repository, "get", _get)
-    monkeypatch.setattr(service.repository, "value_paths", lambda _c, _p: [])
+    monkeypatch.setattr(service.cluster_tests, "get", _get)
+    monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
 
 
 def _disable_cilium(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        lab_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: "applied"
-    )
+    monkeypatch.setattr(lab_module.bootstrap, "bootstrap", lambda *_a, **_k: "applied")
 
 
 # ----- _access_hints --------------------------------------------------------
 
 
-_GATEWAY_SYNCED = (EntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
+_GATEWAY_SYNCED = (DevelopmentClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
 
 
 def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
@@ -238,7 +239,7 @@ def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=[])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -252,7 +253,7 @@ def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) ->
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -265,12 +266,10 @@ def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) ->
 
 
 def test_many_virtualservices_yield_sorted_urls(tmp_path: Path) -> None:
-    kubectl = _RecordingKubectl(
-        vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"]
-    )
+    kubectl = _RecordingKubectl(vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -290,8 +289,8 @@ def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(
-            applied=[EntryOutcome("grafana", "minimal", "observability")]
+        lab_module._DevelopmentClusterRunSummary(
+            applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
         ),
         namespace="observability",
     )
@@ -306,7 +305,7 @@ def test_virtualservice_listing_failure_is_captured_not_raised(tmp_path: Path) -
     kubectl = _RecordingKubectl(vs_raise=ExternalCommandError("no such CRD"))
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -323,7 +322,7 @@ def test_grafana_secret_failure_is_captured_not_raised(tmp_path: Path) -> None:
     )
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -340,12 +339,10 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._RunSummary(no_change=list(_GATEWAY_SYNCED))
+    summary = lab_module._DevelopmentClusterRunSummary(no_change=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
 
-    assert kubectl.cert_waits == [
-        ("apps-wildcard", "istio-ingress", "120s")
-    ]
+    assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
 
 
 def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
@@ -353,8 +350,8 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._RunSummary(
-        applied=[EntryOutcome("grafana", "minimal", "observability")]
+    summary = lab_module._DevelopmentClusterRunSummary(
+        applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
     )
     svc._wait_apps_wildcard_ready(summary)
     assert kubectl.cert_waits == []
@@ -368,10 +365,8 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
         cert_raise=ExternalCommandError("timed out waiting"),
     )
     progress = _Recorder()
-    svc = _service(
-        tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress
-    )
-    summary = lab_module._RunSummary(applied=list(_GATEWAY_SYNCED))
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress)
+    summary = lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
     assert "warn:" in progress.text
     assert "apps-wildcard cert not Ready" in progress.text
@@ -389,16 +384,14 @@ def test_webhook_wait_runs_after_cert_manager_apply(
     helm = _Helm(status="applied")
     svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl)
 
-    plan = [PlanEntry(chart="cert-manager", profile="minimal")]
+    plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
     _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
 
-    assert kubectl.webhook_waits == [
-        ("cert-manager-webhook", "cert-manager", "120s")
-    ]
+    assert kubectl.webhook_waits == [("cert-manager-webhook", "cert-manager", "120s")]
 
 
 def test_webhook_wait_skipped_for_other_charts(
@@ -408,12 +401,12 @@ def test_webhook_wait_skipped_for_other_charts(
     helm = _Helm(status="applied")
     svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl)
 
-    plan = [PlanEntry(chart="grafana", profile="minimal")]
+    plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
     _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
     assert kubectl.webhook_waits == []
 
 
@@ -427,16 +420,14 @@ def test_webhook_wait_warning_does_not_abort_run(
     )
     helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(
-        tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl, progress=progress
-    )
+    svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl, progress=progress)
 
-    plan = [PlanEntry(chart="cert-manager", profile="minimal")]
+    plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
     _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
     assert "cert-manager webhook not Available" in progress.text
 
 
@@ -463,15 +454,13 @@ def test_port_mapping_drift_warning_when_live_missing_expected(
     kind = _Kind(host_ports={80})
     helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
-    )
+    svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
 
-    plan: list[PlanEntry] = []
+    plan: list[InstallPlanEntry] = []
     _wire_repo(monkeypatch, svc, plan=plan, charts={})
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
     assert "kind cluster port mappings do not match kind-config" in progress.text
     assert "443" in progress.text
 
@@ -494,13 +483,11 @@ def test_port_mapping_drift_no_warning_when_matching(
     kind = _Kind(host_ports={80, 443})
     helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
-    )
+    svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
     _wire_repo(monkeypatch, svc, plan=[], charts={})
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
     assert "kind cluster port mappings do not match" not in progress.text
 
 
@@ -513,13 +500,11 @@ def test_port_mapping_drift_silent_when_kind_config_absent(
     kind = _Kind(host_ports=set())
     helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(
-        tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress
-    )
+    svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
     _wire_repo(monkeypatch, svc, plan=[], charts={})
     _disable_cilium(monkeypatch)
 
-    svc.up(LabUpOptions())
+    svc.up(DevelopmentClusterUpRequest())
     assert "kind cluster port mappings" not in progress.text
 
 
@@ -529,7 +514,7 @@ def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     """The lookup namespace comes from the summary, not the run default.
 
     A profile may declare its own `namespace:`. This read `options.namespace`
-    instead, and the two coincide today only because the grafana test-spec
+    instead, and the two coincide today only because the grafana cluster-test configuration
     omits one -- so adding that single line would have silently degraded the
     credential lookup to "secret not found" with no other symptom. The
     original test could not catch it: it passed the same value for both.
@@ -538,11 +523,11 @@ def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     hints = svc._access_hints(
-        lab_module._RunSummary(
+        lab_module._DevelopmentClusterRunSummary(
             applied=[
                 *_GATEWAY_SYNCED,
                 # Grafana installed into its own namespace, not the default.
-                EntryOutcome("grafana", "minimal", "monitoring"),
+                DevelopmentClusterEntryOutcome("grafana", "minimal", "monitoring"),
             ]
         ),
         namespace="observability",
@@ -560,7 +545,7 @@ def test_grafana_secret_falls_back_to_the_run_namespace_when_absent(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     svc._access_hints(
-        lab_module._RunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 

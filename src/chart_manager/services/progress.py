@@ -1,12 +1,12 @@
 """Structured progress narration for the long-running cluster services.
 
-`LabService`, `SandboxService` and `cluster_bootstrap` all take minutes to
-run and have to say what they are doing while they do it. None of them may
+`DevelopmentClusterService`, `EphemeralTestClusterService`, and cluster
+bootstrap all take minutes to run and have to say what they are doing. None may
 know *how* that narration is displayed -- the same run has to be renderable
 by a Rich console, a Slack thread, or an SSE stream.
 
 The contract is deliberately the same shape as the two callbacks that
-already exist in this codebase (`ValidateRunner(on_event=...)`,
+already exist in this codebase (`ManifestValidationRunner(on_event=...)`,
 `MonitorService(progress=...)`): one frozen event object, one callable, no
 return value, exceptions from the callback are the surface's problem.
 
@@ -15,6 +15,7 @@ prefix that carries the severity's emphasis ("Applying", "warn:"); the
 surface styles the label and leaves `message` alone. A `label` of None
 means the whole line carries the emphasis.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable

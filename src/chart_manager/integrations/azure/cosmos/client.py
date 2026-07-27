@@ -2,6 +2,7 @@
 
 import functools
 import os
+from typing import Any
 
 import azure.identity
 from azure.cosmos import ContainerProxy, CosmosClient, PartitionKey, exceptions
@@ -15,7 +16,7 @@ def get_cosmos_client() -> CosmosClient:
     against COSMOS_ENDPOINT. COSMOS_CA_BUNDLE / COSMOS_VERIFY_TLS tune TLS
     verification for the emulator.
     """
-    options = {
+    options: dict[str, Any] = {
         "enable_endpoint_discovery": False,
         "connection_timeout": 10,
     }

@@ -6,6 +6,7 @@ side-file writing, and GITHUB_STEP_SUMMARY behavior by driving the
 internal `_emit_result` helper with a fabricated RunResult and by
 invoking `--help` / `--format unknown` through Typer's CliRunner.
 """
+
 from __future__ import annotations
 
 import io
@@ -20,13 +21,13 @@ from typer.testing import CliRunner
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.main import app
 from chart_manager.plumbing.errors import ChartNotFoundError
-from chart_manager.plumbing.validate_models import (
+from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
+from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.validate.app import RunOutcome, ValidateInputError
 
 
 def _result() -> RunResult:
@@ -50,6 +51,7 @@ def _capture_stdout(fn) -> str:
     buf = io.StringIO()
     # Replace the module-level Rich console with one writing to our buffer.
     from rich.console import Console as _Console
+
     new_console = _Console(file=buf, force_terminal=False, no_color=True, width=200)
     old_console = validate_cli.console
     validate_cli.console = new_console
@@ -59,6 +61,50 @@ def _capture_stdout(fn) -> str:
     finally:
         validate_cli.console = old_console
     return buf.getvalue()
+
+
+def test_record_lifecycle_evidence_records_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[RunOutcome] = []
+
+    class Recorder:
+        def __init__(self, root: Path) -> None:
+            assert root == tmp_path
+
+        def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
+            recorded.append(outcome)
+            return type("Recording", (), {"diagnostics": ()})()
+
+    monkeypatch.setattr(validate_cli, "ManifestValidationEvidenceRecorder", Recorder)
+    outcome = RunOutcome(result=_result(), out_dir=tmp_path / "out")
+
+    validate_cli._record_lifecycle_evidence(tmp_path, outcome)
+
+    assert recorded == [outcome]
+
+
+def test_record_lifecycle_evidence_is_nonfatal_and_warns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Recorder:
+        def __init__(self, root: Path) -> None:
+            pass
+
+        def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
+            raise OSError("read-only state directory")
+
+    monkeypatch.setattr(validate_cli, "ManifestValidationEvidenceRecorder", Recorder)
+    outcome = RunOutcome(result=_result(), out_dir=tmp_path / "out")
+
+    output = _capture_stdout(
+        lambda: validate_cli._record_lifecycle_evidence(tmp_path, outcome)
+    )
+
+    assert "lifecycle evidence was not recorded" in output
+    assert "read-only state directory" in output
 
 
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
@@ -255,73 +301,8 @@ def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
     assert "--format" in result.output
 
 
-# --- deps-install CLI -------------------------------------------------
-
-
-def test_deps_install_rejects_tool_and_all_combined() -> None:
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["validate", "deps-install", "--all", "--tool", "helm"]
-    )
-    assert result.exit_code != 0
-    assert "mutually exclusive" in result.output
-
-
-def test_deps_install_rejects_unknown_tool() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install", "--tool", "terraform"])
-    assert result.exit_code != 0
-    assert "unknown tool" in result.output
-
-
-def test_deps_install_defaults_to_install_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    calls: list[str] = []
-
-    def fake_install_all(runner, *, on_warn=print):
-        calls.append("all")
-        return [deps_install_mod.InstallResult(tool="helm", version="4.1.3", success=True)]
-
-    def fake_install_one(runner, tool, *, on_warn=print):
-        calls.append(f"one:{tool}")
-        return []
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_all", fake_install_all)
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_one", fake_install_one)
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install"])
-
-    assert result.exit_code == 0
-    assert calls == ["all"]
-    assert "helm@4.1.3: ok" in result.output
-
-
-def test_deps_install_with_explicit_tools_calls_install_one_per_tool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    calls: list[str] = []
-
-    def fake_install_one(runner, tool, *, on_warn=print):
-        calls.append(tool)
-        return [deps_install_mod.InstallResult(tool=tool, version="x", success=True)]
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_one", fake_install_one)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app, ["validate", "deps-install", "--tool", "kubeconform", "--tool", "kyverno"]
-    )
-
-    assert result.exit_code == 0
-    assert calls == ["kubeconform", "kyverno"]
-
-
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
-    from chart_manager.plumbing.validate_models import (
+    from chart_manager.services.manifest_validation.models import (
         PhaseResult,
         RowResult,
         RunResult,
@@ -364,6 +345,35 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     assert render["elapsed_seconds"] is None
 
 
+def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
+    tmp_path: Path,
+) -> None:
+    result = RunResult(rows=(), rendered_root=tmp_path / "out")
+    outcome = RunOutcome(
+        result=result,
+        out_dir=result.rendered_root,
+        warnings=("nothing selected",),
+        unmatched_changes=(Path("charts/app/templates/new.yaml"),),
+    )
+
+    out = _capture_stdout(
+        lambda: validate_cli._emit_result(
+            outcome,
+            fmt="json",
+            out_dir=outcome.out_dir,
+            requested_charts=("app",),
+            requested_environments=("dev",),
+        )
+    )
+
+    diagnostics = json.loads(out)["diagnostics"]
+    assert diagnostics["warnings"] == ["nothing selected"]
+    assert diagnostics["selection"]["requested_filters"] == {
+        "charts": ["app"],
+        "environments": ["dev"],
+    }
+
+
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
         lambda: validate_cli._emit_result(
@@ -375,18 +385,21 @@ def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> 
 
 def test_resolve_display_none_returns_null() -> None:
     d = validate_cli._resolve_display("none", fmt="text")
-    from chart_manager.services.validate.progress import NullDisplay
+    from chart_manager.services.manifest_validation.progress import NullDisplay
+
     assert isinstance(d, NullDisplay)
 
 
 def test_resolve_display_plain_returns_plain() -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
+
     d = validate_cli._resolve_display("plain", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
 
 
 def test_resolve_display_auto_with_json_picks_null() -> None:
-    from chart_manager.services.validate.progress import NullDisplay
+    from chart_manager.services.manifest_validation.progress import NullDisplay
+
     d = validate_cli._resolve_display("auto", fmt="json")
     # JSON output piped through jq must not see progress chatter.
     assert isinstance(d, NullDisplay)
@@ -396,6 +409,7 @@ def test_resolve_display_live_without_tty_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
+
     monkeypatch.setattr("sys.stderr.isatty", lambda: False)
     d = validate_cli._resolve_display("live", fmt="text")
     assert isinstance(d, PlainNarrationDisplay)
@@ -418,7 +432,7 @@ def test_run_rejects_unknown_progress_mode() -> None:
 
 # --- surface -> service handoff --------------------------------------------
 #
-# The CLI's whole job is now: build a request, hand it to ValidateApp,
+# The CLI's whole job is now: build a request, hand it to ManifestValidationService,
 # render the outcome, apply retention, exit. These drive the commands with a
 # fake app so the handoff itself is under test.
 
@@ -460,9 +474,7 @@ def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
                 phases={"render": PhaseResult(phase="render", status="FAIL")},
             ),
         )
-    return RunOutcome(
-        result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs
-    )
+    return RunOutcome(result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
@@ -478,15 +490,24 @@ def test_run_builds_a_request_from_its_flags(
     result = CliRunner().invoke(
         app,
         [
-            "validate", "run",
+            "validate",
+            "run",
             "--all",
-            "--chart", "alpha",
-            "--env", "dev",
-            "--phases", "render,schema",
-            "--workers", "3",
-            "--row-timeout", "12",
-            "--root", str(tmp_path),
-            "--progress", "none",
+            "--chart",
+            "alpha",
+            "--env",
+            "dev",
+            "--phases",
+            "render,schema",
+            "--workers",
+            "3",
+            "--row-timeout",
+            "12",
+            "--fail-fast",
+            "--root",
+            str(tmp_path),
+            "--progress",
+            "none",
         ],
     )
 
@@ -498,7 +519,23 @@ def test_run_builds_a_request_from_its_flags(
     assert request.phases == frozenset({"render", "schema"})
     assert request.workers == 3
     assert request.row_timeout == 12.0
+    assert request.fail_fast is True
     assert request.root == tmp_path
+
+
+def test_run_defaults_to_continuing_after_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].fail_fast is False
 
 
 def test_run_exits_with_the_outcome_exit_code(
@@ -523,8 +560,17 @@ def test_run_applies_retention_only_after_the_summary_is_written(
 
     CliRunner().invoke(
         app,
-        ["validate", "run", "--all", "--progress", "none", "--format", "all",
-         "--root", str(tmp_path)],
+        [
+            "validate",
+            "run",
+            "--all",
+            "--progress",
+            "none",
+            "--format",
+            "all",
+            "--root",
+            str(tmp_path),
+        ],
     )
 
     assert fake.cleanups == [fake.outcome]
@@ -659,8 +705,7 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
     output = _capture_stdout(
         lambda: CliRunner().invoke(
             app,
-            ["validate", "run", "--all", "--verbose", "--workers", "4",
-             "--root", str(tmp_path)],
+            ["validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)],
         )
     )
 
@@ -681,8 +726,7 @@ def test_verbose_with_one_worker_does_not_warn(
     output = _capture_stdout(
         lambda: CliRunner().invoke(
             app,
-            ["validate", "run", "--all", "--verbose", "--workers", "1",
-             "--root", str(tmp_path)],
+            ["validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)],
         )
     )
 
@@ -740,9 +784,7 @@ def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
 ) -> None:
     _install(monkeypatch, _FakeApp(error=ChartNotFoundError("chart not found: ghost")))
 
-    result = CliRunner().invoke(
-        app, ["validate", "render", "--chart", "ghost", "--env", "dev"]
-    )
+    result = CliRunner().invoke(app, ["validate", "render", "--chart", "ghost", "--env", "dev"])
 
     assert result.exit_code == 2
     assert "--chart" in result.output
@@ -753,8 +795,18 @@ def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
 def test_single_row_commands_reject_both_helm_bindings(command: str) -> None:
     result = CliRunner().invoke(
         app,
-        ["validate", command, "--chart", "a", "--env", "dev",
-         "--helm-version", "3.20.0", "--helm-bin", "/usr/bin/helm"],
+        [
+            "validate",
+            command,
+            "--chart",
+            "a",
+            "--env",
+            "dev",
+            "--helm-version",
+            "3.20.0",
+            "--helm-bin",
+            "/usr/bin/helm",
+        ],
     )
 
     assert result.exit_code == 2
@@ -773,26 +825,3 @@ def test_run_rejects_an_empty_phase_list() -> None:
 
     assert result.exit_code == 2
     assert "at least one phase" in result.output
-
-
-def test_deps_install_exits_nonzero_on_any_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from chart_manager.services.tools import install as deps_install_mod
-
-    def fake_install_all(runner, *, on_warn=print):
-        return [
-            deps_install_mod.InstallResult(tool="helm", version="4.1.3", success=True),
-            deps_install_mod.InstallResult(
-                tool="kyverno", version="1.18.1", success=False, detail="boom"
-            ),
-        ]
-
-    monkeypatch.setattr(validate_cli.deps_install_mod, "install_all", fake_install_all)
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "deps-install", "--all"])
-
-    assert result.exit_code == 1
-    assert "kyverno@1.18.1: failed" in result.output
-    assert "github.com/kyverno/kyverno/releases/tag/v1.18.1" in result.output

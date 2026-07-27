@@ -1,0 +1,62 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: cosmosdb-emulator
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: cosmosdb-emulator
+    namespaceTemplate: "lab-${env}"
+    environments:
+      dev:
+        namespace: azure-dev
+        values:
+          - values.yaml
+          - values-dev.yaml
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":     [dev, ci]
+      "values-dev.yaml": [dev]
+      "values-ci.yaml":  [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install the Cosmos DB emulator with the Istio VirtualService CRD available and wait for the emulator readiness endpoint.
+        namespace: azure-dev
+        requires:
+          - chart: istio-base
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: emulator-ready
+            type: helm-test
+            description: Poll the emulator /ready endpoint through the in-cluster service.
+        timeout: 15m
+
+      routed:
+        description: Install the emulator behind the shared apps gateway so it is callable through its VirtualService host.
+        namespace: azure-dev
+        requires:
+          - chart: istio-gateway
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: emulator-ready
+            type: helm-test
+            description: Poll the emulator /ready endpoint through the in-cluster service.
+        timeout: 20m
+
+    dependentTests: []

@@ -1,0 +1,17 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: schema-violator
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: schema-violator
+    environments:
+      dev:
+        namespace: lab-dev
+        values:
+          - values.yaml
+    triggers:
+      "values.yaml": [dev]
+    unmatchedChanges: warn

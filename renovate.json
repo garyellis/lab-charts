@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": [
+    "helmv3",
+    "helm-values",
+    "custom.regex"
+  ],
+  "ignorePaths": [],
+  "helm-values": {
+    "managerFilePatterns": [
+      "/(^|/)values(?:-[^/]+)?\\.ya?ml$/"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)templates/.+\\.(?:ya?ml|tpl)$/"
+      ],
+      "matchStrings": [
+        "image:\\s*[\"']?(?<depName>[A-Za-z0-9._/-]+):(?<currentValue>[A-Za-z0-9._-]+)[\"']?"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

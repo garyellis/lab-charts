@@ -1,0 +1,41 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: crossplane
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: crossplane
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: crossplane-system
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":     [ci]
+      "values.yaml":    [ci]
+      "values-ci.yaml": [ci]
+      "templates/**":   [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install Crossplane core and RBAC manager into crossplane-system and verify both deployments are ready.
+        namespace: crossplane-system
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: control-plane-ready
+            type: helm-test
+            description: Wait for the Crossplane and Crossplane RBAC manager deployments to become available.
+        timeout: 10m
+
+    dependentTests: []

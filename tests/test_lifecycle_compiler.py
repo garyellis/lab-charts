@@ -1,0 +1,333 @@
+"""Lifecycle compiler and repository doctor contract tests."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.lifecycle import (
+    ActionKind,
+    DiagnosticSeverity,
+    EdgeKind,
+    LifecycleCompiler,
+    Workflow,
+    doctor_lifecycle,
+)
+
+from .conftest import MakeChart
+
+
+def _add_validation(chart: Path) -> None:
+    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle["spec"]["validation"] = {
+        "releaseName": chart.name,
+        "namespaceTemplate": "lab-${env}",
+        "environments": {
+            "dev": {"values": ["values.yaml", "values-dev.yaml"]},
+        },
+        "schemaLocations": ["default"],
+    }
+    (chart / "values-dev.yaml").write_text("replicas: 1\n")
+    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
+
+
+def _requires(*refs: str) -> dict[str, object]:
+    parsed = []
+    for ref in refs:
+        chart, _, profile = ref.partition(":")
+        parsed.append({"chart": chart, "profile": profile or "minimal"})
+    return {"requires": parsed}
+
+
+def test_validation_compiles_the_authored_environment_to_a_linear_dag(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    _add_validation(chart)
+
+    plan = LifecycleCompiler(chart_root).compile_validation("app", "dev")
+
+    assert plan.workflow is Workflow.VALIDATION
+    assert plan.environment == "dev"
+    assert [action.kind for action in plan.actions] == [
+        ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.RENDER,
+        ActionKind.SCHEMA_VALIDATE,
+        ActionKind.POLICY_VALIDATE,
+    ]
+    assert [edge.kind for edge in plan.edges] == [
+        EdgeKind.SEQUENCE,
+        EdgeKind.INPUT,
+        EdgeKind.SEQUENCE,
+    ]
+    assert plan.actions[1].target.to_dict() == {
+        "workflow": "validation",
+        "chart": "app",
+        "environment": "dev",
+        "release": "app",
+        "namespace": "lab-dev",
+    }
+    assert [path.name for path in plan.actions[1].values] == [
+        "values.yaml",
+        "values-dev.yaml",
+    ]
+    assert all(action.input_digest.startswith("sha256:") for action in plan.actions)
+
+
+def test_cluster_test_compiles_dependency_runtime_edges_and_effective_inputs(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart(
+        "base",
+        profiles={
+            "minimal": {
+                "namespace": "operators",
+                "timeout": "7m",
+                "values": ["values.yaml"],
+            }
+        },
+    )
+    make_chart(
+        "app",
+        profiles={
+            "full": {
+                **_requires("base"),
+                "timeout": "20m",
+                "values": ["values.yaml", "values-full.yaml"],
+            }
+        },
+    )
+
+    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+        "app",
+        "full",
+        default_namespace="workloads",
+    )
+
+    assert plan.workflow is Workflow.CLUSTER_TEST
+    assert [action.target.chart for action in plan.actions] == [
+        *(["base"] * 5),
+        *(["app"] * 5),
+    ]
+    app_install = next(
+        action
+        for action in plan.actions
+        if action.target.chart == "app"
+        and action.kind is ActionKind.HELM_UPGRADE_INSTALL
+    )
+    assert app_install.target.namespace == "workloads"
+    assert app_install.timeout == "20m"
+    assert [path.name for path in app_install.values] == [
+        "values.yaml",
+        "values-full.yaml",
+    ]
+    base_test = next(
+        action
+        for action in plan.actions
+        if action.target.chart == "base" and action.kind is ActionKind.HELM_TEST
+    )
+    requirement = next(
+        edge for edge in plan.edges if edge.kind is EdgeKind.RUNTIME_REQUIREMENT
+    )
+    assert requirement.source == base_test.action_id
+    assert requirement.target == app_install.action_id
+
+
+def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("app", profiles={"minimal": {"helmTest": False}})
+
+    plan = LifecycleCompiler(chart_root).compile_cluster_test("app", "minimal")
+
+    assert [action.kind for action in plan.actions] == [
+        ActionKind.NAMESPACE_ENSURE,
+        ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.HELM_UPGRADE_INSTALL,
+        ActionKind.WORKLOAD_READY,
+    ]
+    assert plan.edges[-1].source.endswith("helm-upgrade-install")
+    assert plan.edges[-1].target.endswith("workload-ready")
+
+
+def test_plan_projection_is_deterministic_and_json_serializable(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("app")
+    compiler = LifecycleCompiler(chart_root)
+
+    first = compiler.compile_cluster_test("app", "minimal").to_dict()
+    second = compiler.compile_cluster_test("app", "minimal").to_dict()
+
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert first["kind"] == "LifecyclePlan"
+    assert first["actions"][0]["actionId"].startswith("cluster-test.app.minimal.")
+    assert first["actions"][0]["target"]["workflow"] == "cluster-test"
+
+
+def test_validation_rejects_unknown_environment_as_a_domain_error(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    _add_validation(chart)
+
+    with pytest.raises(SpecError, match="unknown environment 'missing'"):
+        LifecycleCompiler(chart_root).compile_validation("app", "missing")
+
+
+def test_generated_dependency_contents_do_not_change_compiled_input_digest(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    compiler = LifecycleCompiler(chart_root)
+    before = compiler.compile_cluster_test("app", "minimal")
+
+    generated = chart / "charts"
+    generated.mkdir()
+    (generated / "dependency-1.2.3.tgz").write_bytes(b"downloaded later")
+    after = compiler.compile_cluster_test("app", "minimal")
+
+    assert [action.input_digest for action in before.actions] == [
+        action.input_digest for action in after.actions
+    ]
+
+    templates = chart / "templates"
+    templates.mkdir()
+    (templates / "deployment.yaml").write_text("kind: Deployment\n")
+    source_changed = compiler.compile_cluster_test("app", "minimal")
+
+    assert [action.input_digest for action in after.actions] != [
+        action.input_digest for action in source_changed.actions
+    ]
+
+    (chart / "Chart.lock").write_text("dependencies: []\n")
+    lock_changed = compiler.compile_cluster_test("app", "minimal")
+    assert [action.input_digest for action in source_changed.actions] != [
+        action.input_digest for action in lock_changed.actions
+    ]
+
+
+def test_repository_policy_source_is_part_of_policy_action_digest(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    _add_validation(chart)
+    policies = chart_root / "policies"
+    policies.mkdir()
+    policy = policies / "require-labels.yaml"
+    policy.write_text("apiVersion: kyverno.io/v1\n")
+    compiler = LifecycleCompiler(chart_root)
+    before = compiler.compile_validation("app", "dev")
+
+    policy.write_text("apiVersion: kyverno.io/v2\n")
+    after = compiler.compile_validation("app", "dev")
+
+    before_by_kind = {action.kind: action.input_digest for action in before.actions}
+    after_by_kind = {action.kind: action.input_digest for action in after.actions}
+    assert (
+        before_by_kind[ActionKind.POLICY_VALIDATE]
+        != after_by_kind[ActionKind.POLICY_VALIDATE]
+    )
+    assert (
+        before_by_kind[ActionKind.RENDER]
+        == after_by_kind[ActionKind.RENDER]
+    )
+
+
+def test_validation_digest_includes_toolchain_and_execution_engine_sources(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    _add_validation(chart)
+    compiler = LifecycleCompiler(chart_root)
+    before = compiler.compile_validation("app", "dev")
+
+    (chart_root / ".mise.toml").write_text('[tools]\nhelm = "3.20.0"\n')
+    pins_changed = compiler.compile_validation("app", "dev")
+    assert [action.input_digest for action in before.actions] != [
+        action.input_digest for action in pins_changed.actions
+    ]
+
+    engine = (
+        chart_root
+        / "src"
+        / "chart_manager"
+        / "services"
+        / "manifest_validation"
+    )
+    engine.mkdir(parents=True)
+    (engine / "engine.py").write_text("PHASES = ('render',)\n")
+    source_changed = compiler.compile_validation("app", "dev")
+    assert [action.input_digest for action in pins_changed.actions] != [
+        action.input_digest for action in source_changed.actions
+    ]
+
+
+def test_digest_rejects_value_symlink_that_escapes_repository_root(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    outside = chart_root.parent / "outside-values.yaml"
+    outside.write_text("{}\n")
+    values = chart / "values.yaml"
+    values.unlink()
+    values.symlink_to(outside)
+
+    with pytest.raises(SpecError, match="digest input escapes repository root"):
+        LifecycleCompiler(chart_root).compile_cluster_test("app", "minimal")
+
+
+def test_doctor_reports_unknown_runtime_references_and_cycles(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("a", profiles={"minimal": _requires("b")})
+    make_chart(
+        "b",
+        profiles={
+            "minimal": _requires("a"),
+            "broken": _requires("missing"),
+        },
+    )
+
+    report = doctor_lifecycle(chart_root)
+
+    assert report.ok is False
+    assert report.checked_charts == 2
+    assert {diagnostic.code for diagnostic in report.diagnostics} == {
+        "dependency-cycle",
+        "unknown-chart-reference",
+    }
+    assert all(
+        diagnostic.severity is DiagnosticSeverity.ERROR
+        for diagnostic in report.diagnostics
+    )
+    assert json.loads(json.dumps(report.to_dict()))["ok"] is False
+    assert report.to_dict()["kind"] == "LifecycleDoctorReport"
+
+
+def test_doctor_valid_catalog_has_no_diagnostics(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("base")
+    make_chart("app", profiles={"minimal": _requires("base")})
+
+    report = doctor_lifecycle(chart_root)
+
+    assert report.ok
+    assert report.diagnostics == ()

@@ -7,10 +7,9 @@ name: ci
 #   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
 #
 # validate and sandbox-test run in parallel after prep — they're independent
-# signals. Validate's worklist fanout (library/policy/CLI edits) is owned by
-# the CLI's build_worklist; sandbox-test's fanout regex lives here in YAML
-# because the trigger set (kind-config, mise pins, the workflow file itself)
-# is a CI concern, not a chart concern.
+# signals. Chart Manager's lifecycle impact service owns both validation
+# selection and the sandbox chart/profile matrix, including repository-level
+# safety fanout for kind config, tool pins, and workflow changes.
 #
 # layering has no `needs` — it's a seconds-long static gate on the Python
 # package and shares nothing with the chart pipeline.
@@ -46,18 +45,8 @@ jobs:
   # capabilities. Documented in tests/test_layering.py; the same two commands
   # run locally via `mise run lint-layering`.
   #
-  # This job used to run only the three contract checks, because a backlog of
-  # ~22 ruff findings, ~40 mypy findings and 3 stale chart-inventory test
-  # assertions would have made a wider job permanently red. The ruff and test
-  # backlogs are now cleared (0 and 0), so the suite and the linter are gates
-  # here too -- without them CI could not catch a regression in any of the
-  # ~694 tests.
-  #
-  # mypy is still out: ~37 findings remain, most of them one root cause
-  # (untyped JSON payload plumbing in integrations/helmrelease.py). Add a
-  # `mypy src/` step here once that is addressed; until then a red mypy gate
-  # would train people to ignore this job, which is the failure mode the
-  # original scoping was avoiding.
+  # Keep the fast Python and workflow quality gates together. Runtime chart
+  # validation and cluster tests remain in their dedicated jobs below.
   layering:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -66,6 +55,12 @@ jobs:
 
       - name: Install mise + tools
         uses: jdx/mise-action@v4
+
+      # actionlint is pinned in .mise.toml, like the other CI tools. Checking
+      # the workflow with the project toolchain keeps this gate reproducible
+      # locally and avoids another action dependency.
+      - name: Workflow syntax
+        run: actionlint .github/workflows/ci.yaml
 
       # (a) cli/ may import services/ + plumbing/ + the composition root,
       #     never integrations/. Banned-api config lives in pyproject.toml
@@ -85,10 +80,24 @@ jobs:
       - name: Unit tests
         run: uv run --extra dev pytest -q
 
+      # The lifecycle resource is part of the chart artifact contract: later
+      # automation must be able to read the exact intent that was packaged.
+      # Keep this small Helm-backed integration in the fast gate so a bad
+      # .helmignore or filename migration cannot silently strip the resource.
+      - name: ChartLifecycle packaging contract
+        run: >-
+          uv run --extra dev pytest -q -m integration
+          tests/integration/test_chart_config_packaging.py
+
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
         run: uv run --extra dev ruff check src/ tests/
+
+      # Mypy is intentionally scoped to production code. The package baseline
+      # is clean; test annotations stay lightweight by design.
+      - name: Type check
+        run: uv run --extra dev mypy src/chart_manager
 
   prep:
     runs-on: ubuntu-latest
@@ -130,7 +139,6 @@ jobs:
           # zero charts would silently no-op, which is worse than running the
           # default path.
           mode="diff"
-          chart_list_json="[]"
           chart_list_newline=""
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -158,43 +166,12 @@ jobs:
               else
                 mode="list"
                 chart_list_newline="$parsed"
-                chart_list_json="$(printf '%s\n' "$parsed" \
-                  | jq -R -s -c 'split("\n") | map(select(length > 0))')"
               fi
             fi
           fi
 
           # Job-log only — the authoritative $GITHUB_OUTPUT write is below.
           echo "resolved dispatch mode: $mode"
-
-          # ---- Validate list-mode chart names against charts/ -------------
-          # Fail loud rather than silently dropping unknown names: a typo in
-          # the dispatch input would otherwise produce a partial matrix and
-          # look like a successful run.
-          if [[ "$mode" == "list" ]]; then
-            unknown=()
-            while IFS= read -r c; do
-              [[ -z "$c" ]] && continue
-              if [[ ! -d "charts/$c" ]]; then
-                unknown+=("$c")
-              fi
-            done <<< "$chart_list_newline"
-            if (( ${#unknown[@]} > 0 )) ; then
-              {
-                echo "### dispatch input rejected"
-                echo ""
-                echo "Unknown chart name(s) in \`charts\` input: \`${unknown[*]}\`"
-                echo ""
-                echo "Available charts:"
-                echo ""
-                echo '```'
-                ls -1 charts/
-                echo '```'
-              } >> "$GITHUB_STEP_SUMMARY"
-              echo "unknown chart name(s): ${unknown[*]}" >&2
-              exit 1
-            fi
-          fi
 
           # ---- Compute diff (always — list/all also expose changed_files) -
           # We still run the diff for list/all so downstream steps that read
@@ -218,15 +195,11 @@ jobs:
 
           tmp="$(mktemp)"
           if [[ -n "$base" ]]; then
-            # No pathspec filter: validate's worklist builder and the sandbox
-            # fanout heuristic both need to see the unfiltered list.
+            # No pathspec filter: validation and lifecycle impact analysis
+            # both need to see the complete repository change set.
             git diff --name-only "${base}...${head}" > "$tmp" || true
           fi
 
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "head=$head" >> "$GITHUB_OUTPUT"
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "chart_list_json=$chart_list_json" >> "$GITHUB_OUTPUT"
           echo "changed files:"
           cat "$tmp" || true
 
@@ -234,6 +207,9 @@ jobs:
           # path/name collision with the EOF marker).
           delim="ghadelim_$(openssl rand -hex 8)"
           {
+            echo "base=$base"
+            echo "head=$head"
+            echo "mode=$mode"
             echo "changed_files<<$delim"
             cat "$tmp"
             echo "$delim"
@@ -246,63 +222,49 @@ jobs:
         id: matrix
         env:
           MODE: ${{ steps.diff.outputs.mode }}
-          CHART_LIST_JSON: ${{ steps.diff.outputs.chart_list_json }}
+          CHART_LIST: ${{ steps.diff.outputs.chart_list_newline }}
           BASE_SHA: ${{ steps.diff.outputs.base }}
-          CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
         run: |
           set -euo pipefail
-
-          all_charts() {
-            ls -1 charts/ | jq -R -s -c 'split("\n") | map(select(length > 0))'
-          }
 
           emit() {
             echo "matrix=$1" >> "$GITHUB_OUTPUT"
             echo "matrix: $1"
           }
 
-          # Dispatch-mode short-circuits: skip the diff/fanout logic entirely.
+          args=()
           case "$MODE" in
             all)
-              emit "$(all_charts)"
-              exit 0
+              args=(--all)
               ;;
             list)
-              emit "$CHART_LIST_JSON"
-              exit 0
+              while IFS= read -r chart; do
+                [[ -n "$chart" ]] && args+=(--chart "$chart")
+              done <<< "$CHART_LIST"
+              ;;
+            *)
+              args=(--base "$BASE_SHA")
               ;;
           esac
 
-          # Fanout heuristic: edits to the CLI itself, cilium (installed first
-          # by every test), istio-base (transitive dep), the kind cluster
-          # blueprint, python dep pins, mise pins, or this workflow → every
-          # chart. Kept in YAML so workflow-level concerns don't require a CLI
-          # release to take effect.
-          fanout_re='^(src/chart_manager/|charts/cilium/|charts/istio-base/|kind-config\.yaml$|\.mise\.toml$|pyproject\.toml$|uv\.lock$|\.github/workflows/ci\.yaml$)'
-          if printf '%s\n' "$CHANGED_FILES" | grep -Eq "$fanout_re"; then
-            echo "fanout trigger matched — expanding to all charts."
-            emit "$(all_charts)"
-            exit 0
-          fi
-
-          # Otherwise let the CLI compute the per-chart impact set. Fail loud
-          # if the CLI errors — silently emitting `[]` would skip every sandbox
-          # test and look like "nothing changed".
-          if ! changed_charts="$(uv run chart-manager ci changed --base "$BASE_SHA" 2>prep-stderr.txt)"; then
+          # Chart Manager owns safety fanout, dependentTests expansion, default
+          # profile selection, and explicit-list validation. Fail loud if
+          # matrix compilation errors; an empty success is a legitimate no-op.
+          if ! matrix="$(uv run chart-manager ci cluster-test-matrix \
+            "${args[@]}" 2>prep-stderr.txt)"; then
             {
               echo "### sandbox matrix prep failed"
               echo ""
-              echo '`chart-manager ci changed` exited non-zero. stderr:'
+              echo "\`chart-manager ci cluster-test-matrix\` exited non-zero. stderr:"
               echo ""
-              echo '```'
+              echo "\`\`\`"
               cat prep-stderr.txt
-              echo '```'
+              echo "\`\`\`"
             } >> "$GITHUB_STEP_SUMMARY"
             cat prep-stderr.txt >&2
             exit 1
           fi
-          matrix="$(printf '%s\n' "$changed_charts" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
-          emit "${matrix:-[]}"
+          emit "$matrix"
 
   validate:
     needs: prep
@@ -388,24 +350,23 @@ jobs:
 
   sandbox-test:
     needs: prep
-    if: needs.prep.outputs.sandbox_matrix != '[]'
+    if: needs.prep.outputs.sandbox_matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       max-parallel: 4
-      matrix:
-        chart: ${{ fromJson(needs.prep.outputs.sandbox_matrix) }}
+      matrix: ${{ fromJson(needs.prep.outputs.sandbox_matrix) }}
     env:
       # Route matrix.chart through env once and refer to $CHART in every shell
       # block, instead of literal-interpolating ${{ matrix.chart }} into bash.
-      # Chart names come from `ls charts/` (DNS-1123 dirnames) so injection
-      # risk is ~zero today, but routing through env closes the door fully and
-      # mirrors the prep job's discipline.
+      # Chart names come from Chart Manager's enabled cluster-test catalog;
+      # routing through env keeps the shell blocks readable.
       CHART: ${{ matrix.chart }}
-      # kind cluster names are DNS-1123 (≤63 chars). All existing chart names
-      # in this repo are short + DNS-safe, so `lab-<chart>-<run_id>` fits.
-      CLUSTER_NAME: lab-${{ matrix.chart }}-${{ github.run_id }}
+      PROFILE: ${{ matrix.profile }}
+      # kind cluster names are DNS-1123 (≤63 chars). Existing chart/profile
+      # names are short + DNS-safe, so `lab-<chart>-<profile>-<run_id>` fits.
+      CLUSTER_NAME: lab-${{ matrix.chart }}-${{ matrix.profile }}-${{ github.run_id }}
     steps:
       # No fetch-depth: 0 — sandbox-test doesn't diff, default shallow clone
       # is enough and saves checkout time.
@@ -418,7 +379,7 @@ jobs:
         id: sandbox
         run: |
           mise run kind-test -- "$CHART" \
-            --profile minimal \
+            --profile "$PROFILE" \
             --cluster-name "$CLUSTER_NAME"
 
       # Capture diagnostics BEFORE teardown — once `kind delete` runs the API
@@ -466,14 +427,14 @@ jobs:
           timeout 120 kind export logs sandbox-logs/kind --name "$CLUSTER_NAME" \
             > sandbox-logs/kind-export.txt 2>&1
 
-          tar -czf "sandbox-logs-${CHART}.tar.gz" sandbox-logs
+          tar -czf "sandbox-logs-${CHART}-${PROFILE}.tar.gz" sandbox-logs
 
       - name: Upload diagnostics
         if: failure() && steps.sandbox.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
-          name: sandbox-logs-${{ matrix.chart }}-${{ github.run_id }}
-          path: sandbox-logs-${{ matrix.chart }}.tar.gz
+          name: sandbox-logs-${{ matrix.chart }}-${{ matrix.profile }}-${{ github.run_id }}
+          path: sandbox-logs-${{ matrix.chart }}-${{ matrix.profile }}.tar.gz
           if-no-files-found: ignore
           retention-days: 7
 
@@ -491,7 +452,7 @@ jobs:
           # checkout/mise install failed earlier) so the row stays readable.
           status="${OUTCOME:-unknown}"
           {
-            echo "| chart | result |"
-            echo "| --- | --- |"
-            echo "| \`${CHART}\` | ${status} |"
+            echo "| chart | profile | result |"
+            echo "| --- | --- | --- |"
+            echo "| \`${CHART}\` | \`${PROFILE}\` | ${status} |"
           } >> "$GITHUB_STEP_SUMMARY"
