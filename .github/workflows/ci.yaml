@@ -233,10 +233,6 @@ jobs:
             git diff --name-only "${base}...${head}" > "$tmp" || true
           fi
 
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "head=$head" >> "$GITHUB_OUTPUT"
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "chart_list_json=$chart_list_json" >> "$GITHUB_OUTPUT"
           echo "changed files:"
           cat "$tmp" || true
 
@@ -244,6 +240,10 @@ jobs:
           # path/name collision with the EOF marker).
           delim="ghadelim_$(openssl rand -hex 8)"
           {
+            echo "base=$base"
+            echo "head=$head"
+            echo "mode=$mode"
+            echo "chart_list_json=$chart_list_json"
             echo "changed_files<<$delim"
             cat "$tmp"
             echo "$delim"
@@ -289,7 +289,7 @@ jobs:
           # blueprint, python dep pins, mise pins, or this workflow → every
           # chart. Kept in YAML so workflow-level concerns don't require a CLI
           # release to take effect.
-          fanout_re='^(src/chart_manager/|charts/cilium/|charts/istio-base/|kind-config\.yaml$|\.mise\.toml$|pyproject\.toml$|uv\.lock$|\.github/workflows/ci\.yaml$)'
+          fanout_re="^(src/chart_manager/|charts/cilium/|charts/istio-base/|kind-config\.yaml$|\.mise\.toml$|pyproject\.toml$|uv\.lock$|\.github/workflows/ci\.yaml$)"
           if printf '%s\n' "$CHANGED_FILES" | grep -Eq "$fanout_re"; then
             echo "fanout trigger matched — expanding to all charts."
             emit "$(all_charts)"
