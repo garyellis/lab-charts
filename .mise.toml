@@ -11,7 +11,7 @@ kubectl = "1.35.3"
 kind = "0.32.0"
 kubeconform = "0.8.0"
 kyverno = "1.18.1"
-"npm:renovate" = "43.281.0"
+#"npm:renovate" = "43.281.0"
 
 [tasks.setup]
 description = "Install Python dependencies for the chart-manager CLI."
