@@ -127,7 +127,9 @@ def _mixed_run_result() -> RunResult:
             ),
         ),
         rendered_root=Path("/abs/render-root"),
-        spec_errors=("charts/broken/chart-manager.yaml: unsupported version 99",),
+        spec_errors=(
+            "charts/broken/chart-lifecycle.yaml: unsupported apiVersion example.io/v99",
+        ),
     )
 
 
@@ -360,7 +362,7 @@ def test_to_json_shape_and_schema_version() -> None:
         assert isinstance(a, str)
 
     assert data["spec_errors"] == [
-        "charts/broken/chart-manager.yaml: unsupported version 99"
+        "charts/broken/chart-lifecycle.yaml: unsupported apiVersion example.io/v99"
     ]
 
 
@@ -393,7 +395,7 @@ def test_wire_outcome_preserves_selection_diagnostics() -> None:
     outcome = RunOutcome(
         result=result,
         out_dir=result.rendered_root,
-        warnings=("chart legacy has no chart-manager.yaml",),
+        warnings=("chart legacy has no chart-lifecycle.yaml",),
         ignored_changes=(Path("charts/app/README.md"),),
         unmatched_changes=(Path("charts/app/templates/new.yaml"),),
         rows_filtered_out=2,
@@ -407,7 +409,7 @@ def test_wire_outcome_preserves_selection_diagnostics() -> None:
     )
 
     diagnostics = data["diagnostics"]
-    assert diagnostics["warnings"] == ["chart legacy has no chart-manager.yaml"]
+    assert diagnostics["warnings"] == ["chart legacy has no chart-lifecycle.yaml"]
     assert diagnostics["no_work_reason"] == (
         "requested filters selected no affected validation cases"
     )
@@ -433,7 +435,7 @@ def test_wire_outcome_preserves_selection_diagnostics() -> None:
     assert "Requested charts: app" in markdown
     assert "Changes matching no trigger" in markdown
     assert "### Warnings" in markdown
-    assert "chart legacy has no chart-manager.yaml" in markdown
+    assert "chart legacy has no chart-lifecycle.yaml" in markdown
 
 
 def test_markdown_outcome_with_only_warnings_needs_no_selection_metadata() -> None:

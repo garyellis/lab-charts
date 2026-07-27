@@ -1,14 +1,17 @@
-"""Repository-wide guards for the authored chart-manager contract."""
+"""Repository-wide guards for the authored ChartLifecycle contract."""
 
 from __future__ import annotations
 
+import yaml
+
 from chart_manager.services.chart_config import (
-    CONFIG_FILENAME,
-    LEGACY_CONFIG_FILENAMES,
+    LIFECYCLE_API_VERSION,
+    LIFECYCLE_FILENAME,
+    LIFECYCLE_KIND,
     CapabilityStatus,
-    cluster_tests_status,
-    load_chart_manager_config,
-    manifest_validation_status,
+    cluster_test_status,
+    load_chart_lifecycle,
+    validation_status,
 )
 
 from .conftest import REPO_ROOT
@@ -19,26 +22,24 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
 
     assert len(chart_dirs) == 28
     for chart_dir in chart_dirs:
-        config = load_chart_manager_config(chart_dir / CONFIG_FILENAME)
-        assert config.enabled, chart_dir.name
-        assert manifest_validation_status(config) is CapabilityStatus.ENABLED, chart_dir.name
-        assert cluster_tests_status(config) is CapabilityStatus.ENABLED, chart_dir.name
+        config_path = chart_dir / LIFECYCLE_FILENAME
+        document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert list(document) == ["apiVersion", "kind", "metadata", "spec"], chart_dir.name
+        assert document["apiVersion"] == LIFECYCLE_API_VERSION, chart_dir.name
+        assert document["kind"] == LIFECYCLE_KIND, chart_dir.name
+        assert document["metadata"] == {"name": chart_dir.name}, chart_dir.name
+        assert list(document["spec"]) == [
+            "enabled",
+            "validation",
+            "clusterTest",
+        ], chart_dir.name
 
+        lifecycle = load_chart_lifecycle(config_path)
+        assert lifecycle.spec.enabled, chart_dir.name
+        assert validation_status(lifecycle) is CapabilityStatus.ENABLED, chart_dir.name
+        assert cluster_test_status(lifecycle) is CapabilityStatus.ENABLED, chart_dir.name
 
-def test_repository_contains_no_legacy_chart_configuration_files() -> None:
-    roots = (REPO_ROOT / "charts", REPO_ROOT / "tests" / "fixtures" / "charts")
-
-    found = [
-        path.relative_to(REPO_ROOT)
-        for root in roots
-        for legacy_name in LEGACY_CONFIG_FILENAMES
-        for path in root.glob(f"*/{legacy_name}")
-    ]
-
-    assert found == []
-
-
-def test_no_helmignore_excludes_chart_manager_configuration() -> None:
+def test_no_helmignore_excludes_chart_lifecycle_configuration() -> None:
     offenders = []
     for ignore_path in (REPO_ROOT / "charts").glob("*/.helmignore"):
         entries = {
@@ -46,7 +47,7 @@ def test_no_helmignore_excludes_chart_manager_configuration() -> None:
             for line in ignore_path.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         }
-        if CONFIG_FILENAME in entries:
+        if LIFECYCLE_FILENAME in entries:
             offenders.append(ignore_path.relative_to(REPO_ROOT))
 
     assert offenders == []

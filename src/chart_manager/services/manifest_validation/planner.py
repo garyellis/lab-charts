@@ -6,7 +6,7 @@ import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from chart_manager.services.chart_config import CONFIG_FILENAME
+from chart_manager.services.chart_config import LIFECYCLE_FILENAME
 from chart_manager.services.domain.install_plan import build_helm_dependency_index
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import (
@@ -87,9 +87,9 @@ def build_worklist(
             _fanout_dependents(accumulated, specs, dependency_index, chart_name)
             continue
         chart_relative = Path(*parts[2:])
-        if chart_relative == Path(CONFIG_FILENAME):
-            # The unified config is chart-wide only when this chart has an
-            # enabled manifestValidation capability. Disabled/unconfigured
+        if chart_relative == Path(LIFECYCLE_FILENAME):
+            # Lifecycle intent is chart-wide only when this chart has an
+            # enabled validation capability. Disabled/unconfigured
             # capabilities never enter validation fanout.
             if chart_name in specs:
                 _add_all_envs(accumulated, specs, chart_name)

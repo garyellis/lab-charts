@@ -372,8 +372,14 @@ class Kubectl:
                     hosts.add(host)
         return sorted(hosts)
 
-    def wait_workloads_ready(self, namespace: str, timeout: str = "10m") -> None:
-        """Run `kubectl rollout status` for every workload in the namespace, serially.
+    def wait_workloads_ready(
+        self,
+        namespace: str,
+        timeout: str = "10m",
+        *,
+        selector: str | None = None,
+    ) -> None:
+        """Run rollout status for matching workloads in a namespace, serially.
 
         A failed listing raises instead of being read as "no workloads here".
         The listing ran with check=False and the caller iterated its stdout,
@@ -381,16 +387,17 @@ class Kubectl:
         context -- produced an empty name list and the gate returned
         immediately. A readiness gate that silently passes when it cannot
         see the cluster is worse than no gate, and it did so precisely when
-        the cluster was unhealthy.
+        the cluster was unhealthy. ``selector`` scopes release-owned waits;
+        ``None`` preserves the namespace-wide behavior used by environment
+        bootstrap and the development converger.
         """
         for kind in ("deployment", "statefulset", "daemonset"):
+            list_args = ["kubectl", "-n", namespace, "get", kind]
+            if selector is not None:
+                list_args.extend(("-l", selector))
+            list_args.extend(("-o", "jsonpath={.items[*].metadata.name}"))
             listing = self.runner.run(
-                self._with_context(
-                    [
-                        "kubectl", "-n", namespace, "get", kind,
-                        "-o", "jsonpath={.items[*].metadata.name}",
-                    ]
-                ),
+                self._with_context(list_args),
                 check=False,
                 timeout=self.timeout,
             )

@@ -8,19 +8,20 @@ from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.chart_config import (
-    CONFIG_FILENAME,
+    LIFECYCLE_FILENAME,
     CapabilityStatus,
-    load_optional_chart_manager_config,
-    manifest_validation_status,
-    require_manifest_validation,
+    load_optional_chart_lifecycle,
+    require_validation,
+    validate_chart_lifecycle_identity,
+    validation_status,
 )
 from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.manifest_validation.models import ManifestValidationTarget
 
 
-def discover_chart_manager_config(chart_path: Path) -> Path | None:
-    """Return the chart-manager configuration when it is a regular file."""
-    candidate = chart_path / CONFIG_FILENAME
+def discover_chart_lifecycle(chart_path: Path) -> Path | None:
+    """Return lifecycle intent when it is a regular file."""
+    candidate = chart_path / LIFECYCLE_FILENAME
     return candidate if candidate.is_file() else None
 
 
@@ -52,11 +53,17 @@ class ValidationCatalog:
 def load_manifest_validation_target(root: Path, name: str) -> ManifestValidationTarget:
     """Strictly load one explicitly requested manifest-validation target."""
     chart = ChartRepository(root).get(name)
-    spec_path = chart.path / CONFIG_FILENAME
-    config = load_optional_chart_manager_config(spec_path)
+    spec_path = chart.path / LIFECYCLE_FILENAME
+    lifecycle = load_optional_chart_lifecycle(spec_path)
+    if lifecycle is not None:
+        validate_chart_lifecycle_identity(
+            lifecycle,
+            chart_name=chart.name,
+            chart_directory=chart.path,
+        )
     return ManifestValidationTarget(
         chart=chart,
-        spec=require_manifest_validation(config, chart_name=chart.name),
+        spec=require_validation(lifecycle, chart_name=chart.name),
         spec_path=spec_path,
     )
 
@@ -74,24 +81,30 @@ def load_chart_specs(
         except ChartManagerError as exc:
             entries.append(CatalogEntry(chart=name, error=str(exc)))
             continue
-        spec_path = chart.path / CONFIG_FILENAME
+        spec_path = chart.path / LIFECYCLE_FILENAME
         try:
-            config = load_optional_chart_manager_config(spec_path)
+            lifecycle = load_optional_chart_lifecycle(spec_path)
+            if lifecycle is not None:
+                validate_chart_lifecycle_identity(
+                    lifecycle,
+                    chart_name=chart.name,
+                    chart_directory=chart.path,
+                )
         except SpecError as exc:
             entries.append(CatalogEntry(chart=name, error=str(exc)))
             continue
-        status = manifest_validation_status(config)
+        status = validation_status(lifecycle)
         if status is not CapabilityStatus.ENABLED:
             entries.append(
                 CatalogEntry(
                     chart=name,
-                    config_missing=config is None,
+                    config_missing=lifecycle is None,
                     capability_status=status,
                 )
             )
             continue
         # The status check proves the root and capability are enabled.
-        spec = require_manifest_validation(config, chart_name=chart.name)
+        spec = require_validation(lifecycle, chart_name=chart.name)
         entries.append(
             CatalogEntry(
                 chart=name,
@@ -128,12 +141,12 @@ def build_catalog(root: Path) -> ValidationCatalog:
         errors=errors,
         warnings=(
             *(
-                f"chart {name} has no {CONFIG_FILENAME} — skipping manifest validation"
+                f"chart {name} has no {LIFECYCLE_FILENAME} — skipping manifest validation"
                 for name in config_missing
             ),
             *(
-                f"chart {name} has no manifestValidation configuration in "
-                f"{CONFIG_FILENAME} — skipping"
+                f"chart {name} has no validation configuration in "
+                f"{LIFECYCLE_FILENAME} — skipping"
                 for name in absent
             ),
             *(

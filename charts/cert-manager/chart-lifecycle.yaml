@@ -1,0 +1,60 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: cert-manager
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: cert-manager
+    namespaceTemplate: "lab-${env}"
+    environments:
+      dev:
+        values:
+          - values.yaml
+          - values-dev.yaml
+      test:
+        values:
+          - values.yaml
+          - values-test.yaml
+      uat:
+        values:
+          - values.yaml
+          - values-uat.yaml
+      prod:
+        values:
+          - values.yaml
+          - values-prod.yaml
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":      [dev, test, uat, prod, ci]
+      "values-dev.yaml":  [dev]
+      "values-test.yaml": [test]
+      "values-uat.yaml":  [uat]
+      "values-prod.yaml": [prod]
+      "values-ci.yaml":   [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install cert-manager (controller, webhook, cainjector) with CRDs and exercise a self-signed issuance.
+        namespace: cert-manager
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: selfsign-issuance
+            type: helm-test
+            description: Issue a Certificate via a self-signed Issuer to verify the webhook admits cert-manager.io CRs and the controller signs.
+        timeout: 10m
+
+    dependentTests:
+      - chart: istio-gateway
+        profile: minimal

@@ -63,6 +63,50 @@ def _capture_stdout(fn) -> str:
     return buf.getvalue()
 
 
+def test_record_lifecycle_evidence_records_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[RunOutcome] = []
+
+    class Recorder:
+        def __init__(self, root: Path) -> None:
+            assert root == tmp_path
+
+        def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
+            recorded.append(outcome)
+            return type("Recording", (), {"diagnostics": ()})()
+
+    monkeypatch.setattr(validate_cli, "ManifestValidationEvidenceRecorder", Recorder)
+    outcome = RunOutcome(result=_result(), out_dir=tmp_path / "out")
+
+    validate_cli._record_lifecycle_evidence(tmp_path, outcome)
+
+    assert recorded == [outcome]
+
+
+def test_record_lifecycle_evidence_is_nonfatal_and_warns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Recorder:
+        def __init__(self, root: Path) -> None:
+            pass
+
+        def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
+            raise OSError("read-only state directory")
+
+    monkeypatch.setattr(validate_cli, "ManifestValidationEvidenceRecorder", Recorder)
+    outcome = RunOutcome(result=_result(), out_dir=tmp_path / "out")
+
+    output = _capture_stdout(
+        lambda: validate_cli._record_lifecycle_evidence(tmp_path, outcome)
+    )
+
+    assert "lifecycle evidence was not recorded" in output
+    assert "read-only state directory" in output
+
+
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(

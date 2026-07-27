@@ -5,8 +5,8 @@ path, so ``sandbox test`` and ``sandbox up`` cannot drift.
 
 Cilium runs as the kind cluster CNI with full kube-proxy replacement, so it
 must come up before anything else can become Ready. These bootstrap settings
-live here -- not in ``chart-manager.yaml`` -- because they are a property of the kind
-environment, not of the cilium chart's ``clusterTests`` contract.
+live here -- not in ``chart-lifecycle.yaml`` -- because they are a property of
+the kind environment, not of the Cilium chart's ``spec.clusterTest`` contract.
 """
 
 from __future__ import annotations

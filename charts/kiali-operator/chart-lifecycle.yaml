@@ -1,0 +1,59 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: kiali-operator
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: kiali-operator
+    namespaceTemplate: "lab-${env}"
+    # The Kiali CR (kiali.io/v1alpha1) is not in the datreeio CRDs catalog, so
+    # kubeconform has no schema for it. Add a local permissive schema alongside
+    # the defaults (default in-tree schemas + the datreeio catalog for the istio
+    # CRDs). schema_locations replaces the built-in defaults, so all three are
+    # listed here.
+    schemaLocations:
+      - default
+      - "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+      - "charts/kiali-operator/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+    environments:
+      ci:
+        namespace: kiali-operator
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":     [ci]
+      "values.yaml":    [ci]
+      "values-ci.yaml": [ci]
+      "templates/**":   [ci]
+      "schemas/**":     [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install the operator behind the shared apps gateway (Kiali CR + VirtualService) and verify the operator, CRD, and route.
+        namespace: kiali-operator
+        requires:
+          - chart: istio-gateway
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: control-plane-ready
+            type: helm-test
+            description: Wait for the kiali-operator Deployment to become Available.
+          - name: crds-installed
+            type: helm-test
+            description: Verify the Kiali CRD (kialis.kiali.io) is registered.
+          - name: route-configured
+            type: helm-test
+            description: Verify the Kiali VirtualService exists on the apps gateway.
+        timeout: 15m
+
+    dependentTests: []

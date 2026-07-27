@@ -36,6 +36,7 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartNotFoundError
+from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
@@ -95,7 +96,7 @@ EnvOption = Annotated[
         "--env",
         help=(
             "Environment label. Used for the namespace default (lab-<env>) and output path. "
-            "Single-row commands (render/schema/policy) do NOT consult chart-manager.yaml — "
+            "Single-row commands (render/schema/policy) do NOT consult chart-lifecycle.yaml — "
             "pass --values explicitly to overlay per-env values. Use `validate run` for "
             "spec-driven multi-row execution."
         ),
@@ -192,6 +193,28 @@ def _warn(message: str) -> None:
     console.print(f"[yellow]{message}[/yellow]")
 
 
+def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
+    """Best-effort projection of validation phases into local lifecycle evidence.
+
+    Evidence is an observational side effect, not the validation deliverable:
+    an unavailable local state directory must never turn a truthful validation
+    result into a different process verdict.
+    """
+    try:
+        recording = ManifestValidationEvidenceRecorder(root).record(outcome)
+    except Exception as exc:
+        _warn(f"warning: lifecycle evidence was not recorded: {exc}")
+        return
+    for diagnostic in recording.diagnostics:
+        phase = f"/{diagnostic.phase}" if diagnostic.phase else ""
+        _warn(
+            "warning: lifecycle evidence "
+            f"{diagnostic.stage} failed for "
+            f"{diagnostic.chart}/{diagnostic.environment}{phase}: "
+            f"{diagnostic.message}"
+        )
+
+
 def render(
     chart: ChartOption,
     env: EnvOption,
@@ -246,8 +269,8 @@ def schema(
             help=(
                 "Kubernetes version for kubeconform (e.g. 1.31.2). "
                 "Defaults to kubeconform's built-in default. "
-                "For multi-row runs this is sourced from chart-manager.yaml "
-                "(manifestValidation.kubernetesVersion)."
+                "For multi-row runs this is sourced from chart-lifecycle.yaml "
+                "(spec.validation.kubernetesVersion)."
             ),
         ),
     ] = None,
@@ -258,8 +281,8 @@ def schema(
             help=(
                 "Override kubeconform schema search path (repeatable). "
                 "Default: ['default', datreeio CRDs catalog]. "
-                "For multi-row runs this is sourced from chart-manager.yaml "
-                "(manifestValidation.schemaLocations)."
+                "For multi-row runs this is sourced from chart-lifecycle.yaml "
+                "(spec.validation.schemaLocations)."
             ),
         ),
     ] = [],
@@ -306,14 +329,14 @@ def policy(
         str | None,
         typer.Option(
             "--kube-version",
-            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from chart-manager.yaml.",
+            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from chart-lifecycle.yaml.",
         ),
     ] = None,
     schema_location: Annotated[
         list[str],
         typer.Option(
             "--schema-location",
-            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from chart-manager.yaml.",
+            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from chart-lifecycle.yaml.",
         ),
     ] = [],
     policy_dir: Annotated[
@@ -477,7 +500,7 @@ def run(
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build worklist from chart-manager.yaml + git, then run all phases.
+    """Build worklist from chart-lifecycle.yaml + git, then run all phases.
 
     Source of the changed-files list (in precedence order):
       --all > --changed-files > git diff against --base.
@@ -523,6 +546,8 @@ def run(
         outcome = app.run(request)
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
+
+    _record_lifecycle_evidence(root, outcome)
 
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with --format all the sidecars are written into the render

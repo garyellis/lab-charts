@@ -1,0 +1,34 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: chaos-mesh
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: chaos-mesh
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":    [ci]
+      "values-ci.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install Chaos Mesh (controller-manager, chaos-daemon, dashboard) and verify rollout.
+        namespace: chaos-mesh
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []

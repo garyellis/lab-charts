@@ -1,4 +1,4 @@
-"""Prove unified chart configuration remains in Helm package artifacts."""
+"""Prove ChartLifecycle intent remains in Helm package artifacts."""
 
 from __future__ import annotations
 
@@ -9,14 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.chart_config import CONFIG_FILENAME
+from chart_manager.services.chart_config import LIFECYCLE_FILENAME
 
 pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).parents[2]
-
-
-def test_every_production_chart_package_contains_chart_manager_config(
+def test_every_production_chart_package_contains_chart_lifecycle(
     tmp_path: Path,
 ) -> None:
     if shutil.which("helm") is None:
@@ -39,6 +37,6 @@ def test_every_production_chart_package_contains_chart_manager_config(
         with tarfile.open(archive, mode="r:gz") as package:
             members = {member.name for member in package.getmembers()}
         packaged_configs = {
-            member for member in members if member.endswith(f"/{CONFIG_FILENAME}")
+            member for member in members if member.endswith(f"/{LIFECYCLE_FILENAME}")
         }
         assert len(packaged_configs) == 1, archive.name

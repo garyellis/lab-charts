@@ -242,6 +242,23 @@ def test_wait_workloads_ready_accepts_a_genuinely_empty_namespace() -> None:
     assert not [c for c in runner.calls if "rollout" in c]
 
 
+def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
+    runner = _scripted([_ok("web"), _ok(), _ok(""), _ok("")])
+
+    Kubectl(runner=runner).wait_workloads_ready(
+        "shared",
+        selector="app.kubernetes.io/instance=grafana",
+    )
+
+    listings = [call for call in runner.calls if "get" in call]
+    assert len(listings) == 3
+    assert all(
+        call[call.index("-l") : call.index("-l") + 2]
+        == ("-l", "app.kubernetes.io/instance=grafana")
+        for call in listings
+    )
+
+
 # ----- cluster addressing ---------------------------------------------------
 # `Kubectl` took no context at all until Wave 4, so `Settings.kube_context`
 # reached two of six adapters and the lab/sandbox/ci/expose services all read

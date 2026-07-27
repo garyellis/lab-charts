@@ -1,6 +1,6 @@
 """Manifest-validation planning tests over a temporary chart tree.
 
-We synthesize charts (Chart.yaml + chart-manager.yaml) rather than rely on
+We synthesize charts (Chart.yaml + chart-lifecycle.yaml) rather than rely on
 the in-repo charts so the tests are independent of real-repo evolution.
 """
 
@@ -36,14 +36,21 @@ def _chart(
             chart_yaml += f"  - name: {dep['name']}\n    version: {dep.get('version', '0.0.0')}\n"
     (chart_dir / "Chart.yaml").write_text(chart_yaml)
     if spec is not None:
-        section = textwrap.dedent(spec).removeprefix("\n").removeprefix("version: 1\n")
-        envelope = "version: 1\nmanifestValidation:\n" + textwrap.indent(section, "  ")
-        (chart_dir / "chart-manager.yaml").write_text(envelope)
+        section = textwrap.dedent(spec).removeprefix("\n")
+        envelope = (
+            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "kind: ChartLifecycle\n"
+            "metadata:\n"
+            f"  name: {name}\n"
+            "spec:\n"
+            "  validation:\n"
+            + textwrap.indent(section, "    ")
+        )
+        (chart_dir / "chart-lifecycle.yaml").write_text(envelope)
     return chart_dir
 
 
 _DEFAULT_SPEC = """
-version: 1
 releaseName: {name}
 environments:
   dev:
@@ -84,7 +91,6 @@ def test_trigger_specific_env(tmp_path: Path) -> None:
 
 def test_match_by_basename(tmp_path: Path) -> None:
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -232,12 +238,12 @@ def test_per_chart_policies_dir_edit_fanouts_to_all_envs(tmp_path: Path) -> None
     assert pairs == {("alpha", "dev"), ("alpha", "prod")}
 
 
-def test_manifest_validation_spec_edit_fanouts_to_all_envs(tmp_path: Path) -> None:
+def test_chart_lifecycle_edit_fanouts_to_all_envs(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
         root=tmp_path,
-        changed_files=["charts/alpha/chart-manager.yaml"],
+        changed_files=["charts/alpha/chart-lifecycle.yaml"],
     )
 
     pairs = {(r.chart, r.env) for r in result.rows}
@@ -248,7 +254,6 @@ def test_overlapping_triggers_union_envs(tmp_path: Path) -> None:
     # `values.yaml` matches BOTH the literal trigger (dev only) and the
     # glob trigger (prod only). Contract: set-union, not last-wins.
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -276,7 +281,6 @@ def test_match_by_basename_preserves_multi_dot_stem(tmp_path: Path) -> None:
     # `envs/dev.local.yaml` -> stem `dev.local`. Declared env wins; an
     # undeclared stem produces zero envs (silently ignored).
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev.local:
@@ -318,7 +322,6 @@ def test_unmatched_changes_policy_fans_out_to_all_envs(tmp_path: Path) -> None:
     # mode the worklist fans out to every env in `environments` instead of
     # silently dropping the file.
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -345,7 +348,6 @@ unmatchedChanges: all-environments
 def test_unmatched_changes_policy_does_not_override_explicit_trigger(tmp_path: Path) -> None:
     # An explicit trigger still scopes to its listed envs even with strict on.
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -373,7 +375,6 @@ def test_unmatched_changes_warn_drops_unmatched_work(tmp_path: Path) -> None:
     # Default (non-strict) behavior preserved: an unmatched chart file
     # produces zero rows.
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -400,7 +401,6 @@ def test_explicit_trigger_ignore_is_distinct_from_unmatched_change(
     tmp_path: Path,
 ) -> None:
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -436,7 +436,6 @@ def test_explicit_ignore_takes_precedence_over_overlapping_trigger(
     tmp_path: Path,
 ) -> None:
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -462,7 +461,6 @@ def test_strict_fanout_still_records_unmatched_trigger_coverage(
     tmp_path: Path,
 ) -> None:
     spec = """
-version: 1
 releaseName: alpha
 environments:
   dev:
@@ -500,7 +498,7 @@ def test_catalog_composes_validate_spec_over_authoritative_helm_chart(
     assert target.name == "alpha"
     assert target.path == chart_dir
     assert target.chart.metadata.version == "0.1.0"
-    assert target.spec_path == chart_dir / "chart-manager.yaml"
+    assert target.spec_path == chart_dir / "chart-lifecycle.yaml"
 
 
 def test_repository_scan_records_malformed_chart_metadata_without_aborting(
@@ -524,7 +522,7 @@ def test_explicit_validatable_chart_load_is_strict(tmp_path: Path) -> None:
 
     with pytest.raises(
         ChartManagerError,
-        match=r"has no manifestValidation configuration in chart-manager\.yaml",
+        match=r"has no validation configuration in chart-lifecycle\.yaml",
     ):
         load_manifest_validation_target(tmp_path, "alpha")
 
@@ -565,7 +563,7 @@ policies:
     ]
 
 
-def test_compiler_accepts_legacy_repo_relative_policy_with_diagnostic(
+def test_compiler_does_not_accept_repository_relative_extra_policy(
     tmp_path: Path,
 ) -> None:
     spec = (
@@ -578,14 +576,16 @@ policies:
     chart_dir = _chart(tmp_path, "alpha", spec=spec)
     (chart_dir / "values.yaml").write_text("{}\n")
     (chart_dir / "values-prod.yaml").write_text("{}\n")
-    legacy = tmp_path / "legacy-policies"
-    legacy.mkdir()
+    repository_policy = tmp_path / "legacy-policies"
+    repository_policy.mkdir()
 
     build = build_worklist(root=tmp_path, all_charts=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
 
-    assert compiled.policy_paths == (legacy.resolve(),)
-    assert any("repository-relative for compatibility" in item for item in compiled.warnings)
+    assert compiled.policy_paths == ()
+    assert len(compiled.warnings) == 1
+    assert "policy directory does not exist" in compiled.warnings[0]
+    assert str(chart_dir / "legacy-policies") in compiled.warnings[0]
 
 
 def test_explicit_filter_diagnostics_use_catalog_not_affected_rows(

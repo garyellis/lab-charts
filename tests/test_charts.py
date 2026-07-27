@@ -87,7 +87,7 @@ def test_cluster_test_catalog_requires_chart_manager_configuration(
 
     with pytest.raises(
         CapabilityUnavailableError,
-        match=r"no clusterTests configuration in chart-manager\.yaml",
+        match=r"no clusterTest configuration in chart-lifecycle\.yaml",
     ):
         ClusterTestCatalog(chart_root).get("common")
 
@@ -98,20 +98,31 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
 ) -> None:
     make_chart("enabled")
     unmanaged = make_chart("unmanaged")
-    (unmanaged / "chart-manager.yaml").unlink()
+    (unmanaged / "chart-lifecycle.yaml").unlink()
     disabled = make_chart("disabled")
-    (disabled / "chart-manager.yaml").write_text(
-        yaml.safe_dump({"version": 1, "enabled": False}),
+    (disabled / "chart-lifecycle.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": "disabled"},
+                "spec": {"enabled": False},
+            }
+        ),
         encoding="utf-8",
     )
     section_disabled = make_chart("section-disabled")
-    (section_disabled / "chart-manager.yaml").write_text(
+    (section_disabled / "chart-lifecycle.yaml").write_text(
         yaml.safe_dump(
             {
-                "version": 1,
-                "clusterTests": {
-                    "enabled": False,
-                    "profiles": {"minimal": {}},
+                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": "section-disabled"},
+                "spec": {
+                    "clusterTest": {
+                        "enabled": False,
+                        "profiles": {"minimal": {}},
+                    }
                 },
             }
         ),
@@ -126,13 +137,36 @@ def test_chart_catalog_retains_invalid_config_for_operator_visibility(
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("broken")
-    (chart / "chart-manager.yaml").write_text("version: [wrong\n", encoding="utf-8")
+    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
     entry = ChartCatalogService(chart_root).list_entries()[0]
 
     assert entry.name == "broken"
-    assert entry.config_status == "invalid"
+    assert entry.lifecycle_status == "invalid"
     assert entry.error is not None
+
+
+def test_chart_catalog_rejects_lifecycle_identity_mismatch(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("actual")
+    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle["metadata"]["name"] = "other"
+    (chart / "chart-lifecycle.yaml").write_text(
+        yaml.safe_dump(lifecycle),
+        encoding="utf-8",
+    )
+
+    entry = ChartCatalogService(chart_root).list_entries()[0]
+
+    assert entry.lifecycle_status == "invalid"
+    assert entry.error is not None
+    assert "metadata.name 'other'" in entry.error
+    assert "Chart.yaml name 'actual'" in entry.error
+
+    with pytest.raises(SpecError, match=r"metadata\.name 'other'"):
+        ChartCatalogService(chart_root).get_lifecycle("actual")
 
 
 def test_charts_list_returns_nonzero_after_rendering_invalid_config(
@@ -140,7 +174,7 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("broken")
-    (chart / "chart-manager.yaml").write_text("version: [wrong\n", encoding="utf-8")
+    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
     result = CliRunner().invoke(app, ["charts", "list", "--root", str(chart_root)])
 
@@ -149,7 +183,7 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
     assert "invalid" in result.stdout
 
 
-def test_charts_config_prints_the_normalized_envelope(
+def test_charts_lifecycle_prints_the_normalized_envelope(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -157,12 +191,13 @@ def test_charts_config_prints_the_normalized_envelope(
 
     result = CliRunner().invoke(
         app,
-        ["charts", "config", "alloy", "--root", str(chart_root)],
+        ["charts", "lifecycle", "alloy", "--root", str(chart_root)],
     )
 
     assert result.exit_code == 0
-    assert '"version": 1' in result.stdout
-    assert '"clusterTests"' in result.stdout
+    assert '"apiVersion": "lifecycle.cmg.io/v1alpha1"' in result.stdout
+    assert '"kind": "ChartLifecycle"' in result.stdout
+    assert '"clusterTest"' in result.stdout
     assert '"enabled": true' in result.stdout
 
 

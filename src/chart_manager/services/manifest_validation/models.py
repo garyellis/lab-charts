@@ -103,7 +103,7 @@ class RunResult:
 
     rows: tuple[RowResult, ...]
     rendered_root: Path
-    # Configuration-level errors (corrupt chart-manager.yaml, unknown version envelope)
+    # Configuration-level errors (corrupt chart-lifecycle.yaml, wrong resource envelope)
     # that prevent rows from being constructed at all.
     spec_errors: tuple[str, ...] = field(default_factory=tuple)
 

@@ -70,12 +70,7 @@ def resolve_manifest_validation(
     target: ManifestValidationTarget,
     repo_root: Path,
 ) -> ResolvedManifestValidation:
-    """Resolve an authored spec against its Helm chart and repository.
-
-    ``policies.extra`` is chart-relative as its schema documents. For a
-    migration window, an existing repository-relative directory is accepted
-    only when the chart-relative path does not exist, and produces a warning.
-    """
+    """Resolve an authored spec against its Helm chart and repository."""
     root = repo_root.resolve()
     chart_path = target.path.resolve()
     environments: dict[str, ResolvedValidationEnvironment] = {}
@@ -99,7 +94,6 @@ def resolve_manifest_validation(
     warnings: list[str] = []
     for extra in target.spec.policies.extra:
         chart_relative = (chart_path / extra).resolve()
-        repo_relative = (root / extra).resolve()
         if chart_relative.is_dir():
             _require_within(
                 chart_relative,
@@ -110,25 +104,7 @@ def resolve_manifest_validation(
         elif chart_relative.exists():
             warnings.append(f"{target.spec_path}: policy path is not a directory: {chart_relative}")
             continue
-        elif repo_relative.is_dir():
-            _require_within(
-                repo_relative,
-                root,
-                label=(f"{target.spec_path}: repository-relative policy directory {extra!r}"),
-            )
-            selected = repo_relative
-            warnings.append(
-                f"{target.spec_path}: policy path {extra!r} is interpreted as "
-                "repository-relative for compatibility; move it beneath the chart "
-                "or update the authored path"
-            )
-        elif repo_relative.exists():
-            warnings.append(f"{target.spec_path}: policy path is not a directory: {repo_relative}")
-            continue
         else:
-            # Extra policies were historically optional and silently omitted.
-            # Keep that compatibility window non-fatal, but never omit one
-            # without an actionable diagnostic.
             warnings.append(
                 f"{target.spec_path}: policy directory does not exist: {chart_relative}"
             )

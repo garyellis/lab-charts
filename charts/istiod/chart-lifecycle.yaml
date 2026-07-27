@@ -1,0 +1,42 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: istiod
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: istiod
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":    [ci]
+      "values-ci.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install istiod on top of istio-base and validate the control plane.
+        namespace: istio-system
+        requires:
+          - chart: istio-base
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        checks:
+          - name: istiod-ready
+            type: helm-test
+            description: Verify the istiod Deployment is Available and the sidecar-injector / validating webhooks are registered.
+        timeout: 10m
+
+    dependentTests:
+      - chart: istio-gateway
+        profile: minimal

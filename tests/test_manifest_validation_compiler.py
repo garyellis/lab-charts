@@ -22,15 +22,19 @@ def _target(
     chart = root / "charts" / "alpha"
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text("apiVersion: v2\nname: alpha\nversion: 0.1.0\n")
-    (chart / "chart-manager.yaml").write_text(
-        "version: 1\n"
-        "manifestValidation:\n"
-        "  releaseName: alpha\n"
-        "  environments:\n"
-        "    dev:\n"
-        "      namespace: lab-dev\n"
-        f"      values: [{values}]\n"
-        f"{textwrap.indent(extra, '  ') if extra else ''}"
+    (chart / "chart-lifecycle.yaml").write_text(
+        "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+        "kind: ChartLifecycle\n"
+        "metadata:\n"
+        "  name: alpha\n"
+        "spec:\n"
+        "  validation:\n"
+        "    releaseName: alpha\n"
+        "    environments:\n"
+        "      dev:\n"
+        "        namespace: lab-dev\n"
+        f"        values: [{values}]\n"
+        f"{textwrap.indent(extra, '    ') if extra else ''}"
     )
     return load_manifest_validation_target(root, "alpha")
 

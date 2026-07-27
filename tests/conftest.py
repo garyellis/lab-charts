@@ -94,15 +94,19 @@ def make_chart(chart_root: Path) -> MakeChart:
         for value_file in sorted(referenced):
             (chart_dir / value_file).write_text("", encoding="utf-8")
 
-        (chart_dir / "chart-manager.yaml").write_text(
+        (chart_dir / "chart-lifecycle.yaml").write_text(
             yaml.safe_dump(
                 {
-                    "version": 1,
-                    "enabled": True,
-                    "clusterTests": {
+                    "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                    "kind": "ChartLifecycle",
+                    "metadata": {"name": name},
+                    "spec": {
                         "enabled": True,
-                        "profiles": spec_profiles,
-                        "dependentTests": [],
+                        "clusterTest": {
+                            "enabled": True,
+                            "profiles": spec_profiles,
+                            "dependentTests": [],
+                        },
                     },
                 }
             ),

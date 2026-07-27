@@ -52,7 +52,7 @@ class RowConfig:
     adding a phase does not multiply the constructor surface.
 
     Two builders: `worklist.row_config_for` assembles these from a chart's
-    `chart-manager.yaml` for `validate run`; `ManifestValidationService.single` assembles
+    `chart-lifecycle.yaml` for `validate run`; `ManifestValidationService.single` assembles
     them from explicit flags for `validate render/schema/policy`.
 
     `None` means "use the phase's own default"; an empty list in

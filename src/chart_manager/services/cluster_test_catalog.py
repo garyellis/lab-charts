@@ -6,11 +6,12 @@ from pathlib import Path
 
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.chart_config import (
-    CONFIG_FILENAME,
+    LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_tests_status,
-    load_optional_chart_manager_config,
-    require_cluster_tests,
+    cluster_test_status,
+    load_optional_chart_lifecycle,
+    require_cluster_test,
+    validate_chart_lifecycle_identity,
 )
 from chart_manager.services.domain.charts import (
     ChartRepository,
@@ -22,16 +23,22 @@ class ClusterTestCatalog:
     """Load cluster-test capabilities without coupling Helm discovery to them."""
 
     def __init__(self, root: Path) -> None:
-        """Anchor Helm and chart-manager configuration lookup at ``root``."""
+        """Anchor Helm and lifecycle-intent lookup at ``root``."""
         self.repository = ChartRepository(root)
 
     def get(self, name: str) -> ClusterTestChart:
         """Return ``name`` composed with its required, enabled cluster tests."""
         chart = self.repository.get(name)
-        config = load_optional_chart_manager_config(chart.path / CONFIG_FILENAME)
+        lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
+        if lifecycle is not None:
+            validate_chart_lifecycle_identity(
+                lifecycle,
+                chart_name=chart.name,
+                chart_directory=chart.path,
+            )
         return ClusterTestChart(
             chart=chart,
-            spec=require_cluster_tests(config, chart_name=chart.name),
+            spec=require_cluster_test(lifecycle, chart_name=chart.name),
         )
 
     def enabled_names(self) -> list[str]:
@@ -43,8 +50,14 @@ class ClusterTestCatalog:
         enabled: list[str] = []
         for name in self.repository.list_names():
             chart = self.repository.get(name)
-            config = load_optional_chart_manager_config(chart.path / CONFIG_FILENAME)
-            if cluster_tests_status(config) is CapabilityStatus.ENABLED:
+            lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
+            if lifecycle is not None:
+                validate_chart_lifecycle_identity(
+                    lifecycle,
+                    chart_name=chart.name,
+                    chart_directory=chart.path,
+                )
+            if cluster_test_status(lifecycle) is CapabilityStatus.ENABLED:
                 enabled.append(name)
         return enabled
 

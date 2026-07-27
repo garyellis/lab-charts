@@ -1,7 +1,7 @@
 """Authored manifest-validation capability configuration.
 
-The model is composed beneath ``manifestValidation`` in
-``chart-manager.yaml``. Loading and envelope validation belong to
+The model is composed beneath ``spec.validation`` in the standalone
+``chart-lifecycle.yaml`` resource. Loading and envelope validation belong to
 ``services.chart_config``; runtime consumers resolve this authored model
 into ``ResolvedManifestValidation`` before executing cases.
 """

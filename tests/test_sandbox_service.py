@@ -219,7 +219,10 @@ def test_run_ensures_the_cluster_and_narrates_it(
     monkeypatch.setattr(svc.resolver, "install_plan", lambda _c, _p: [])
     monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
 
-    svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx"))
+    # This test intentionally supplies an empty legacy install plan because
+    # it covers cluster ensuring/narration only. Opt into the lint legacy
+    # branch; the lifecycle executor correctly rejects zero-action plans.
+    svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx", lint=True))
 
     assert kind.ensure_calls == [("sbx", None)]
     assert "Ensuring sandbox cluster sbx" in progress.text

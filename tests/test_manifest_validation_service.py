@@ -61,8 +61,16 @@ def _chart(root: Path, name: str, *, spec: str | None = _SPEC, extra: str = "") 
         body = textwrap.dedent(spec.format(name=name))
         if extra:
             body += textwrap.dedent(extra)
-        envelope = "version: 1\nmanifestValidation:\n" + textwrap.indent(body, "  ")
-        (chart_dir / "chart-manager.yaml").write_text(envelope)
+        envelope = (
+            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "kind: ChartLifecycle\n"
+            "metadata:\n"
+            f"  name: {name}\n"
+            "spec:\n"
+            "  validation:\n"
+            + textwrap.indent(body, "    ")
+        )
+        (chart_dir / "chart-lifecycle.yaml").write_text(envelope)
     return chart_dir
 
 
@@ -295,7 +303,7 @@ policies:
     _chart(tmp_path, "alpha", extra=extra)
     (tmp_path / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "policies").mkdir()
-    (tmp_path / "extra-policies").mkdir()
+    (tmp_path / "charts" / "alpha" / "extra-policies").mkdir()
     rec = Recorder()
 
     _app(rec).run(RunRequest(root=tmp_path, all_charts=True, envs=("prod",)))
@@ -311,7 +319,7 @@ policies:
     assert cfg.policy_paths == [
         tmp_path / "policies",
         tmp_path / "charts" / "alpha" / "policies",
-        (tmp_path / "extra-policies").resolve(),
+        (tmp_path / "charts" / "alpha" / "extra-policies").resolve(),
     ]
 
 
@@ -442,7 +450,7 @@ def test_explicit_chart_without_config_fails_precisely(tmp_path: Path) -> None:
 
     with pytest.raises(
         ValidateInputError,
-        match=r"has no manifestValidation configuration in chart-manager\.yaml",
+        match=r"has no validation configuration in chart-lifecycle\.yaml",
     ):
         _app(Recorder()).run(
             RunRequest(root=tmp_path, all_charts=True, charts=("alpha",))

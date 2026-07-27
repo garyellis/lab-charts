@@ -9,10 +9,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+from uuid import uuid4
 
 from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kind import Kind
+from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
@@ -22,7 +25,15 @@ from chart_manager.services.clusters.bootstrap import (
     kind_config_path,
 )
 from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
-from chart_manager.services.progress import ProgressCallback, info, step
+from chart_manager.services.lifecycle.cluster_executor import (
+    ClusterActionExecutor,
+    HelmTestResult,
+)
+from chart_manager.services.lifecycle.compiler import LifecycleCompiler
+from chart_manager.services.lifecycle.evidence import ClusterIdentity, LocalEvidenceRepository
+from chart_manager.services.lifecycle.models import ActionKind
+from chart_manager.services.lifecycle.plan_projection import exclude_bootstrap_owned_charts
+from chart_manager.services.progress import ProgressCallback, info, step, warn
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 DEFAULT_NAMESPACE = "observability"
@@ -85,6 +96,15 @@ class EphemeralTestClusterService:
         self.root = root
         self.cluster_tests = ClusterTestCatalog(root)
         self.resolver = DependencyResolver(self.cluster_tests.get)
+        # Share the catalog/resolver instances so authored configuration is
+        # loaded consistently and tests/alternate surfaces can replace the
+        # repository seams once rather than patching two independent graphs.
+        self.lifecycle_compiler = LifecycleCompiler(root)
+        self.lifecycle_compiler.cluster_tests = self.cluster_tests
+        self.lifecycle_compiler.resolver = self.resolver
+        self.evidence_repository = LocalEvidenceRepository(
+            root / ".chart-manager" / "state"
+        )
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
@@ -145,8 +165,33 @@ class EphemeralTestClusterService:
             installed.add(CILIUM_BOOTSTRAP_CHART)
             namespaces_created.add(cluster_bootstrap.CILIUM_BOOTSTRAP_NAMESPACE)
 
-        plan = self.resolver.install_plan(options.chart, options.profile)
-        self._install_plan(plan, options, installed, tested, namespaces_created, lint=options.lint)
+        # Lint needs the legacy per-entry hook, a Cilium target must retain
+        # the bootstrap-owned live control-plane install semantics, and
+        # dependent-test fanout currently relies on one shared dedupe set
+        # across several plans. Keep those branches explicit until their
+        # contracts have first-class lifecycle actions.
+        use_legacy = (
+            options.lint
+            or options.chart == CILIUM_BOOTSTRAP_CHART
+            or options.include_dependent_tests
+        )
+        if use_legacy:
+            plan = self.resolver.install_plan(options.chart, options.profile)
+            self._install_plan(
+                plan,
+                options,
+                installed,
+                tested,
+                namespaces_created,
+                lint=options.lint,
+            )
+        else:
+            self._execute_lifecycle_plan(
+                options,
+                installed=installed,
+                tested=tested,
+                namespaces_created=namespaces_created,
+            )
 
         if options.include_dependent_tests:
             for dependent in self.resolver.dependent_tests(options.chart):
@@ -170,6 +215,80 @@ class EphemeralTestClusterService:
             installed=tuple(sorted(installed)),
             tested=tuple(tested),
             namespaces=tuple(sorted(namespaces_created)),
+        )
+
+    def _execute_lifecycle_plan(
+        self,
+        options: EphemeralTestRequest,
+        *,
+        installed: set[str],
+        tested: list[str],
+        namespaces_created: set[str],
+    ) -> None:
+        """Execute the safe default path through the compiled lifecycle DAG."""
+
+        compiled = self.lifecycle_compiler.compile_cluster_test(
+            options.chart,
+            options.profile,
+            default_namespace=options.namespace,
+        )
+        plan = exclude_bootstrap_owned_charts(
+            compiled,
+            {CILIUM_BOOTSTRAP_CHART},
+        )
+        executor = ClusterActionExecutor(
+            helm=_ExecutorHelmAdapter(self.helm),
+            kubectl=self.kubectl,
+            repository=self.evidence_repository,
+        )
+        context = getattr(self.kubectl, "context", None) or kind_context(
+            options.cluster_name
+        )
+        result = executor.execute(
+            plan,
+            fail_fast=True,
+            run_id=_new_lifecycle_run_id(),
+            cluster=ClusterIdentity(name=options.cluster_name, context=context),
+        )
+        for diagnostic in result.diagnostics:
+            self._progress(
+                warn(
+                    f"lifecycle evidence write failed for "
+                    f"{diagnostic.action_id}: {diagnostic.message}"
+                )
+            )
+
+        for outcome in result.outcomes:
+            if outcome.verdict != "PASS":
+                continue
+            action = plan.action(outcome.action_id)
+            if action.kind is ActionKind.NAMESPACE_ENSURE:
+                if action.target.namespace is not None:
+                    namespaces_created.add(action.target.namespace)
+            elif action.kind is ActionKind.HELM_UPGRADE_INSTALL:
+                installed.add(action.target.release or action.target.chart)
+            elif action.kind is ActionKind.HELM_TEST:
+                tested.append(action.target.chart)
+
+        failure = next(
+            (outcome for outcome in result.outcomes if outcome.verdict == "FAIL"),
+            None,
+        )
+        if failure is None:
+            return
+        failed_action = plan.action(failure.action_id)
+        namespace = failed_action.target.namespace
+        if namespace is not None:
+            diagnostics = self.kubectl.diagnostics(namespace)
+            if diagnostics.strip():
+                self._progress(info(diagnostics))
+        if failed_action.kind is ActionKind.HELM_TEST:
+            raise ChartManagerError(
+                f"helm test failed for {failed_action.target.chart}: {failure.detail}"
+            )
+        raise ChartManagerError(
+            f"cluster action failed for {failed_action.target.chart} "
+            f"({failed_action.kind.value}): {failure.detail}"
         )
 
     def _install_plan(
@@ -251,3 +370,51 @@ class EphemeralTestClusterService:
             if diagnostics.strip():
                 self._progress(info(diagnostics))
             raise
+
+
+def _new_lifecycle_run_id() -> str:
+    """Mint one evidence-safe identity for an ephemeral cluster-test run."""
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"cluster-test-{timestamp}-{uuid4().hex[:12]}"
+
+
+class _ExecutorHelmAdapter:
+    """Narrow the production Helm API to the executor's structural port."""
+
+    def __init__(self, helm: Helm) -> None:
+        self.helm = helm
+
+    def dependency_update_if_stale(self, chart_path: Path) -> object:
+        return self.helm.dependency_update_if_stale(chart_path)
+
+    def upgrade_install(
+        self,
+        release: str,
+        chart_path: Path,
+        *,
+        namespace: str,
+        values: list[Path] | None,
+        timeout: str,
+        wait: bool,
+    ) -> object:
+        return self.helm.upgrade_install(
+            release,
+            chart_path,
+            namespace=namespace,
+            values=values,
+            timeout=timeout,
+            wait=wait,
+        )
+
+    def test(
+        self,
+        release: str,
+        *,
+        namespace: str,
+        timeout: str,
+    ) -> HelmTestResult:
+        return cast(
+            HelmTestResult,
+            self.helm.test(release, namespace=namespace, timeout=timeout),
+        )

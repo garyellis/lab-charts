@@ -1,8 +1,8 @@
-"""The authored ``chart-manager.yaml`` boundary.
+"""Strict authored ``ChartLifecycle`` intent.
 
-The envelope composes independently owned capability specifications. It is
-the one place that understands the per-chart configuration file; Helm chart
-discovery remains configuration-agnostic.
+``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
+module owns its schema and loading boundary; catalogs compose the document
+with Helm metadata and enforce identity agreement.
 """
 
 from __future__ import annotations
@@ -12,151 +12,165 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.domain.cluster_tests import ClusterTestSpec
 from chart_manager.services.manifest_validation.spec import ManifestValidationSpec
 
-CONFIG_FILENAME = "chart-manager.yaml"
-LEGACY_CONFIG_FILENAMES = (
-    "manifest-validation.yaml",
-    "cluster-test.yaml",
-    "validate-spec.yaml",
-    "test-spec.yaml",
-)
+LIFECYCLE_FILENAME = "chart-lifecycle.yaml"
+LIFECYCLE_API_VERSION = "lifecycle.cmg.io/v1alpha1"
+LIFECYCLE_KIND = "ChartLifecycle"
 
 
 class CapabilityStatus(StrEnum):
-    """Whether a chart-manager capability can be used."""
+    """Whether an authored lifecycle capability can be used."""
 
     ABSENT = "absent"
     DISABLED = "disabled"
     ENABLED = "enabled"
 
 
-class ChartManagerConfig(BaseModel):
-    """Strict authored configuration for one Helm chart."""
+class ChartLifecycleMetadata(BaseModel):
+    """Identity of the chart governed by a lifecycle document."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
-    version: Literal[1]
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_exact(cls, name: str) -> str:
+        """Reject whitespace-only and silently normalized chart names."""
+        if name != name.strip():
+            raise ValueError("metadata.name must not have leading or trailing whitespace")
+        return name
+
+
+class ChartLifecycleSpec(BaseModel):
+    """Capabilities authored for one chart."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     enabled: bool = True
-    manifest_validation: ManifestValidationSpec | None = Field(
-        default=None,
-        alias="manifestValidation",
-    )
-    cluster_tests: ClusterTestSpec | None = Field(
-        default=None,
-        alias="clusterTests",
-    )
-
-    @model_validator(mode="after")
-    def enabled_config_has_a_capability(self) -> ChartManagerConfig:
-        """Reject an enabled envelope that configures no behavior."""
-        if self.enabled and self.manifest_validation is None and self.cluster_tests is None:
-            raise ValueError(
-                "enabled chart-manager configuration must declare "
-                "manifestValidation or clusterTests"
-            )
-        return self
+    validation: ManifestValidationSpec | None = None
+    cluster_test: ClusterTestSpec | None = Field(default=None, alias="clusterTest")
 
 
-def load_chart_manager_config(path: Path) -> ChartManagerConfig:
-    """Strictly load one ``chart-manager.yaml`` file."""
+class ChartLifecycle(BaseModel):
+    """Kubernetes-style lifecycle intent envelope for one Helm chart."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["lifecycle.cmg.io/v1alpha1"] = Field(alias="apiVersion")
+    kind: Literal["ChartLifecycle"]
+    metadata: ChartLifecycleMetadata
+    spec: ChartLifecycleSpec
+
+
+def load_chart_lifecycle(path: Path) -> ChartLifecycle:
+    """Strictly load one ``chart-lifecycle.yaml`` document."""
+    if path.name != LIFECYCLE_FILENAME:
+        raise SpecError(
+            f"lifecycle configuration must be named {LIFECYCLE_FILENAME}: {path}"
+        )
     if not path.exists():
-        _raise_for_legacy_config(path)
-        raise SpecError(f"missing chart-manager configuration: {path}")
+        raise SpecError(f"missing chart lifecycle configuration: {path}")
     try:
         document = load_yaml_file(path)
     except (SpecError, yaml.YAMLError) as exc:
-        raise SpecError(f"invalid chart-manager configuration {path}: {exc}") from exc
+        raise SpecError(f"invalid chart lifecycle configuration {path}: {exc}") from exc
     try:
-        return ChartManagerConfig.model_validate(document)
+        return ChartLifecycle.model_validate(document)
     except ValueError as exc:
-        raise SpecError(f"invalid chart-manager configuration {path}: {exc}") from exc
+        raise SpecError(f"invalid chart lifecycle configuration {path}: {exc}") from exc
 
 
-def load_optional_chart_manager_config(path: Path) -> ChartManagerConfig | None:
-    """Load a config when present; malformed present files still fail."""
-    if not path.exists():
-        _raise_for_legacy_config(path)
-        return None
-    return load_chart_manager_config(path)
-
-
-def _raise_for_legacy_config(path: Path) -> None:
-    legacy = [name for name in LEGACY_CONFIG_FILENAMES if (path.parent / name).exists()]
-    if legacy:
-        names = ", ".join(legacy)
+def load_optional_chart_lifecycle(path: Path) -> ChartLifecycle | None:
+    """Load lifecycle intent when present; malformed present files still fail."""
+    if path.name != LIFECYCLE_FILENAME:
         raise SpecError(
-            f"legacy chart-manager configuration found beside {path}: {names}; "
-            f"migrate to {CONFIG_FILENAME}"
+            f"lifecycle configuration must be named {LIFECYCLE_FILENAME}: {path}"
+        )
+    if not path.exists():
+        return None
+    return load_chart_lifecycle(path)
+
+
+def validate_chart_lifecycle_identity(
+    lifecycle: ChartLifecycle,
+    *,
+    chart_name: str,
+    chart_directory: Path,
+) -> None:
+    """Require lifecycle, Helm, and directory identities to agree.
+
+    ``ChartRepository.get`` has already established that ``chart_name`` is
+    both the requested directory name and ``Chart.yaml`` name.  Keeping this
+    final comparison at composition sites avoids coupling the standalone
+    lifecycle schema to Helm discovery.
+    """
+    directory_name = chart_directory.name
+    if lifecycle.metadata.name != chart_name or directory_name != chart_name:
+        raise SpecError(
+            f"{chart_directory / LIFECYCLE_FILENAME} metadata.name "
+            f"'{lifecycle.metadata.name}' does not match chart directory "
+            f"'{directory_name}' and Chart.yaml name '{chart_name}'"
         )
 
 
-def manifest_validation_status(
-    config: ChartManagerConfig | None,
-) -> CapabilityStatus:
+def validation_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
     """Return effective manifest-validation availability."""
-    if config is None or config.manifest_validation is None:
+    if lifecycle is None or lifecycle.spec.validation is None:
         return CapabilityStatus.ABSENT
-    if not config.enabled or not config.manifest_validation.enabled:
+    if not lifecycle.spec.enabled or not lifecycle.spec.validation.enabled:
         return CapabilityStatus.DISABLED
     return CapabilityStatus.ENABLED
 
 
-def cluster_tests_status(config: ChartManagerConfig | None) -> CapabilityStatus:
+def cluster_test_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
     """Return effective live-cluster-test availability."""
-    if config is None or config.cluster_tests is None:
+    if lifecycle is None or lifecycle.spec.cluster_test is None:
         return CapabilityStatus.ABSENT
-    if not config.enabled or not config.cluster_tests.enabled:
+    if not lifecycle.spec.enabled or not lifecycle.spec.cluster_test.enabled:
         return CapabilityStatus.DISABLED
     return CapabilityStatus.ENABLED
 
 
-def require_manifest_validation(
-    config: ChartManagerConfig | None,
+def require_validation(
+    lifecycle: ChartLifecycle | None,
     *,
     chart_name: str,
 ) -> ManifestValidationSpec:
-    """Return an enabled manifest-validation section or raise precisely."""
-    if config is None:
+    """Return an enabled validation section or raise precisely."""
+    if lifecycle is None or lifecycle.spec.validation is None:
         raise CapabilityUnavailableError(
-            f"chart '{chart_name}' has no manifestValidation configuration "
-            f"in {CONFIG_FILENAME}"
+            f"chart '{chart_name}' has no validation configuration in "
+            f"{LIFECYCLE_FILENAME}"
         )
-    if not config.enabled:
-        raise CapabilityUnavailableError(f"chart-manager is disabled for chart '{chart_name}'")
-    if config.manifest_validation is None:
-        raise CapabilityUnavailableError(
-            f"chart '{chart_name}' has no manifestValidation configuration "
-            f"in {CONFIG_FILENAME}"
-        )
-    if not config.manifest_validation.enabled:
+    if not lifecycle.spec.enabled:
+        raise CapabilityUnavailableError(f"ChartLifecycle is disabled for chart '{chart_name}'")
+    if not lifecycle.spec.validation.enabled:
         raise CapabilityUnavailableError(
             f"manifest validation is disabled for chart '{chart_name}'"
         )
-    return config.manifest_validation
+    return lifecycle.spec.validation
 
 
-def require_cluster_tests(
-    config: ChartManagerConfig | None,
+def require_cluster_test(
+    lifecycle: ChartLifecycle | None,
     *,
     chart_name: str,
 ) -> ClusterTestSpec:
     """Return an enabled cluster-test section or raise precisely."""
-    if config is None:
+    if lifecycle is None or lifecycle.spec.cluster_test is None:
         raise CapabilityUnavailableError(
-            f"chart '{chart_name}' has no clusterTests configuration in {CONFIG_FILENAME}"
+            f"chart '{chart_name}' has no clusterTest configuration in "
+            f"{LIFECYCLE_FILENAME}"
         )
-    if not config.enabled:
-        raise CapabilityUnavailableError(f"chart-manager is disabled for chart '{chart_name}'")
-    if config.cluster_tests is None:
-        raise CapabilityUnavailableError(
-            f"chart '{chart_name}' has no clusterTests configuration in {CONFIG_FILENAME}"
-        )
-    if not config.cluster_tests.enabled:
+    if not lifecycle.spec.enabled:
+        raise CapabilityUnavailableError(f"ChartLifecycle is disabled for chart '{chart_name}'")
+    if not lifecycle.spec.cluster_test.enabled:
         raise CapabilityUnavailableError(f"cluster tests are disabled for chart '{chart_name}'")
-    return config.cluster_tests
+    return lifecycle.spec.cluster_test

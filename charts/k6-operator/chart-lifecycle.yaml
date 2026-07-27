@@ -1,0 +1,38 @@
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: k6-operator
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: k6-operator
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "values.yaml":    [ci]
+      "values-ci.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install k6-operator with the manager ServiceMonitor enabled.
+        namespace: k6-operator-system
+        # ServiceMonitor is on by default in values.yaml, so prometheus-operator
+        # must be installed first to provide the monitoring.coreos.com CRDs.
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,7 @@ from rich.table import Table
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
+from chart_manager.cli import lifecycle as lifecycle_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
@@ -107,7 +109,7 @@ def _exit_if_failed(ok: bool) -> None:
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
 charts_app = typer.Typer(
     no_args_is_help=True,
-    help="Inspect Helm charts and their chart-manager configuration.",
+    help="Inspect Helm charts and their lifecycle intent.",
 )
 deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
 sandbox_app = typer.Typer(
@@ -130,6 +132,10 @@ validate_app = typer.Typer(
     no_args_is_help=True,
     help="Static chart validation: render -> schema -> policy.",
 )
+lifecycle_app = typer.Typer(
+    no_args_is_help=True,
+    help="Compile lifecycle intent into plans, graphs, diagnostics, and status.",
+)
 
 # setup the events command interface
 events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
@@ -137,6 +143,7 @@ events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle eve
 events_cli.register(events_app)
 validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
+lifecycle_cli.register(lifecycle_app)
 
 app.add_typer(events_app, name="events")
 app.add_typer(charts_app, name="charts")
@@ -146,6 +153,7 @@ app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
+app.add_typer(lifecycle_app, name="lifecycle")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
@@ -155,14 +163,14 @@ NamespaceOption = Annotated[str, typer.Option("--namespace", help="Kubernetes na
 
 @charts_app.command("list")
 def list_charts(root: RootOption = Path(".")) -> None:
-    """List Helm charts and their chart-manager capability status."""
+    """List Helm charts and their lifecycle capability status."""
     service = ChartCatalogService(root)
     table = Table(
         "Chart",
         "Type",
         "Version",
         "Dependencies",
-        "Config",
+        "Lifecycle",
         "Manifest validation",
         "Cluster tests",
         "Profiles",
@@ -170,19 +178,19 @@ def list_charts(root: RootOption = Path(".")) -> None:
     invalid = False
     for entry in service.list_entries():
         invalid = invalid or entry.error is not None
-        config_status = (
+        lifecycle_status = (
             f"[red]invalid: {escape(entry.error or '')}[/red]"
             if entry.error is not None
-            else entry.config_status
+            else entry.lifecycle_status
         )
         table.add_row(
             entry.name,
             entry.chart_type,
             entry.version,
             ", ".join(entry.dependencies),
-            config_status,
-            entry.manifest_validation.value,
-            entry.cluster_tests.value,
+            lifecycle_status,
+            entry.validation.value,
+            entry.cluster_test.value,
             ", ".join(entry.profiles),
         )
     console.print(table)
@@ -190,12 +198,12 @@ def list_charts(root: RootOption = Path(".")) -> None:
         raise typer.Exit(1)
 
 
-@charts_app.command("config")
-def show_config(chart: str, root: RootOption = Path(".")) -> None:
-    """Print one chart's normalized chart-manager.yaml configuration."""
-    config = ChartCatalogService(root).get_config(chart)
+@charts_app.command("lifecycle")
+def show_lifecycle(chart: str, root: RootOption = Path(".")) -> None:
+    """Print one chart's normalized ChartLifecycle intent."""
+    lifecycle = ChartCatalogService(root).get_lifecycle(chart)
     console.print_json(
-        data=config.model_dump(mode="json", by_alias=True, exclude_none=True)
+        data=lifecycle.model_dump(mode="json", by_alias=True, exclude_none=True)
     )
 
 
@@ -668,6 +676,41 @@ def ci_cluster_test_charts(root: RootOption = Path(".")) -> None:
     """List every chart enabled for live-cluster tests."""
     for chart in _container().ci_service(root).cluster_test_charts():
         console.print(chart)
+
+
+@ci_app.command("cluster-test-matrix")
+def ci_cluster_test_matrix(
+    root: RootOption = Path("."),
+    base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
+    all_charts: Annotated[
+        bool,
+        typer.Option("--all", help="Include every chart with enabled cluster tests."),
+    ] = False,
+    charts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--chart",
+            help="Explicit chart to include; repeat for multiple charts.",
+        ),
+    ] = None,
+) -> None:
+    """Emit a GitHub-ready chart/profile cluster-test matrix as JSON."""
+    if all_charts and charts:
+        raise ChartManagerError("--all and --chart are mutually exclusive")
+    service = _container().ci_service(root)
+    if all_charts:
+        entries = service.all_cluster_test_matrix()
+    elif charts:
+        entries = service.explicit_cluster_test_matrix(charts)
+    else:
+        entries = service.cluster_test_matrix(base)
+    payload = {
+        "include": [
+            {"chart": entry.chart, "profile": entry.profile}
+            for entry in entries
+        ]
+    }
+    typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 
 @ci_app.command("install")

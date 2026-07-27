@@ -1,4 +1,4 @@
-"""Read-only catalog of Helm charts and chart-manager capabilities."""
+"""Read-only catalog of Helm charts and authored lifecycle capabilities."""
 
 from __future__ import annotations
 
@@ -7,64 +7,76 @@ from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.chart_config import (
-    CONFIG_FILENAME,
+    LIFECYCLE_FILENAME,
     CapabilityStatus,
-    ChartManagerConfig,
-    cluster_tests_status,
-    load_optional_chart_manager_config,
-    manifest_validation_status,
+    ChartLifecycle,
+    cluster_test_status,
+    load_optional_chart_lifecycle,
+    validate_chart_lifecycle_identity,
+    validation_status,
 )
 from chart_manager.services.domain.charts import ChartDependency, ChartRepository
 
 
 @dataclass(frozen=True)
 class ChartCatalogEntry:
-    """One chart's Helm metadata and best-effort configuration status."""
+    """One chart's Helm metadata and best-effort lifecycle status."""
 
     name: str
     version: str = "?"
     chart_type: str = "?"
     dependencies: tuple[str, ...] = ()
-    config_status: str = "absent"
-    manifest_validation: CapabilityStatus = CapabilityStatus.ABSENT
-    cluster_tests: CapabilityStatus = CapabilityStatus.ABSENT
+    lifecycle_status: str = "absent"
+    validation: CapabilityStatus = CapabilityStatus.ABSENT
+    cluster_test: CapabilityStatus = CapabilityStatus.ABSENT
     profiles: tuple[str, ...] = ()
     error: str | None = None
 
 
 class ChartCatalogService:
-    """Inspect Helm charts and their optional chart-manager configuration."""
+    """Inspect Helm charts and their optional lifecycle intent."""
 
     def __init__(self, root: Path) -> None:
         """Build the Helm repository from the chart repo root."""
         self.repository = ChartRepository(root)
 
     def list_entries(self) -> list[ChartCatalogEntry]:
-        """Return every chart, retaining malformed metadata/config diagnostics."""
+        """Return every chart, retaining malformed metadata/intent diagnostics."""
         return [self._entry(name) for name in self.repository.list_names()]
 
-    def get_config(self, name: str) -> ChartManagerConfig:
-        """Strictly return one chart's authored configuration."""
+    def get_lifecycle(self, name: str) -> ChartLifecycle:
+        """Strictly return one chart's composed lifecycle intent."""
         chart = self.repository.get(name)
-        config = load_optional_chart_manager_config(chart.path / CONFIG_FILENAME)
-        if config is None:
+        lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
+        if lifecycle is None:
             raise SpecError(
-                f"chart '{name}' has no chart-manager configuration in {CONFIG_FILENAME}"
+                f"chart '{name}' has no lifecycle configuration in {LIFECYCLE_FILENAME}"
             )
-        return config
+        validate_chart_lifecycle_identity(
+            lifecycle,
+            chart_name=chart.name,
+            chart_directory=chart.path,
+        )
+        return lifecycle
 
     def _entry(self, name: str) -> ChartCatalogEntry:
         try:
             chart = self.repository.get(name)
-            config = load_optional_chart_manager_config(chart.path / CONFIG_FILENAME)
+            lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
+            if lifecycle is not None:
+                validate_chart_lifecycle_identity(
+                    lifecycle,
+                    chart_name=chart.name,
+                    chart_directory=chart.path,
+                )
         except ChartManagerError as exc:
             return ChartCatalogEntry(
                 name=name,
-                config_status="invalid",
+                lifecycle_status="invalid",
                 error=str(exc),
             )
 
-        if config is None:
+        if lifecycle is None:
             return ChartCatalogEntry(
                 name=chart.name,
                 version=chart.metadata.version or "",
@@ -72,12 +84,12 @@ class ChartCatalogService:
                 dependencies=_dependencies(chart.metadata.dependencies),
             )
 
-        manifest_status = manifest_validation_status(config)
-        cluster_status = cluster_tests_status(config)
+        manifest_status = validation_status(lifecycle)
+        cluster_status = cluster_test_status(lifecycle)
         profiles = (
-            tuple(sorted(config.cluster_tests.profiles))
+            tuple(sorted(lifecycle.spec.cluster_test.profiles))
             if cluster_status is CapabilityStatus.ENABLED
-            and config.cluster_tests is not None
+            and lifecycle.spec.cluster_test is not None
             else ()
         )
         return ChartCatalogEntry(
@@ -85,9 +97,9 @@ class ChartCatalogService:
             version=chart.metadata.version or "",
             chart_type=chart.metadata.chart_type,
             dependencies=_dependencies(chart.metadata.dependencies),
-            config_status="enabled" if config.enabled else "disabled",
-            manifest_validation=manifest_status,
-            cluster_tests=cluster_status,
+            lifecycle_status="enabled" if lifecycle.spec.enabled else "disabled",
+            validation=manifest_status,
+            cluster_test=cluster_status,
             profiles=profiles,
         )
 

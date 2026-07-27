@@ -59,7 +59,7 @@ def test_exit_code_two_on_tool_error() -> None:
 
 
 def test_exit_code_three_on_spec_errors_list() -> None:
-    result = _run(spec_errors=("corrupt chart-manager.yaml",))
+    result = _run(spec_errors=("corrupt chart-lifecycle.yaml",))
     assert result.exit_code() == 3
 
 

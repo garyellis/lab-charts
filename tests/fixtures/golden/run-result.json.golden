@@ -100,6 +100,6 @@
     }
   ],
   "spec_errors": [
-    "charts/broken/chart-manager.yaml: unsupported version 99"
+    "charts/broken/chart-lifecycle.yaml: unsupported apiVersion example.io/v99"
   ]
 }

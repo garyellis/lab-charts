@@ -58,7 +58,7 @@ def _check_phases(phases: frozenset[str]) -> None:
 class SingleRequest:
     """Validate exactly one chart x env (the render/schema/policy commands).
 
-    Single-row requests do NOT consult `chart-manager.yaml`; callers pass
+    Single-row requests do NOT consult `chart-lifecycle.yaml`; callers pass
     values explicitly. `policy_dirs` wins outright when non-empty; when it
     is empty and `discover_policies` is set, the repo-wide and per-chart
     policy directories are discovered. When neither is supplied the policy
