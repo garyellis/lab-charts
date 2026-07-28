@@ -20,6 +20,7 @@ from chart_manager.services.upgrader.models import (
     UpdateMetadata,
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path, safe_output_path
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _HEADING = re.compile(r"^##\s")
@@ -113,11 +114,21 @@ def load_update_data(
 class UpgradeFinalizer:
     """Finalize Renovate's edits without trusting an upstream wrapper version."""
 
-    def __init__(self, baseline: BaselineReader | None = None) -> None:
+    def __init__(
+        self,
+        baseline: BaselineReader | None = None,
+        *,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
+    ) -> None:
         self._baseline = baseline or GitBaselineReader()
+        self._charts_dir = charts_dir
 
     def finalize(self, request: FinalizeRequest) -> FinalizeResult:
-        root, chart_path, _ = resolve_chart_path(request.repo_root, request.chart_path)
+        root, chart_path, _ = resolve_chart_path(
+            request.repo_root,
+            request.chart_path,
+            charts_dir=self._charts_dir,
+        )
         chart_rel = chart_path.relative_to(root)
         baseline_text = self._baseline.read(root, request.baseline_ref, chart_rel / "Chart.yaml")
         yaml = YAML()

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -130,9 +132,16 @@ def lint_paths(paths: Iterable[Path]) -> LintResult:
     return LintResult(findings=tuple(findings), files_scanned=len(targets))
 
 
-def discover_dashboards(root: Path) -> list[Path]:
+def discover_dashboards(
+    root: Path,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
+) -> list[Path]:
     """Return all dashboard JSON files under the grafana-dashboards chart, sorted."""
-    base = root / "charts" / "grafana-dashboards" / "dashboards"
+    base = RepositoryLayout(
+        root=root,
+        charts_dir=charts_dir,
+    ).chart_path("grafana-dashboards") / "dashboards"
     if not base.exists():
         return []
     return sorted(base.rglob("*.json"))

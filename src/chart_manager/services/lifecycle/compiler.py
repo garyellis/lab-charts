@@ -25,20 +25,26 @@ from chart_manager.services.manifest_validation.catalog import (
 from chart_manager.services.manifest_validation.compiler import (
     resolve_manifest_validation,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class LifecycleCompiler:
     """Compile authored lifecycle capabilities into a common typed action graph."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
         """Anchor all chart and value resolution at the repository root."""
         self.root = root.resolve()
-        self.cluster_tests = ClusterTestCatalog(self.root)
+        self.charts_dir = charts_dir
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
 
     def compile_validation(self, chart: str, environment: str) -> LifecyclePlan:
         """Compile static validation for one chart and authored environment."""
-        target = load_manifest_validation_target(self.root, chart)
+        target = load_manifest_validation_target(
+            self.root,
+            chart,
+            charts_dir=self.charts_dir,
+        )
         resolved = resolve_manifest_validation(target, self.root)
         try:
             selected = resolved.environments[environment]
@@ -352,9 +358,14 @@ def compile_validation_plan(
     root: Path,
     chart: str,
     environment: str,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> LifecyclePlan:
     """Convenience wrapper for one validation plan."""
-    return LifecycleCompiler(root).compile_validation(chart, environment)
+    return LifecycleCompiler(
+        root,
+        charts_dir=charts_dir,
+    ).compile_validation(chart, environment)
 
 
 def compile_cluster_test_plan(
@@ -363,9 +374,10 @@ def compile_cluster_test_plan(
     profile: str,
     *,
     default_namespace: str = "default",
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> LifecyclePlan:
     """Convenience wrapper for one cluster-test plan."""
-    return LifecycleCompiler(root).compile_cluster_test(
+    return LifecycleCompiler(root, charts_dir=charts_dir).compile_cluster_test(
         chart,
         profile,
         default_namespace=default_namespace,

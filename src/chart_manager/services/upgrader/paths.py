@@ -8,6 +8,7 @@ from typing import Any
 from ruamel.yaml import YAML
 
 from chart_manager.services.upgrader.errors import UpgradeError
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 def _reject_symlinks(path: Path, stop: Path) -> None:
@@ -21,17 +22,23 @@ def _reject_symlinks(path: Path, stop: Path) -> None:
         current = parent
 
 
-def resolve_chart_path(root: Path, chart_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+def resolve_chart_path(
+    root: Path,
+    chart_path: Path,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
+) -> tuple[Path, Path, dict[str, Any]]:
     """Resolve and validate one chart without allowing an escape from ``root``."""
     try:
         repo_root = root.expanduser().resolve(strict=True)
     except OSError as exc:
         raise UpgradeError(f"repository root does not exist: {root}") from exc
+    layout = RepositoryLayout(root=repo_root, charts_dir=charts_dir)
     raw = chart_path.expanduser()
     if raw.is_absolute():
         candidate = raw
     elif len(raw.parts) == 1:
-        candidate = repo_root / "charts" / raw
+        candidate = layout.chart_path(raw.name)
     else:
         candidate = repo_root / raw
     _reject_symlinks(candidate, repo_root)
@@ -72,4 +79,3 @@ def safe_output_path(chart_path: Path, filename: str) -> Path:
     except (OSError, ValueError) as exc:
         raise UpgradeError(f"output escapes chart directory: {target}") from exc
     return target
-

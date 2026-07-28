@@ -34,6 +34,7 @@ from chart_manager.services.lifecycle.evidence import ClusterIdentity, LocalEvid
 from chart_manager.services.lifecycle.models import ActionKind
 from chart_manager.services.lifecycle.plan_projection import exclude_bootstrap_owned_charts
 from chart_manager.services.progress import ProgressCallback, info, step, warn
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 DEFAULT_NAMESPACE = "observability"
@@ -87,6 +88,7 @@ class EphemeralTestClusterService:
         kind: Kind,
         kubectl: Kubectl,
         progress: ProgressCallback | None = None,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -94,12 +96,12 @@ class EphemeralTestClusterService:
         discarded the composition root's cluster configuration.
         """
         self.root = root
-        self.cluster_tests = ClusterTestCatalog(root)
+        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
         # repository seams once rather than patching two independent graphs.
-        self.lifecycle_compiler = LifecycleCompiler(root)
+        self.lifecycle_compiler = LifecycleCompiler(root, charts_dir=charts_dir)
         self.lifecycle_compiler.cluster_tests = self.cluster_tests
         self.lifecycle_compiler.resolver = self.resolver
         self.evidence_repository = LocalEvidenceRepository(

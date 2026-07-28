@@ -34,7 +34,7 @@ from chart_manager.cli.validate_render import (
     failure_details,
     to_text_table,
 )
-from chart_manager.composition import Container
+from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartNotFoundError
 from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
 from chart_manager.services.manifest_validation.app import (
@@ -87,7 +87,8 @@ def _validate_format(value: str) -> str:
 ChartOption = Annotated[
     str,
     typer.Option(
-        "--chart", help="Chart name (resolved under <root>/charts/) or path containing '/'."
+        "--chart",
+        help="Chart name (resolved under the configured chart directory) or an explicit path.",
     ),
 ]
 EnvOption = Annotated[
@@ -201,7 +202,10 @@ def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
     result into a different process verdict.
     """
     try:
-        recording = ManifestValidationEvidenceRecorder(root).record(outcome)
+        recording = ManifestValidationEvidenceRecorder(
+            root,
+            charts_dir=Settings().charts_dir,
+        ).record(outcome)
     except Exception as exc:
         _warn(f"warning: lifecycle evidence was not recorded: {exc}")
         return
@@ -345,7 +349,7 @@ def policy(
             "--policy-dir",
             help=(
                 "Kyverno policy directory (repeatable). Defaults to "
-                "<root>/policies and <root>/charts/<chart>/policies "
+                "<root>/policies and the configured chart's policies directory "
                 "(whichever exist)."
             ),
         ),

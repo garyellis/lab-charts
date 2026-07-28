@@ -17,14 +17,15 @@ from chart_manager.services.domain.charts import (
     ChartRepository,
     ClusterTestChart,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class ClusterTestCatalog:
     """Load cluster-test capabilities without coupling Helm discovery to them."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
         """Anchor Helm and lifecycle-intent lookup at ``root``."""
-        self.repository = ChartRepository(root)
+        self.repository = ChartRepository(root, charts_dir=charts_dir)
 
     def get(self, name: str) -> ClusterTestChart:
         """Return ``name`` composed with its required, enabled cluster tests."""

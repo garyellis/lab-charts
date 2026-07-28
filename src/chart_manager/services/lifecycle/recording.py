@@ -25,6 +25,7 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
 )
 from chart_manager.services.manifest_validation.requests import RunOutcome
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 RecordingStage = Literal["compile", "write"]
 
@@ -155,12 +156,16 @@ class ManifestValidationEvidenceRecorder:
         compiler: ValidationPlanCompiler | None = None,
         clock: Callable[[], datetime] | None = None,
         run_id_factory: Callable[[], str] | None = None,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         self.root = root.resolve()
         self.repository = repository or LocalEvidenceRepository(
             self.root / ".chart-manager" / "state"
         )
-        self.compiler = compiler or LifecycleCompiler(self.root)
+        self.compiler = compiler or LifecycleCompiler(
+            self.root,
+            charts_dir=charts_dir,
+        )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.run_id_factory = run_id_factory or _new_run_id
 

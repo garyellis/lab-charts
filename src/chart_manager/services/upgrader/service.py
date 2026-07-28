@@ -18,6 +18,7 @@ from chart_manager.services.upgrader.models import (
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.services.upgrader.telemetry import UpgradeTelemetry
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class RenovateAdapter(Protocol):
@@ -63,6 +64,7 @@ class UpgradeService:
         repository: str | None = None,
         base: str | None = None,
         telemetry: UpgradeTelemetry | None = None,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         self._renovate = renovate
         self._request_factory = request_factory
@@ -75,9 +77,14 @@ class UpgradeService:
         # configured events backend, and the ad-hoc callers (tests, a bare
         # UpgradeService) should not need one to work.
         self._telemetry = telemetry
+        self._charts_dir = charts_dir
 
     def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
-        plan = build_upgrade_plan(request.root, request.chart_path)
+        plan = build_upgrade_plan(
+            request.root,
+            request.chart_path,
+            charts_dir=self._charts_dir,
+        )
         diagnostics: list[str] = []
         self._require_relevant_files_clean(plan)
         existing_pr, found_existing = (
@@ -233,9 +240,18 @@ def _chart_version(text: str) -> str | None:
     return version if isinstance(version, str) else None
 
 
-def build_upgrade_plan(root: Path, chart_path: Path) -> UpgradePlan:
+def build_upgrade_plan(
+    root: Path,
+    chart_path: Path,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
+) -> UpgradePlan:
     """Build deterministic chart identity, branch, group and callback overlay."""
-    repo_root, resolved, chart = resolve_chart_path(root, chart_path)
+    repo_root, resolved, chart = resolve_chart_path(
+        root,
+        chart_path,
+        charts_dir=charts_dir,
+    )
     version = chart.get("version")
     if not isinstance(version, str) or not re.fullmatch(r"(0|[1-9]\d*)\.\d+\.\d+", version):
         raise UpgradeError(f"Chart.yaml version must be a strict x.y.z version, got {version!r}")

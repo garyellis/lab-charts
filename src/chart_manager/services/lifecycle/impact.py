@@ -12,6 +12,7 @@ from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.lifecycle.models import LIFECYCLE_API_VERSION
 from chart_manager.services.manifest_validation.planner import build_worklist
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 class ImpactReasonCode(StrEnum):
@@ -121,21 +122,11 @@ class _FanoutRule:
         return parts[: len(self.prefix)] == self.prefix
 
 
-_CLUSTER_FANOUT_RULES = (
+_STATIC_CLUSTER_FANOUT_RULES = (
     _FanoutRule(
         "chart-manager-code",
         "chart-manager implementation changes can affect every cluster workflow",
         prefix=("src", "chart_manager"),
-    ),
-    _FanoutRule(
-        "cilium-bootstrap",
-        "Cilium is environment-owned bootstrap used by every ephemeral cluster",
-        prefix=("charts", "cilium"),
-    ),
-    _FanoutRule(
-        "istio-base",
-        "Istio base is a shared runtime prerequisite across cluster tests",
-        prefix=("charts", "istio-base"),
     ),
     _FanoutRule(
         "kind-config",
@@ -168,9 +159,10 @@ _CLUSTER_FANOUT_RULES = (
 class LifecycleImpactService:
     """Derive both lifecycle worklists from an explicit changed-file list."""
 
-    def __init__(self, root: Path) -> None:
-        self.root = root.resolve()
-        self.cluster_catalog = ClusterTestCatalog(self.root)
+    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
+        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+        self.root = self.layout.root
+        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -185,18 +177,24 @@ class LifecycleImpactService:
             single = build_worklist(
                 root=self.root,
                 changed_files=[changed_file.as_posix()],
+                charts_dir=self.layout.charts_dir,
             )
             for row in single.rows:
                 key = (row.chart, row.env)
                 _append_reason(
                     validation_reasons,
                     key,
-                    _validation_reason(changed_file, selected_chart=row.chart),
+                    _validation_reason(
+                        changed_file,
+                        selected_chart=row.chart,
+                        layout=self.layout,
+                    ),
                 )
 
         combined = build_worklist(
             root=self.root,
             changed_files=[path.as_posix() for path in changes],
+            charts_dir=self.layout.charts_dir,
         )
         rows_by_key = {(row.chart, row.env): row for row in combined.rows}
         validation = tuple(
@@ -247,7 +245,7 @@ class LifecycleImpactService:
         fanout_matches = [
             (path, rule)
             for path in changes
-            for rule in _CLUSTER_FANOUT_RULES
+            for rule in _cluster_fanout_rules(self.layout)
             if rule.matches(path)
         ]
         if fanout_matches:
@@ -265,10 +263,9 @@ class LifecycleImpactService:
 
         enabled_set = set(enabled)
         for path in changes:
-            parts = path.parts
-            if len(parts) < 2 or parts[0] != "charts":
+            changed_chart = self.layout.chart_name_from_repo_path(path)
+            if changed_chart is None:
                 continue
-            changed_chart = parts[1]
             if changed_chart not in enabled_set:
                 continue
             own_profile = profiles[changed_chart]
@@ -308,9 +305,11 @@ class LifecycleImpactService:
 def analyze_lifecycle_impact(
     root: Path,
     changed_files: list[str] | tuple[str, ...],
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> LifecycleImpact:
     """Convenience wrapper for explicit changed-file impact analysis."""
-    return LifecycleImpactService(root).analyze(changed_files)
+    return LifecycleImpactService(root, charts_dir=charts_dir).analyze(changed_files)
 
 
 def _default_profile(profiles: Mapping[str, object]) -> str:
@@ -320,7 +319,12 @@ def _default_profile(profiles: Mapping[str, object]) -> str:
     return sorted(profiles)[0]
 
 
-def _validation_reason(changed_file: Path, *, selected_chart: str) -> ImpactReason:
+def _validation_reason(
+    changed_file: Path,
+    *,
+    selected_chart: str,
+    layout: RepositoryLayout,
+) -> ImpactReason:
     """Classify the existing validation worklist rule that selected a row."""
     parts = changed_file.parts
     if parts and parts[0] == "policies":
@@ -339,7 +343,7 @@ def _validation_reason(changed_file: Path, *, selected_chart: str) -> ImpactReas
             changed_file,
             "validation implementation changes validate every configured environment",
         )
-    changed_chart = parts[1] if len(parts) >= 2 and parts[0] == "charts" else None
+    changed_chart = layout.chart_name_from_repo_path(changed_file)
     if changed_chart is not None and changed_chart != selected_chart:
         return ImpactReason(
             ImpactReasonCode.HELM_DEPENDENT,
@@ -350,6 +354,23 @@ def _validation_reason(changed_file: Path, *, selected_chart: str) -> ImpactReas
         ImpactReasonCode.VALIDATION_TRIGGER,
         changed_file,
         f"authored validation triggers selected {selected_chart}",
+    )
+
+
+def _cluster_fanout_rules(layout: RepositoryLayout) -> tuple[_FanoutRule, ...]:
+    """Return static safety rules plus chart-root-relative shared prerequisites."""
+    return (
+        *_STATIC_CLUSTER_FANOUT_RULES,
+        _FanoutRule(
+            "cilium-bootstrap",
+            "Cilium is environment-owned bootstrap used by every ephemeral cluster",
+            prefix=(*layout.charts_dir.parts, "cilium"),
+        ),
+        _FanoutRule(
+            "istio-base",
+            "Istio base is a shared runtime prerequisite across cluster tests",
+            prefix=(*layout.charts_dir.parts, "istio-base"),
+        ),
     )
 
 

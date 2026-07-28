@@ -77,6 +77,11 @@ from chart_manager.services.manifest_validation.runner import (
     ManifestValidationRunner,
     RowConfig,
 )
+from chart_manager.settings import (
+    DEFAULT_CHARTS_DIR,
+    RepositoryLayout,
+    validate_charts_dir,
+)
 
 # Re-exports, so a surface needs one import for "drive the validate
 # capability": `ALL_PHASES` is defined in `services.manifest_validation.models`, and
@@ -178,14 +183,18 @@ class ManifestValidationService:
         command_runner: CommandRunner | None = None,
         git_factory: Callable[[Path], Git] | None = None,
         run_id_factory: Callable[[], str] | None = None,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
+        self._charts_dir = validate_charts_dir(charts_dir)
         self._progress: ProgressDisplay = progress or NullDisplay()
         # No-op default so call sites can warn unconditionally.
         self._on_warn: WarnCallback = on_warn or (lambda _msg: None)
         self._runner_factory: RunnerFactory = runner_factory or self._build_runner
         self._command_runner = command_runner or SubprocessRunner()
-        self._git_factory = git_factory or Git
+        self._git_factory = git_factory or (
+            lambda root: Git(root, charts_dir=self._charts_dir)
+        )
         self._run_id_factory = run_id_factory or new_run_id
 
     # --- single row --------------------------------------------------------
@@ -196,7 +205,11 @@ class ManifestValidationService:
         Raises `ChartNotFoundError` when the chart cannot be resolved.
         """
         repo_root = request.root.resolve()
-        chart_path, chart_label = resolve_chart_path(repo_root, request.chart)
+        chart_path, chart_label = resolve_chart_path(
+            repo_root,
+            request.chart,
+            charts_dir=self._charts_dir,
+        )
         out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
 
         row = build_single_row(
@@ -260,6 +273,7 @@ class ManifestValidationService:
             root=repo_root,
             changed_files=changed,
             all_charts=request.all_charts,
+            charts_dir=self._charts_dir,
         )
 
         selection = select_rows(
@@ -285,7 +299,11 @@ class ManifestValidationService:
         unresolved_charts: list[str] = []
         for chart_name in selection.unmatched_charts:
             try:
-                load_manifest_validation_target(repo_root, chart_name)
+                load_manifest_validation_target(
+                    repo_root,
+                    chart_name,
+                    charts_dir=self._charts_dir,
+                )
             except SpecError as exc:
                 # Repository discovery already records malformed present
                 # config with the chart name. Keep one diagnostic while
@@ -459,7 +477,13 @@ class ManifestValidationService:
                 p if p.is_absolute() else (repo_root / p).resolve() for p in request.policy_dirs
             ]
         if request.discover_policies:
-            return discover_policies(repo_root, repo_root / "charts" / chart)
+            return discover_policies(
+                repo_root,
+                RepositoryLayout(
+                    root=repo_root,
+                    charts_dir=self._charts_dir,
+                ).chart_path(chart),
+            )
         return None
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:

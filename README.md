@@ -80,6 +80,13 @@ for a minimal validation example. The lifecycle resource intentionally remains
 in packaged charts so later lifecycle automation consumes the same
 authoritative intent.
 
+`charts/` is the default managed-chart directory, not a fixed repository
+layout. Set `CHART_MANAGER_CHARTS_DIR` to a repository-relative path such as
+`deploy/helm` to move the entire chart tree. Discovery, Git change
+classification, lifecycle planning and diagnostics, validation, cluster
+services, upgrades, and Grafana dashboard discovery all consume this same
+Pydantic setting. Absolute paths and `.`/`..` traversal are rejected.
+
 Changed chart files are selected through the existing `triggers:` glob-to-environment
 mapping. Intentional exclusions belong in the additive, chart-relative
 `triggerIgnores:` glob list. Files matching neither are reported as trigger

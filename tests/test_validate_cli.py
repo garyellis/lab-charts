@@ -28,6 +28,7 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 def _result() -> RunResult:
@@ -70,8 +71,9 @@ def test_record_lifecycle_evidence_records_outcome(
     recorded: list[RunOutcome] = []
 
     class Recorder:
-        def __init__(self, root: Path) -> None:
+        def __init__(self, root: Path, *, charts_dir: Path) -> None:
             assert root == tmp_path
+            assert charts_dir == DEFAULT_CHARTS_DIR
 
         def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
             recorded.append(outcome)
@@ -90,8 +92,8 @@ def test_record_lifecycle_evidence_is_nonfatal_and_warns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Recorder:
-        def __init__(self, root: Path) -> None:
-            pass
+        def __init__(self, root: Path, *, charts_dir: Path) -> None:
+            assert charts_dir == DEFAULT_CHARTS_DIR
 
         def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
             raise OSError("read-only state directory")

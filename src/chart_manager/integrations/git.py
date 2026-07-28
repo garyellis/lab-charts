@@ -7,15 +7,23 @@ from pathlib import Path
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 class Git:
     """Run git subcommands rooted at one working tree."""
 
-    def __init__(self, root: Path, runner: CommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        runner: CommandRunner | None = None,
+        *,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
+    ) -> None:
         """Bind the working-tree root and a CommandRunner."""
         self.root = root
         self.runner = runner or SubprocessRunner()
+        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
 
     def is_repository(self) -> bool:
         """True if `root` is inside a git work tree."""
@@ -81,7 +89,7 @@ class Git:
     def changed_charts(self, base: str = "origin/main") -> list[str]:
         """Return chart names with committed changes vs `base` (merge-base diff).
 
-        A "chart" is the first directory under charts/ in any changed path.
+        A "chart" is the first directory under the configured chart root.
         """
         if not self.is_repository():
             raise ExternalCommandError(
@@ -92,9 +100,9 @@ class Git:
         )
         charts: set[str] = set()
         for line in result.stdout.splitlines():
-            parts = Path(line).parts
-            if len(parts) >= 2 and parts[0] == "charts":
-                charts.add(parts[1])
+            chart = self.layout.chart_name_from_repo_path(line)
+            if chart is not None:
+                charts.add(chart)
         return sorted(charts)
 
     def changed_files(self, base: str = "origin/main") -> list[str]:

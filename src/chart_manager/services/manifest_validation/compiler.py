@@ -15,6 +15,7 @@ from chart_manager.services.manifest_validation.models import (
 )
 from chart_manager.services.manifest_validation.runner import RowConfig
 from chart_manager.services.manifest_validation.spec import resolve_namespace
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,12 @@ def discover_policies(repo_root: Path, chart_path: Path) -> list[Path]:
     return [candidate.resolve() for candidate in candidates if candidate.is_dir()]
 
 
-def resolve_chart_path(repo_root: Path, chart: str) -> tuple[Path, str]:
+def resolve_chart_path(
+    repo_root: Path,
+    chart: str,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
+) -> tuple[Path, str]:
     """Resolve a repository chart name or an explicit fixture path."""
     if "/" in chart:
         candidate = Path(chart)
@@ -52,7 +58,7 @@ def resolve_chart_path(repo_root: Path, chart: str) -> tuple[Path, str]:
         if not (candidate / "Chart.yaml").is_file():
             raise ChartNotFoundError(f"no Chart.yaml at {candidate}")
         return candidate, candidate.name
-    resolved = ChartRepository(repo_root).get(chart)
+    resolved = ChartRepository(repo_root, charts_dir=charts_dir).get(chart)
     return resolved.path, resolved.name
 
 

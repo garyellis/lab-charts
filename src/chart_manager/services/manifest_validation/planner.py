@@ -19,6 +19,7 @@ from chart_manager.services.manifest_validation.spec import (
     ManifestValidationSpec,
     resolve_namespace,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 @dataclass(frozen=True)
@@ -44,10 +45,12 @@ def build_worklist(
     root: Path,
     changed_files: list[str] | None = None,
     all_charts: bool = False,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> WorklistBuildResult:
     """Build the deterministic chart/environment worklist."""
-    root = root.resolve()
-    catalog = build_catalog(root)
+    layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+    root = layout.root
+    catalog = build_catalog(root, charts_dir=layout.charts_dir)
     targets = catalog.by_name()
     specs = {name: target.spec for name, target in targets.items()}
 
@@ -65,7 +68,7 @@ def build_worklist(
     accumulated: set[tuple[str, str]] = set()
     ignored_changes: set[Path] = set()
     unmatched_changes: set[Path] = set()
-    dependency_index = build_helm_dependency_index(root)
+    dependency_index = build_helm_dependency_index(root, charts_dir=layout.charts_dir)
     for raw in changed_files:
         if not raw:
             continue
@@ -78,15 +81,16 @@ def build_worklist(
             continue
         if _is_other_chart_manager_path(parts):
             continue
-        if len(parts) < 2 or parts[0] != "charts":
+        chart_name = layout.chart_name_from_repo_path(Path(raw))
+        if chart_name is None:
             continue
 
-        chart_name = parts[1]
-        if len(parts) == 2:
+        prefix_length = len(layout.charts_dir.parts)
+        if len(parts) == prefix_length + 1:
             _add_all_envs(accumulated, specs, chart_name)
             _fanout_dependents(accumulated, specs, dependency_index, chart_name)
             continue
-        chart_relative = Path(*parts[2:])
+        chart_relative = Path(*parts[prefix_length + 1 :])
         if chart_relative == Path(LIFECYCLE_FILENAME):
             # Lifecycle intent is chart-wide only when this chart has an
             # enabled validation capability. Disabled/unconfigured
@@ -120,6 +124,7 @@ def build_worklist(
         ignored=ordered_ignored,
         unmatched=ordered_unmatched,
         specs=specs,
+        layout=layout,
     )
     return WorklistBuildResult(
         rows=rows,
@@ -219,6 +224,7 @@ def _trigger_coverage_warnings(
     ignored: tuple[Path, ...],
     unmatched: tuple[Path, ...],
     specs: dict[str, ManifestValidationSpec],
+    layout: RepositoryLayout,
 ) -> tuple[str, ...]:
     """Explain why changed chart files did not use an explicit trigger."""
     warnings = [
@@ -226,8 +232,7 @@ def _trigger_coverage_warnings(
         for path in ignored
     ]
     for path in unmatched:
-        parts = path.parts
-        chart = parts[1] if len(parts) >= 2 and parts[0] == "charts" else ""
+        chart = layout.chart_name_from_repo_path(path) or ""
         spec = specs.get(chart)
         behavior = (
             "unmatchedChanges=all-environments selected all environments"

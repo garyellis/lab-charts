@@ -17,12 +17,20 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpact,
     LifecycleImpactService,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class CiService:
     """CI pipeline verbs for a single chart against an already-provisioned cluster."""
 
-    def __init__(self, root: Path, *, helm: Helm, kubectl: Kubectl) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        helm: Helm,
+        kubectl: Kubectl,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
+    ) -> None:
         """Wire repository/git against `root`; take cluster adapters injected.
 
         `helm`/`kubectl` were constructed inline here, which meant CI ran
@@ -31,9 +39,9 @@ class CiService:
         which this service already owns.
         """
         self.root = root
-        self.cluster_tests = ClusterTestCatalog(root)
-        self.impact = LifecycleImpactService(root)
-        self.git = Git(root)
+        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
+        self.impact = LifecycleImpactService(root, charts_dir=charts_dir)
+        self.git = Git(root, charts_dir=charts_dir)
         self.helm = helm
         self.kubectl = kubectl
 

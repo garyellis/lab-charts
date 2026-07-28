@@ -51,6 +51,9 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.setenv("TERM", "dumb")
     monkeypatch.setenv("NO_COLOR", "1")
+    # Unit and integration tests must never inherit a developer's external
+    # event sink configuration and persist records in Cosmos DB.
+    monkeypatch.setenv("EVENTS_BACKEND", "none")
 
 
 @pytest.fixture

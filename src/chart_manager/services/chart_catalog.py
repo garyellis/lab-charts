@@ -16,6 +16,7 @@ from chart_manager.services.chart_config import (
     validation_status,
 )
 from chart_manager.services.domain.charts import ChartDependency, ChartRepository
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 @dataclass(frozen=True)
@@ -36,9 +37,9 @@ class ChartCatalogEntry:
 class ChartCatalogService:
     """Inspect Helm charts and their optional lifecycle intent."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
         """Build the Helm repository from the chart repo root."""
-        self.repository = ChartRepository(root)
+        self.repository = ChartRepository(root, charts_dir=charts_dir)
 
     def list_entries(self) -> list[ChartCatalogEntry]:
         """Return every chart, retaining malformed metadata/intent diagnostics."""

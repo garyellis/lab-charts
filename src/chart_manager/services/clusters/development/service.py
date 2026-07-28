@@ -54,6 +54,7 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 # cert-manager webhook deployment. Must be Available before the
 # istio-gateway chart installs (its Certificate / ClusterIssuer CRs go
@@ -76,6 +77,7 @@ class DevelopmentClusterService:
         kubectl: Kubectl,
         expose: ExposeService,
         progress: ProgressCallback | None = None,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -85,7 +87,7 @@ class DevelopmentClusterService:
         composition root is now the only place these are built.
         """
         self.root = root
-        self.cluster_tests = ClusterTestCatalog(root)
+        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
         self.helm = helm
         self.kind = kind

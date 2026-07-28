@@ -28,16 +28,20 @@ from chart_manager.services.manifest_validation.catalog import (
 from chart_manager.services.manifest_validation.compiler import (
     resolve_manifest_validation,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
-def doctor_lifecycle(root: Path) -> DoctorReport:
+def doctor_lifecycle(
+    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+) -> DoctorReport:
     """Scan every chart config, runtime reference, input path, and requires cycle.
 
     This is deliberately observational: it parses and resolves authored data
     but does not invoke Helm, Kubernetes, or an environment bootstrap.
     """
-    root = root.resolve()
-    repository = ChartRepository(root)
+    layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+    root = layout.root
+    repository = ChartRepository(root, charts_dir=layout.charts_dir)
     chart_names = repository.list_names()
     diagnostics: list[LifecycleDiagnostic] = []
     lifecycles: dict[str, ChartLifecycle | None] = {}
@@ -88,7 +92,11 @@ def doctor_lifecycle(root: Path) -> DoctorReport:
             lifecycle
         ) is CapabilityStatus.ENABLED:
             try:
-                target = load_manifest_validation_target(root, name)
+                target = load_manifest_validation_target(
+                    root,
+                    name,
+                    charts_dir=layout.charts_dir,
+                )
                 resolve_manifest_validation(target, root)
             except ChartManagerError as exc:
                 diagnostics.append(
@@ -100,7 +108,7 @@ def doctor_lifecycle(root: Path) -> DoctorReport:
                     )
                 )
 
-    catalog = ClusterTestCatalog(root)
+    catalog = ClusterTestCatalog(root, charts_dir=layout.charts_dir)
     for name, spec in sorted(cluster_specs.items()):
         for profile_name, profile in sorted(spec.profiles.items()):
             try:
@@ -126,6 +134,7 @@ def doctor_lifecycle(root: Path) -> DoctorReport:
                     lifecycles=lifecycles,
                     cluster_specs=cluster_specs,
                     root=root,
+                    charts_dir=layout.charts_dir,
                 )
                 if diagnostic is not None:
                     diagnostics.append(diagnostic)
@@ -140,11 +149,18 @@ def doctor_lifecycle(root: Path) -> DoctorReport:
                 lifecycles=lifecycles,
                 cluster_specs=cluster_specs,
                 root=root,
+                charts_dir=layout.charts_dir,
             )
             if diagnostic is not None:
                 diagnostics.append(diagnostic)
 
-    diagnostics.extend(_cycle_diagnostics(cluster_specs, root))
+    diagnostics.extend(
+        _cycle_diagnostics(
+            cluster_specs,
+            root,
+            charts_dir=layout.charts_dir,
+        )
+    )
     diagnostics.sort(
         key=lambda item: (
             item.chart or "",
@@ -169,10 +185,11 @@ def _validate_ref(
     lifecycles: dict[str, ChartLifecycle | None],
     cluster_specs: dict[str, ClusterTestSpec],
     root: Path,
+    charts_dir: Path,
 ) -> LifecycleDiagnostic | None:
     """Validate one cross-chart runtime reference with a precise code."""
     label = f"{relation} reference {reference.chart}:{reference.profile}"
-    source_path = root / "charts" / source_chart / LIFECYCLE_FILENAME
+    source_path = root / charts_dir / source_chart / LIFECYCLE_FILENAME
     if reference.chart not in all_chart_names:
         return _error(
             "unknown-chart-reference",
@@ -213,6 +230,8 @@ def _validate_ref(
 def _cycle_diagnostics(
     specs: dict[str, ClusterTestSpec],
     root: Path,
+    *,
+    charts_dir: Path,
 ) -> list[LifecycleDiagnostic]:
     """Find unique cycles in the authored runtime-requirement graph."""
     graph: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {}
@@ -249,7 +268,7 @@ def _cycle_diagnostics(
                     f"cluster-test requirement cycle detected: {rendered}",
                     chart=chart,
                     profile=profile,
-                    path=root / "charts" / chart / LIFECYCLE_FILENAME,
+                    path=root / charts_dir / chart / LIFECYCLE_FILENAME,
                 )
             )
             return

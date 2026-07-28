@@ -8,6 +8,7 @@ from pathlib import Path
 from chart_manager.plumbing.errors import ChartManagerError, DependencyCycleError
 from chart_manager.services.domain.charts import ChartRepository, ClusterTestChart
 from chart_manager.services.domain.cluster_tests import ClusterTestRef
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 @dataclass(frozen=True)
@@ -70,8 +71,10 @@ class DependencyResolver:
         return self._load_chart(chart).spec.dependent_tests
 
 
-def build_helm_dependency_index(root: Path) -> dict[str, set[str]]:
-    """Map each chart in `<root>/charts/` to the chart names that depend on it.
+def build_helm_dependency_index(
+    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+) -> dict[str, set[str]]:
+    """Map each managed chart to the chart names that depend on it.
 
     Loads ordinary ``HelmChart`` objects, so charts without enabled cluster
     tests — including library charts — still enter the index.
@@ -79,7 +82,7 @@ def build_helm_dependency_index(root: Path) -> dict[str, set[str]]:
     explicitly requested charts remain strict.
     """
     index: dict[str, set[str]] = {}
-    repository = ChartRepository(root)
+    repository = ChartRepository(root, charts_dir=charts_dir)
     for name in repository.list_names():
         try:
             chart = repository.get(name)

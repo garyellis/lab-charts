@@ -10,6 +10,7 @@ import yaml
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.domain.cluster_tests import ClusterTestSpec
+from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 @dataclass(frozen=True)
@@ -112,12 +113,13 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
 
 
 class ChartRepository:
-    """Discover and load Helm charts under ``<root>/charts``."""
+    """Discover and load Helm charts under the configured repository directory."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
         """Anchor the repository at the resolved repo root."""
-        self.root = root.resolve()
-        self.charts_dir = self.root / "charts"
+        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+        self.root = self.layout.root
+        self.charts_dir = self.layout.charts_root
 
     def list_names(self) -> list[str]:
         """Return sorted names of chart directories containing a Chart.yaml."""

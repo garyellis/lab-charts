@@ -48,7 +48,6 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -85,6 +84,7 @@ from chart_manager.services.upgrader import (
     UpgradeService,
     UpgradeTelemetry,
 )
+from chart_manager.settings import Settings
 
 __all__ = ["Container", "HelmReleaseProgress", "Settings"]
 
@@ -93,49 +93,6 @@ HelmReleaseProgress = Callable[[HelmReleaseRef, Transition], None]
 
 #: Operator-warning channel shape accepted by ManifestValidationService.
 WarnCallback = Callable[[str], None]
-
-
-@dataclass(frozen=True)
-class Settings:
-    """Process-level configuration for the adapters this root assembles.
-
-    Every default reproduces what the CLI hardcodes today, so
-    `Container()` is behavior-identical to the pre-refactor call sites.
-    Deliberately small: a field belongs here only when an adapter actually
-    accepts it and a non-CLI surface would plausibly set it differently.
-
-    Notably absent:
-
-    * ``events_backend`` -- selected by `services.events.store.get_event_store`
-      from the `EVENTS_BACKEND` environment variable at first write. Mirroring
-      it here would create a second source of truth that nothing reads.
-    * ``root`` -- the repository root is a per-invocation argument (`--root`),
-      not process configuration, so root-scoped services (`DevelopmentClusterService`,
-      cluster lifecycle services, `ChartCatalogService`, ...) are constructed
-      by their caller.
-    * ``helm_verbose`` -- see `Container.test_service`; that flag is a
-      per-service policy, not a deployment knob.
-    """
-
-    #: kubectl/helm `--context`. None = whatever the ambient kubeconfig
-    #: selects, which is what every CLI call site does today. Honored by all
-    #: five kube-facing adapters; before Wave 4 it reached only two of them.
-    kube_context: str | None = None
-
-    #: `DOCKER_HOST` for the kind adapter. kind addresses its cluster with
-    #: `--name`, so the daemon is the only ambient part of "which cluster";
-    #: this is the `kube_context` of the docker half. None = ambient daemon.
-    docker_host: str | None = None
-
-    #: Wall-clock cap applied to every kubectl/kind subprocess. None =
-    #: unbounded, today's behavior. A server needs this: `kubectl get`
-    #: against an unreachable apiserver otherwise pins a worker forever.
-    #: helm/kubeconform/kyverno take their cap from `validate --row-timeout`
-    #: instead, which is per-run rather than per-deployment.
-    command_timeout: float | None = None
-
-    #: `source` stamped onto every emitted PlatformLifecycleEvent.
-    event_source: str = "chart-manager"
 
 
 class Container:
@@ -280,6 +237,7 @@ class Container:
             kubectl=self.kubectl(),
             expose=self.expose_service(),
             progress=progress,
+            charts_dir=self._settings.charts_dir,
         )
 
     def ephemeral_test_cluster_service(
@@ -292,11 +250,17 @@ class Container:
             kind=self.kind(),
             kubectl=self.kubectl(),
             progress=progress,
+            charts_dir=self._settings.charts_dir,
         )
 
     def ci_service(self, root: Path) -> CiService:
         """Build the per-chart CI verbs for the repo at `root`."""
-        return CiService(root, helm=self.helm(), kubectl=self.kubectl())
+        return CiService(
+            root,
+            helm=self.helm(),
+            kubectl=self.kubectl(),
+            charts_dir=self._settings.charts_dir,
+        )
 
     def validate_app(
         self,
@@ -309,6 +273,7 @@ class Container:
             progress=progress,
             on_warn=on_warn,
             command_runner=self.command_runner(),
+            charts_dir=self._settings.charts_dir,
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:
@@ -360,12 +325,16 @@ class Container:
             branch_file_reader=github.read_file_at_ref,
             repository=repository,
             telemetry=UpgradeTelemetry(writer=self.event_writer()),
+            charts_dir=self._settings.charts_dir,
         )
 
     def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:
         """Build the trusted callback finalizer with the shared git runner."""
         del root  # address is carried by FinalizeRequest; retained for surface symmetry.
-        return UpgradeFinalizer(baseline=GitBaselineReader(self.command_runner()))
+        return UpgradeFinalizer(
+            baseline=GitBaselineReader(self.command_runner()),
+            charts_dir=self._settings.charts_dir,
+        )
 
     def _repository_slug(self, root: Path) -> str:
         """Read owner/repository from CI metadata or the configured origin."""

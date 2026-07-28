@@ -84,7 +84,7 @@ def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
 def _compiler(root: Path) -> LifecycleCompiler:
     """Build the compiler at a seam tests and future composition can replace."""
 
-    return LifecycleCompiler(root)
+    return LifecycleCompiler(root, charts_dir=Settings().charts_dir)
 
 
 def _compile(root: Path, chart: str, workflow: str, profile: str) -> Any:
@@ -230,7 +230,7 @@ def graph(
 
 
 def _doctor(root: Path) -> Any:
-    return doctor_lifecycle(root)
+    return doctor_lifecycle(root, charts_dir=Settings().charts_dir)
 
 
 def _status_service(root: Path) -> LifecycleStatusService:
@@ -303,7 +303,7 @@ def _build_live_observers(
 
 
 def _impact_service(root: Path) -> LifecycleImpactService:
-    return LifecycleImpactService(root)
+    return LifecycleImpactService(root, charts_dir=Settings().charts_dir)
 
 
 def _changed_paths(

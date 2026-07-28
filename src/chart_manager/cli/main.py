@@ -17,7 +17,7 @@ from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import lifecycle as lifecycle_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
-from chart_manager.composition import Container
+from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.clusters.development import (
@@ -166,7 +166,7 @@ NamespaceOption = Annotated[str, typer.Option("--namespace", help="Kubernetes na
 @charts_app.command("list")
 def list_charts(root: RootOption = Path(".")) -> None:
     """List Helm charts and their lifecycle capability status."""
-    service = ChartCatalogService(root)
+    service = ChartCatalogService(root, charts_dir=Settings().charts_dir)
     table = Table(
         "Chart",
         "Type",
@@ -203,7 +203,10 @@ def list_charts(root: RootOption = Path(".")) -> None:
 @charts_app.command("lifecycle")
 def show_lifecycle(chart: str, root: RootOption = Path(".")) -> None:
     """Print one chart's normalized ChartLifecycle intent."""
-    lifecycle = ChartCatalogService(root).get_lifecycle(chart)
+    lifecycle = ChartCatalogService(
+        root,
+        charts_dir=Settings().charts_dir,
+    ).get_lifecycle(chart)
     console.print_json(
         data=lifecycle.model_dump(mode="json", by_alias=True, exclude_none=True)
     )
@@ -262,14 +265,18 @@ def grafana_lint_dashboards(
         list[Path],
         typer.Option(
             "--path",
-            help="Specific dashboard JSON file (repeatable). Default: all under charts/grafana-dashboards/dashboards/.",
+            help="Specific dashboard JSON file (repeatable). Default: all under the configured chart directory's grafana-dashboards/dashboards/.",
         ),
     ] = [],
 ) -> None:
     """Lint Grafana dashboards for repo-wide quality rules."""
     from chart_manager.services.grafana.dashboard_lint import discover_dashboards, lint_paths
 
-    targets = list(path) if path else discover_dashboards(root)
+    targets = (
+        list(path)
+        if path
+        else discover_dashboards(root, charts_dir=Settings().charts_dir)
+    )
     if not targets:
         console.print("[yellow]no dashboards found[/yellow]")
         raise typer.Exit(0)
@@ -293,7 +300,7 @@ def dependency_plan(
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
-    service = InstallPlanService(root)
+    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
     table = Table("Order", "Chart", "Profile", "Target")
     for index, entry in enumerate(service.install_plan(chart, profile), start=1):
         table.add_row(str(index), entry.chart, entry.profile, "yes" if entry.target else "")
@@ -306,7 +313,7 @@ def dependency_checks(
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
 ) -> None:
-    service = InstallPlanService(root)
+    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
     table = Table("Order", "Chart", "Profile", "Check", "Type", "Description")
     row = 0
     for entry in service.plan_checks(chart, profile):
@@ -325,7 +332,7 @@ def dependency_checks(
 
 @deps_app.command("dependent-tests")
 def dependent_tests(chart: str, root: RootOption = Path(".")) -> None:
-    service = InstallPlanService(root)
+    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
     table = Table("Chart", "Profile")
     for ref in service.dependent_tests(chart):
         table.add_row(ref.chart, ref.profile)

@@ -17,6 +17,7 @@ from chart_manager.services.chart_config import (
 )
 from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.manifest_validation.models import ManifestValidationTarget
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 def discover_chart_lifecycle(chart_path: Path) -> Path | None:
@@ -50,9 +51,14 @@ class ValidationCatalog:
         return {target.name: target for target in self.targets}
 
 
-def load_manifest_validation_target(root: Path, name: str) -> ManifestValidationTarget:
+def load_manifest_validation_target(
+    root: Path,
+    name: str,
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
+) -> ManifestValidationTarget:
     """Strictly load one explicitly requested manifest-validation target."""
-    chart = ChartRepository(root).get(name)
+    chart = ChartRepository(root, charts_dir=charts_dir).get(name)
     spec_path = chart.path / LIFECYCLE_FILENAME
     lifecycle = load_optional_chart_lifecycle(spec_path)
     if lifecycle is not None:
@@ -71,9 +77,11 @@ def load_manifest_validation_target(root: Path, name: str) -> ManifestValidation
 def load_chart_specs(
     root: Path,
     charts: Iterable[str],
+    *,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> list[CatalogEntry]:
     """Compose Helm metadata and validation specs without aborting a full scan."""
-    repository = ChartRepository(root)
+    repository = ChartRepository(root, charts_dir=charts_dir)
     entries: list[CatalogEntry] = []
     for name in charts:
         try:
@@ -115,11 +123,13 @@ def load_chart_specs(
     return entries
 
 
-def build_catalog(root: Path) -> ValidationCatalog:
+def build_catalog(
+    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+) -> ValidationCatalog:
     """Discover all repository charts, intentionally retaining per-chart errors."""
     root = root.resolve()
-    repository = ChartRepository(root)
-    entries = load_chart_specs(root, repository.list_names())
+    repository = ChartRepository(root, charts_dir=charts_dir)
+    entries = load_chart_specs(root, repository.list_names(), charts_dir=charts_dir)
     targets = tuple(entry.target for entry in entries if entry.target is not None)
     errors = tuple(f"{entry.chart}: {entry.error}" for entry in entries if entry.error is not None)
     config_missing = tuple(entry.chart for entry in entries if entry.config_missing)
