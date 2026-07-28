@@ -14,6 +14,7 @@ so it is loaded exactly once.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ DryRunMode = Literal["extract", "lookup", "full"]
 
 _EMPTY_CONFIG: Mapping[str, object] = MappingProxyType({})
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+$")
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,16 @@ class Renovate:
         if request.token is not None:
             env["RENOVATE_TOKEN"] = request.token
 
+        mode = f"dry-run={request.dry_run}" if request.dry_run is not None else "write"
+        _LOG.info("Starting Renovate for %s (%s)", request.repository, mode)
+        _LOG.debug("Repository root: %s", repo_root)
+        _LOG.debug("Global config: %s", global_config)
+        if additional_config is not None:
+            _LOG.debug("Additional config: %s", additional_config)
+        _LOG.debug(
+            "Authentication: %s",
+            "configured" if request.token is not None else "not configured",
+        )
         result = self.runner.run(
             [self._binary, request.repository],
             cwd=repo_root,
@@ -124,6 +136,16 @@ class Renovate:
         )
         stdout = _redact_token(result.stdout, request.token)
         stderr = _redact_token(result.stderr, request.token)
+        _log_subprocess_output(stdout, error=False)
+        _log_subprocess_output(stderr, error=True)
+        if result.returncode == 0:
+            _LOG.info("Renovate completed for %s", request.repository)
+        else:
+            _LOG.error(
+                "Renovate failed for %s (exit %s)",
+                request.repository,
+                result.returncode,
+            )
         return RenovateResult(
             returncode=result.returncode,
             stdout=stdout,
@@ -202,3 +224,17 @@ def _redact_token(value: str, token: str | None) -> str:
     if not token:
         return value
     return value.replace(token, "***")
+
+
+def _log_subprocess_output(value: str, *, error: bool) -> None:
+    """Forward captured Renovate output through the configured process logger."""
+    for line in value.rstrip().splitlines():
+        stripped = line.lstrip()
+        if error or stripped.startswith(("ERROR:", "FATAL:")):
+            _LOG.error("renovate> %s", line)
+        elif stripped.startswith("WARN:"):
+            _LOG.warning("renovate> %s", line)
+        elif stripped.startswith("DEBUG:"):
+            _LOG.debug("renovate> %s", line)
+        else:
+            _LOG.info("renovate> %s", line)

@@ -87,6 +87,15 @@ classification, lifecycle planning and diagnostics, validation, cluster
 services, upgrades, and Grafana dashboard discovery all consume this same
 Pydantic setting. Absolute paths and `.`/`..` traversal are rejected.
 
+CLI operational logs are rendered to stderr, leaving stdout safe for JSON and
+pipelines. The Pydantic `Settings.log_level` default is `INFO`; override it
+with `CHART_MANAGER_LOG_LEVEL=DEBUG` (or `WARNING`, `ERROR`, or `CRITICAL`) for
+more or less detail. Text logs include a UTC timestamp and the module, function,
+and line that emitted each record. Set `CHART_MANAGER_LOG_FORMAT=json` for
+structured records with `timestamp`, `level`, `logger`, `module`, `function`,
+`line`, and `message` fields. Upgrade logging includes its plan, sanitized
+Renovate stdout/stderr, and the final outcome; credentials are never logged.
+
 Changed chart files are selected through the existing `triggers:` glob-to-environment
 mapping. Intentional exclusions belong in the additive, chart-relative
 `triggerIgnores:` glob list. Files matching neither are reported as trigger

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -19,6 +20,8 @@ from chart_manager.services.upgrader.models import (
 from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.services.upgrader.telemetry import UpgradeTelemetry
 from chart_manager.settings import DEFAULT_CHARTS_DIR
+
+_LOG = logging.getLogger(__name__)
 
 
 class RenovateAdapter(Protocol):
@@ -85,7 +88,11 @@ class UpgradeService:
             request.chart_path,
             charts_dir=self._charts_dir,
         )
+        _LOG.info("Planning dependency upgrade for chart %s", plan.chart)
+        _LOG.debug("Chart path: %s", plan.chart_path)
+        _LOG.debug("Renovate branch prefix: %s", plan.branch_prefix)
         diagnostics: list[str] = []
+        _LOG.debug("Checking upgrade inputs for uncommitted changes")
         self._require_relevant_files_clean(plan)
         existing_pr, found_existing = (
             (None, True)
@@ -111,7 +118,16 @@ class UpgradeService:
             raise UpgradeError(
                 f"Renovate failed for chart {plan.chart}: {stderr.strip() or stdout.strip()}"
             )
+        # Renovate can return zero after a repository-scoped failure. Its
+        # logger writes those failures to stdout, so relying on the process
+        # code alone turns auth, checkout, lookup, and artifact errors into a
+        # convincing but false "no_changes" result.
+        if _renovate_reported_error(stdout):
+            raise UpgradeError(
+                f"Renovate reported an error for chart {plan.chart}: {stdout.strip()}"
+            )
         diagnostics.extend(line for line in stderr.splitlines() if line.strip())
+        diagnostics.extend(_renovate_warnings(stdout))
         current_pr, found_current = (
             (existing_pr, True)
             if request.dry_run
@@ -124,6 +140,10 @@ class UpgradeService:
             outcome = "status_unknown"
         elif current_pr is None:
             outcome = "no_changes"
+            diagnostics.append(
+                f"Renovate completed without an open pull request under "
+                f"{plan.branch_prefix}; no eligible update was proposed"
+            )
         elif existing_pr is None:
             outcome = "pr_open"
         else:
@@ -149,6 +169,11 @@ class UpgradeService:
         # never work. `UpgradeTelemetry` owns the swallow.
         if self._telemetry is not None:
             self._telemetry.completed(upgrade_result, previously_proposed=previously_proposed)
+        _LOG.info(
+            "Upgrade result for %s: %s",
+            plan.chart,
+            upgrade_result.outcome,
+        )
         return upgrade_result
 
     def _proposed_version(
@@ -238,6 +263,23 @@ def _chart_version(text: str) -> str | None:
         return None
     version = document.get("version")
     return version if isinstance(version, str) else None
+
+
+def _renovate_reported_error(output: str) -> bool:
+    """Detect repository failures Renovate logged despite returning zero."""
+    return any(
+        line.lstrip().startswith(("ERROR:", "FATAL:"))
+        for line in output.splitlines()
+    )
+
+
+def _renovate_warnings(output: str) -> tuple[str, ...]:
+    """Retain warning headlines from Renovate's stdout logger."""
+    return tuple(
+        line.strip()
+        for line in output.splitlines()
+        if line.lstrip().startswith("WARN:")
+    )
 
 
 def build_upgrade_plan(

@@ -30,7 +30,11 @@ def _chart(root: Path) -> Path:
     return chart
 
 
-def test_upgrade_service_uses_shared_runner_for_git_and_renovate(tmp_path: Path) -> None:
+def test_upgrade_service_uses_shared_runner_for_git_and_renovate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ci-token")
     chart = _chart(tmp_path)
     (tmp_path / "renovate-global.json").write_text("{}\n", encoding="utf-8")
     (chart / "renovate.json").write_text("{}\n", encoding="utf-8")
@@ -52,6 +56,7 @@ def test_upgrade_service_uses_shared_runner_for_git_and_renovate(tmp_path: Path)
     assert runner.calls[2] == ("renovate", "owner/repository")
     assert runner.records[2].env is not None
     assert runner.records[2].env["RENOVATE_DRY_RUN"] == "full"
+    assert runner.records[2].env["RENOVATE_TOKEN"] == "ci-token"
     assert runner.records[2].env["RENOVATE_ADDITIONAL_CONFIG_FILE"] == str(
         chart / "renovate.json"
     )

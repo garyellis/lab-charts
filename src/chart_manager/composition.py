@@ -298,7 +298,12 @@ class Container:
                 additional_config_path=chart_config if chart_config.is_file() else None,
                 runtime_overlay=plan.runtime_overlay,
                 dry_run="full" if dry_run else None,
-                token=os.environ.get("RENOVATE_TOKEN"),
+                # Renovate names this setting RENOVATE_TOKEN, while GitHub
+                # Actions exposes its repository token as GITHUB_TOKEN. Honor
+                # the explicit Renovate name first and use the standard CI
+                # token as the composition-boundary fallback.
+                token=os.environ.get("RENOVATE_TOKEN")
+                or os.environ.get("GITHUB_TOKEN"),
             )
 
         def relevant_changes(paths: Sequence[Path]) -> Sequence[str]:

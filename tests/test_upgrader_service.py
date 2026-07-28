@@ -192,6 +192,49 @@ def test_no_branch_read_without_a_pull_request(tmp_path: Path) -> None:
 
     assert result.outcome == "no_changes"
     assert result.proposed_version is None
+    assert result.diagnostics == (
+        "Renovate completed without an open pull request under "
+        "renovate/my-chart/; no eligible update was proposed",
+    )
+
+
+def test_service_rejects_renovate_errors_logged_with_zero_exit(tmp_path: Path) -> None:
+    chart = _chart(tmp_path)
+
+    class Adapter:
+        def run(self, request: object) -> object:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='ERROR: Repository has unknown error\n  "errorMessage": "Bad credentials"',
+                stderr="",
+            )
+
+    with pytest.raises(UpgradeError, match="Bad credentials"):
+        UpgradeService(
+            Adapter(),
+            lambda plan, *, dry_run: plan,
+            pull_request_lookup=lambda prefix: (),
+        ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
+
+
+def test_service_preserves_renovate_warning_headlines(tmp_path: Path) -> None:
+    chart = _chart(tmp_path)
+
+    class Adapter:
+        def run(self, request: object) -> object:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="WARN: Package lookup failed\nINFO: Repository finished",
+                stderr="",
+            )
+
+    result = UpgradeService(
+        Adapter(),
+        lambda plan, *, dry_run: plan,
+        pull_request_lookup=lambda prefix: (),
+    ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
+
+    assert result.diagnostics[0] == "WARN: Package lookup failed"
 
 
 def test_service_reports_drift_when_a_chart_holds_more_than_one_branch(

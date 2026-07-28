@@ -19,6 +19,7 @@ from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
+from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.clusters.development import (
     DEFAULT_CHART as DEVELOPMENT_DEFAULT_CHART,
@@ -755,6 +756,8 @@ def main() -> None:
     FileNotFoundError here used to do.
     """
     try:
+        settings = Settings()
+        setup_logging(settings.log_level, fmt=settings.log_format)
         app()
     except MissingToolError as exc:
         console.print(f"[red]error:[/red] {escape(str(exc))}")

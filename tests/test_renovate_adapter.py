@@ -18,7 +18,10 @@ def _config(root: Path, name: str = "renovate-global.json") -> Path:
     return path
 
 
-def test_run_scopes_argv_cwd_and_all_config_layers(tmp_path: Path) -> None:
+def test_run_scopes_argv_cwd_and_all_config_layers(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     global_config = _config(tmp_path)
     additional_config = _config(tmp_path, ".chart-renovate.json")
     overlay = {
@@ -46,17 +49,18 @@ def test_run_scopes_argv_cwd_and_all_config_layers(tmp_path: Path) -> None:
     }
     runner = FakeCommandRunner(stdout="done\n")
 
-    result = Renovate(runner=runner, timeout=45).run(
-        RenovateRequest(
-            repo_root=tmp_path,
-            repository="garyellis/lab-charts",
-            global_config_path=Path("renovate-global.json"),
-            additional_config_path=additional_config,
-            runtime_overlay=overlay,
-            dry_run="full",
-            token="secret-token",
+    with caplog.at_level("DEBUG"):
+        result = Renovate(runner=runner, timeout=45).run(
+            RenovateRequest(
+                repo_root=tmp_path,
+                repository="garyellis/lab-charts",
+                global_config_path=Path("renovate-global.json"),
+                additional_config_path=additional_config,
+                runtime_overlay=overlay,
+                dry_run="full",
+                token="secret-token",
+            )
         )
-    )
 
     assert result.ok is True
     assert result.stdout == "done\n"
@@ -71,6 +75,9 @@ def test_run_scopes_argv_cwd_and_all_config_layers(tmp_path: Path) -> None:
     assert json.loads(record.env["RENOVATE_CONFIG"]) == overlay
     assert record.env["RENOVATE_DRY_RUN"] == "full"
     assert record.env["RENOVATE_TOKEN"] == "secret-token"
+    assert "Starting Renovate for garyellis/lab-charts (dry-run=full)" in caplog.text
+    assert "renovate> done" in caplog.text
+    assert "Authentication: configured" in caplog.text
 
 
 def test_token_is_environment_only_and_excluded_from_repr(tmp_path: Path) -> None:

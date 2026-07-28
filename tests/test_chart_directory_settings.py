@@ -41,6 +41,26 @@ def test_settings_default_and_environment_override(
     )
 
 
+def test_log_level_has_case_insensitive_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHART_MANAGER_LOG_LEVEL", raising=False)
+    assert Settings().log_level == "INFO"
+
+    monkeypatch.setenv("CHART_MANAGER_LOG_LEVEL", "debug")
+    assert Settings().log_level == "DEBUG"
+
+
+def test_log_format_has_case_insensitive_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHART_MANAGER_LOG_FORMAT", raising=False)
+    assert Settings().log_format == "text"
+
+    monkeypatch.setenv("CHART_MANAGER_LOG_FORMAT", "JSON")
+    assert Settings().log_format == "json"
+
+
 @pytest.mark.parametrize(
     "value",
     [Path("."), Path("../charts"), Path("deploy/../charts"), Path("/tmp/charts")],

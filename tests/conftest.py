@@ -50,6 +50,8 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_ACTIONS",
         "GITHUB_REPOSITORY",
         "GITHUB_STEP_SUMMARY",
+        "GITHUB_TOKEN",
+        "RENOVATE_TOKEN",
         "FORCE_COLOR",
     ):
         monkeypatch.delenv(var, raising=False)

@@ -9,11 +9,14 @@ agree on the same location.
 from __future__ import annotations
 
 from pathlib import Path, PurePath
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CHARTS_DIR = Path("charts")
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+LogFormat = Literal["text", "json"]
 
 
 def validate_charts_dir(value: Path) -> Path:
@@ -43,11 +46,23 @@ class Settings(BaseSettings):
     command_timeout: float | None = None
     event_source: str = "chart-manager"
     charts_dir: Path = DEFAULT_CHARTS_DIR
+    log_level: LogLevel = "INFO"
+    log_format: LogFormat = "text"
 
     @field_validator("charts_dir")
     @classmethod
     def _validate_charts_dir(cls, value: Path) -> Path:
         return validate_charts_dir(value)
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+    @field_validator("log_format", mode="before")
+    @classmethod
+    def _normalize_log_format(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
 
     def layout(self, root: Path) -> RepositoryLayout:
         """Bind this process configuration to one repository root."""
@@ -85,6 +100,8 @@ class RepositoryLayout:
 
 __all__ = [
     "DEFAULT_CHARTS_DIR",
+    "LogFormat",
+    "LogLevel",
     "RepositoryLayout",
     "Settings",
     "validate_charts_dir",
