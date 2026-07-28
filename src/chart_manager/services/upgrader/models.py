@@ -67,6 +67,13 @@ class UpdateMetadata:
     manager: str = ""
     datasource: str = ""
     update_type: str = ""
+    # Repo-relative file the dependency was found in, e.g.
+    # "charts/grafana/values.yaml". Excluded from equality so that one
+    # dependency pinned across several values files still collapses to a single
+    # changelog line, exactly as it did before this field existed. A future
+    # multi-chart run must therefore filter by this field *before* de-duplicating,
+    # or one chart's entry would absorb another's.
+    package_file: str = field(default="", compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> UpdateMetadata:
@@ -86,6 +93,7 @@ class UpdateMetadata:
             manager=text("manager"),
             datasource=text("datasource"),
             update_type=text("update_type", "updateType"),
+            package_file=text("package_file", "packageFile"),
         )
 
     @property

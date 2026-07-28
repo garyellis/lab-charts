@@ -93,6 +93,40 @@ def test_newer_update_on_open_branch_rewrites_the_same_section(tmp_path: Path) -
     )
 
 
+def test_package_file_is_captured_without_changing_deduplication(tmp_path: Path) -> None:
+    chart = _write_chart(tmp_path)
+    baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
+    # Renovate emits one update per file, so a tag pinned in both values files
+    # arrives twice. The two entries must still collapse to one changelog line.
+    data = {
+        "updates": [
+            {
+                "depName": "api",
+                "currentValue": "2.9.0",
+                "newValue": "2.10.0",
+                "datasource": "docker",
+                "packageFile": "charts/demo/values.yaml",
+            },
+            {
+                "depName": "api",
+                "currentValue": "2.9.0",
+                "newValue": "2.10.0",
+                "datasource": "docker",
+                "packageFile": "charts/demo/values-prod.yaml",
+            },
+        ]
+    }
+    result = UpgradeFinalizer(Baseline(baseline)).finalize(
+        FinalizeRequest(repo_root=tmp_path, chart_path=chart, update_data=data, baseline_ref="abc123")
+    )
+
+    assert len(result.updates) == 1
+    assert result.updates[0].package_file == "charts/demo/values.yaml"
+    assert (chart / "changelog.md").read_text(encoding="utf-8") == (
+        "## 1.2.4\n\n- api: 2.9.0 -> 2.10.0\n\n"
+    )
+
+
 def test_dependency_diff_is_reliable_fallback_and_major(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path, dependency="3.0.0")
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("3.0.0", "2.4.0")
