@@ -83,6 +83,7 @@ from chart_manager.services.upgrader import (
     UpgradeFinalizer,
     UpgradePlan,
     UpgradeService,
+    UpgradeTelemetry,
 )
 
 __all__ = ["Container", "HelmReleaseProgress", "Settings"]
@@ -311,7 +312,13 @@ class Container:
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:
-        """Build the chart-scoped Renovate orchestrator with one shared runner."""
+        """Build the chart-scoped Renovate orchestrator with one shared runner.
+
+        Gets the same memoized writer as the promotion services: `PR_OPEN` is
+        the *start* of the build timeline whose `merged`/`published` phases CI
+        emits through `chart-manager events build`, so it has to land on the
+        same store or the timeline is split across two backends.
+        """
         resolved_root = root.resolve()
         renovate = Renovate(self.command_runner())
         repository = self._repository_slug(resolved_root)
@@ -352,6 +359,7 @@ class Container:
             relevant_changes=relevant_changes,
             branch_file_reader=github.read_file_at_ref,
             repository=repository,
+            telemetry=UpgradeTelemetry(writer=self.event_writer()),
         )
 
     def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:

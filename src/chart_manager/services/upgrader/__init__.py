@@ -25,8 +25,10 @@ from chart_manager.services.upgrader.service import (
     UpgradeService,
     build_upgrade_plan,
 )
+from chart_manager.services.upgrader.telemetry import OUTCOME_PHASE, UpgradeTelemetry
 
 __all__ = [
+    "OUTCOME_PHASE",
     "BaselineReader",
     "FinalizeRequest",
     "FinalizeResult",
@@ -43,6 +45,7 @@ __all__ = [
     "UpgradeRequest",
     "UpgradeResult",
     "UpgradeService",
+    "UpgradeTelemetry",
     "build_upgrade_plan",
     "load_update_data",
     "resolve_chart_path",

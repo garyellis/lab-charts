@@ -73,3 +73,25 @@ def test_finalizer_baseline_read_uses_shared_runner(tmp_path: Path) -> None:
     assert runner.calls == [
         ("git", "show", "HEAD:charts/loki/Chart.yaml"),
     ]
+
+
+def test_upgrade_service_gets_the_container_memoized_event_writer(tmp_path: Path) -> None:
+    """PR_OPEN opens the build timeline whose later phases CI emits.
+
+    It has to land on the same store as those, so the service must get the
+    container's *memoized* writer rather than a fresh one -- a fresh writer
+    means a fresh EVENTS_BACKEND read and a fresh SDK client per call.
+    """
+    _chart(tmp_path)
+    (tmp_path / "renovate-global.json").write_text("{}\n", encoding="utf-8")
+    container = _Container(
+        FakeCommandRunner().script(Reply(stdout="git@github.com:owner/repository.git\n"))
+    )
+
+    service = container.upgrade_service(tmp_path)
+
+    telemetry = service._telemetry
+    assert telemetry is not None
+    assert telemetry.writer is container.event_writer()
+    # Operator path: a dropped event must never fail an upgrade.
+    assert telemetry.strict is False

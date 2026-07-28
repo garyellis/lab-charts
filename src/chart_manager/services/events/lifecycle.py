@@ -37,12 +37,15 @@ class PlatformLifecycleEvent:
 
     # identity
     uuid: UUID = field(default_factory=uuid4)
-    correlation_id: str | None     # f"{chart_name}@{chart_version}"
+    correlation_id: str | None     # f"{chart_name}@{chart_version}"; the join
+                                   # key, NOT the partition key (see store.py)
     build_correlation_id: str | None     # the charts repo PR (build lifecycle)
     promotion_correlation_id: str | None # the flux repo PR (promotion lifecycle)
 
     # unit
-    chart_name: str
+    chart_name: str           # the store partition key: chart-scoped, so one
+                              # chart's whole history is a single-partition read
+
     chart_version: str | None # None while PR is open and version not published
     images: tuple[str, ...]
     environment: str | None   # None for the build lifecycle; set in Flux

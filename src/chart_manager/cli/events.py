@@ -6,7 +6,6 @@ a warning and exits 0 so telemetry never breaks a build. --strict overrides.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated
@@ -14,10 +13,9 @@ from typing import Annotated
 import typer
 
 from chart_manager.composition import Container
+from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.writer import EventWriter
-
-_LOG = logging.getLogger(__name__)
 
 
 def _make_event_writer() -> EventWriter:
@@ -48,17 +46,24 @@ def _emit(
     """Run an emit callback; swallow+warn on failure unless `strict` (telemetry is non-fatal).
 
     The writer is built by the caller, but backend resolution still happens
-    lazily on first write -- i.e. inside `fn` and therefore inside this
-    try/except -- so a misconfigured EVENTS_BACKEND stays non-fatal.
+    lazily on first write -- i.e. inside `fn` and therefore inside the shared
+    `emit_non_fatal` boundary -- so a misconfigured EVENTS_BACKEND stays
+    non-fatal.
+
+    The confirmation line is printed only on success: `emit_non_fatal`
+    swallows, so `emitted ...` would otherwise be echoed for events that were
+    dropped.
     """
-    try:
+    emitted = False
+
+    def run() -> None:
+        nonlocal emitted
         fn(writer)
-    except Exception as exc:  # telemetry must not break the build
-        if strict:
-            raise
-        _LOG.warning(f"event emissions failed (non-fatal): {exc}")
-        return
-    typer.echo(f"emitted {summary}")
+        emitted = True
+
+    emit_non_fatal(run, strict=strict, what=summary)
+    if emitted:
+        typer.echo(f"emitted {summary}")
 
 def build(
     chart: Annotated[str, typer.Option(help="Chart name.")],

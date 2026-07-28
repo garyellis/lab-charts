@@ -8,43 +8,22 @@ had a start (`FLUX_PR_OPEN`, from `promote.py`) and no end, which is exactly
 what makes DESIGN.md's "duration from renovate PR propagation to all envs"
 uncomputable.
 
-This module holds the wiring and, more importantly, the *failure policy* in
-one place. `promote.py` already established it -- telemetry is emitted after
-the work is done, so an unconfigured or unreachable events backend must never
-turn a successful run into a traceback -- and three hand-copied try/excepts
-would have been the same duplication this cleanup is removing.
+This module holds the promotion wiring. The *failure policy* it used to own
+now lives in `services/events/failure.py`, which grew a fourth caller (the
+upgrade service) and no longer belongs to this domain; `emit_non_fatal` is
+re-exported here so existing importers keep working.
 """
 from __future__ import annotations
 
-import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 
+from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import PromotionPhase
 from chart_manager.services.events.writer import EventWriter
 
 from .state import START_PHASE, TERMINAL_PHASES, Stage, Verdict
 
-_LOG = logging.getLogger(__name__)
-
 __all__ = ["PromotionTelemetry", "emit_non_fatal"]
-
-
-def emit_non_fatal(emit: Callable[[], None], *, strict: bool, what: str) -> None:
-    """Run `emit`, logging and swallowing any failure unless `strict`.
-
-    `strict` exists for callers where the event *is* the deliverable (a
-    backfill job, a test asserting the payload); everything on an operator
-    path wants the swallow. The word "non-fatal" in the log line is load
-    bearing -- it is how an operator tells a dropped event from a dropped
-    promotion.
-    """
-    try:
-        emit()
-    except Exception as exc:  # telemetry must not break the run that produced it
-        if strict:
-            raise
-        _LOG.warning(f"{what} event emission failed (non-fatal): {exc}")
 
 
 @dataclass(frozen=True)

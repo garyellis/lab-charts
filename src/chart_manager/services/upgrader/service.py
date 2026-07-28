@@ -17,6 +17,7 @@ from chart_manager.services.upgrader.models import (
     UpgradeResult,
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path
+from chart_manager.services.upgrader.telemetry import UpgradeTelemetry
 
 
 class RenovateAdapter(Protocol):
@@ -61,6 +62,7 @@ class UpgradeService:
         branch_file_reader: BranchFileReader | None = None,
         repository: str | None = None,
         base: str | None = None,
+        telemetry: UpgradeTelemetry | None = None,
     ) -> None:
         self._renovate = renovate
         self._request_factory = request_factory
@@ -69,6 +71,10 @@ class UpgradeService:
         self._branch_file_reader = branch_file_reader
         self._repository = repository
         self._base = base
+        # None disables emission entirely: an upgrade run is useful without a
+        # configured events backend, and the ad-hoc callers (tests, a bare
+        # UpgradeService) should not need one to work.
+        self._telemetry = telemetry
 
     def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
         plan = build_upgrade_plan(request.root, request.chart_path)
@@ -78,6 +84,17 @@ class UpgradeService:
             (None, True)
             if request.dry_run
             else self._find_pull_request(plan.branch_prefix, diagnostics)
+        )
+        # The version already proposed on the open branch, captured *before*
+        # Renovate can rewrite it. It is what makes "this run changed the
+        # proposal" answerable: without it, a re-run against an unchanged pull
+        # request is indistinguishable from one that retargeted the wrapper
+        # version, and telemetry has to either emit on every invocation or
+        # miss the retarget. Read into a throwaway diagnostics list -- a
+        # failure here degrades telemetry, and reporting it as an upgrade
+        # diagnostic would be noise about work the operator did not ask for.
+        previously_proposed = (
+            self._proposed_version(plan, existing_pr, []) if existing_pr is not None else None
         )
         result = self._renovate.run(self._request_factory(plan, dry_run=request.dry_run))
         returncode = int(getattr(result, "returncode", 1))
@@ -104,7 +121,7 @@ class UpgradeService:
             outcome = "pr_open"
         else:
             outcome = "pr_updated"
-        return UpgradeResult(
+        upgrade_result = UpgradeResult(
             chart=plan.chart,
             chart_path=plan.chart_path,
             current_version=plan.current_version,
@@ -120,6 +137,12 @@ class UpgradeService:
             pr_url=current_pr.url if current_pr is not None else None,
             pr_number=current_pr.number if current_pr is not None else None,
         )
+        # Emitted last, from the fully projected result: the upgrade is already
+        # done and pushed by this point, so telemetry can only cost latency,
+        # never work. `UpgradeTelemetry` owns the swallow.
+        if self._telemetry is not None:
+            self._telemetry.completed(upgrade_result, previously_proposed=previously_proposed)
+        return upgrade_result
 
     def _proposed_version(
         self,
