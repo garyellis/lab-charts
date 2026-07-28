@@ -46,7 +46,12 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     set the variables they need explicitly, and those `monkeypatch.setenv`
     calls run after this fixture, so they still win.
     """
-    for var in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "FORCE_COLOR"):
+    for var in (
+        "GITHUB_ACTIONS",
+        "GITHUB_REPOSITORY",
+        "GITHUB_STEP_SUMMARY",
+        "FORCE_COLOR",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.setenv("TERM", "dumb")
