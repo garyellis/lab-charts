@@ -22,6 +22,7 @@ from chart_manager.services.upgrader.models import (
 from chart_manager.services.upgrader.paths import resolve_chart_path, safe_output_path
 
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_HEADING = re.compile(r"^##\s")
 
 
 class BaselineReader(Protocol):
@@ -177,8 +178,8 @@ class UpgradeFinalizer:
             changelog_file.read_text(encoding="utf-8") if changelog_file.exists() else ""
         )
         entry = _changelog_entry(heading, qualifying)
-        heading_present = any(line.rstrip() == heading for line in old_changelog.splitlines())
-        changelog_changed = not heading_present
+        new_changelog = _apply_changelog_entry(old_changelog, heading, entry)
+        changelog_changed = new_changelog != old_changelog
         if not request.dry_run:
             if chart_changed:
                 current["version"] = target
@@ -186,10 +187,7 @@ class UpgradeFinalizer:
                 yaml.dump(current, output)
                 chart_file.write_text(output.getvalue(), encoding="utf-8")
             if changelog_changed:
-                changelog_file.write_text(
-                    entry + (old_changelog.lstrip("\n") if old_changelog else ""),
-                    encoding="utf-8",
-                )
+                changelog_file.write_text(new_changelog, encoding="utf-8")
         files = tuple(
             path
             for changed, path in (
@@ -252,6 +250,26 @@ def _chart_dependency_diff(
 def _loose_major(value: str) -> int | None:
     match = re.search(r"(?<!\d)(\d+)(?:\.\d+)", value)
     return int(match.group(1)) if match else None
+
+
+def _apply_changelog_entry(old: str, heading: str, entry: str) -> str:
+    """Return the changelog with ``heading``'s section replaced by ``entry``.
+
+    Replay must be keyed on the section's content, not on the heading alone.
+    A newer update can land on an open upgrade branch before it merges: the
+    baseline is unchanged, so the target version -- and therefore the heading
+    -- stays the same while the update set underneath it does not. Skipping on
+    a matching heading would leave Chart.yaml and the changelog disagreeing.
+    """
+    lines = old.splitlines(keepends=True)
+    start = next((index for index, line in enumerate(lines) if line.rstrip() == heading), None)
+    if start is None:
+        return entry + old.lstrip("\n") if old else entry
+    end = next(
+        (index for index in range(start + 1, len(lines)) if _HEADING.match(lines[index])),
+        len(lines),
+    )
+    return "".join(lines[:start]) + entry + "".join(lines[end:])
 
 
 def _changelog_entry(heading: str, updates: Sequence[UpdateMetadata]) -> str:

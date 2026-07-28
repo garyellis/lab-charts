@@ -73,6 +73,26 @@ def test_minor_update_bumps_patch_once_on_replay(tmp_path: Path) -> None:
     assert (chart / "changelog.md").read_text(encoding="utf-8").count("## 1.2.4") == 1
 
 
+def test_newer_update_on_open_branch_rewrites_the_same_section(tmp_path: Path) -> None:
+    chart = _write_chart(tmp_path)
+    baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
+    finalizer = UpgradeFinalizer(Baseline(baseline))
+    (chart / "changelog.md").write_text("## 1.2.3\n\n- api: 2.8.0 -> 2.9.0\n\n", encoding="utf-8")
+    first = finalizer.finalize(
+        _request(tmp_path, chart, (UpdateMetadata("api", "2.9.0", "2.10.0", datasource="docker"),))
+    )
+    assert first.version == "1.2.4"
+    # Renovate commits a newer value onto the still-open branch. The baseline
+    # has not moved, so the heading stays 1.2.4 and only the body changes.
+    second = finalizer.finalize(
+        _request(tmp_path, chart, (UpdateMetadata("api", "2.9.0", "2.11.0", datasource="docker"),))
+    )
+    assert second.changed is True
+    assert (chart / "changelog.md").read_text(encoding="utf-8") == (
+        "## 1.2.4\n\n- api: 2.9.0 -> 2.11.0\n\n## 1.2.3\n\n- api: 2.8.0 -> 2.9.0\n\n"
+    )
+
+
 def test_dependency_diff_is_reliable_fallback_and_major(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path, dependency="3.0.0")
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("3.0.0", "2.4.0")

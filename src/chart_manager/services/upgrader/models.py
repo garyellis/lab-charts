@@ -145,6 +145,6 @@ class UpgradePlan:
     chart_path: Path
     chart: str
     current_version: str
-    branch: str
+    branch_prefix: str
     group: str
     runtime_overlay: Mapping[str, object] = field(default_factory=dict)
