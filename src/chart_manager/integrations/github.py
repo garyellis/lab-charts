@@ -16,6 +16,7 @@ class PullRequest:
 
     url: str
     number: int | None
+    branch: str = ""
 
 
 class Github:
@@ -74,6 +75,79 @@ class Github:
                 url=url, number=number if isinstance(number, int) else None
             )
         return None
+
+    def find_open_prs_for_branch_prefix(
+        self, prefix: str, *, base: str | None = None, limit: int = 200
+    ) -> tuple[PullRequest, ...]:
+        """Return open PRs whose head branch starts with `prefix`, lowest number first.
+
+        Only the prefix is ours to predict: Renovate derives the rest of the
+        branch name itself (group slug, slugification, a `major-` segment when
+        majors are separated). Matching on the prefix keeps callers correct
+        without re-deriving that algorithm. `gh pr list --head` is an exact
+        match, so the filtering happens here.
+        """
+        args = [
+            self.binary,
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--json",
+            "url,number,baseRefName,headRefName",
+        ]
+        if base is not None:
+            args.extend(["--base", base])
+        result = self.runner.run(args, cwd=self.repo_root)
+        raw = result.stdout.strip() or "[]"
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ExternalCommandError(
+                f"gh pr list returned non-JSON output: {exc}\n{raw[:200]}"
+            ) from exc
+        if not isinstance(payload, list):
+            return ()
+        found: list[PullRequest] = []
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            if base is not None and entry.get("baseRefName") != base:
+                continue
+            branch = str(entry.get("headRefName", ""))
+            if not branch.startswith(prefix):
+                continue
+            number = entry.get("number")
+            found.append(
+                PullRequest(
+                    url=str(entry.get("url", "")),
+                    number=number if isinstance(number, int) else None,
+                    branch=branch,
+                )
+            )
+        return tuple(sorted(found, key=lambda pr: (pr.number is None, pr.number or 0, pr.branch)))
+
+    def read_file_at_ref(self, path: str, ref: str) -> str:
+        """Return a repository file's contents as of `ref`, via the GitHub API.
+
+        Reading through the API rather than a local fetch keeps the caller's
+        checkout untouched: upgrade branches live only on the remote, and this
+        command must not switch branches or write to `.git`. `{owner}`/`{repo}`
+        are placeholders `gh` fills from the repository context.
+        """
+        result = self.runner.run(
+            [
+                self.binary,
+                "api",
+                f"repos/{{owner}}/{{repo}}/contents/{path}?ref={ref}",
+                "-H",
+                "Accept: application/vnd.github.raw",
+            ],
+            cwd=self.repo_root,
+        )
+        return result.stdout
 
     def create_pr(
         self,

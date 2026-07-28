@@ -7,6 +7,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from ruamel.yaml import YAML, YAMLError
+
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.upgrader.errors import UpgradeError
 from chart_manager.services.upgrader.models import (
@@ -38,10 +40,12 @@ class PullRequestLike(Protocol):
 
     url: str
     number: int | None
+    branch: str
 
 
-PullRequestLookup = Callable[[str], PullRequestLike | None]
+PullRequestLookup = Callable[[str], Sequence[PullRequestLike]]
 RelevantChanges = Callable[[Sequence[Path]], Sequence[str]]
+BranchFileReader = Callable[[str, str], str]
 
 
 class UpgradeService:
@@ -54,6 +58,7 @@ class UpgradeService:
         *,
         pull_request_lookup: PullRequestLookup | None = None,
         relevant_changes: RelevantChanges | None = None,
+        branch_file_reader: BranchFileReader | None = None,
         repository: str | None = None,
         base: str | None = None,
     ) -> None:
@@ -61,6 +66,7 @@ class UpgradeService:
         self._request_factory = request_factory
         self._pull_request_lookup = pull_request_lookup
         self._relevant_changes = relevant_changes
+        self._branch_file_reader = branch_file_reader
         self._repository = repository
         self._base = base
 
@@ -68,12 +74,11 @@ class UpgradeService:
         plan = build_upgrade_plan(request.root, request.chart_path)
         diagnostics: list[str] = []
         self._require_relevant_files_clean(plan)
-        existing_pr = (
-            None
+        existing_pr, found_existing = (
+            (None, True)
             if request.dry_run
-            else self._find_pull_request(plan.branch, diagnostics)
+            else self._find_pull_request(plan.branch_prefix, diagnostics)
         )
-        lookup_failed = bool(diagnostics)
         result = self._renovate.run(self._request_factory(plan, dry_run=request.dry_run))
         returncode = int(getattr(result, "returncode", 1))
         stdout = str(getattr(result, "stdout", ""))
@@ -83,13 +88,12 @@ class UpgradeService:
                 f"Renovate failed for chart {plan.chart}: {stderr.strip() or stdout.strip()}"
             )
         diagnostics.extend(line for line in stderr.splitlines() if line.strip())
-        diagnostics_before_lookup = len(diagnostics)
-        current_pr = (
-            existing_pr
+        current_pr, found_current = (
+            (existing_pr, True)
             if request.dry_run
-            else self._find_pull_request(plan.branch, diagnostics)
+            else self._find_pull_request(plan.branch_prefix, diagnostics)
         )
-        lookup_failed = lookup_failed or len(diagnostics) > diagnostics_before_lookup
+        lookup_failed = not (found_existing and found_current)
         if request.dry_run:
             outcome = "dry_run"
         elif lookup_failed:
@@ -104,8 +108,10 @@ class UpgradeService:
             chart=plan.chart,
             chart_path=plan.chart_path,
             current_version=plan.current_version,
-            proposed_version=None,
-            branch=plan.branch,
+            proposed_version=self._proposed_version(plan, current_pr, diagnostics),
+            # The branch Renovate actually opened, not a local re-derivation of
+            # its naming algorithm; None when no PR is open for this chart.
+            branch=current_pr.branch if current_pr is not None else None,
             group=plan.group,
             outcome=outcome,
             diagnostics=tuple(diagnostics),
@@ -114,6 +120,43 @@ class UpgradeService:
             pr_url=current_pr.url if current_pr is not None else None,
             pr_number=current_pr.number if current_pr is not None else None,
         )
+
+    def _proposed_version(
+        self,
+        plan: UpgradePlan,
+        pull_request: PullRequestLike | None,
+        diagnostics: list[str],
+    ) -> str | None:
+        """Read the wrapper version the finalizer wrote on the upgrade branch.
+
+        The version is decided by `upgrade-finalize`, which Renovate runs as a
+        post-upgrade task inside its own checkout, so this process never sees
+        it directly. Reading it back from the pushed branch reports the artifact
+        that exists rather than a local prediction of it -- and doubles as the
+        only check that the callback ran at all: Renovate records a failed or
+        disallowed post-upgrade command as an artifact error and still opens the
+        pull request with a zero exit code.
+        """
+        if self._branch_file_reader is None or pull_request is None or not pull_request.branch:
+            return None
+        relative = plan.chart_path.relative_to(plan.repo_root).as_posix()
+        try:
+            text = self._branch_file_reader(f"{relative}/Chart.yaml", pull_request.branch)
+        except ChartManagerError as exc:
+            diagnostics.append(f"proposed wrapper version unavailable: {exc}")
+            return None
+        version = _chart_version(text)
+        if version is None:
+            diagnostics.append(
+                f"no wrapper version found in {relative}/Chart.yaml on {pull_request.branch}"
+            )
+            return None
+        if version == plan.current_version:
+            diagnostics.append(
+                f"wrapper version on {pull_request.branch} still matches the baseline "
+                f"{plan.current_version}; the upgrade-finalize callback may not have run"
+            )
+        return version
 
     def _require_relevant_files_clean(self, plan: UpgradePlan) -> None:
         if self._relevant_changes is None:
@@ -133,16 +176,38 @@ class UpgradeService:
 
     def _find_pull_request(
         self,
-        branch: str,
+        branch_prefix: str,
         diagnostics: list[str],
-    ) -> PullRequestLike | None:
+    ) -> tuple[PullRequestLike | None, bool]:
+        """Return the chart's open PR and whether its status is known."""
         if self._pull_request_lookup is None:
-            return None
+            return None, True
         try:
-            return self._pull_request_lookup(branch)
+            found = tuple(self._pull_request_lookup(branch_prefix))
         except ChartManagerError as exc:
             diagnostics.append(f"pull-request status unavailable: {exc}")
-            return None
+            return None, False
+        if len(found) > 1:
+            # One chart is expected to hold one branch. More than one means the
+            # grouping config no longer collapses this chart's updates into a
+            # single branch; report it rather than silently picking one.
+            branches = ", ".join(sorted(pr.branch for pr in found))
+            diagnostics.append(
+                f"multiple open pull requests under {branch_prefix}: {branches}"
+            )
+        return (found[0] if found else None), True
+
+
+def _chart_version(text: str) -> str | None:
+    """Return the wrapper version from a Chart.yaml document, if it has one."""
+    try:
+        document = YAML(typ="safe").load(text)
+    except YAMLError:
+        return None
+    if not isinstance(document, Mapping):
+        return None
+    version = document.get("version")
+    return version if isinstance(version, str) else None
 
 
 def build_upgrade_plan(root: Path, chart_path: Path) -> UpgradePlan:
@@ -153,22 +218,46 @@ def build_upgrade_plan(root: Path, chart_path: Path) -> UpgradePlan:
         raise UpgradeError(f"Chart.yaml version must be a strict x.y.z version, got {version!r}")
     name = resolved.name
     group = f"chart-manager:{name}"
-    branch = f"renovate/{name}"
+    # Renovate's stale-branch pruning is scoped by `branchPrefix` alone, while
+    # this run's extraction is scoped to one chart by `includePaths`. A shared
+    # "renovate/" prefix would therefore make every run look like the complete
+    # truth for the whole namespace and autoclose every other chart's PR. A
+    # per-chart prefix makes the two scopes agree, so pruning stays enabled and
+    # only ever reaches this chart's own branches.
+    branch_prefix = f"renovate/{name}/"
     relative = resolved.relative_to(repo_root).as_posix()
+    # `packageFile` is repo-relative and always a file inside the chart
+    # directory, so it attributes a custom.regex match under templates/ as
+    # reliably as a Chart.yaml dependency. It is redundant while `includePaths`
+    # scopes a run to a single chart; it is carried now so that widening a run to
+    # several charts is a filtering change rather than a template change.
     data_template = (
         '{"updates":['
         "{{#each upgrades}}"
         '{"depName":"{{depName}}","currentValue":"{{currentValue}}",'
         '"newValue":"{{newValue}}","manager":"{{manager}}",'
-        '"datasource":"{{datasource}}","updateType":"{{updateType}}"}'
+        '"datasource":"{{datasource}}","updateType":"{{updateType}}",'
+        '"packageFile":"{{packageFile}}"}'
         "{{#unless @last}},{{/unless}}"
         "{{/each}}"
         "]}"
     )
     overlay: Mapping[str, object] = {
-        "includePaths": [f"{relative}/**"],
+        # `force` is global-only config that Renovate re-applies at the end of
+        # every config merge, including the repository's own renovate.json,
+        # which is otherwise merged as the child and wins. The chart scope and
+        # its matching branch namespace are the two keys that must survive that
+        # merge, so a stray branchPrefix in renovate.json cannot silently
+        # re-break cross-chart isolation.
+        "force": {
+            "includePaths": [f"{relative}/**"],
+            "branchPrefix": branch_prefix,
+            # Defaults to "renovate/". Left alone, Renovate rewrites the branch
+            # name back onto the old prefix whenever the new branch does not
+            # exist yet, which would undo the scoping on every first run.
+            "branchPrefixOld": branch_prefix,
+        },
         "enabledManagers": ["helmv3", "helm-values", "custom.regex"],
-        "branchPrefix": "renovate/",
         "lockFileMaintenance": {"enabled": False},
         "packageRules": [
             {
@@ -193,7 +282,7 @@ def build_upgrade_plan(root: Path, chart_path: Path) -> UpgradePlan:
         chart_path=resolved,
         chart=name,
         current_version=version,
-        branch=branch,
+        branch_prefix=branch_prefix,
         group=group,
         runtime_overlay=overlay,
     )

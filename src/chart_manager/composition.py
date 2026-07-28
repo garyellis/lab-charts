@@ -339,14 +339,18 @@ class Container:
                 if len(line) > 3 and line[3:].strip()
             )
 
-        def pull_request_lookup(branch: str) -> PullRequestLike | None:
-            return cast(PullRequestLike | None, github.find_open_pr_for_branch(branch))
+        def pull_request_lookup(branch_prefix: str) -> Sequence[PullRequestLike]:
+            return cast(
+                Sequence[PullRequestLike],
+                github.find_open_prs_for_branch_prefix(branch_prefix),
+            )
 
         return UpgradeService(
             renovate=renovate,
             request_factory=request_factory,
             pull_request_lookup=pull_request_lookup,
             relevant_changes=relevant_changes,
+            branch_file_reader=github.read_file_at_ref,
             repository=repository,
         )
 

@@ -63,3 +63,22 @@ def test_find_open_pr_raises_on_non_json(tmp_path: Path) -> None:
     runner = FakeCommandRunner(stdout="not json")
     with pytest.raises(ExternalCommandError, match="non-JSON"):
         Github(tmp_path, runner=runner).find_open_pr_for_branch("foo")
+
+
+def test_prefix_lookup_keeps_only_the_matching_namespace(tmp_path: Path) -> None:
+    payload = json.dumps(
+        [
+            {"url": "https://x/9", "number": 9, "headRefName": "renovate/loki/major-loki"},
+            {"url": "https://x/4", "number": 4, "headRefName": "renovate/loki/loki"},
+            {"url": "https://x/5", "number": 5, "headRefName": "renovate/loki-gateway/x"},
+            {"url": "https://x/6", "number": 6, "headRefName": "feature/manual"},
+        ]
+    )
+    runner = FakeCommandRunner(stdout=payload)
+    found = Github(tmp_path, runner=runner).find_open_prs_for_branch_prefix("renovate/loki/")
+
+    # A sibling chart whose name merely starts with the same characters must
+    # not be captured; the trailing slash is what makes the namespace exact.
+    assert [pr.branch for pr in found] == ["renovate/loki/loki", "renovate/loki/major-loki"]
+    assert "--head" not in runner.calls[0]
+    assert "headRefName" in runner.calls[0][runner.calls[0].index("--json") + 1]

@@ -18,7 +18,7 @@
         "/(^|/)templates/.+\\.(?:ya?ml|tpl)$/"
       ],
       "matchStrings": [
-        "image:\\s*[\"']?(?<depName>[A-Za-z0-9._/-]+):(?<currentValue>[A-Za-z0-9._-]+)[\"']?"
+        "image:\\s*[\"']?(?<depName>[A-Za-z0-9._/:-]+):(?<currentValue>[A-Za-z0-9._-]+)[\"']?"
       ],
       "datasourceTemplate": "docker"
     }
