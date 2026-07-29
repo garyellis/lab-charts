@@ -15,7 +15,44 @@ from chart_manager.integrations.kubeconform import (
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.manifest_validation.models import WorklistRow
-from chart_manager.services.manifest_validation.runner import ManifestValidationRunner, RowConfig
+from chart_manager.services.manifest_validation.runner import (
+    ManifestValidationRunner as _ManifestValidationRunner,
+)
+from chart_manager.services.manifest_validation.runner import (
+    RowConfig,
+)
+from chart_manager.services.manifest_validation.validator_adapters import (
+    KubeconformValidator,
+    KyvernoValidator,
+)
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+    ValidatorCategory,
+    ValidatorInvocation,
+)
+
+
+def ManifestValidationRunner(
+    *,
+    helm,
+    output_root,
+    kubeconform=None,
+    kyverno=None,
+    validators=None,
+    **kwargs,
+) -> _ManifestValidationRunner:
+    """Keep test setup compact while production runner stays tool-neutral."""
+    executors = validators or {
+        "kubeconform": KubeconformValidator(kubeconform or Kubeconform()),
+        "kyverno": KyvernoValidator(kyverno or Kyverno()),
+    }
+    return _ManifestValidationRunner(
+        helm=helm,
+        output_root=output_root,
+        validators=executors,
+        **kwargs,
+    )
 
 
 class _StubHelm(Helm):
@@ -112,14 +149,33 @@ def _cfg(
     policy_paths: list[Path] | None = None,
     kubernetes_version: str | None = None,
     schema_locations: list[str] | None = None,
+    enabled_validators: frozenset[str] = frozenset({"schema", "policy"}),
 ) -> RowConfig:
     return RowConfig(
         row=row,
         chart_path=chart_path,
         values=[],
-        kubernetes_version=kubernetes_version,
-        schema_locations=schema_locations,
-        policy_paths=policy_paths,
+        validator_invocations=(
+            ValidatorInvocation(
+                validator_id="kubeconform",
+                category=ValidatorCategory.SCHEMA,
+                order=100,
+                lifecycle_action_kind="schema-validate",
+                enabled="schema" in enabled_validators,
+                config=KubeconformConfig(
+                    kubernetes_version=kubernetes_version,
+                    schema_locations=tuple(schema_locations or ()),
+                ),
+            ),
+            ValidatorInvocation(
+                validator_id="kyverno",
+                category=ValidatorCategory.POLICY,
+                order=200,
+                lifecycle_action_kind="policy-validate",
+                enabled="policy" in enabled_validators,
+                config=KyvernoConfig(policy_paths=tuple(policy_paths or ())),
+            ),
+        ),
     )
 
 
@@ -296,6 +352,33 @@ def test_render_fail_skips_schema_and_policy_with_upstream_detail(tmp_path: Path
     assert result.exit_code() == 2
 
 
+def test_render_fail_preserves_disabled_validator_semantics(tmp_path: Path) -> None:
+    runner = ManifestValidationRunner(
+        helm=_StubHelm(succeed=False),
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        kyverno=_StubKyverno(report=_kyverno_pass()),
+    )
+
+    result = runner.run(
+        [
+            _cfg(
+                _row(),
+                tmp_path / "chart",
+                enabled_validators=frozenset(),
+            )
+        ]
+    )
+
+    phases = result.rows[0].phases
+    assert phases["render"].status == "FAIL"
+    assert phases["schema"].status == "SKIP"
+    assert phases["schema"].skip_cause == "validator_disabled"
+    assert phases["policy"].status == "SKIP"
+    assert phases["policy"].skip_cause == "validator_disabled"
+    assert result.exit_code() == 2
+
+
 def test_schema_fail_skips_policy_with_upstream_detail(tmp_path: Path) -> None:
     helm = _StubHelm(succeed=True)
     kc = _StubKubeconform(
@@ -324,6 +407,49 @@ def test_schema_fail_skips_policy_with_upstream_detail(tmp_path: Path) -> None:
     assert row_result.phases["schema"].status == "FAIL"
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "upstream schema FAIL"
+    assert result.exit_code() == 1
+
+
+def test_schema_fail_preserves_disabled_policy_semantics(tmp_path: Path) -> None:
+    helm = _StubHelm(succeed=True)
+    kubeconform = _StubKubeconform(
+        KubeconformReport(
+            resources=(
+                ResourceResult(
+                    filename="/r/x.yaml",
+                    kind="Deployment",
+                    name="bad",
+                    status="invalid",
+                    msg="invalid",
+                ),
+            ),
+            summary={"valid": 0, "invalid": 1, "errors": 0, "skipped": 0},
+        )
+    )
+    kyverno = _StubKyverno(report=_kyverno_pass())
+    runner = ManifestValidationRunner(
+        helm=helm,
+        output_root=tmp_path / "out",
+        kubeconform=kubeconform,
+        kyverno=kyverno,
+    )
+
+    result = runner.run(
+        [
+            _cfg(
+                _row(),
+                tmp_path / "chart",
+                enabled_validators=frozenset({"schema"}),
+            )
+        ]
+    )
+
+    policy = result.rows[0].phases["policy"]
+    assert result.rows[0].phases["schema"].status == "FAIL"
+    assert policy.status == "SKIP"
+    assert policy.detail == "disabled by chart-lifecycle"
+    assert policy.skip_cause == "validator_disabled"
+    assert kyverno.calls == []
     assert result.exit_code() == 1
 
 
@@ -584,6 +710,68 @@ def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
     assert row_result.phases["policy"].status == "NOT_RUN"
     assert ky.calls == []
     assert result.exit_code() == 0
+
+
+def test_chart_disabled_kubeconform_skips_it_without_blocking_policy(
+    tmp_path: Path,
+) -> None:
+    helm = _StubHelm(succeed=True)
+    kubeconform = _StubKubeconform(_ok_report())
+    kyverno = _StubKyverno(report=_kyverno_pass())
+    runner = ManifestValidationRunner(
+        helm=helm,
+        output_root=tmp_path / "out",
+        kubeconform=kubeconform,
+        kyverno=kyverno,
+    )
+
+    result = runner.run(
+        [
+            _cfg(
+                _row(),
+                tmp_path / "chart",
+                policy_paths=[tmp_path / "policies"],
+                enabled_validators=frozenset({"policy"}),
+            )
+        ]
+    )
+
+    phases = result.rows[0].phases
+    assert phases["render"].status == "PASS"
+    assert phases["schema"].status == "SKIP"
+    assert phases["schema"].detail == "disabled by chart-lifecycle"
+    assert phases["policy"].status == "PASS"
+    assert kubeconform.calls == []
+    assert len(kyverno.calls) == 1
+
+
+def test_chart_disabled_policy_is_a_visible_skip_and_never_invokes_kyverno(
+    tmp_path: Path,
+) -> None:
+    helm = _StubHelm(succeed=True)
+    kyverno = _StubKyverno(report=_kyverno_pass())
+    runner = ManifestValidationRunner(
+        helm=helm,
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        kyverno=kyverno,
+    )
+
+    result = runner.run(
+        [
+            _cfg(
+                _row(),
+                tmp_path / "chart",
+                policy_paths=[tmp_path / "policies"],
+                enabled_validators=frozenset({"schema"}),
+            )
+        ]
+    )
+
+    policy = result.rows[0].phases["policy"]
+    assert policy.status == "SKIP"
+    assert policy.detail == "disabled by chart-lifecycle"
+    assert kyverno.calls == []
 
 
 def test_phases_subset_multi_row_batch(tmp_path: Path) -> None:

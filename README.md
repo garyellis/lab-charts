@@ -21,7 +21,7 @@ cd lab-charts
 mise trust
 mise install
 mise run setup
-mise run validate -- --chart grafana --env dev
+uv run chart-manager validate chart --chart grafana --env dev
 ```
 
 `mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `spec.validation` in its `chart-lifecycle.yaml`.
@@ -30,7 +30,8 @@ mise run validate -- --chart grafana --env dev
 
 | Command | What it does |
 | --- | --- |
-| `mise run validate -- --chart <name> --env <env>` | Render one chart for one env, then run schema and policy checks against the rendered manifests. |
+| `uv run chart-manager validate chart --chart <name> --env <env>` | Render one chart for one authored env, then run its enabled validators. |
+| `uv run chart-manager validate chart --chart <name> --all` | Validate every environment authored for one chart. |
 | `mise run validate -- --all` | Same as above, fanned out across every chart and every env declared in the repo. |
 | `mise run kind-test -- <name> --profile minimal` | Spin up an ephemeral kind cluster, do a real `helm install` of the chart, run smoke checks, and tear the cluster down. |
 | `mise run charts` | List every chart wrapper the CLI knows about. |
@@ -42,7 +43,8 @@ mise run validate -- --chart grafana --env dev
 | `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
 | `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
-For the full flag surface on validate, run `uv run chart-manager validate run --help`.
+Use `uv run chart-manager validate chart --help` for local chart validation and
+`uv run chart-manager validate run --help` for changed-worklist and repository-wide runs.
 
 ## CI
 
@@ -69,7 +71,7 @@ heuristic in YAML.
 ## Reproducing a CI failure
 
 - Open the failed run and download `rendered-manifests-<run_id>` (validate) or `sandbox-logs-<chart>-<run_id>` (sandbox-test) from the Artifacts panel.
-- Reproduce a validate failure locally with `mise run validate -- --chart <name> --env <env>`.
+- Reproduce a validate failure locally with `uv run chart-manager validate chart --chart <name> --env <env>`.
 - Reproduce a sandbox-test failure locally with `mise run kind-test -- <name> --profile minimal`.
 
 ## Adding or editing a chart
@@ -77,8 +79,9 @@ heuristic in YAML.
 Each managed chart owns one standalone
 `charts/<name>/chart-lifecycle.yaml` resource with
 `apiVersion: lifecycle.cmg.io/v1alpha1` and `kind: ChartLifecycle`.
-`spec.validation` declares environments, composed values, triggers, and
-policies. `spec.clusterTest` declares live-cluster install profiles and checks;
+`spec.validation` declares environments, composed values, triggers, policies,
+and default-true `validators.kubeconform` / `validators.policy` gates.
+`spec.clusterTest` declares live-cluster install profiles and checks;
 `dependentTests` lists chart/profile tests that should rerun when this chart
 changes. Either capability can be absent or explicitly disabled, and
 `spec.enabled` pauses both.

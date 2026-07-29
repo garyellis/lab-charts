@@ -12,12 +12,17 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.compiler import (
     resolve_manifest_validation,
     row_config_for,
 )
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+)
 
 
 def _chart(
@@ -75,6 +80,38 @@ def test_all_charts_cross_product(tmp_path: Path) -> None:
     assert pairs == {("alpha", "dev"), ("alpha", "prod"), ("beta", "dev"), ("beta", "prod")}
     assert result.warnings == ()
     assert result.spec_errors == ()
+
+
+def test_selected_charts_do_not_enumerate_or_parse_unrelated_charts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
+    _chart(
+        tmp_path,
+        "broken",
+        spec="releaseName: broken\nenvironments: {}\nmystery: true\n",
+    )
+    monkeypatch.setattr(
+        ChartRepository,
+        "list_names",
+        lambda _self: pytest.fail("targeted planning must not enumerate the repository"),
+    )
+
+    result = build_worklist(
+        root=tmp_path,
+        all_charts=True,
+        selected_charts=("alpha",),
+    )
+
+    assert {(row.chart, row.env) for row in result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
+    assert result.spec_errors == ()
+    assert result.warnings == ()
+    assert result.chart_count_unvalidated == 0
+    assert set(result.targets) == {"alpha"}
 
 
 def test_trigger_specific_env(tmp_path: Path) -> None:
@@ -554,13 +591,17 @@ policies:
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
     dev = next(row for row in build.rows if row.env == "dev")
     config = row_config_for(compiled, dev)
+    kubeconform = config.validator_invocations[0].config
+    kyverno = config.validator_invocations[1].config
+    assert isinstance(kubeconform, KubeconformConfig)
+    assert isinstance(kyverno, KyvernoConfig)
 
     assert config.values == [(chart_dir / "values.yaml").resolve()]
-    assert config.policy_paths == [(chart_dir / "extra-policies").resolve()]
-    assert config.schema_locations == [
+    assert kyverno.policy_paths == ((chart_dir / "extra-policies").resolve(),)
+    assert kubeconform.schema_locations == (
         "default",
         str((tmp_path / "schemas" / "{{.Group}}" / "{{.ResourceKind}}.json").resolve()),
-    ]
+    )
 
 
 def test_compiler_does_not_accept_repository_relative_extra_policy(
@@ -582,7 +623,6 @@ policies:
     build = build_worklist(root=tmp_path, all_charts=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
 
-    assert compiled.policy_paths == ()
     assert len(compiled.warnings) == 1
     assert "policy directory does not exist" in compiled.warnings[0]
     assert str(chart_dir / "legacy-policies") in compiled.warnings[0]

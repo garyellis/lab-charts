@@ -9,8 +9,29 @@ import pytest
 
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
-from chart_manager.services.manifest_validation.compiler import resolve_manifest_validation
+from chart_manager.services.manifest_validation.compiler import (
+    ResolvedManifestValidation,
+    resolve_manifest_validation,
+)
 from chart_manager.services.manifest_validation.models import ManifestValidationTarget
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+)
+
+
+def _kubeconform_config(
+    compiled: ResolvedManifestValidation,
+) -> KubeconformConfig:
+    config = compiled.validator_invocations[0].config
+    assert isinstance(config, KubeconformConfig)
+    return config
+
+
+def _kyverno_config(compiled: ResolvedManifestValidation) -> KyvernoConfig:
+    config = compiled.validator_invocations[1].config
+    assert isinstance(config, KyvernoConfig)
+    return config
 
 
 def _target(
@@ -83,10 +104,52 @@ def test_missing_extra_policy_is_omitted_with_warning(tmp_path: Path) -> None:
 
     compiled = resolve_manifest_validation(target, tmp_path)
 
-    assert compiled.policy_paths == ()
+    assert _kyverno_config(compiled).policy_paths == ()
     assert len(compiled.warnings) == 1
     assert "policy directory does not exist" in compiled.warnings[0]
     assert str(target.spec_path) in compiled.warnings[0]
+
+
+def test_validator_toggles_compile_into_per_row_execution_policy(tmp_path: Path) -> None:
+    target = _target(
+        tmp_path,
+        extra="validators:\n  kubeconform: false\n  policy: true\n",
+    )
+    (target.path / "values.yaml").write_text("{}\n")
+
+    compiled = resolve_manifest_validation(target, tmp_path)
+
+    assert [
+        (invocation.validator_id, invocation.category.value, invocation.enabled)
+        for invocation in compiled.validator_invocations
+    ] == [
+        ("kubeconform", "schema", False),
+        ("kyverno", "policy", True),
+    ]
+
+
+def test_disabled_validators_do_not_resolve_unused_runtime_inputs(
+    tmp_path: Path,
+) -> None:
+    target = _target(
+        tmp_path,
+        extra=(
+            "validators:\n"
+            "  kubeconform: false\n"
+            "  policy: false\n"
+            "schemaLocations: [missing/schema.json]\n"
+            "policies:\n"
+            "  extra: [missing-policies]\n"
+        ),
+    )
+    (target.path / "values.yaml").write_text("{}\n")
+
+    compiled = resolve_manifest_validation(target, tmp_path)
+
+    assert not any(invocation.enabled for invocation in compiled.validator_invocations)
+    assert _kubeconform_config(compiled).schema_locations == ()
+    assert _kyverno_config(compiled).policy_paths == ()
+    assert compiled.warnings == ()
 
 
 def test_extra_policy_must_be_a_directory(tmp_path: Path) -> None:
@@ -99,7 +162,7 @@ def test_extra_policy_must_be_a_directory(tmp_path: Path) -> None:
 
     compiled = resolve_manifest_validation(target, tmp_path)
 
-    assert compiled.policy_paths == ()
+    assert _kyverno_config(compiled).policy_paths == ()
     assert len(compiled.warnings) == 1
     assert "policy path is not a directory" in compiled.warnings[0]
 
@@ -154,7 +217,7 @@ def test_schema_locations_preserve_keywords_and_urls_and_absolutize_local(
 
     compiled = resolve_manifest_validation(target, tmp_path)
 
-    assert compiled.schema_locations == (
+    assert _kubeconform_config(compiled).schema_locations == (
         "default",
         "https://schemas.example.test/{{.ResourceKind}}.json",
         str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),

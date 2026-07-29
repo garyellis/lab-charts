@@ -45,12 +45,22 @@ def build_worklist(
     root: Path,
     changed_files: list[str] | None = None,
     all_charts: bool = False,
+    selected_charts: tuple[str, ...] = (),
     charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> WorklistBuildResult:
-    """Build the deterministic chart/environment worklist."""
+    """Build the deterministic chart/environment worklist.
+
+    ``selected_charts`` is a planning boundary, not a result filter: only
+    those charts are loaded. Callers performing change-impact analysis must
+    leave it empty so repository-wide dependencies and fanout remain visible.
+    """
     layout = RepositoryLayout(root=root, charts_dir=charts_dir)
     root = layout.root
-    catalog = build_catalog(root, charts_dir=layout.charts_dir)
+    catalog = build_catalog(
+        root,
+        chart_names=selected_charts or None,
+        charts_dir=layout.charts_dir,
+    )
     targets = catalog.by_name()
     specs = {name: target.spec for name, target in targets.items()}
 
@@ -135,11 +145,6 @@ def build_worklist(
         chart_count_unvalidated=catalog.chart_count_unvalidated,
         targets=targets,
     )
-
-
-def build_single_row(*, chart: str, env: str, namespace: str, release: str) -> WorklistRow:
-    """Build the explicit single-row request."""
-    return WorklistRow(chart=chart, env=env, release=release, namespace=namespace)
 
 
 def select_rows(

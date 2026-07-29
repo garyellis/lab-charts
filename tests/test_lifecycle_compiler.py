@@ -79,6 +79,60 @@ def test_validation_compiles_the_authored_environment_to_a_linear_dag(
     assert all(action.input_digest.startswith("sha256:") for action in plan.actions)
 
 
+@pytest.mark.parametrize(
+    ("validators", "expected_actions"),
+    [
+        (
+            {"kubeconform": False, "policy": True},
+            [
+                ActionKind.HELM_DEPENDENCY_UPDATE,
+                ActionKind.RENDER,
+                ActionKind.POLICY_VALIDATE,
+            ],
+        ),
+        (
+            {"kubeconform": True, "policy": False},
+            [
+                ActionKind.HELM_DEPENDENCY_UPDATE,
+                ActionKind.RENDER,
+                ActionKind.SCHEMA_VALIDATE,
+            ],
+        ),
+        (
+            {"kubeconform": False, "policy": False},
+            [ActionKind.HELM_DEPENDENCY_UPDATE, ActionKind.RENDER],
+        ),
+    ],
+)
+def test_validation_dag_omits_disabled_validators(
+    chart_root: Path,
+    make_chart: MakeChart,
+    validators: dict[str, bool],
+    expected_actions: list[ActionKind],
+) -> None:
+    chart = make_chart("app")
+    _add_validation(chart)
+    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle["spec"]["validation"]["validators"] = validators
+    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
+
+    plan = LifecycleCompiler(chart_root).compile_validation("app", "dev")
+
+    assert [action.kind for action in plan.actions] == expected_actions
+    assert len(plan.edges) == len(plan.actions) - 1
+    if ActionKind.POLICY_VALIDATE in expected_actions:
+        policy_edge = next(
+            edge
+            for edge in plan.edges
+            if edge.target.endswith(ActionKind.POLICY_VALIDATE.value)
+        )
+        assert policy_edge.kind is (
+            EdgeKind.SEQUENCE
+            if ActionKind.SCHEMA_VALIDATE in expected_actions
+            else EdgeKind.INPUT
+        )
+
+
 def test_cluster_test_compiles_dependency_runtime_edges_and_effective_inputs(
     chart_root: Path,
     make_chart: MakeChart,

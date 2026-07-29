@@ -22,6 +22,6 @@ into `ManifestValidationService` so that a REST worker or Slack handler drives t
 pipeline without reimplementing them.
 
 This split is what lets us unit-test phases without subprocess mocking
-pyramids, and lets the runner stay reusable from both `validate render`
+pyramids, and lets the runner stay reusable from both `validate chart`
 and `validate run`.
 """
