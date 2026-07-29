@@ -65,6 +65,40 @@ def test_push_captures_full_reference_and_digest(tmp_path: Path) -> None:
     assert result.digest == "sha256:0123456789"
 
 
+def test_push_reads_decorated_machine_output_from_stderr(tmp_path: Path) -> None:
+    runner = FakeCommandRunner(
+        stderr=(
+            "\x1b[32m  Pushed: registry.local/library/demo:1.2.3\x1b[0m\n"
+            "  Digest: sha256:0123456789\n"
+        )
+    )
+
+    result = Helm(runner=runner, binary="helm").push(
+        tmp_path / "demo-1.2.3.tgz",
+        "oci://registry.local/library",
+    )
+
+    assert result.reference == "oci://registry.local/library/demo:1.2.3"
+    assert result.digest == "sha256:0123456789"
+    assert "Pushed:" in result.output
+
+
+def test_push_uses_expected_reference_when_success_output_has_no_marker(
+    tmp_path: Path,
+) -> None:
+    expected = "oci://registry.local/library/cert-manager:1.18.2"
+    helm = Helm(runner=FakeCommandRunner(stdout="upload complete\n"), binary="helm")
+
+    result = helm.push(
+        tmp_path / "cert-manager-1.18.2.tgz",
+        "oci://registry.local/library",
+        expected_reference=expected,
+    )
+
+    assert result.reference == expected
+    assert result.digest is None
+
+
 def test_package_and_push_reject_missing_machine_output(tmp_path: Path) -> None:
     helm = Helm(runner=FakeCommandRunner(stdout="done\n"), binary="helm")
     with pytest.raises(ExternalCommandError, match="archive path"):
@@ -72,3 +106,6 @@ def test_package_and_push_reject_missing_machine_output(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="oci://"):
         helm.push(tmp_path / "demo.tgz", "registry.local/library")
+
+    with pytest.raises(ExternalCommandError, match="pushed OCI reference"):
+        helm.push(tmp_path / "demo.tgz", "oci://registry.local/library")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections.abc import MutableMapping
 from dataclasses import dataclass
@@ -205,8 +206,17 @@ class Helm:
         repository: str,
         *,
         ca_file: Path | None = None,
+        expected_reference: str | None = None,
     ) -> PushResult:
-        """Push one package to an OCI repository and retain its ref/digest."""
+        """Push one package to an OCI repository and retain its ref/digest.
+
+        A zero subprocess exit is authoritative for the remote mutation.
+        Helm's human-readable success lines have moved between output streams
+        and gained presentation decoration across versions, so callers that
+        know the packaged chart identity provide ``expected_reference`` as a
+        retry-safe fallback rather than turning an already-completed push into
+        a false failure.
+        """
         if not repository.startswith("oci://"):
             raise ValueError("OCI repository must start with oci://")
         args = [
@@ -222,14 +232,18 @@ class Helm:
             capture=True,
             timeout=self.timeout,
         )
-        pushed = _helm_output_value(result.stdout, "Pushed")
-        digest = _helm_output_value(result.stdout, "Digest")
+        output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        pushed = _helm_output_value(output, "Pushed")
+        digest = _helm_output_value(output, "Digest")
         if pushed is None:
-            raise ExternalCommandError(
-                "helm push succeeded but did not report the pushed OCI reference"
-            )
-        reference = pushed if pushed.startswith("oci://") else f"oci://{pushed}"
-        return PushResult(reference=reference, digest=digest, output=result.stdout)
+            if expected_reference is None:
+                raise ExternalCommandError(
+                    "helm push succeeded but did not report the pushed OCI reference"
+                )
+            reference = expected_reference
+        else:
+            reference = pushed if pushed.startswith("oci://") else f"oci://{pushed}"
+        return PushResult(reference=reference, digest=digest, output=output)
 
     def lint(self, chart_path: Path, values: list[Path]) -> None:
         """Run `helm lint` with the given values overlays; raises on lint failure."""
@@ -598,13 +612,17 @@ def _is_local_chart_ref(chart_ref: str | Path) -> bool:
 
 
 def _helm_output_value(output: str, label: str) -> str | None:
-    """Read a single ``Label: value`` emitted by Helm."""
+    """Read a presentation-tolerant ``Label: value`` emitted by Helm."""
     prefix = f"{label}:"
     for line in output.splitlines():
-        if line.startswith(prefix):
-            value = line.removeprefix(prefix).strip()
+        clean = _ANSI_ESCAPE.sub("", line).strip()
+        if clean.startswith(prefix):
+            value = clean.removeprefix(prefix).strip()
             return value or None
     return None
+
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 #: Memo for `mise where helm@<version>`, keyed by the runner that resolved

@@ -17,6 +17,7 @@ from .conftest import MakeChart
 class _Helm:
     def __init__(self, *, fail_package: str | None = None, fail_push: str | None = None) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.expected_references: list[str | None] = []
         self.fail_package = fail_package
         self.fail_push = fail_push
 
@@ -38,13 +39,19 @@ class _Helm:
         repository: str,
         *,
         ca_file: Path | None = None,
+        expected_reference: str | None = None,
     ) -> PushResult:
         del ca_file
         name = package.name.split("-", 1)[0]
         self.calls.append(("push", name))
+        self.expected_references.append(expected_reference)
         if name == self.fail_push:
             raise ExternalCommandError("push failed")
-        return PushResult(f"{repository}/{name}:version", f"sha256:{name}", "pushed")
+        return PushResult(
+            expected_reference or f"{repository}/{name}:version",
+            f"sha256:{name}",
+            "pushed",
+        )
 
 
 class _Events:
@@ -135,7 +142,8 @@ def test_preview_publish_emits_retry_safe_event_for_each_success(
     make_chart("alpha", version="1.0.0")
     make_chart("beta", version="2.0.0")
     events = _Events()
-    service = PublishService(chart_root, helm=_Helm(), events=events)  # type: ignore[arg-type]
+    helm = _Helm()
+    service = PublishService(chart_root, helm=helm, events=events)  # type: ignore[arg-type]
 
     first = service.publish(
         ["alpha", "beta"],
@@ -168,13 +176,17 @@ def test_preview_publish_emits_retry_safe_event_for_each_success(
     assert events.calls[0]["detail"] == {
         "publish_kind": "preview",
         "repository": "oci://registry.local/library",
-        "reference": "oci://registry.local/library/alpha:version",
+        "reference": "oci://registry.local/library/alpha:1.0.0-pr.8.gabc",
         "digest": "sha256:alpha",
         "operation_id": "100.1",
         "batch_index": 1,
         "batch_count": 2,
     }
     assert events.calls[0]["idempotency_key"] == events.calls[2]["idempotency_key"]
+    assert helm.expected_references[:2] == [
+        "oci://registry.local/library/alpha:1.0.0-pr.8.gabc",
+        "oci://registry.local/library/beta:2.0.0-pr.8.gabc",
+    ]
 
 
 def test_release_publish_uses_final_published_phase(

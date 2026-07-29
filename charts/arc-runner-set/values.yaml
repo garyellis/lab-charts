@@ -54,11 +54,11 @@ gha-runner-scale-set:
             - /home/runner/run.sh
           resources:
             requests:
-              cpu: 250m
-              memory: 512Mi
-            limits:
               cpu: "1"
               memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
           securityContext:
             runAsNonRoot: true
             # actions-runner ships the `runner` user as uid/gid 1001 and owns

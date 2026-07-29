@@ -72,7 +72,10 @@ charts/arc-runner-set/install-kind
 The source CA Secret (`cert-manager/lab-root-ca-secret`), apps gateway Service,
 and GitHub credential Secret must exist before installation. Re-run the
 installer after recreating either the kind cluster or gateway Service so the
-runner `hostAliases` entry follows the current gateway ClusterIP.
+runner `hostAliases` entry follows the current gateway ClusterIP. Repeated
+invocations reconcile the same namespace, public CA ConfigMap, and Helm
+release. A CA checksum on the runner template rotates pods when the lab CA
+changes.
 
 The kind scale set exposes the `kind` and `runner-scale-set` labels:
 
@@ -88,6 +91,15 @@ jobs:
       - run: uname -a
       - run: echo "runner from kind"
 ```
+
+## runner capacity
+
+Each job runner requests 1 CPU and 1 GiB of memory and may burst to 2 CPU and
+2 GiB. The request prevents busy nodes from packing runners at the former
+development-sized allocation. At the five-runner ceiling, the runner
+containers reserve half of the 10-CPU kind node; bursts may still contend.
+Docker-in-Docker work runs in ARC's injected sidecar and therefore also
+consumes node capacity outside the runner limit.
 
 ## local validation
 

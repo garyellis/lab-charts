@@ -153,6 +153,9 @@ class PublishService:
                         package.path,
                         repository,
                         ca_file=ca_file,
+                        expected_reference=(
+                            f"{repository.rstrip('/')}/{name}:{target_version}"
+                        ),
                     )
                 except ChartManagerError as exc:
                     outcomes.append(
