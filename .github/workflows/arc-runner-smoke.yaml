@@ -11,6 +11,14 @@ jobs:
     runs-on: [kind, runner-scale-set]
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v6
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v4
+
+      - name: List charts
+        run: uv run chart-manager charts list
+
       - name: Runner identity
         run: |
           echo "runner: ${RUNNER_NAME}"
