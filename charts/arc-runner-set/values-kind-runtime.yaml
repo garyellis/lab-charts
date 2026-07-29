@@ -10,10 +10,14 @@ gha-runner-scale-set:
   # the corresponding GitHub App Secret.
   githubConfigSecret: "arc-github-pat"
 
-  # Keep one idle runner registered while proving the setup. Switch to 0 after
-  # registration and workflow pickup are understood.
-  minRunners: 1
-  maxRunners: 1
+  # Route workflow jobs to this kind-backed ARC scale set by capability.
+  scaleSetLabels:
+    - "kind"
+    - "runner-scale-set"
+
+  # Keep two idle runners registered for two-way job concurrency.
+  minRunners: 2
+  maxRunners: 5
 
   # dind mode injects a privileged docker:dind sidecar so jobs can build/run
   # containers. Requires the dind-compatible pod securityContext in values.yaml
