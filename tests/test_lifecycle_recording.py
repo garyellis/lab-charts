@@ -208,6 +208,174 @@ def test_compile_failure_does_not_prevent_an_independent_row_from_recording(
     assert repository.history().records[0].target.chart == "grafana"
 
 
+def test_disabled_validator_skip_needs_no_action_or_evidence_record(
+    tmp_path: Path,
+) -> None:
+    full_plan = validation_plan("grafana", "dev")
+    plan = replace(
+        full_plan,
+        actions=tuple(
+            action
+            for action in full_plan.actions
+            if action.kind is not ActionKind.SCHEMA_VALIDATE
+        ),
+    )
+    repository = LocalEvidenceRepository(tmp_path / "state")
+    result = row_result(
+        "grafana",
+        "dev",
+        render=PhaseResult(phase="render", status="PASS"),
+        schema=PhaseResult(
+            phase="schema",
+            status="SKIP",
+            detail="disabled by chart-lifecycle",
+            skip_cause="validator_disabled",
+        ),
+        policy=PhaseResult(phase="policy", status="PASS"),
+    )
+    recorder = ManifestValidationEvidenceRecorder(
+        tmp_path,
+        repository=repository,
+        compiler=StubCompiler({("grafana", "dev"): plan}),
+        clock=lambda: NOW,
+        run_id_factory=lambda: "run-1",
+    )
+
+    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+
+    assert recording.ok
+    assert len(recording.paths) == 2
+    assert {record.action_kind for record in repository.history().records} == {
+        "render",
+        "policy-validate",
+    }
+
+
+def test_disabled_validators_need_no_actions_when_render_fails(tmp_path: Path) -> None:
+    full_plan = validation_plan("grafana", "dev")
+    plan = replace(
+        full_plan,
+        actions=tuple(
+            action
+            for action in full_plan.actions
+            if action.kind
+            not in {ActionKind.SCHEMA_VALIDATE, ActionKind.POLICY_VALIDATE}
+        ),
+    )
+    repository = LocalEvidenceRepository(tmp_path / "state")
+    result = row_result(
+        "grafana",
+        "dev",
+        render=PhaseResult(phase="render", status="FAIL", error_type="tool"),
+        schema=PhaseResult(
+            phase="schema",
+            status="SKIP",
+            skip_cause="validator_disabled",
+        ),
+        policy=PhaseResult(
+            phase="policy",
+            status="SKIP",
+            skip_cause="validator_disabled",
+        ),
+    )
+    recorder = ManifestValidationEvidenceRecorder(
+        tmp_path,
+        repository=repository,
+        compiler=StubCompiler({("grafana", "dev"): plan}),
+        clock=lambda: NOW,
+        run_id_factory=lambda: "run-1",
+    )
+
+    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+
+    assert recording.ok
+    assert len(recording.paths) == 1
+    assert repository.history().records[0].action_kind == "render"
+
+
+def test_disabled_policy_needs_no_action_when_schema_fails(tmp_path: Path) -> None:
+    full_plan = validation_plan("grafana", "dev")
+    plan = replace(
+        full_plan,
+        actions=tuple(
+            action
+            for action in full_plan.actions
+            if action.kind is not ActionKind.POLICY_VALIDATE
+        ),
+    )
+    repository = LocalEvidenceRepository(tmp_path / "state")
+    result = row_result(
+        "grafana",
+        "dev",
+        render=PhaseResult(phase="render", status="PASS"),
+        schema=PhaseResult(phase="schema", status="FAIL"),
+        policy=PhaseResult(
+            phase="policy",
+            status="SKIP",
+            detail="wording is presentation-only",
+            skip_cause="validator_disabled",
+        ),
+    )
+    recorder = ManifestValidationEvidenceRecorder(
+        tmp_path,
+        repository=repository,
+        compiler=StubCompiler({("grafana", "dev"): plan}),
+        clock=lambda: NOW,
+        run_id_factory=lambda: "run-1",
+    )
+
+    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+
+    assert recording.ok
+    assert len(recording.paths) == 2
+    assert {record.action_kind for record in repository.history().records} == {
+        "render",
+        "schema-validate",
+    }
+
+
+def test_missing_enabled_validator_action_remains_a_diagnostic(tmp_path: Path) -> None:
+    full_plan = validation_plan("grafana", "dev")
+    plan = replace(
+        full_plan,
+        actions=tuple(
+            action
+            for action in full_plan.actions
+            if action.kind is not ActionKind.POLICY_VALIDATE
+        ),
+    )
+    repository = LocalEvidenceRepository(tmp_path / "state")
+    result = row_result(
+        "grafana",
+        "dev",
+        render=PhaseResult(phase="render", status="FAIL", error_type="tool"),
+        schema=PhaseResult(
+            phase="schema",
+            status="SKIP",
+            skip_cause="upstream_failed",
+        ),
+        policy=PhaseResult(
+            phase="policy",
+            status="SKIP",
+            skip_cause="upstream_failed",
+        ),
+    )
+    recorder = ManifestValidationEvidenceRecorder(
+        tmp_path,
+        repository=repository,
+        compiler=StubCompiler({("grafana", "dev"): plan}),
+        clock=lambda: NOW,
+        run_id_factory=lambda: "run-1",
+    )
+
+    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+
+    assert not recording.ok
+    assert len(recording.paths) == 2
+    assert recording.diagnostics[0].phase == "policy"
+    assert "expected exactly one" in recording.diagnostics[0].message
+
+
 def test_recorded_digest_projects_stale_after_plan_inputs_change(tmp_path: Path) -> None:
     original = validation_plan("grafana", "dev", digest_suffix="v1")
     repository = LocalEvidenceRepository(tmp_path / "state")

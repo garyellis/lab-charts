@@ -25,6 +25,14 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
 )
 from chart_manager.services.manifest_validation.requests import RunOutcome
+from chart_manager.services.manifest_validation.validator_registry import (
+    VALIDATOR_REGISTRY,
+)
+from chart_manager.services.manifest_validation.validators import (
+    ValidatorProvider,
+    provider_by_id,
+    validate_registry,
+)
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 RecordingStage = Literal["compile", "write"]
@@ -145,6 +153,45 @@ def _action_for_phase(plan: LifecyclePlan, phase: PhaseName) -> LifecycleAction:
     return matches[0]
 
 
+def _action_for_validator(
+    plan: LifecyclePlan,
+    validator_id: str,
+    providers: tuple[ValidatorProvider, ...],
+) -> LifecycleAction:
+    """Return the lifecycle action owned by one concrete validator."""
+    provider = provider_by_id(validator_id, providers)
+    kind = ActionKind(provider.lifecycle_action_kind)
+    matches = [action for action in plan.actions if action.kind is kind]
+    if len(matches) != 1:
+        raise ValueError(
+            f"compiled plan has {len(matches)} {kind.value!r} actions; expected exactly one"
+        )
+    return matches[0]
+
+
+def _is_authored_validator_skip(plan: LifecyclePlan, phase: PhaseResult) -> bool:
+    """Return whether a SKIP corresponds to an intentionally omitted action."""
+
+    if phase.status != "SKIP" or phase.skip_cause != "validator_disabled":
+        return False
+    kind = _PHASE_ACTION_KIND[phase.phase]
+    return not any(action.kind is kind for action in plan.actions)
+
+
+def _is_authored_identity_skip(
+    plan: LifecyclePlan,
+    validator_id: str,
+    result: PhaseResult,
+    providers: tuple[ValidatorProvider, ...],
+) -> bool:
+    """Return whether an identity-level SKIP has no authored action."""
+    if result.status != "SKIP" or result.skip_cause != "validator_disabled":
+        return False
+    provider = provider_by_id(validator_id, providers)
+    kind = ActionKind(provider.lifecycle_action_kind)
+    return not any(action.kind is kind for action in plan.actions)
+
+
 class ManifestValidationEvidenceRecorder:
     """Record terminal manifest-validation phase outcomes as lifecycle evidence."""
 
@@ -157,6 +204,7 @@ class ManifestValidationEvidenceRecorder:
         clock: Callable[[], datetime] | None = None,
         run_id_factory: Callable[[], str] | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
     ) -> None:
         self.root = root.resolve()
         self.repository = repository or LocalEvidenceRepository(
@@ -165,9 +213,11 @@ class ManifestValidationEvidenceRecorder:
         self.compiler = compiler or LifecycleCompiler(
             self.root,
             charts_dir=charts_dir,
+            validator_providers=validator_providers,
         )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.run_id_factory = run_id_factory or _new_run_id
+        self.validator_providers = validate_registry(validator_providers)
 
     def record(self, outcome: RunOutcome | RunResult) -> ValidationEvidenceRecording:
         """Compile each row and append evidence for PASS, FAIL, and SKIP phases.
@@ -185,12 +235,42 @@ class ManifestValidationEvidenceRecorder:
 
         for row_result in result.rows:
             row = row_result.row
-            terminal_phases = tuple(
-                (phase_name, phase)
-                for phase_name in ("render", "schema", "policy")
-                if (phase := row_result.phases.get(phase_name)) is not None
-                and phase.status != "NOT_RUN"
-            )
+            render = row_result.phases.get("render")
+            terminal_phases: tuple[
+                tuple[str, PhaseResult, str | None],
+                ...,
+            ]
+            if row_result.validator_results:
+                concrete = tuple(
+                    (
+                        definition.category.value,
+                        phase,
+                        definition.validator_id,
+                    )
+                    for definition in self.validator_providers
+                    if (
+                        phase := row_result.validator_results.get(
+                            definition.validator_id
+                        )
+                    )
+                    is not None
+                    and phase.status != "NOT_RUN"
+                )
+                terminal_phases = (
+                    (
+                        (("render", render, None),)
+                        if render is not None and render.status != "NOT_RUN"
+                        else ()
+                    )
+                    + concrete
+                )
+            else:
+                terminal_phases = tuple(
+                    (phase_name, phase, None)
+                    for phase_name in ("render", "schema", "policy")
+                    if (phase := row_result.phases.get(phase_name)) is not None
+                    and phase.status != "NOT_RUN"
+                )
             if not terminal_phases:
                 continue
             try:
@@ -206,15 +286,32 @@ class ManifestValidationEvidenceRecorder:
                 )
                 continue
 
-            for phase_name, phase in terminal_phases:
+            for phase_name, phase, validator_id in terminal_phases:
                 try:
+                    if validator_id is not None and _is_authored_identity_skip(
+                        plan,
+                        validator_id,
+                        phase,
+                        self.validator_providers,
+                    ):
+                        continue
+                    if validator_id is None and _is_authored_validator_skip(plan, phase):
+                        continue
                     # The collection above excludes the only non-evidence
                     # phase state. Keep the assertion local so static typing
                     # preserves that invariant at the EvidenceRecord boundary.
                     assert phase.status in {"PASS", "FAIL", "SKIP"}
                     verdict = cast(EvidenceVerdict, phase.status)
                     status = cast(EvidenceStatus, phase.status)
-                    action = _action_for_phase(plan, phase.phase)
+                    action = (
+                        _action_for_validator(
+                            plan,
+                            validator_id,
+                            self.validator_providers,
+                        )
+                        if validator_id is not None
+                        else _action_for_phase(plan, phase.phase)
+                    )
                     finished_at = self.clock()
                     if finished_at.tzinfo is None:
                         raise ValueError("recording clock must return a timezone-aware timestamp")

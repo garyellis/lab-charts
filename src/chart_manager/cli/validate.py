@@ -8,8 +8,7 @@ workers, run identity, artifact retention — lives in the service.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
 This `register(app)` pattern keeps cli/main.py free of validate-specific
-imports and lets the sub-app grow (render/schema/policy/run/clean) without
-touching main.py.
+imports and lets the sub-app grow without touching main.py.
 """
 
 from __future__ import annotations
@@ -35,14 +34,12 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
-from chart_manager.plumbing.errors import ChartNotFoundError
 from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
     RunOutcome,
     RunRequest,
-    SingleRequest,
     ValidateInputError,
     resolve_workers,
 )
@@ -56,7 +53,6 @@ _PROGRESS_MODES = ("auto", "live", "plain", "none")
 _PARAM_HINTS = {
     "changed_files": "--changed-files",
     "phases": "--phases",
-    "helm_version": "--helm-version / --helm-bin",
 }
 
 
@@ -72,62 +68,13 @@ def _validate_format(value: str) -> str:
 
 # --- Shared option declarations -------------------------------------------
 #
-# render/schema/policy are three distinct verbs with three distinct request
-# shapes, but they take the same twelve flags. Declaring those flags inline
-# in each signature meant three copies of every help string, and the copies
-# had already drifted (see the --kube-version note on `schema`/`policy`).
-# `Annotated` aliases are the documented Typer idiom for this and produce
-# byte-identical `--help`: Typer reads the `typer.Option` out of the
-# annotation's metadata, so position, type and default are unchanged.
-#
-# Defaults deliberately stay at the call site — an alias that also carried a
-# default would have to become a `= Field(...)`-style sentinel, and Typer
-# would no longer see a required parameter as required (--chart/--env are
-# required precisely because the call sites give them no default).
+# Shared options for the spec-driven chart and repository commands.
 ChartOption = Annotated[
     str,
     typer.Option(
         "--chart",
-        help="Chart name (resolved under the configured chart directory) or an explicit path.",
+        help="Chart name resolved under the configured chart directory.",
     ),
-]
-EnvOption = Annotated[
-    str,
-    typer.Option(
-        "--env",
-        help=(
-            "Environment label. Used for the namespace default (lab-<env>) and output path. "
-            "Single-row commands (render/schema/policy) do NOT consult chart-lifecycle.yaml — "
-            "pass --values explicitly to overlay per-env values. Use `validate run` for "
-            "spec-driven multi-row execution."
-        ),
-    ),
-]
-ValuesOption = Annotated[
-    list[Path],
-    typer.Option(
-        "--values",
-        help=(
-            "Values file (repeatable, applied in order). "
-            "Defaults to <chart>/values.yaml only if no --values flags are passed."
-        ),
-    ),
-]
-NamespaceOption = Annotated[
-    str | None,
-    typer.Option("--namespace", help="Kubernetes namespace. Defaults to lab-<env>."),
-]
-ReleaseOption = Annotated[
-    str | None,
-    typer.Option("--release", help="Helm release name. Defaults to the chart name."),
-]
-HelmVersionOption = Annotated[
-    str | None,
-    typer.Option("--helm-version", help="Resolve helm via `mise where helm@<version>`."),
-]
-HelmBinOption = Annotated[
-    Path | None,
-    typer.Option("--helm-bin", help="Explicit path to a helm binary."),
 ]
 OutOption = Annotated[
     Path | None,
@@ -172,9 +119,7 @@ console = Console()
 
 def register(app: typer.Typer) -> None:
     """Attach the validate subcommands to the given Typer app."""
-    app.command("render")(render)
-    app.command("schema")(schema)
-    app.command("policy")(policy)
+    app.command("chart")(chart)
     app.command("run")(run)
     app.command("clean")(clean)
 
@@ -219,167 +164,82 @@ def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
         )
 
 
-def render(
+def chart(
     chart: ChartOption,
-    env: EnvOption,
-    values: ValuesOption = [],
-    namespace: NamespaceOption = None,
-    release: ReleaseOption = None,
-    helm_version: HelmVersionOption = None,
-    helm_bin: HelmBinOption = None,
-    out: OutOption = None,
-    keep: KeepOption = False,
-    fmt: FormatOption = "text",
-    github_step_summary: GithubStepSummaryOption = False,
-    root: RootOption = Path("."),
-) -> None:
-    """Render one chart x env via `helm template` and print a status row."""
-    _guard_helm_selection(helm_version, helm_bin)
-    _run_single(
-        SingleRequest(
-            chart=chart,
-            env=env,
-            root=root,
-            values=tuple(values),
-            namespace=namespace,
-            release=release,
-            helm_version=helm_version,
-            helm_bin=helm_bin,
-            out=out,
-            keep=keep,
-            phases=ALL_PHASES,
-        ),
-        fmt=fmt,
-        github_step_summary=github_step_summary,
-    )
-
-
-def schema(
-    chart: ChartOption,
-    env: EnvOption,
-    values: ValuesOption = [],
-    namespace: NamespaceOption = None,
-    release: ReleaseOption = None,
-    helm_version: HelmVersionOption = None,
-    helm_bin: HelmBinOption = None,
-    # --kube-version / --schema-location are NOT hoisted to shared aliases:
-    # `policy` declares the same two flags with shorter help text, and
-    # unifying them would change `--help` output. The wording drift is real
-    # and worth fixing, but it is a deliberate UX change, not a refactor.
-    kube_version: Annotated[
-        str | None,
-        typer.Option(
-            "--kube-version",
-            help=(
-                "Kubernetes version for kubeconform (e.g. 1.31.2). "
-                "Defaults to kubeconform's built-in default. "
-                "For multi-row runs this is sourced from chart-lifecycle.yaml "
-                "(spec.validation.kubernetesVersion)."
-            ),
-        ),
-    ] = None,
-    schema_location: Annotated[
+    env: Annotated[
         list[str],
         typer.Option(
-            "--schema-location",
-            help=(
-                "Override kubeconform schema search path (repeatable). "
-                "Default: ['default', datreeio CRDs catalog]. "
-                "For multi-row runs this is sourced from chart-lifecycle.yaml "
-                "(spec.validation.schemaLocations)."
-            ),
+            "--env",
+            help="Environment declared in chart-lifecycle.yaml (repeatable).",
         ),
     ] = [],
+    all_envs: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Validate every environment declared for this chart.",
+        ),
+    ] = False,
+    kubeconform: Annotated[
+        bool,
+        typer.Option(
+            "--kubeconform/--no-kubeconform",
+            help="Enable or disable kubeconform schema validation for this invocation.",
+        ),
+    ] = True,
+    policy: Annotated[
+        bool,
+        typer.Option(
+            "--policy/--no-policy",
+            help="Enable or disable policy validation for this invocation.",
+        ),
+    ] = True,
     out: OutOption = None,
     keep: KeepOption = False,
+    progress: Annotated[
+        str,
+        typer.Option(
+            "--progress",
+            help="Progress UI: auto (default), live, plain, or none.",
+        ),
+    ] = "auto",
+    timings: Annotated[
+        bool,
+        typer.Option("--timings/--no-timings", help="Include per-phase elapsed times."),
+    ] = False,
     fmt: FormatOption = "text",
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Render one chart x env then validate manifests with kubeconform."""
-    _guard_helm_selection(helm_version, helm_bin)
-    _run_single(
-        SingleRequest(
-            chart=chart,
-            env=env,
-            root=root,
-            values=tuple(values),
-            namespace=namespace,
-            release=release,
-            helm_version=helm_version,
-            helm_bin=helm_bin,
-            kubernetes_version=kube_version,
-            schema_locations=tuple(schema_location),
-            out=out,
-            keep=keep,
-            phases=ALL_PHASES,
-        ),
-        fmt=fmt,
-        github_step_summary=github_step_summary,
+    """Validate one chart using its authored lifecycle environments and inputs."""
+    if all_envs and env:
+        raise typer.BadParameter(
+            "--all and --env are mutually exclusive",
+            param_hint="--all / --env",
+        )
+    if not all_envs and not env:
+        raise typer.BadParameter(
+            "select at least one --env or use --all",
+            param_hint="--env / --all",
+        )
+    phases = {"render"}
+    if kubeconform:
+        phases.add("schema")
+    if policy:
+        phases.add("policy")
+    request = RunRequest(
+        root=root,
+        charts=(chart,),
+        envs=() if all_envs else tuple(env),
+        all_charts=True,
+        phases=frozenset(phases),
+        out=out,
+        keep=keep,
     )
-
-
-def policy(
-    chart: ChartOption,
-    env: EnvOption,
-    values: ValuesOption = [],
-    namespace: NamespaceOption = None,
-    release: ReleaseOption = None,
-    helm_version: HelmVersionOption = None,
-    helm_bin: HelmBinOption = None,
-    # See the note on `schema`: these two carry shorter help text here, so
-    # they stay inline until someone decides which wording wins.
-    kube_version: Annotated[
-        str | None,
-        typer.Option(
-            "--kube-version",
-            help="Kubernetes version for kubeconform (e.g. 1.31.2). Multi-row runs source this from chart-lifecycle.yaml.",
-        ),
-    ] = None,
-    schema_location: Annotated[
-        list[str],
-        typer.Option(
-            "--schema-location",
-            help="Override kubeconform schema search path (repeatable). Multi-row runs source this from chart-lifecycle.yaml.",
-        ),
-    ] = [],
-    policy_dir: Annotated[
-        list[Path],
-        typer.Option(
-            "--policy-dir",
-            help=(
-                "Kyverno policy directory (repeatable). Defaults to "
-                "<root>/policies and the configured chart's policies directory "
-                "(whichever exist)."
-            ),
-        ),
-    ] = [],
-    out: OutOption = None,
-    keep: KeepOption = False,
-    fmt: FormatOption = "text",
-    github_step_summary: GithubStepSummaryOption = False,
-    root: RootOption = Path("."),
-) -> None:
-    """Render -> schema -> policy for one chart x env via kyverno."""
-    _guard_helm_selection(helm_version, helm_bin)
-    _run_single(
-        SingleRequest(
-            chart=chart,
-            env=env,
-            root=root,
-            values=tuple(values),
-            namespace=namespace,
-            release=release,
-            helm_version=helm_version,
-            helm_bin=helm_bin,
-            kubernetes_version=kube_version,
-            schema_locations=tuple(schema_location),
-            policy_dirs=tuple(policy_dir),
-            discover_policies=True,
-            out=out,
-            keep=keep,
-            phases=ALL_PHASES,
-        ),
+    _execute(
+        request,
+        progress=progress,
+        timings=timings,
         fmt=fmt,
         github_step_summary=github_step_summary,
     )
@@ -504,30 +364,12 @@ def run(
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build worklist from chart-lifecycle.yaml + git, then run all phases.
+    """Build a lifecycle worklist, then render and run selected validators.
 
-    Source of the changed-files list (in precedence order):
-      --all > --changed-files > git diff against --base.
+    Worklist selection precedence:
+      --all > --changed-files > explicit --chart > git diff against --base.
     """
     enabled_phases = _parse_phases(phases)
-    if progress not in _PROGRESS_MODES:
-        raise typer.BadParameter(
-            f"unknown progress mode: {progress} (allowed: {', '.join(_PROGRESS_MODES)})",
-            param_hint="--progress",
-        )
-
-    # --verbose streams raw subprocess stdout/stderr. Live can't share the
-    # terminal with that, and >1 worker interleaves the streams into
-    # illegible noise — the service forces serial; we say so.
-    if verbose and progress in ("auto", "live"):
-        progress = "plain"
-    if verbose and resolve_workers(workers) > 1:
-        console.print(
-            "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
-            "streamed subprocess output readable"
-        )
-
-    display = _resolve_display(progress, fmt=fmt)
     request = RunRequest(
         root=root,
         charts=tuple(chart),
@@ -544,6 +386,48 @@ def run(
         dep_update_timeout=dep_update_timeout,
         fail_fast=fail_fast,
     )
+    _execute(
+        request,
+        progress=progress,
+        timings=timings,
+        fmt=fmt,
+        github_step_summary=github_step_summary,
+    )
+
+
+def _execute(
+    request: RunRequest,
+    *,
+    progress: str,
+    timings: bool,
+    fmt: str,
+    github_step_summary: bool,
+) -> None:
+    """Execute one prepared request and own all CLI-side run behavior.
+
+    ``chart`` and ``run`` differ only in how they select work and build a
+    :class:`RunRequest`. This boundary keeps service invocation, presentation,
+    evidence recording, retention, and process exit identical without coupling
+    one Typer command to another command's Python defaults.
+    """
+    if progress not in _PROGRESS_MODES:
+        raise typer.BadParameter(
+            f"unknown progress mode: {progress} (allowed: {', '.join(_PROGRESS_MODES)})",
+            param_hint="--progress",
+        )
+
+    # --verbose streams raw subprocess stdout/stderr. Live can't share the
+    # terminal with that, and >1 worker interleaves the streams into
+    # illegible noise — the service forces serial; we say so.
+    if request.verbose and progress in ("auto", "live"):
+        progress = "plain"
+    if request.verbose and resolve_workers(request.workers) > 1:
+        console.print(
+            "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
+            "streamed subprocess output readable"
+        )
+
+    display = _resolve_display(progress, fmt=fmt)
 
     app = _make_app(display)
     try:
@@ -551,7 +435,7 @@ def run(
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
 
-    _record_lifecycle_evidence(root, outcome)
+    _record_lifecycle_evidence(request.root, outcome)
 
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with --format all the sidecars are written into the render
@@ -566,7 +450,7 @@ def run(
             requested_charts=request.charts,
             requested_environments=request.envs,
             timings=timings,
-            verbose=verbose,
+            verbose=request.verbose,
             github_step_summary=github_step_summary,
         )
 
@@ -575,42 +459,6 @@ def run(
     finally:
         app.cleanup(outcome)
     sys.exit(outcome.exit_code)
-
-
-def _run_single(
-    request: SingleRequest,
-    *,
-    fmt: str,
-    github_step_summary: bool,
-) -> None:
-    """Execute a one-row request, emit it, apply retention, and exit."""
-    app = _make_app()
-    try:
-        outcome = app.single(request)
-    except ChartNotFoundError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--chart") from exc
-    except ValidateInputError as exc:
-        raise _bad_parameter(exc) from exc
-
-    try:
-        _emit_result(
-            outcome,
-            fmt=fmt,
-            out_dir=outcome.out_dir,
-            github_step_summary=github_step_summary,
-        )
-    finally:
-        app.cleanup(outcome)
-    sys.exit(outcome.exit_code)
-
-
-def _guard_helm_selection(helm_version: str | None, helm_bin: Path | None) -> None:
-    """Reject --helm-version together with --helm-bin."""
-    if helm_version is not None and helm_bin is not None:
-        raise typer.BadParameter(
-            "--helm-version and --helm-bin are mutually exclusive",
-            param_hint="--helm-version / --helm-bin",
-        )
 
 
 def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:

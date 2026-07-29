@@ -62,20 +62,8 @@ description = "Delete the sandbox kind cluster entirely (full teardown; image ca
 run = "uv run chart-manager sandbox delete \"$@\""
 
 [tasks.validate]
-description = "Run render + schema + policy. Usage: mise run validate -- --chart grafana --env dev"
+description = "Run the spec-driven repository validator. Usage: mise run validate -- --chart grafana --env dev"
 run = "uv run chart-manager validate run \"$@\""
-
-[tasks."validate:render"]
-description = "Render one chart x env via helm template. Usage: mise run validate:render -- --chart grafana --env dev"
-run = "uv run chart-manager validate render \"$@\""
-
-[tasks."validate:schema"]
-description = "Render then kubeconform-validate one chart x env."
-run = "uv run chart-manager validate schema \"$@\""
-
-[tasks."validate:policy"]
-description = "Render -> schema -> kyverno policy for one chart x env."
-run = "uv run chart-manager validate policy \"$@\""
 
 [tasks."validate:clean"]
 description = "Remove .chart-manager/rendered/ tree."

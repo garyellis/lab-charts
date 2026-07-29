@@ -18,6 +18,16 @@ from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.services.manifest_validation.models import WorklistRow
 from chart_manager.services.manifest_validation.runner import ManifestValidationRunner, RowConfig
+from chart_manager.services.manifest_validation.validator_adapters import (
+    KubeconformValidator,
+    KyvernoValidator,
+)
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+    ValidatorCategory,
+    ValidatorInvocation,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -37,8 +47,10 @@ def _runner(out_root: Path) -> ManifestValidationRunner:
     return ManifestValidationRunner(
         helm=Helm(runner=cmd_runner),
         output_root=out_root,
-        kubeconform=Kubeconform(runner=cmd_runner),
-        kyverno=Kyverno(runner=cmd_runner),
+        validators={
+            "kubeconform": KubeconformValidator(Kubeconform(runner=cmd_runner)),
+            "kyverno": KyvernoValidator(Kyverno(runner=cmd_runner)),
+        },
     )
 
 
@@ -54,7 +66,24 @@ def _cfg(chart_dir: Path, *, env: str = "dev") -> RowConfig:
         row=row,
         chart_path=chart_dir,
         values=values,
-        policy_paths=[REPO_POLICIES],
+        validator_invocations=(
+            ValidatorInvocation(
+                "kubeconform",
+                ValidatorCategory.SCHEMA,
+                100,
+                "schema-validate",
+                True,
+                KubeconformConfig(None, ()),
+            ),
+            ValidatorInvocation(
+                "kyverno",
+                ValidatorCategory.POLICY,
+                200,
+                "policy-validate",
+                True,
+                KyvernoConfig((REPO_POLICIES,)),
+            ),
+        ),
     )
 
 

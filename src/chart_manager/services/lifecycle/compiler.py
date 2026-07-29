@@ -25,18 +25,33 @@ from chart_manager.services.manifest_validation.catalog import (
 from chart_manager.services.manifest_validation.compiler import (
     resolve_manifest_validation,
 )
+from chart_manager.services.manifest_validation.validator_registry import (
+    VALIDATOR_REGISTRY,
+)
+from chart_manager.services.manifest_validation.validators import (
+    ValidatorCategory,
+    ValidatorProvider,
+    validate_registry,
+)
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class LifecycleCompiler:
     """Compile authored lifecycle capabilities into a common typed action graph."""
 
-    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
+        validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
+    ) -> None:
         """Anchor all chart and value resolution at the repository root."""
         self.root = root.resolve()
         self.charts_dir = charts_dir
         self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
+        self.validator_providers = validate_registry(validator_providers)
 
     def compile_validation(self, chart: str, environment: str) -> LifecyclePlan:
         """Compile static validation for one chart and authored environment."""
@@ -45,7 +60,11 @@ class LifecycleCompiler:
             chart,
             charts_dir=self.charts_dir,
         )
-        resolved = resolve_manifest_validation(target, self.root)
+        resolved = resolve_manifest_validation(
+            target,
+            self.root,
+            providers=self.validator_providers,
+        )
         try:
             selected = resolved.environments[environment]
         except KeyError as exc:
@@ -63,7 +82,7 @@ class LifecycleCompiler:
             namespace=selected.namespace,
         )
         execution_inputs = _validation_execution_inputs(self.root)
-        definitions = (
+        definitions = [
             (
                 ActionKind.HELM_DEPENDENCY_UPDATE,
                 execution_inputs,
@@ -79,31 +98,21 @@ class LifecycleCompiler:
                 ),
                 (),
             ),
-            (
-                ActionKind.SCHEMA_VALIDATE,
-                selected.values,
-                (
-                    ("kubernetesVersion", target.spec.kubernetes_version or ""),
-                    ("schemaLocations", json.dumps(resolved.schema_locations)),
-                ),
-                (
-                    *execution_inputs,
-                    *(
-                        Path(location)
-                        for location in resolved.schema_locations
-                        if Path(location).is_absolute()
-                    ),
-                ),
-            ),
-            (
-                ActionKind.POLICY_VALIDATE,
-                selected.values,
-                (
-                    ("policyPaths", json.dumps([str(path) for path in resolved.policy_paths])),
-                ),
-                (*execution_inputs, *resolved.policy_paths),
-            ),
+        ]
+        enabled_invocations = tuple(
+            invocation
+            for invocation in resolved.validator_invocations
+            if invocation.enabled
         )
+        for invocation in enabled_invocations:
+            definitions.append(
+                (
+                    ActionKind(invocation.lifecycle_action_kind),
+                    selected.values,
+                    invocation.lifecycle_metadata,
+                    (*execution_inputs, *invocation.lifecycle_additional_paths),
+                )
+            )
         actions: list[LifecycleAction] = []
         for kind, digest_values, metadata, additional_paths in definitions:
             action_id = _action_id(
@@ -131,32 +140,50 @@ class LifecycleCompiler:
                 )
             )
 
-        edges = (
+        edges: list[LifecycleEdge] = [
             LifecycleEdge(
                 actions[0].action_id,
                 actions[1].action_id,
                 EdgeKind.SEQUENCE,
                 "chart dependencies must be current before rendering",
             ),
-            LifecycleEdge(
-                actions[1].action_id,
-                actions[2].action_id,
-                EdgeKind.INPUT,
-                "schema validation consumes rendered manifests",
-            ),
-            LifecycleEdge(
-                actions[2].action_id,
-                actions[3].action_id,
-                EdgeKind.SEQUENCE,
-                "preserve the authored validation phase order",
-            ),
+        ]
+        validator_actions = tuple(zip(actions[2:], enabled_invocations, strict=True))
+        schema_actions = tuple(
+            action
+            for action, invocation in validator_actions
+            if invocation.category is ValidatorCategory.SCHEMA
         )
+        policy_actions = tuple(
+            action
+            for action, invocation in validator_actions
+            if invocation.category is ValidatorCategory.POLICY
+        )
+        for action in schema_actions or policy_actions:
+            edges.append(
+                LifecycleEdge(
+                    actions[1].action_id,
+                    action.action_id,
+                    EdgeKind.INPUT,
+                    "validation consumes rendered manifests",
+                )
+            )
+        for predecessor in schema_actions:
+            for successor in policy_actions:
+                edges.append(
+                    LifecycleEdge(
+                        predecessor.action_id,
+                        successor.action_id,
+                        EdgeKind.SEQUENCE,
+                        "preserve the authored validation phase order",
+                    )
+                )
         return LifecyclePlan(
             workflow=Workflow.VALIDATE,
             chart=target.name,
             environment=environment,
             actions=tuple(actions),
-            edges=edges,
+            edges=tuple(edges),
             warnings=resolved.warnings,
         )
 
@@ -309,9 +336,7 @@ class LifecycleCompiler:
                         ("target", str(entry.target).lower()),
                         (
                             "checks",
-                            json.dumps(
-                                [check.name for check in profile_spec.effective_checks()]
-                            ),
+                            json.dumps([check.name for check in profile_spec.effective_checks()]),
                         ),
                     ),
                 )
@@ -387,8 +412,7 @@ def compile_cluster_test_plan(
 def _action_id(*parts: object) -> str:
     """Build a deterministic, evidence-path-safe human-readable action ID."""
     candidate = ".".join(
-        str(part.value if isinstance(part, (Workflow, ActionKind)) else part)
-        for part in parts
+        str(part.value if isinstance(part, (Workflow, ActionKind)) else part) for part in parts
     )
     if len(candidate) <= 128 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", candidate):
         return candidate
@@ -481,9 +505,7 @@ def _resolve_digest_input(path: Path, root: Path) -> Path:
     """Resolve a digest input and reject symlinks escaping the repository."""
     resolved = path.resolve()
     if not resolved.is_relative_to(root):
-        raise SpecError(
-            f"digest input escapes repository root: {path} resolves to {resolved}"
-        )
+        raise SpecError(f"digest input escapes repository root: {path} resolves to {resolved}")
     return resolved
 
 

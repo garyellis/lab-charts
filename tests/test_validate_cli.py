@@ -20,7 +20,6 @@ from typer.testing import CliRunner
 
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.main import app
-from chart_manager.plumbing.errors import ChartNotFoundError
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
@@ -273,7 +272,7 @@ def test_github_step_summary_unwritable_does_not_crash(
     assert "could not write GITHUB_STEP_SUMMARY" in output
 
 
-@pytest.mark.parametrize("subcommand", ["render", "schema", "policy", "run"])
+@pytest.mark.parametrize("subcommand", ["chart", "run"])
 def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["validate", subcommand, "--help"])
@@ -295,7 +294,7 @@ def test_run_help_lists_format_option() -> None:
     assert "--format" in result.output
 
 
-@pytest.mark.parametrize("subcommand", ["render", "schema", "policy", "run"])
+@pytest.mark.parametrize("subcommand", ["chart", "run"])
 def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["validate", subcommand, "--help"])
@@ -459,9 +458,6 @@ class _FakeApp:
     def run(self, request):
         return self._answer(request)
 
-    def single(self, request):
-        return self._answer(request)
-
     def cleanup(self, outcome: RunOutcome) -> None:
         self.cleanups.append(outcome)
         self.cleanup_saw_summary = (outcome.out_dir / "summary.md").is_file()
@@ -481,6 +477,132 @@ def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
     monkeypatch.setattr(validate_cli, "_make_app", lambda progress=None: fake)
+
+
+def test_chart_delegates_to_shared_execution_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def execute(request, **options):  # type: ignore[no-untyped-def]
+        calls.append((request, options))
+
+    monkeypatch.setattr(validate_cli, "_execute", execute)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate",
+            "chart",
+            "--chart",
+            "alpha",
+            "--env",
+            "dev",
+            "--no-policy",
+            "--keep",
+            "--out",
+            str(tmp_path / "rendered"),
+            "--progress",
+            "plain",
+            "--timings",
+            "--format",
+            "md",
+            "--github-step-summary",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    request, options = calls[0]
+    assert request.charts == ("alpha",)
+    assert request.envs == ("dev",)
+    assert request.all_charts is True
+    assert request.phases == frozenset({"render", "schema"})
+    assert request.keep is True
+    assert request.out == tmp_path / "rendered"
+    assert request.root == tmp_path
+    assert options == {
+        "progress": "plain",
+        "timings": True,
+        "fmt": "md",
+        "github_step_summary": True,
+    }
+
+
+def test_run_delegates_to_shared_execution_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+    changed = tmp_path / "changed.txt"
+
+    def execute(request, **options):  # type: ignore[no-untyped-def]
+        calls.append((request, options))
+
+    monkeypatch.setattr(validate_cli, "_execute", execute)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate",
+            "run",
+            "--chart",
+            "alpha",
+            "--env",
+            "dev",
+            "--base",
+            "main",
+            "--changed-files",
+            str(changed),
+            "--all",
+            "--phases",
+            "render,policy",
+            "--out",
+            str(tmp_path / "rendered"),
+            "--keep",
+            "--workers",
+            "3",
+            "--progress",
+            "none",
+            "--timings",
+            "--verbose",
+            "--row-timeout",
+            "12",
+            "--dep-update-timeout",
+            "42",
+            "--fail-fast",
+            "--format",
+            "all",
+            "--github-step-summary",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    request, options = calls[0]
+    assert request.charts == ("alpha",)
+    assert request.envs == ("dev",)
+    assert request.base == "main"
+    assert request.changed_files == changed
+    assert request.all_charts is True
+    assert request.phases == frozenset({"render", "policy"})
+    assert request.out == tmp_path / "rendered"
+    assert request.keep is True
+    assert request.workers == 3
+    assert request.verbose is True
+    assert request.row_timeout == 12.0
+    assert request.dep_update_timeout == 42.0
+    assert request.fail_fast is True
+    assert request.root == tmp_path
+    assert options == {
+        "progress": "none",
+        "timings": True,
+        "fmt": "all",
+        "github_step_summary": True,
+    }
 
 
 def test_run_builds_a_request_from_its_flags(
@@ -735,84 +857,88 @@ def test_verbose_with_one_worker_does_not_warn(
     assert "forces --workers=1" not in output
 
 
-@pytest.mark.parametrize(
-    ("command", "expected_phases"),
-    [
-        ("render", frozenset({"render", "schema", "policy"})),
-        ("schema", frozenset({"render", "schema", "policy"})),
-        ("policy", frozenset({"render", "schema", "policy"})),
-    ],
-)
-def test_single_row_commands_build_single_requests(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    command: str,
-    expected_phases: frozenset[str],
+def test_chart_builds_a_spec_driven_all_environments_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
     result = CliRunner().invoke(
         app,
-        ["validate", command, "--chart", "alpha", "--env", "dev", "--root", str(tmp_path)],
+        [
+            "validate",
+            "chart",
+            "--chart",
+            "alpha",
+            "--all",
+            "--progress",
+            "none",
+            "--root",
+            str(tmp_path),
+        ],
     )
 
     assert result.exit_code == 0
     request = fake.requests[0]
-    assert (request.chart, request.env) == ("alpha", "dev")
-    assert request.phases == expected_phases
+    assert request.charts == ("alpha",)
+    assert request.envs == ()
+    assert request.all_charts is True
+    assert request.phases == frozenset({"render", "schema", "policy"})
     assert fake.cleanups == [fake.outcome]
 
 
-def test_only_the_policy_command_asks_for_policy_discovery(
+def test_chart_honors_environment_and_validator_toggles(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """render/schema must keep passing no policy paths at all (phase SKIPs)."""
-    requests = []
-    for command in ("render", "schema", "policy"):
-        fake = _FakeApp(_outcome(tmp_path / "out"))
-        _install(monkeypatch, fake)
-        CliRunner().invoke(
-            app,
-            ["validate", command, "--chart", "a", "--env", "dev", "--root", str(tmp_path)],
-        )
-        requests.append(fake.requests[0])
-
-    assert [r.discover_policies for r in requests] == [False, False, True]
-
-
-def test_single_row_command_maps_chart_not_found_onto_the_chart_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _install(monkeypatch, _FakeApp(error=ChartNotFoundError("chart not found: ghost")))
-
-    result = CliRunner().invoke(app, ["validate", "render", "--chart", "ghost", "--env", "dev"])
-
-    assert result.exit_code == 2
-    assert "--chart" in result.output
-    assert "ghost" in result.output
-
-
-@pytest.mark.parametrize("command", ["render", "schema", "policy"])
-def test_single_row_commands_reject_both_helm_bindings(command: str) -> None:
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
     result = CliRunner().invoke(
         app,
         [
             "validate",
-            command,
+            "chart",
             "--chart",
-            "a",
+            "alpha",
             "--env",
             "dev",
-            "--helm-version",
-            "3.20.0",
-            "--helm-bin",
-            "/usr/bin/helm",
+            "--no-kubeconform",
+            "--policy",
+            "--progress",
+            "none",
+            "--root",
+            str(tmp_path),
         ],
     )
 
+    assert result.exit_code == 0
+    request = fake.requests[0]
+    assert request.envs == ("dev",)
+    assert request.phases == frozenset({"render", "policy"})
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--chart", "alpha"],
+        ["--chart", "alpha", "--env", "dev", "--all"],
+    ],
+)
+def test_chart_requires_exactly_one_environment_selection(args: list[str]) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["validate", "chart", *args],
+    )
+
     assert result.exit_code == 2
-    assert "mutually exclusive" in result.output
+    assert "--env" in result.output
+
+
+@pytest.mark.parametrize("command", ["render", "schema", "policy"])
+def test_legacy_validate_commands_are_removed(command: str) -> None:
+    result = CliRunner().invoke(app, ["validate", command, "--help"])
+
+    assert result.exit_code == 2
+    assert "No such command" in result.output
 
 
 def test_run_rejects_an_unknown_phase() -> None:

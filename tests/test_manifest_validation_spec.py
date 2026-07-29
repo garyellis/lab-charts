@@ -42,6 +42,7 @@ def test_full_authored_shape_uses_camel_case() -> None:
             },
             "triggerIgnores": ["README.md", "docs/**"],
             "unmatchedChanges": "all-environments",
+            "validators": {"kubeconform": False, "policy": True},
             "policies": {"extra": ["extra/policies"]},
         }
     )
@@ -53,6 +54,20 @@ def test_full_authored_shape_uses_camel_case() -> None:
     assert spec.triggers["envs/*.yaml"] == MATCH_BY_BASENAME
     assert spec.trigger_ignores == ["README.md", "docs/**"]
     assert spec.policies.extra == ["extra/policies"]
+    assert spec.validators.kubeconform is False
+    assert spec.validators.policy is True
+
+
+def test_validators_default_to_the_existing_full_pipeline() -> None:
+    spec = _spec()
+
+    assert spec.validators.kubeconform is True
+    assert spec.validators.policy is True
+
+
+def test_validators_reject_unknown_names() -> None:
+    with pytest.raises(ValidationError):
+        _spec(validators={"kubeconform": True, "conftest": False})
 
 
 @pytest.mark.parametrize(

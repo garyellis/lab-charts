@@ -14,15 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.manifest_validation.app import (
-    ALL_PHASES,
     ManifestValidationService,
     RunnerSpec,
     RunRequest,
-    SingleRequest,
     ValidateInputError,
-    default_namespace,
     default_workers,
     resolve_workers,
 )
@@ -33,6 +30,10 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 from chart_manager.services.manifest_validation.runner import RowConfig
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+)
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -239,6 +240,23 @@ def test_explicit_changed_files_wins_over_git(tmp_path: Path) -> None:
     assert any("matches no trigger" in warning for warning in outcome.warnings)
 
 
+def test_explicit_chart_selection_validates_all_environments_without_git(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha")
+    _chart(tmp_path, "beta")
+    git = FakeGit(files=[])
+    rec = Recorder()
+
+    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, charts=("alpha",)))
+
+    assert git.calls == []
+    assert {(row.row.chart, row.row.env) for row in outcome.result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
+
+
 def test_git_diff_supplies_changed_files_by_default(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     git = FakeGit(files=["charts/alpha/values.yaml"])
@@ -286,8 +304,8 @@ def test_chart_and_env_filters_narrow_the_worklist(tmp_path: Path) -> None:
     )
 
     assert [(r.row.chart, r.row.env) for r in outcome.result.rows] == [("alpha", "dev")]
-    # The worklist now knows what the filters removed.
-    assert outcome.rows_filtered_out == 3
+    # Targeted planning never loads beta; only alpha/prod is filtered out.
+    assert outcome.rows_filtered_out == 1
 
 
 # --- row assembly -----------------------------------------------------------
@@ -314,13 +332,17 @@ policies:
         (tmp_path / "charts" / "alpha" / "values.yaml").resolve(),
         (tmp_path / "charts" / "alpha" / "values-prod.yaml").resolve(),
     ]
-    assert cfg.kubernetes_version == "1.31.2"
-    assert cfg.schema_locations == ["default"]
-    assert cfg.policy_paths == [
+    kubeconform = cfg.validator_invocations[0].config
+    kyverno = cfg.validator_invocations[1].config
+    assert isinstance(kubeconform, KubeconformConfig)
+    assert isinstance(kyverno, KyvernoConfig)
+    assert kubeconform.kubernetes_version == "1.31.2"
+    assert kubeconform.schema_locations == ("default",)
+    assert kyverno.policy_paths == (
         tmp_path / "policies",
         tmp_path / "charts" / "alpha" / "policies",
         (tmp_path / "charts" / "alpha" / "extra-policies").resolve(),
-    ]
+    )
 
 
 def test_spec_policy_extra_that_does_not_exist_is_skipped(tmp_path: Path) -> None:
@@ -329,7 +351,9 @@ def test_spec_policy_extra_that_does_not_exist_is_skipped(tmp_path: Path) -> Non
 
     _app(rec).run(RunRequest(root=tmp_path, all_charts=True, envs=("dev",)))
 
-    assert rec.configs[0].policy_paths == []
+    config = rec.configs[0].validator_invocations[1].config
+    assert isinstance(config, KyvernoConfig)
+    assert config.policy_paths == ()
 
 
 # --- helm bindings ----------------------------------------------------------
@@ -480,6 +504,28 @@ def test_explicit_chart_with_malformed_config_returns_spec_exit(tmp_path: Path) 
     assert outcome.exit_code == 3
 
 
+def test_explicit_chart_is_isolated_from_unrelated_repository_errors(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha")
+    _chart(tmp_path, "broken", spec="releaseName: broken\nmystery: true\n")
+    _chart(tmp_path, "unconfigured", spec=None)
+    rec = Recorder()
+
+    outcome = _app(rec).run(
+        RunRequest(root=tmp_path, all_charts=True, charts=("alpha",))
+    )
+
+    assert {(row.row.chart, row.row.env) for row in outcome.result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
+    assert outcome.result.spec_errors == ()
+    assert outcome.warnings == ()
+    assert outcome.charts_unvalidated == 0
+    assert outcome.exit_code == 0
+
+
 def test_enabled_phases_reach_the_runner_and_the_outcome(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     rec = Recorder()
@@ -489,6 +535,35 @@ def test_enabled_phases_reach_the_runner_and_the_outcome(tmp_path: Path) -> None
     )
 
     assert outcome.enabled_phases == frozenset({"render"})
+
+
+def test_mixed_charts_keep_validator_selection_on_each_row(tmp_path: Path) -> None:
+    _chart(
+        tmp_path,
+        "alpha",
+        extra="validators:\n  kubeconform: false\n  policy: true\n",
+    )
+    _chart(
+        tmp_path,
+        "beta",
+        extra="validators:\n  kubeconform: true\n  policy: false\n",
+    )
+    rec = Recorder()
+
+    _app(rec).run(RunRequest(root=tmp_path, all_charts=True))
+
+    enabled_by_chart = {
+        config.row.chart: frozenset(
+            invocation.category.value
+            for invocation in config.validator_invocations
+            if invocation.enabled
+        )
+        for config in rec.configs
+    }
+    assert enabled_by_chart == {
+        "alpha": frozenset({"policy"}),
+        "beta": frozenset({"schema"}),
+    }
 
 
 def test_unknown_phase_is_rejected() -> None:
@@ -659,161 +734,27 @@ def test_runner_construction_failure_becomes_outcomes_and_progress(
     assert len(sink.events) == 6
 
 
-# --- single row -------------------------------------------------------------
-
-
-def test_single_defaults_namespace_release_and_values(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    rec = Recorder()
-
-    outcome = _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path))
-
-    cfg = rec.configs[0]
-    assert cfg.row.namespace == "lab-dev" == default_namespace("dev")
-    assert cfg.row.release == "alpha"
-    assert cfg.values == [(tmp_path / "charts" / "alpha" / "values.yaml").resolve()]
-    assert outcome.result.rendered_root == outcome.out_dir
-
-
-def test_single_honors_explicit_namespace_release_and_values(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    rec = Recorder()
-
-    _app(rec).single(
-        SingleRequest(
-            chart="alpha",
-            env="dev",
-            root=tmp_path,
-            namespace="custom",
-            release="rel",
-            values=(Path("values-prod.yaml"),),
-        )
-    )
-
-    cfg = rec.configs[0]
-    assert cfg.row.namespace == "custom"
-    assert cfg.row.release == "rel"
-    assert cfg.values == [(tmp_path / "charts" / "alpha" / "values-prod.yaml").resolve()]
-
-
-def test_single_without_policies_passes_none_so_the_phase_skips(tmp_path: Path) -> None:
-    """render/schema must not silently start enforcing policy."""
-    _chart(tmp_path, "alpha")
-    (tmp_path / "policies").mkdir()
-    rec = Recorder()
-
-    _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path))
-
-    assert rec.configs[0].policy_paths is None
-
-
-def test_single_discovers_policies_when_asked(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    (tmp_path / "policies").mkdir()
-    rec = Recorder()
-
-    _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path, discover_policies=True))
-
-    assert rec.configs[0].policy_paths == [tmp_path / "policies"]
-
-
-def test_single_explicit_policy_dirs_beat_discovery(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    (tmp_path / "policies").mkdir()
-    (tmp_path / "mine").mkdir()
-    rec = Recorder()
-
-    _app(rec).single(
-        SingleRequest(
-            chart="alpha",
-            env="dev",
-            root=tmp_path,
-            policy_dirs=(Path("mine"),),
-            discover_policies=True,
-        )
-    )
-
-    assert rec.configs[0].policy_paths == [(tmp_path / "mine").resolve()]
-
-
-def test_single_accepts_a_chart_path_outside_the_charts_dir(tmp_path: Path) -> None:
-    fixture = tmp_path / "fixtures" / "outside"
-    fixture.mkdir(parents=True)
-    (fixture / "Chart.yaml").write_text("apiVersion: v2\nname: outside\nversion: 0.1.0\n")
-    rec = Recorder()
-
-    _app(rec).single(SingleRequest(chart="fixtures/outside", env="dev", root=tmp_path))
-
-    cfg = rec.configs[0]
-    assert cfg.chart_path == fixture.resolve()
-    assert cfg.row.chart == "outside"
-    assert cfg.values == []  # no values.yaml in the fixture chart
-
-
-def test_single_raises_a_domain_error_for_an_unknown_chart(tmp_path: Path) -> None:
-    """Resolution failures must not be coupled to Typer's exception type."""
-    (tmp_path / "charts").mkdir()
-    rec = Recorder()
-
-    with pytest.raises(ChartNotFoundError):
-        _app(rec).single(SingleRequest(chart="ghost", env="dev", root=tmp_path))
-
-
-def test_single_raises_a_domain_error_for_a_path_without_chart_yaml(
+def test_runner_construction_failure_preserves_disabled_validator_semantics(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "not-a-chart").mkdir()
-    rec = Recorder()
-
-    with pytest.raises(ChartNotFoundError):
-        _app(rec).single(SingleRequest(chart="not-a-chart/", env="dev", root=tmp_path))
-
-
-def test_single_rejects_both_helm_bindings() -> None:
-    with pytest.raises(ValidateInputError) as exc:
-        SingleRequest(chart="a", env="dev", helm_version="3.20.0", helm_bin=Path("/x"))
-    assert exc.value.hint == "helm_version"
-
-
-def test_single_threads_the_helm_binding_and_schema_inputs_through(
-    tmp_path: Path,
-) -> None:
-    _chart(tmp_path, "alpha")
-    rec = Recorder()
-
-    _app(rec).single(
-        SingleRequest(
-            chart="alpha",
-            env="dev",
-            root=tmp_path,
-            helm_version="3.20.0",
-            kubernetes_version="1.31.2",
-            schema_locations=("default", "crds"),
-        )
+    _chart(
+        tmp_path,
+        "alpha",
+        extra="validators:\n  kubeconform: false\n  policy: false\n",
     )
 
-    spec, cfgs = rec.runs[0]
-    assert spec.helm_version == "3.20.0"
-    assert spec.verbose is True  # single-row commands stream helm output
-    assert cfgs[0].kubernetes_version == "1.31.2"
-    assert cfgs[0].schema_locations == ["default", "crds"]
+    def exploding_factory(_spec):
+        raise RuntimeError("boom")
 
+    outcome = ManifestValidationService(
+        runner_factory=exploding_factory,
+        run_id_factory=lambda: "RUNID",
+    ).run(RunRequest(root=tmp_path, all_charts=True))
 
-def test_single_defaults_to_every_phase(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    rec = Recorder()
-
-    outcome = _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path))
-
-    assert outcome.enabled_phases == ALL_PHASES
-
-
-def test_single_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    rec = Recorder()
-    target = tmp_path / "named"
-
-    outcome = _app(rec).single(SingleRequest(chart="alpha", env="dev", root=tmp_path, out=target))
-
-    assert outcome.out_dir == target.resolve()
-    assert outcome.keep is True
+    phases = outcome.result.rows[0].phases
+    assert phases["render"].status == "FAIL"
+    assert phases["schema"].status == "SKIP"
+    assert phases["schema"].skip_cause == "validator_disabled"
+    assert phases["policy"].status == "SKIP"
+    assert phases["policy"].skip_cause == "validator_disabled"
+    assert outcome.exit_code == 2

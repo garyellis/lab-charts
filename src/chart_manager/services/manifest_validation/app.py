@@ -1,7 +1,7 @@
 """Transport-neutral entry point for the manifest-validation pipeline.
 
 `ManifestValidationService` is the capability behind `chart-manager validate
-run|render|schema|policy`. It owns the *sequencing* of a run:
+chart|run`. It owns the *sequencing* of a run:
 
   * where the changed-files list comes from (--all > explicit list > git),
   * which helm binding each row runs under (specs may pin a version),
@@ -37,17 +37,12 @@ from pathlib import Path
 
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.compiler import (
     ResolvedManifestValidation,
-    discover_policies,
-    resolve_chart_path,
     resolve_manifest_validation,
-    resolve_values,
     row_config_for,
 )
 from chart_manager.services.manifest_validation.models import (
@@ -56,11 +51,7 @@ from chart_manager.services.manifest_validation.models import (
     RowResult,
     RunResult,
 )
-from chart_manager.services.manifest_validation.planner import (
-    build_single_row,
-    build_worklist,
-    select_rows,
-)
+from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
 from chart_manager.services.manifest_validation.progress import (
     NullDisplay,
     ProgressDisplay,
@@ -69,17 +60,23 @@ from chart_manager.services.manifest_validation.progress import (
 from chart_manager.services.manifest_validation.requests import (
     RunOutcome,
     RunRequest,
-    SingleRequest,
     ValidateInputError,
 )
 from chart_manager.services.manifest_validation.runner import (
     EventCallback,
     ManifestValidationRunner,
     RowConfig,
+    blocked_phase_result,
+)
+from chart_manager.services.manifest_validation.validator_registry import (
+    VALIDATOR_REGISTRY,
+)
+from chart_manager.services.manifest_validation.validators import (
+    ValidatorProvider,
+    validate_registry,
 )
 from chart_manager.settings import (
     DEFAULT_CHARTS_DIR,
-    RepositoryLayout,
     validate_charts_dir,
 )
 
@@ -93,9 +90,7 @@ __all__ = [
     "RunOutcome",
     "RunRequest",
     "RunnerSpec",
-    "SingleRequest",
     "ValidateInputError",
-    "default_namespace",
     "default_workers",
     "new_run_id",
     "resolve_workers",
@@ -105,16 +100,6 @@ WarnCallback = Callable[[str], None]
 
 
 # --- policies expressed as functions ---------------------------------------
-
-
-def default_namespace(env: str) -> str:
-    """The namespace a row renders into when none is given: `lab-<env>`.
-
-    Single source of truth for the rule. It decides which namespace the
-    manifests carry, so it changes what passes validation — it is not a
-    display default.
-    """
-    return f"lab-{env}"
 
 
 def default_workers() -> int:
@@ -157,6 +142,9 @@ class RunnerSpec:
     row_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
+    validator_ids: frozenset[str] = frozenset(
+        provider.validator_id for provider in VALIDATOR_REGISTRY
+    )
 
 
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
@@ -184,6 +172,7 @@ class ManifestValidationService:
         git_factory: Callable[[Path], Git] | None = None,
         run_id_factory: Callable[[], str] | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self._charts_dir = validate_charts_dir(charts_dir)
@@ -192,70 +181,9 @@ class ManifestValidationService:
         self._on_warn: WarnCallback = on_warn or (lambda _msg: None)
         self._runner_factory: RunnerFactory = runner_factory or self._build_runner
         self._command_runner = command_runner or SubprocessRunner()
-        self._git_factory = git_factory or (
-            lambda root: Git(root, charts_dir=self._charts_dir)
-        )
+        self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
-
-    # --- single row --------------------------------------------------------
-
-    def single(self, request: SingleRequest) -> RunOutcome:
-        """Validate one chart x env and return the outcome.
-
-        Raises `ChartNotFoundError` when the chart cannot be resolved.
-        """
-        repo_root = request.root.resolve()
-        chart_path, chart_label = resolve_chart_path(
-            repo_root,
-            request.chart,
-            charts_dir=self._charts_dir,
-        )
-        out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
-
-        row = build_single_row(
-            chart=chart_label,
-            env=request.env,
-            namespace=request.namespace or default_namespace(request.env),
-            release=request.release or chart_label,
-        )
-        config = RowConfig(
-            row=row,
-            chart_path=chart_path,
-            values=resolve_values(chart_path, request.values),
-            kubernetes_version=request.kubernetes_version,
-            schema_locations=list(request.schema_locations) or None,
-            policy_paths=self._resolve_policy_paths(repo_root, chart_label, request),
-        )
-
-        progress = ProgressFinalizer(self._progress)
-        self._progress.start([row])
-        try:
-            try:
-                runner = self._runner_factory(
-                    RunnerSpec(
-                        output_root=out_dir,
-                        helm_version=request.helm_version,
-                        helm_bin=request.helm_bin,
-                        on_event=progress.on_event,
-                    )
-                )
-                result = runner.run([config], enabled_phases=request.phases)
-            except Exception as exc:
-                result = RunResult(
-                    rows=(self._execution_failure(config, exc),),
-                    rendered_root=out_dir,
-                )
-            for row_result in result.rows:
-                progress.finalize(row_result)
-        finally:
-            self._progress.stop()
-
-        return RunOutcome(
-            result=result,
-            out_dir=out_dir,
-            keep=keep,
-            enabled_phases=request.phases,
-        )
+        self._validator_providers = validate_registry(validator_providers)
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -273,6 +201,9 @@ class ManifestValidationService:
             root=repo_root,
             changed_files=changed,
             all_charts=request.all_charts,
+            selected_charts=(
+                request.charts if request.charts and changed is None else ()
+            ),
             charts_dir=self._charts_dir,
         )
 
@@ -308,9 +239,7 @@ class ManifestValidationService:
                 # Repository discovery already records malformed present
                 # config with the chart name. Keep one diagnostic while
                 # still distinguishing it from unavailable capability state.
-                if not any(
-                    error.startswith(f"{chart_name}: ") for error in build.spec_errors
-                ):
+                if not any(error.startswith(f"{chart_name}: ") for error in build.spec_errors):
                     explicit_spec_errors.append(str(exc))
             except ChartManagerError as exc:
                 raise ValidateInputError(str(exc), hint="charts") from exc
@@ -346,7 +275,11 @@ class ManifestValidationService:
             target = build.targets[row.chart]
             spec = target.spec
             if row.chart not in compiled_by_chart:
-                compiled = resolve_manifest_validation(target, repo_root)
+                compiled = resolve_manifest_validation(
+                    target,
+                    repo_root,
+                    providers=self._validator_providers,
+                )
                 compiled_by_chart[row.chart] = compiled
                 compile_warnings.extend(compiled.warnings)
                 for warning in compiled.warnings:
@@ -391,6 +324,14 @@ class ManifestValidationService:
                                 base_spec,
                                 helm_version=helm_version,
                                 helm_bin=helm_bin,
+                                validator_ids=frozenset(
+                                    invocation.validator_id
+                                    for cfg in cfgs
+                                    for invocation in cfg.validator_invocations
+                                    if invocation.enabled
+                                    and invocation.category.value
+                                    in request.phases
+                                ),
                             )
                         )
                         group_rows = runner.run(
@@ -399,7 +340,10 @@ class ManifestValidationService:
                             fail_fast=request.fail_fast,
                         ).rows
                     except Exception as exc:
-                        group_rows = tuple(self._execution_failure(cfg, exc) for cfg in cfgs)
+                        group_rows = tuple(
+                            self._execution_failure(cfg, exc, request.phases)
+                            for cfg in cfgs
+                        )
                 aggregated.extend(group_rows)
                 for row_result in group_rows:
                     progress.finalize(row_result)
@@ -468,31 +412,15 @@ class ManifestValidationService:
         run_id = self._run_id_factory()
         return (repo_root / ".chart-manager" / "rendered" / run_id).resolve(), keep
 
-    def _resolve_policy_paths(
-        self, repo_root: Path, chart: str, request: SingleRequest
-    ) -> list[Path] | None:
-        """Explicit dirs win; else discover when asked; else no policies at all."""
-        if request.policy_dirs:
-            return [
-                p if p.is_absolute() else (repo_root / p).resolve() for p in request.policy_dirs
-            ]
-        if request.discover_policies:
-            return discover_policies(
-                repo_root,
-                RepositoryLayout(
-                    root=repo_root,
-                    charts_dir=self._charts_dir,
-                ).chart_path(chart),
-            )
-        return None
-
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".
 
-        Precedence: all_charts > an explicit changed-files file > `git
-        diff` against `base`. A failed git diff is a warning, not an
-        error: a shallow CI checkout or a missing base ref must widen the
-        run rather than fail it.
+        Precedence: all_charts > an explicit changed-files file > explicit
+        chart selection > `git diff` against `base`. A plain ``--chart`` is
+        an intentional request to validate that chart, not a filter over an
+        unrelated Git diff. A failed git diff is a warning, not an error: a
+        shallow CI checkout or a missing base ref must widen the run rather
+        than fail it.
         """
         if request.all_charts:
             return None
@@ -504,6 +432,8 @@ class ManifestValidationService:
                     f"cannot read changed-files list: {exc}", hint="changed_files"
                 ) from exc
             return [line for line in text.splitlines() if line.strip()]
+        if request.charts:
+            return None
         try:
             return self._git_factory(repo_root).changed_files(base=request.base)
         except ChartManagerError as exc:
@@ -512,6 +442,14 @@ class ManifestValidationService:
 
     def _build_runner(self, spec: RunnerSpec) -> ManifestValidationRunner:
         """Default runner factory: one Helm per binding, shared command runner."""
+        validators = {
+            provider.validator_id: provider.build(
+                command_runner=self._command_runner,
+                timeout=spec.row_timeout,
+            )
+            for provider in self._validator_providers
+            if provider.validator_id in spec.validator_ids
+        }
         return ManifestValidationRunner(
             helm=Helm(
                 runner=self._command_runner,
@@ -520,8 +458,7 @@ class ManifestValidationService:
                 verbose=spec.verbose,
             ),
             output_root=spec.output_root,
-            kubeconform=Kubeconform(runner=self._command_runner),
-            kyverno=Kyverno(runner=self._command_runner),
+            validators=validators,
             max_workers=spec.max_workers,
             on_event=spec.on_event,
             row_timeout=spec.row_timeout,
@@ -529,7 +466,11 @@ class ManifestValidationService:
         )
 
     @staticmethod
-    def _execution_failure(cfg: RowConfig, exc: Exception) -> RowResult:
+    def _execution_failure(
+        cfg: RowConfig,
+        exc: Exception,
+        active: frozenset[str],
+    ) -> RowResult:
         """Convert a runner-level failure into a complete terminal row.
 
         This is the boundary for failures outside an individual validation
@@ -540,6 +481,7 @@ class ManifestValidationService:
         """
         rendered = traceback.format_exception_only(type(exc), exc)
         detail = (rendered[-1] if rendered else repr(exc)).strip()
+
         return RowResult(
             row=cfg.row,
             phases={
@@ -549,15 +491,11 @@ class ManifestValidationService:
                     detail=f"execution failed: {detail}",
                     error_type="tool",
                 ),
-                "schema": PhaseResult(
-                    phase="schema",
-                    status="SKIP",
-                    detail="upstream render FAIL",
+                "schema": blocked_phase_result(
+                    cfg, active, "schema", upstream="render"
                 ),
-                "policy": PhaseResult(
-                    phase="policy",
-                    status="SKIP",
-                    detail="upstream render FAIL",
+                "policy": blocked_phase_result(
+                    cfg, active, "policy", upstream="render"
                 ),
             },
         )

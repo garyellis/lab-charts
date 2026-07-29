@@ -25,13 +25,14 @@ from pathlib import Path
 from threading import Lock
 
 from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.manifest_validation import phases
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
+    ErrorType,
+    PhaseName,
     PhaseResult,
+    PhaseStatus,
     RowResult,
     RunResult,
     WorklistRow,
@@ -39,6 +40,12 @@ from chart_manager.services.manifest_validation.models import (
 from chart_manager.services.manifest_validation.output_paths import (
     case_output_directory,
     reset_case_output_directory,
+)
+from chart_manager.services.manifest_validation.validators import (
+    ManifestValidator,
+    ValidationContext,
+    ValidatorCategory,
+    ValidatorInvocation,
 )
 
 EventCallback = Callable[[WorklistRow, str, str, float | None], None]
@@ -51,21 +58,53 @@ class RowConfig:
     One config for all phases rather than one input struct per phase, so
     adding a phase does not multiply the constructor surface.
 
-    Two builders: `worklist.row_config_for` assembles these from a chart's
-    `chart-lifecycle.yaml` for `validate run`; `ManifestValidationService.single` assembles
-    them from explicit flags for `validate render/schema/policy`.
-
-    `None` means "use the phase's own default"; an empty list in
-    `policy_paths` is a deliberate signal that no policies were discovered
-    at all (phase => SKIP), which is why it is not merged with `None`.
+    ``row_config_for`` assembles these from a chart's
+    ``chart-lifecycle.yaml`` for both ``validate chart`` and ``validate run``.
     """
 
     row: WorklistRow
     chart_path: Path
+    validator_invocations: tuple[ValidatorInvocation, ...]
     values: list[Path] = field(default_factory=list)
-    kubernetes_version: str | None = None
-    schema_locations: list[str] | None = None
-    policy_paths: list[Path] | None = None
+
+    def invocations_for(self, category: ValidatorCategory) -> tuple[ValidatorInvocation, ...]:
+        """Return this row's invocations for one gate in deterministic order."""
+        return tuple(
+            sorted(
+                (
+                    invocation
+                    for invocation in self.validator_invocations
+                    if invocation.category is category
+                ),
+                key=lambda invocation: invocation.order,
+            )
+        )
+
+
+def blocked_phase_result(
+    cfg: RowConfig,
+    active: frozenset[str],
+    phase: PhaseName,
+    *,
+    upstream: str,
+) -> PhaseResult:
+    """Describe why a downstream phase cannot run, in precedence order."""
+    if phase not in active:
+        return PhaseResult(phase=phase, status="NOT_RUN")
+    category = ValidatorCategory(phase)
+    if not any(invocation.enabled for invocation in cfg.invocations_for(category)):
+        return PhaseResult(
+            phase=phase,
+            status="SKIP",
+            detail="disabled by chart-lifecycle",
+            skip_cause="validator_disabled",
+        )
+    return PhaseResult(
+        phase=phase,
+        status="SKIP",
+        detail=f"upstream {upstream} FAIL",
+        skip_cause="upstream_failed",
+    )
 
 
 class ManifestValidationRunner:
@@ -76,8 +115,7 @@ class ManifestValidationRunner:
         *,
         helm: Helm,
         output_root: Path,
-        kubeconform: Kubeconform | None = None,
-        kyverno: Kyverno | None = None,
+        validators: dict[str, ManifestValidator],
         max_workers: int = 1,
         on_event: EventCallback | None = None,
         dep_update_timeout: float | None = 300.0,
@@ -85,8 +123,7 @@ class ManifestValidationRunner:
     ) -> None:
         """Wire integrations, worker count, event callback, and dep/row timeouts."""
         self.helm = helm
-        self.kubeconform = kubeconform or Kubeconform()
-        self.kyverno = kyverno or Kyverno()
+        self.validators = dict(validators)
         self.output_root = output_root.resolve()
         self.max_workers = max(1, max_workers)
         # No-op default so phase code can fire-and-forget without a None
@@ -101,17 +138,12 @@ class ManifestValidationRunner:
         # Default None preserves legacy behavior; CLI exposes --row-timeout.
         # On timeout, the row is marked FAIL with error_type=tool.
         self.row_timeout = row_timeout
-        # Propagate it onto each integration's per-subprocess cap here rather
-        # than in `run`. These three adapters are then shared across
-        # `max_workers` threads, and writing a public attribute on an object
-        # other threads are already reading is a race waiting for someone to
-        # move the fan-out. It was only safe because the writes happened to
-        # land before the pool started. `_build_runner` constructs a runner
-        # per run, so nothing loses the ability to change --row-timeout.
+        # Propagate the cap before execution. Helm is shared across
+        # `max_workers` threads, so mutating it after fan-out would race.
+        # Validator providers receive the same timeout while constructing
+        # their executors in the service composition root.
         if self.row_timeout is not None:
             self.helm.timeout = self.row_timeout
-            self.kubeconform.timeout = self.row_timeout
-            self.kyverno.timeout = self.row_timeout
 
     def run(
         self,
@@ -174,7 +206,14 @@ class ManifestValidationRunner:
             if stopped:
                 results.append(self._not_run_row(cfg))
             elif exc is not None:
-                results.append(self._crash_row(cfg, exc, context="dependency prefetch failed"))
+                results.append(
+                    self._crash_row(
+                        cfg,
+                        exc,
+                        active=active,
+                        context="dependency prefetch failed",
+                    )
+                )
                 stopped = fail_fast
             else:
                 runnable.append(cfg)
@@ -190,7 +229,7 @@ class ManifestValidationRunner:
                 try:
                     row_result = self._run_row(cfg, active)
                 except Exception as exc:
-                    row_result = self._crash_row(cfg, exc)
+                    row_result = self._crash_row(cfg, exc, active=active)
                 results.append(row_result)
                 if fail_fast and self._row_failed(row_result):
                     stopped = True
@@ -215,7 +254,7 @@ class ManifestValidationRunner:
                         # SystemExit must propagate so Ctrl-C terminates a
                         # long parallel run instead of being absorbed into
                         # a per-row "FAIL".
-                        results.append(self._crash_row(cfg, exc))
+                        results.append(self._crash_row(cfg, exc, active=active))
 
         for result in results:
             self._finalize_row(result)
@@ -306,16 +345,33 @@ class ManifestValidationRunner:
             ),
         )
 
+        validator_results: dict[str, PhaseResult] = {}
         if render_result.status != "PASS":
-            schema_result = PhaseResult(
-                phase="schema",
-                status="SKIP",
-                detail="upstream render FAIL",
+            schema_result = blocked_phase_result(
+                cfg,
+                active,
+                "schema",
+                upstream="render",
             )
-            policy_result = PhaseResult(
-                phase="policy",
-                status="SKIP",
-                detail="upstream render FAIL",
+            policy_result = blocked_phase_result(
+                cfg,
+                active,
+                "policy",
+                upstream="render",
+            )
+            validator_results.update(
+                self._blocked_validator_results(
+                    cfg,
+                    ValidatorCategory.SCHEMA,
+                    schema_result,
+                )
+            )
+            validator_results.update(
+                self._blocked_validator_results(
+                    cfg,
+                    ValidatorCategory.POLICY,
+                    policy_result,
+                )
             )
         else:
             rendered_dir = (
@@ -323,46 +379,179 @@ class ManifestValidationRunner:
                 if render_result.artifacts
                 else (self.output_root / cfg.row.chart / cfg.row.env)
             )
-            if "schema" in active:
-                schema_result = self._timed(
-                    cfg.row,
-                    "schema",
-                    lambda: phases.schema(
-                        cfg.row,
-                        kubeconform=self.kubeconform,
-                        rendered_dir=rendered_dir,
-                        kubernetes_version=cfg.kubernetes_version,
-                        schema_locations=cfg.schema_locations,
-                    ),
-                )
-            else:
-                schema_result = PhaseResult(phase="schema", status="NOT_RUN")
+            schema_result, schema_validators = self._run_category(
+                cfg,
+                ValidatorCategory.SCHEMA,
+                rendered_dir,
+                active,
+            )
+            validator_results.update(schema_validators)
             if schema_result.status == "FAIL":
-                policy_result = PhaseResult(
-                    phase="policy",
-                    status="SKIP",
-                    detail="upstream schema FAIL",
-                )
-            elif "policy" in active:
-                policy_result = self._timed(
-                    cfg.row,
+                policy_result = blocked_phase_result(
+                    cfg,
+                    active,
                     "policy",
-                    lambda: phases.policy(
-                        cfg.row,
-                        kyverno=self.kyverno,
-                        rendered_dir=rendered_dir,
-                        policy_paths=cfg.policy_paths or [],
-                    ),
+                    upstream="schema",
+                )
+                validator_results.update(
+                    self._blocked_validator_results(
+                        cfg,
+                        ValidatorCategory.POLICY,
+                        policy_result,
+                    )
                 )
             else:
-                policy_result = PhaseResult(phase="policy", status="NOT_RUN")
+                policy_result, policy_validators = self._run_category(
+                    cfg,
+                    ValidatorCategory.POLICY,
+                    rendered_dir,
+                    active,
+                )
+                validator_results.update(policy_validators)
 
         phase_map: dict[str, PhaseResult] = {
             "render": render_result,
             "schema": schema_result,
             "policy": policy_result,
         }
-        return RowResult(row=cfg.row, phases=phase_map)
+        return RowResult(
+            row=cfg.row,
+            phases=phase_map,
+            validator_results=validator_results,
+        )
+
+    def _run_category(
+        self,
+        cfg: RowConfig,
+        category: ValidatorCategory,
+        rendered_dir: Path,
+        active: frozenset[str],
+    ) -> tuple[PhaseResult, dict[str, PhaseResult]]:
+        """Run enabled validators in one stable gate and aggregate their result."""
+        invocations = cfg.invocations_for(category)
+        phase: PhaseName = (
+            "schema" if category is ValidatorCategory.SCHEMA else "policy"
+        )
+        if category.value not in active:
+            result = PhaseResult(phase=phase, status="NOT_RUN")
+            return result, {
+                invocation.validator_id: result for invocation in invocations
+            }
+
+        enabled = tuple(invocation for invocation in invocations if invocation.enabled)
+        disabled_result = PhaseResult(
+            phase=phase,
+            status="SKIP",
+            detail="disabled by chart-lifecycle",
+            skip_cause="validator_disabled",
+        )
+        results: dict[str, PhaseResult] = {
+            invocation.validator_id: disabled_result
+            for invocation in invocations
+            if not invocation.enabled
+        }
+        if not enabled:
+            return disabled_result, results
+
+        self._emit(cfg.row, category.value, "running", None)
+        start = time.monotonic()
+        for invocation in enabled:
+            executor = self.validators.get(invocation.validator_id)
+            if executor is None:
+                results[invocation.validator_id] = PhaseResult(
+                    phase=phase,
+                    status="FAIL",
+                    detail=f"validator executor unavailable: {invocation.validator_id}",
+                    error_type="tool",
+                )
+                continue
+            results[invocation.validator_id] = executor.validate(
+                ValidationContext(row=cfg.row, rendered_dir=rendered_dir),
+                invocation.config,
+            )
+        elapsed = time.monotonic() - start
+        aggregate = self._aggregate_category(category, enabled, results)
+        aggregate = PhaseResult(
+            phase=aggregate.phase,
+            status=aggregate.status,
+            detail=aggregate.detail,
+            artifacts=aggregate.artifacts,
+            error_type=aggregate.error_type,
+            skip_cause=aggregate.skip_cause,
+            elapsed_seconds=elapsed,
+        )
+        self._emit(cfg.row, category.value, aggregate.status, elapsed)
+        if len(enabled) == 1:
+            results[enabled[0].validator_id] = aggregate
+        return aggregate, results
+
+    @staticmethod
+    def _aggregate_category(
+        category: ValidatorCategory,
+        enabled: tuple[ValidatorInvocation, ...],
+        results: dict[str, PhaseResult],
+    ) -> PhaseResult:
+        """Fold concrete validator outcomes into the stable category phase."""
+        selected = tuple(
+            (invocation.validator_id, results[invocation.validator_id])
+            for invocation in enabled
+        )
+        if len(selected) == 1:
+            return selected[0][1]
+
+        statuses = {result.status for _, result in selected}
+        status: PhaseStatus = (
+            "FAIL"
+            if "FAIL" in statuses
+            else "PASS"
+            if "PASS" in statuses
+            else "SKIP"
+        )
+        error_type: ErrorType | None = (
+            "spec"
+            if any(result.error_type == "spec" for _, result in selected)
+            else "tool"
+            if any(result.error_type == "tool" for _, result in selected)
+            else None
+        )
+        details = [
+            f"[{validator_id}] {result.detail}"
+            for validator_id, result in selected
+            if result.detail
+        ]
+        artifacts = tuple(
+            artifact
+            for _, result in selected
+            for artifact in result.artifacts
+        )
+        return PhaseResult(
+            phase=category.value,
+            status=status,
+            detail="\n".join(details) or None,
+            artifacts=artifacts,
+            error_type=error_type,
+        )
+
+    @staticmethod
+    def _blocked_validator_results(
+        cfg: RowConfig,
+        category: ValidatorCategory,
+        aggregate: PhaseResult,
+    ) -> dict[str, PhaseResult]:
+        """Project a blocked/disabled category result onto its identities."""
+        return {
+            invocation.validator_id: (
+                aggregate
+                if invocation.enabled
+                else PhaseResult(
+                    phase=category.value,
+                    status="SKIP",
+                    detail="disabled by chart-lifecycle",
+                    skip_cause="validator_disabled",
+                )
+            )
+            for invocation in cfg.invocations_for(category)
+        }
 
     def _timed(
         self,
@@ -383,6 +572,7 @@ class ManifestValidationRunner:
             detail=result.detail,
             artifacts=result.artifacts,
             error_type=result.error_type,
+            skip_cause=result.skip_cause,
             elapsed_seconds=elapsed,
         )
         self._emit(row, name, result.status, elapsed)
@@ -393,6 +583,7 @@ class ManifestValidationRunner:
         cfg: RowConfig,
         exc: Exception,
         *,
+        active: frozenset[str],
         context: str = "worker crashed",
     ) -> RowResult:
         """Convert a worker-level crash into a visible row failure.
@@ -409,8 +600,8 @@ class ManifestValidationRunner:
             detail=f"{context}: {detail}",
             error_type="tool",
         )
-        schema = PhaseResult(phase="schema", status="SKIP", detail="upstream render FAIL")
-        policy = PhaseResult(phase="policy", status="SKIP", detail="upstream render FAIL")
+        schema = blocked_phase_result(cfg, active, "schema", upstream="render")
+        policy = blocked_phase_result(cfg, active, "policy", upstream="render")
         return RowResult(
             row=cfg.row,
             phases={"render": render, "schema": schema, "policy": policy},

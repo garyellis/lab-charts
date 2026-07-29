@@ -17,6 +17,15 @@ from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.services.manifest_validation.models import WorklistRow
 from chart_manager.services.manifest_validation.runner import ManifestValidationRunner, RowConfig
+from chart_manager.services.manifest_validation.validator_adapters import (
+    KubeconformValidator,
+)
+from chart_manager.services.manifest_validation.validators import (
+    KubeconformConfig,
+    KyvernoConfig,
+    ValidatorCategory,
+    ValidatorInvocation,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +43,9 @@ def _runner(out_root: Path) -> ManifestValidationRunner:
     return ManifestValidationRunner(
         helm=Helm(runner=cmd_runner),
         output_root=out_root,
-        kubeconform=Kubeconform(runner=cmd_runner),
+        validators={
+            "kubeconform": KubeconformValidator(Kubeconform(runner=cmd_runner)),
+        },
     )
 
 
@@ -46,7 +57,29 @@ def _inputs(chart_dir: Path, *, env: str = "dev") -> RowConfig:
         namespace=f"lab-{env}",
     )
     values = [chart_dir / "values.yaml"] if (chart_dir / "values.yaml").is_file() else []
-    return RowConfig(row=row, chart_path=chart_dir, values=values)
+    return RowConfig(
+        row=row,
+        chart_path=chart_dir,
+        values=values,
+        validator_invocations=(
+            ValidatorInvocation(
+                "kubeconform",
+                ValidatorCategory.SCHEMA,
+                100,
+                "schema-validate",
+                True,
+                KubeconformConfig(None, ()),
+            ),
+            ValidatorInvocation(
+                "kyverno",
+                ValidatorCategory.POLICY,
+                200,
+                "policy-validate",
+                False,
+                KyvernoConfig(()),
+            ),
+        ),
+    )
 
 
 def test_passing_app_renders_and_passes_schema(tmp_path: Path) -> None:

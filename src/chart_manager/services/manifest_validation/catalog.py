@@ -124,12 +124,21 @@ def load_chart_specs(
 
 
 def build_catalog(
-    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+    root: Path,
+    *,
+    chart_names: Iterable[str] | None = None,
+    charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> ValidationCatalog:
-    """Discover all repository charts, intentionally retaining per-chart errors."""
+    """Load selected charts, or discover the repository when none are selected.
+
+    Explicit selection deliberately avoids ``list_names()`` and therefore
+    avoids parsing unrelated chart metadata and lifecycle documents. Full
+    repository scans retain their best-effort per-chart diagnostics.
+    """
     root = root.resolve()
     repository = ChartRepository(root, charts_dir=charts_dir)
-    entries = load_chart_specs(root, repository.list_names(), charts_dir=charts_dir)
+    names = repository.list_names() if chart_names is None else sorted(set(chart_names))
+    entries = load_chart_specs(root, names, charts_dir=charts_dir)
     targets = tuple(entry.target for entry in entries if entry.target is not None)
     errors = tuple(f"{entry.chart}: {entry.error}" for entry in entries if entry.error is not None)
     config_missing = tuple(entry.chart for entry in entries if entry.config_missing)

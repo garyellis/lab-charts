@@ -18,6 +18,7 @@ from chart_manager.services.manifest_validation.spec import ManifestValidationSp
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]
 ErrorType = Literal["tool", "spec"]
+SkipCause = Literal["validator_disabled", "upstream_failed"]
 
 #: The phases, in dependency order (render feeds schema feeds policy).
 #: Derived from `PhaseName` rather than restated so the two cannot drift.
@@ -84,6 +85,10 @@ class PhaseResult:
     # (exit 2) or a spec parse error (exit 3). Phase functions set this
     # alongside status; RunResult.exit_code() reads it.
     error_type: ErrorType | None = None
+    # Machine-readable reason for a skipped phase. Human-readable ``detail``
+    # remains presentation text and must not be used to make orchestration or
+    # evidence decisions.
+    skip_cause: SkipCause | None = None
     # Wall-clock seconds for the phase. Populated by the runner (not the
     # phase fn itself) and surfaced in output only when --timings is on.
     elapsed_seconds: float | None = None
@@ -95,6 +100,9 @@ class RowResult:
 
     row: WorklistRow
     phases: Mapping[str, PhaseResult]
+    # Concrete-tool outcomes. ``phases`` remains the stable category aggregate
+    # consumed by existing CLI and wire surfaces.
+    validator_results: Mapping[str, PhaseResult] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

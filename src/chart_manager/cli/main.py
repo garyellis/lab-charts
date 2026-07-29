@@ -133,7 +133,7 @@ helmrelease_app = typer.Typer(
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
 validate_app = typer.Typer(
     no_args_is_help=True,
-    help="Static chart validation: render -> schema -> policy.",
+    help="Static chart validation: render plus configured validators.",
 )
 lifecycle_app = typer.Typer(
     no_args_is_help=True,

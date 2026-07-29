@@ -53,6 +53,20 @@ class ManifestValidationPolicySpec(BaseModel):
         return ensure_relative(extra, label="policy path", relation="chart-relative")
 
 
+class ManifestValidationValidatorsSpec(BaseModel):
+    """Per-validator gates for the rendered-manifest pipeline.
+
+    Defaults preserve the historical pipeline for every existing lifecycle
+    document.  The nested section gives future validators a stable home
+    without adding more top-level validation flags.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kubeconform: bool = True
+    policy: bool = True
+
+
 class ManifestValidationSpec(BaseModel):
     """Authored configuration for a chart's manifest-validation pipeline."""
 
@@ -81,6 +95,9 @@ class ManifestValidationSpec(BaseModel):
     unmatched_changes: Literal["warn", "all-environments"] = Field(
         default="warn",
         alias="unmatchedChanges",
+    )
+    validators: ManifestValidationValidatorsSpec = Field(
+        default_factory=ManifestValidationValidatorsSpec
     )
     policies: ManifestValidationPolicySpec = Field(default_factory=ManifestValidationPolicySpec)
 

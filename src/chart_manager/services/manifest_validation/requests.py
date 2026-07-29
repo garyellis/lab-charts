@@ -1,6 +1,6 @@
 """Caller-facing vocabulary of the manifest-validation capability.
 
-What a surface hands in (`SingleRequest`, `RunRequest`), what it gets back
+What a surface hands in (`RunRequest`), what it gets back
 (`RunOutcome`), and the one error type that says "your input was bad, and
 here is which input" (`ValidateInputError`).
 
@@ -23,7 +23,6 @@ from chart_manager.services.manifest_validation.models import ALL_PHASES, RunRes
 __all__ = [
     "RunOutcome",
     "RunRequest",
-    "SingleRequest",
     "ValidateInputError",
 ]
 
@@ -52,43 +51,6 @@ def _check_phases(phases: frozenset[str]) -> None:
             f"valid: {', '.join(sorted(ALL_PHASES))}",
             hint="phases",
         )
-
-
-@dataclass(frozen=True)
-class SingleRequest:
-    """Validate exactly one chart x env (the render/schema/policy commands).
-
-    Single-row requests do NOT consult `chart-lifecycle.yaml`; callers pass
-    values explicitly. `policy_dirs` wins outright when non-empty; when it
-    is empty and `discover_policies` is set, the repo-wide and per-chart
-    policy directories are discovered. When neither is supplied the policy
-    phase sees no paths at all and SKIPs.
-    """
-
-    chart: str
-    env: str
-    root: Path = Path(".")
-    values: tuple[Path, ...] = ()
-    namespace: str | None = None
-    release: str | None = None
-    helm_version: str | None = None
-    helm_bin: Path | None = None
-    kubernetes_version: str | None = None
-    schema_locations: tuple[str, ...] = ()
-    policy_dirs: tuple[Path, ...] = ()
-    discover_policies: bool = False
-    out: Path | None = None
-    keep: bool = False
-    phases: frozenset[str] = ALL_PHASES
-
-    def __post_init__(self) -> None:
-        """Reject an unknown phase name and a double helm binding."""
-        _check_phases(self.phases)
-        if self.helm_version is not None and self.helm_bin is not None:
-            raise ValidateInputError(
-                "helm_version and helm_bin are mutually exclusive",
-                hint="helm_version",
-            )
 
 
 @dataclass(frozen=True)
