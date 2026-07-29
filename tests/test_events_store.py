@@ -15,6 +15,7 @@ mis-partitioned document that queries silently miss.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,9 +57,13 @@ def _event(*, chart_name: str = "loki", version: str | None = "1.2.4") -> Platfo
 class _FakeContainer:
     def __init__(self) -> None:
         self.items: list[dict[str, Any]] = []
+        self.upserted: list[dict[str, Any]] = []
 
     def create_item(self, item: dict[str, Any]) -> None:
         self.items.append(item)
+
+    def upsert_item(self, item: dict[str, Any]) -> None:
+        self.upserted.append(item)
 
 
 class _FakeTable:
@@ -97,6 +102,19 @@ def test_dynamodb_store_writes_the_partition_attribute_and_a_sortable_key() -> N
     assert item["event_id"] == f"{item['timestamp']}#{item['uuid']}"
     # boto3's resource serializer rejects tuples.
     assert isinstance(item["images"], list)
+
+
+def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
+    event = replace(_event(), idempotency_key="stable-publish-key")
+    container = _FakeContainer()
+    table = _FakeTable()
+
+    CosmosEventStore(container).write(event)
+    DynamoDBEventStore(table, sort_key="event_id").write(event)
+
+    assert container.items == []
+    assert container.upserted[0]["id"] == "stable-publish-key"
+    assert table.items[0]["event_id"] == "idempotent#stable-publish-key"
 
 
 @pytest.mark.parametrize(

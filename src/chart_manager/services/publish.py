@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tempfile
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.domain.charts import ChartRepository
+from chart_manager.services.events.failure import emit_non_fatal
+from chart_manager.services.events.lifecycle import BuildPhase
+from chart_manager.services.events.writer import EventWriter
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 _SEMVER = re.compile(
@@ -19,6 +24,13 @@ _SEMVER = re.compile(
 )
 _SUFFIX_IDENTIFIER = r"[0-9A-Za-z](?:[0-9A-Za-z-]*[0-9A-Za-z])?"
 _SUFFIX = re.compile(rf"^{_SUFFIX_IDENTIFIER}(?:\.{_SUFFIX_IDENTIFIER})*$")
+
+
+class PublishKind(StrEnum):
+    """Meaning of a published artifact in the build lifecycle."""
+
+    PREVIEW = "preview"
+    RELEASE = "release"
 
 
 @dataclass(frozen=True)
@@ -41,10 +53,24 @@ class PublishResult:
     """Consolidated batch outcome."""
 
     charts: tuple[PublishedChart, ...]
+    telemetry_failures: tuple[PublishTelemetryFailure, ...] = ()
 
     @property
     def ok(self) -> bool:
         return all(chart.ok for chart in self.charts)
+
+    @property
+    def telemetry_ok(self) -> bool:
+        return not self.telemetry_failures
+
+
+@dataclass(frozen=True)
+class PublishTelemetryFailure:
+    """A lifecycle event that could not be persisted after a successful push."""
+
+    chart: str
+    version: str
+    error: str
 
 
 class PublishService:
@@ -55,10 +81,12 @@ class PublishService:
         root: Path,
         *,
         helm: Helm,
+        events: EventWriter | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
         self.repository = ChartRepository(root, charts_dir=charts_dir)
         self.helm = helm
+        self.events = events
 
     def publish(
         self,
@@ -68,6 +96,11 @@ class PublishService:
         version_suffix: str | None = None,
         version: str | None = None,
         ca_file: Path | None = None,
+        publish_kind: PublishKind | None = None,
+        build_correlation_id: str | None = None,
+        pr_url: str | None = None,
+        git_sha: str | None = None,
+        operation_id: str | None = None,
     ) -> PublishResult:
         """Package the whole batch, then push each prepared archive.
 
@@ -86,6 +119,11 @@ class PublishService:
             raise SpecError("--version is only valid when publishing exactly one chart")
         if version is not None:
             validate_semver(version, label="version")
+        resolved_kind = publish_kind or (
+            PublishKind.PREVIEW if version_suffix is not None else PublishKind.RELEASE
+        )
+        if resolved_kind is PublishKind.RELEASE and version_suffix is not None:
+            raise SpecError("release publishing cannot use --version-suffix")
 
         with tempfile.TemporaryDirectory(prefix="chart-manager-publish-") as work:
             output_dir = Path(work)
@@ -133,7 +171,87 @@ class PublishService:
                             digest=pushed.digest,
                         )
                     )
-            return PublishResult(tuple(outcomes))
+            telemetry_failures = self._emit_publish_events(
+                outcomes,
+                repository=repository,
+                publish_kind=resolved_kind,
+                build_correlation_id=build_correlation_id,
+                pr_url=pr_url,
+                git_sha=git_sha,
+                operation_id=operation_id,
+            )
+            return PublishResult(tuple(outcomes), telemetry_failures)
+
+    def _emit_publish_events(
+        self,
+        outcomes: list[PublishedChart],
+        *,
+        repository: str,
+        publish_kind: PublishKind,
+        build_correlation_id: str | None,
+        pr_url: str | None,
+        git_sha: str | None,
+        operation_id: str | None,
+    ) -> tuple[PublishTelemetryFailure, ...]:
+        """Emit one retry-safe lifecycle transition per successful push."""
+        events = self.events
+        if events is None:
+            return ()
+
+        successful = tuple(chart for chart in outcomes if chart.ok)
+        phase = (
+            BuildPhase.PREVIEW_PUBLISHED
+            if publish_kind is PublishKind.PREVIEW
+            else BuildPhase.PUBLISHED
+        )
+        failures: list[PublishTelemetryFailure] = []
+        for index, chart in enumerate(successful, start=1):
+            identity = "|".join(
+                (
+                    "build",
+                    phase.value,
+                    chart.chart,
+                    chart.version,
+                    chart.digest or chart.reference or repository,
+                )
+            )
+            idempotency_key = hashlib.sha256(identity.encode()).hexdigest()
+            detail: dict[str, object] = {
+                "publish_kind": publish_kind.value,
+                "repository": repository,
+                "reference": chart.reference,
+                "digest": chart.digest,
+                "operation_id": operation_id,
+                "batch_index": index,
+                "batch_count": len(successful),
+            }
+
+            def write_event(
+                chart: PublishedChart = chart,
+                detail: dict[str, object] = detail,
+                idempotency_key: str = idempotency_key,
+            ) -> None:
+                events.build(
+                    chart_name=chart.chart,
+                    chart_version=chart.version,
+                    phase=phase,
+                    build_correlation_id=build_correlation_id,
+                    pr_url=pr_url,
+                    git_sha=git_sha,
+                    detail=detail,
+                    idempotency_key=idempotency_key,
+                )
+
+            error = emit_non_fatal(
+                write_event,
+                strict=False,
+                what=f"build:{phase.value} for {chart.chart}@{chart.version}",
+            )
+            if error is not None:
+                failures.append(
+                    PublishTelemetryFailure(chart.chart, chart.version, str(error))
+                )
+        return tuple(failures)
 
 
 def validate_semver(version: str, *, label: str = "version") -> str:
@@ -168,8 +286,10 @@ def _has_leading_zero_numeric(value: str | None) -> bool:
 
 
 __all__ = [
+    "PublishKind",
     "PublishResult",
     "PublishService",
+    "PublishTelemetryFailure",
     "PublishedChart",
     "validate_semver",
     "with_version_suffix",

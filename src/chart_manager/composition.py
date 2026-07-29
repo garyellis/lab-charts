@@ -268,6 +268,7 @@ class Container:
         return PublishService(
             root,
             helm=self.helm(verbose=False),
+            events=self.event_writer(),
             charts_dir=self._settings.charts_dir,
         )
 

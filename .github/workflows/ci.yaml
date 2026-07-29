@@ -5,7 +5,7 @@ name: ci
 #   prep         → compute diff + sandbox chart matrix once.
 #   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
 #   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
-#   publish      → package and push every directly changed PR chart in one batch.
+#   publish      → publish PR previews or final artifacts for merged chart changes.
 #
 # validate and sandbox-test run in parallel after prep — they're independent
 # signals. Chart Manager's lifecycle impact service owns both validation
@@ -107,6 +107,7 @@ jobs:
       sandbox_matrix: ${{ steps.matrix.outputs.matrix }}
       mode: ${{ steps.diff.outputs.mode }}
       chart_list_newline: ${{ steps.diff.outputs.chart_list_newline }}
+      publish_charts: ${{ steps.diff.outputs.publish_charts }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -204,6 +205,14 @@ jobs:
           echo "changed files:"
           cat "$tmp" || true
 
+          # Publishing is direct ownership only: any current chart with a
+          # changed path is selected, independent of lifecycle/test fanout.
+          # Compute this on the hosted prep runner so a no-chart PR never
+          # reserves the private kind runner or contacts Harbor.
+          publish_charts="$(
+            uv run chart-manager ci publish-charts --changed-files "$tmp"
+          )"
+
           # Multi-line outputs via random delimiter (avoids any chance of a
           # path/name collision with the EOF marker).
           delim="ghadelim_$(openssl rand -hex 8)"
@@ -216,6 +225,9 @@ jobs:
             echo "$delim"
             echo "chart_list_newline<<$delim"
             printf '%s\n' "$chart_list_newline"
+            echo "$delim"
+            echo "publish_charts<<$delim"
+            printf '%s\n' "$publish_charts"
             echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
@@ -463,24 +475,40 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (
+            github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository
+          ) ||
+          github.event_name == 'push'
+        ) &&
+        needs.prep.outputs.publish_charts != '' &&
         needs.layering.result == 'success' &&
         needs.validate.result == 'success' &&
         (needs.sandbox-test.result == 'success' || needs.sandbox-test.result == 'skipped')
       }}
     runs-on: [runner-scale-set, kind]
     env:
+      HARBOR_REGISTRY: ${{ vars.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ vars.HARBOR_USERNAME }}
+      HARBOR_PROJECT: ${{ vars.HARBOR_PROJECT || 'charts' }}
       HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
       HARBOR_CA_FILE: /usr/local/share/ca-certificates/lab-root-ca.crt
-      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EVENT_NAME: ${{ github.event_name }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
+      PUBLISH_CHARTS: ${{ needs.prep.outputs.publish_charts }}
+      EVENTS_BACKEND: ${{ vars.EVENTS_BACKEND }}
+      COSMOS_ENDPOINT: ${{ vars.COSMOS_ENDPOINT }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
-      # Explicitly package the PR head, never GitHub's synthetic merge ref.
+      # PRs package their head, never GitHub's synthetic merge ref. Pushes
+      # package the checked-out main commit.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install mise + tools
         uses: jdx/mise-action@v4
@@ -500,22 +528,29 @@ jobs:
       - name: Publish directly changed charts
         run: |
           set -euo pipefail
-          changed_file="$(mktemp)"
-          chart_file="$(mktemp)"
-          printf '%s' "$CHANGED_FILES" > "$changed_file"
+          charts=()
+          while IFS= read -r chart; do
+            [[ -n "$chart" ]] && charts+=("$chart")
+          done <<< "$PUBLISH_CHARTS"
 
-          uv run chart-manager ci publish-charts \
-            --changed-files "$changed_file" > "$chart_file"
-          mapfile -t charts < "$chart_file"
-          if (( ${#charts[@]} == 0 )); then
-            echo "No directly changed charts to publish."
-            exit 0
+          repository="oci://${HARBOR_REGISTRY}/${HARBOR_PROJECT:-charts}"
+          publish_args=(
+            --repository "$repository"
+            --ca-file "$HARBOR_CA_FILE"
+            --git-sha "$SOURCE_SHA"
+            --operation-id "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          )
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            short_sha="${SOURCE_SHA:0:8}"
+            publish_args+=(
+              --version-suffix "pr.${PR_NUMBER}.g${short_sha}"
+              --publish-kind preview
+              --build-correlation-id "${GITHUB_REPOSITORY}#${PR_NUMBER}"
+              --pr-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+            )
+          else
+            publish_args+=(--publish-kind release)
           fi
 
-          short_sha="${PR_HEAD_SHA:0:8}"
-          suffix="pr.${PR_NUMBER}.g${short_sha}"
-          repository="oci://${HARBOR_REGISTRY}/${HARBOR_PROJECT:-charts}"
-          uv run chart-manager publish "${charts[@]}" \
-            --repository "$repository" \
-            --version-suffix "$suffix" \
-            --ca-file "$HARBOR_CA_FILE"
+          uv run chart-manager publish "${charts[@]}" "${publish_args[@]}"

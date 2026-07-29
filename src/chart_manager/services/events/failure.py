@@ -22,14 +22,17 @@ _LOG = logging.getLogger(__name__)
 __all__ = ["emit_non_fatal"]
 
 
-def emit_non_fatal(emit: Callable[[], None], *, strict: bool, what: str) -> None:
-    """Run `emit`, logging and swallowing any failure unless `strict`.
+def emit_non_fatal(
+    emit: Callable[[], None], *, strict: bool, what: str
+) -> Exception | None:
+    """Run `emit`, returning a swallowed failure unless `strict`.
 
     `strict` exists for callers where the event *is* the deliverable (a
     backfill job, a test asserting the payload); everything on an operator
     path wants the swallow. The word "non-fatal" in the log line is load
     bearing -- it is how an operator tells a dropped event from a dropped
-    promotion.
+    promotion. The returned exception lets batch callers report every dropped
+    event after attempting the whole batch.
     """
     try:
         emit()
@@ -37,3 +40,5 @@ def emit_non_fatal(emit: Callable[[], None], *, strict: bool, what: str) -> None
         if strict:
             raise
         _LOG.warning(f"{what} event emission failed (non-fatal): {exc}")
+        return exc
+    return None

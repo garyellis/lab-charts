@@ -7,7 +7,11 @@ import typer
 from typer.testing import CliRunner
 
 from chart_manager.cli import publish
-from chart_manager.services.publish import PublishedChart, PublishResult
+from chart_manager.services.publish import (
+    PublishedChart,
+    PublishResult,
+    PublishTelemetryFailure,
+)
 
 
 def _app() -> typer.Typer:
@@ -67,6 +71,11 @@ def test_publish_passes_multiple_charts_in_one_service_call(
                 "version_suffix": "pr.4.gabc",
                 "version": None,
                 "ca_file": publish.Path("/tmp/lab-ca.crt"),
+                "publish_kind": None,
+                "build_correlation_id": None,
+                "pr_url": None,
+                "git_sha": None,
+                "operation_id": None,
             },
         )
     ]
@@ -95,3 +104,53 @@ def test_publish_exits_nonzero_for_consolidated_push_failure(
 
     assert result.exit_code == 1
     assert "registry rejected upload" in result.stdout
+
+
+def test_publish_forwards_event_metadata_and_strict_failure_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def run(*_args: object, **kwargs: object) -> PublishResult:
+        calls.append(kwargs)
+        return PublishResult(
+            (PublishedChart("grafana", "1.2.3", "oci://registry/grafana:1.2.3"),),
+            (PublishTelemetryFailure("grafana", "1.2.3", "cosmos unavailable"),),
+        )
+
+    monkeypatch.setattr(
+        publish,
+        "_container",
+        lambda: SimpleNamespace(
+            publish_service=lambda _root: SimpleNamespace(publish=run)
+        ),
+    )
+
+    result = CliRunner().invoke(
+        _app(),
+        [
+            "publish",
+            "grafana",
+            "--repository",
+            "oci://registry",
+            "--publish-kind",
+            "release",
+            "--build-correlation-id",
+            "owner/repository#9",
+            "--pr-url",
+            "https://github.test/owner/repository/pull/9",
+            "--git-sha",
+            "abcdef12",
+            "--operation-id",
+            "200.1",
+            "--strict-events",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "event failed" in result.stdout
+    assert calls[0]["publish_kind"] == publish.PublishKind.RELEASE
+    assert calls[0]["build_correlation_id"] == "owner/repository#9"
+    assert calls[0]["pr_url"] == "https://github.test/owner/repository/pull/9"
+    assert calls[0]["git_sha"] == "abcdef12"
+    assert calls[0]["operation_id"] == "200.1"

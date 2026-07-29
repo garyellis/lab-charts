@@ -14,6 +14,7 @@ class BuildPhase(str, Enum):
     VALIDATION_OK   = "validation_ok"
     VALIDATION_FAIL = "validation_fail"
     MERGED          = "merged"
+    PREVIEW_PUBLISHED = "preview_published"
     PUBLISHED       = "published"
 
 class PromotionPhase(str, Enum):
@@ -59,11 +60,15 @@ class PlatformLifecycleEvent:
     pr_url: str | None
     git_sha: str | None
     detail: dict[str, Any] | None
+    # Stable identity for retry-safe transitions. Legacy/ad-hoc events leave
+    # this unset and retain append-only UUID identity.
+    idempotency_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict with uuid and timestamp as strings (store-ready)."""
         d = asdict(self)
         d["uuid"] = str(self.uuid)
         d["timestamp"] = self.timestamp.isoformat()
+        if self.idempotency_key is None:
+            d.pop("idempotency_key")
         return d
-

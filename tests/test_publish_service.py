@@ -8,7 +8,8 @@ import pytest
 
 from chart_manager.integrations.helm import PackageResult, PushResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
-from chart_manager.services.publish import PublishService, with_version_suffix
+from chart_manager.services.events.lifecycle import BuildPhase
+from chart_manager.services.publish import PublishKind, PublishService, with_version_suffix
 
 from .conftest import MakeChart
 
@@ -44,6 +45,17 @@ class _Helm:
         if name == self.fail_push:
             raise ExternalCommandError("push failed")
         return PushResult(f"{repository}/{name}:version", f"sha256:{name}", "pushed")
+
+
+class _Events:
+    def __init__(self, *, fail_chart: str | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.fail_chart = fail_chart
+
+    def build(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+        if kwargs["chart_name"] == self.fail_chart:
+            raise RuntimeError("events backend unavailable")
 
 
 def test_version_suffix_preserves_existing_prerelease_and_build() -> None:
@@ -88,13 +100,15 @@ def test_preflight_failure_pushes_nothing(chart_root: Path, make_chart: MakeChar
     make_chart("alpha")
     make_chart("beta")
     helm = _Helm(fail_package="beta")
+    events = _Events()
 
     with pytest.raises(ExternalCommandError, match="package failed"):
-        PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+        PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
             ["alpha", "beta"], repository="oci://registry.local/library"
         )
 
     assert not any(call[0] == "push" for call in helm.calls)
+    assert events.calls == []
 
 
 def test_push_failures_are_consolidated_and_remaining_pushes_continue(
@@ -103,14 +117,112 @@ def test_push_failures_are_consolidated_and_remaining_pushes_continue(
     make_chart("alpha")
     make_chart("beta")
     helm = _Helm(fail_push="alpha")
+    events = _Events()
 
-    result = PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+    result = PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
         ["alpha", "beta"], repository="oci://registry.local/library"
     )
 
     assert not result.ok
     assert [item.ok for item in result.charts] == [False, True]
     assert helm.calls[-2:] == [("push", "alpha"), ("push", "beta")]
+    assert [call["chart_name"] for call in events.calls] == ["beta"]
+
+
+def test_preview_publish_emits_retry_safe_event_for_each_success(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha", version="1.0.0")
+    make_chart("beta", version="2.0.0")
+    events = _Events()
+    service = PublishService(chart_root, helm=_Helm(), events=events)  # type: ignore[arg-type]
+
+    first = service.publish(
+        ["alpha", "beta"],
+        repository="oci://registry.local/library",
+        version_suffix="pr.8.gabc",
+        build_correlation_id="owner/repository#8",
+        pr_url="https://github.test/owner/repository/pull/8",
+        git_sha="abcdef12",
+        operation_id="100.1",
+    )
+    service.publish(
+        ["alpha", "beta"],
+        repository="oci://registry.local/library",
+        version_suffix="pr.8.gabc",
+        build_correlation_id="owner/repository#8",
+    )
+
+    assert first.ok and first.telemetry_ok
+    assert [call["phase"] for call in events.calls[:2]] == [
+        BuildPhase.PREVIEW_PUBLISHED,
+        BuildPhase.PREVIEW_PUBLISHED,
+    ]
+    assert [call["chart_version"] for call in events.calls[:2]] == [
+        "1.0.0-pr.8.gabc",
+        "2.0.0-pr.8.gabc",
+    ]
+    assert events.calls[0]["build_correlation_id"] == "owner/repository#8"
+    assert events.calls[0]["pr_url"] == "https://github.test/owner/repository/pull/8"
+    assert events.calls[0]["git_sha"] == "abcdef12"
+    assert events.calls[0]["detail"] == {
+        "publish_kind": "preview",
+        "repository": "oci://registry.local/library",
+        "reference": "oci://registry.local/library/alpha:version",
+        "digest": "sha256:alpha",
+        "operation_id": "100.1",
+        "batch_index": 1,
+        "batch_count": 2,
+    }
+    assert events.calls[0]["idempotency_key"] == events.calls[2]["idempotency_key"]
+
+
+def test_release_publish_uses_final_published_phase(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha", version="1.2.3")
+    events = _Events()
+
+    PublishService(chart_root, helm=_Helm(), events=events).publish(  # type: ignore[arg-type]
+        ["alpha"],
+        repository="oci://registry.local/library",
+        publish_kind=PublishKind.RELEASE,
+    )
+
+    assert events.calls[0]["phase"] is BuildPhase.PUBLISHED
+    assert events.calls[0]["chart_version"] == "1.2.3"
+
+
+def test_release_kind_rejects_preview_version_suffix(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha", version="1.2.3")
+
+    with pytest.raises(SpecError, match="release publishing"):
+        PublishService(chart_root, helm=_Helm()).publish(  # type: ignore[arg-type]
+            ["alpha"],
+            repository="oci://registry.local/library",
+            version_suffix="pr.8.gabc",
+            publish_kind=PublishKind.RELEASE,
+        )
+
+
+def test_event_failure_is_reported_without_changing_artifact_success(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha")
+    make_chart("beta")
+    events = _Events(fail_chart="alpha")
+
+    result = PublishService(
+        chart_root, helm=_Helm(), events=events  # type: ignore[arg-type]
+    ).publish(["alpha", "beta"], repository="oci://registry.local/library")
+
+    assert result.ok
+    assert not result.telemetry_ok
+    assert len(events.calls) == 2
+    assert result.telemetry_failures[0].chart == "alpha"
+    assert result.telemetry_failures[0].error == "events backend unavailable"
 
 
 def test_exact_version_requires_one_chart(chart_root: Path, make_chart: MakeChart) -> None:

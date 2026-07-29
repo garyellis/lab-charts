@@ -100,3 +100,11 @@ def test_upgrade_service_gets_the_container_memoized_event_writer(tmp_path: Path
     assert telemetry.writer is container.event_writer()
     # Operator path: a dropped event must never fail an upgrade.
     assert telemetry.strict is False
+
+
+def test_publish_service_gets_the_container_memoized_event_writer(tmp_path: Path) -> None:
+    container = _Container(FakeCommandRunner())
+
+    service = container.publish_service(tmp_path)
+
+    assert service.events is container.event_writer()

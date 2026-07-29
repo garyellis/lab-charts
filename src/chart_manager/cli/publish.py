@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from chart_manager.composition import Container
+from chart_manager.services.publish import PublishKind
 
 console = Console()
 
@@ -48,6 +49,27 @@ def publish(
             help="CA bundle used to verify the OCI registry.",
         ),
     ] = None,
+    publish_kind: Annotated[
+        PublishKind | None,
+        typer.Option(
+            "--publish-kind",
+            help="Artifact lifecycle meaning; inferred as preview with --version-suffix, release otherwise.",
+        ),
+    ] = None,
+    build_correlation_id: Annotated[
+        str | None,
+        typer.Option(help="Charts-repo build identifier, conventionally owner/repo#PR."),
+    ] = None,
+    pr_url: Annotated[str | None, typer.Option(help="Originating pull-request URL.")] = None,
+    git_sha: Annotated[str | None, typer.Option(help="Published source commit SHA.")] = None,
+    operation_id: Annotated[
+        str | None,
+        typer.Option(help="CI run or batch identifier included in event detail."),
+    ] = None,
+    strict_events: Annotated[
+        bool,
+        typer.Option(help="Exit nonzero when a publication event cannot be persisted."),
+    ] = False,
 ) -> None:
     """Package all requested charts before pushing any of them."""
     result = _container().publish_service(root).publish(
@@ -56,6 +78,11 @@ def publish(
         version_suffix=version_suffix,
         version=version,
         ca_file=ca_file,
+        publish_kind=publish_kind,
+        build_correlation_id=build_correlation_id,
+        pr_url=pr_url,
+        git_sha=git_sha,
+        operation_id=operation_id,
     )
     for chart in result.charts:
         if chart.ok:
@@ -69,7 +96,12 @@ def publish(
                 f"[red]failed[/red] [bold]{escape(chart.chart)}[/bold]: "
                 f"{escape(chart.error or 'unknown push failure')}"
             )
-    if not result.ok:
+    for failure in result.telemetry_failures:
+        console.print(
+            f"[yellow]event failed[/yellow] [bold]{escape(failure.chart)}[/bold] "
+            f"{escape(failure.version)}: {escape(failure.error)}"
+        )
+    if not result.ok or (strict_events and not result.telemetry_ok):
         raise typer.Exit(1)
 
 

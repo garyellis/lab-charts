@@ -41,6 +41,7 @@ class EventWriter:
         git_sha: str | None = None,
         detail: dict[str, Any] | None = None,
         timestamp: datetime | None = None,  # override now() for backfill/seeding
+        idempotency_key: str | None = None,
     ) -> None:
         """Build and write a build-lifecycle event for a chart."""
         event = PlatformLifecycleEvent(
@@ -58,6 +59,7 @@ class EventWriter:
             pr_url=pr_url,
             git_sha=git_sha,
             detail=detail,
+            idempotency_key=idempotency_key,
         )
         self._get_store().write(event)
 
@@ -92,5 +94,6 @@ class EventWriter:
            pr_url=pr_url,
            git_sha=git_sha,
            detail=detail,
+           idempotency_key=None,
        )
        self._get_store().write(event)
