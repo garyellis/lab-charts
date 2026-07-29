@@ -76,6 +76,7 @@ from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
 from chart_manager.services.manifest_validation.app import ManifestValidationService
 from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
+from chart_manager.services.publish import PublishService
 from chart_manager.services.upgrader import (
     GitBaselineReader,
     PullRequestLike,
@@ -259,6 +260,14 @@ class Container:
             root,
             helm=self.helm(),
             kubectl=self.kubectl(),
+            charts_dir=self._settings.charts_dir,
+        )
+
+    def publish_service(self, root: Path) -> PublishService:
+        """Build the headless OCI publisher for charts below ``root``."""
+        return PublishService(
+            root,
+            helm=self.helm(verbose=False),
             charts_dir=self._settings.charts_dir,
         )
 

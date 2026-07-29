@@ -59,6 +59,23 @@ class UpgradeResult:
     output: str
 
 
+@dataclass(frozen=True)
+class PackageResult:
+    """A packaged chart archive prepared for an OCI push."""
+
+    path: Path
+    output: str
+
+
+@dataclass(frozen=True)
+class PushResult:
+    """Machine-useful identity returned by ``helm push``."""
+
+    reference: str
+    digest: str | None
+    output: str
+
+
 class Helm:
     """Run helm subcommands through a CommandRunner, with per-instance context/timeout."""
 
@@ -144,6 +161,75 @@ class Helm:
             )
             self._deps_updated.add(resolved)
             return True
+
+    def package(
+        self,
+        chart_path: Path,
+        output_dir: Path,
+        *,
+        version: str | None = None,
+    ) -> PackageResult:
+        """Package a chart without editing its source metadata."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        args = [
+            self._helm_bin,
+            "package",
+            str(chart_path),
+            "--destination",
+            str(output_dir),
+        ]
+        if version is not None:
+            args.extend(["--version", version])
+        result = self.runner.run(
+            args,
+            capture=True,
+            timeout=self.timeout,
+        )
+        marker = "Successfully packaged chart and saved it to:"
+        archive_line = next(
+            (line for line in result.stdout.splitlines() if marker in line),
+            None,
+        )
+        if archive_line is None:
+            raise ExternalCommandError(
+                "helm package succeeded but did not report the package archive path"
+            )
+        archive = Path(archive_line.split(marker, 1)[1].strip())
+        if not archive.is_absolute():
+            archive = output_dir / archive.name
+        return PackageResult(path=archive, output=result.stdout)
+
+    def push(
+        self,
+        package_path: Path,
+        repository: str,
+        *,
+        ca_file: Path | None = None,
+    ) -> PushResult:
+        """Push one package to an OCI repository and retain its ref/digest."""
+        if not repository.startswith("oci://"):
+            raise ValueError("OCI repository must start with oci://")
+        args = [
+            self._helm_bin,
+            "push",
+            str(package_path),
+            repository.rstrip("/"),
+        ]
+        if ca_file is not None:
+            args.extend(["--ca-file", str(ca_file)])
+        result = self.runner.run(
+            args,
+            capture=True,
+            timeout=self.timeout,
+        )
+        pushed = _helm_output_value(result.stdout, "Pushed")
+        digest = _helm_output_value(result.stdout, "Digest")
+        if pushed is None:
+            raise ExternalCommandError(
+                "helm push succeeded but did not report the pushed OCI reference"
+            )
+        reference = pushed if pushed.startswith("oci://") else f"oci://{pushed}"
+        return PushResult(reference=reference, digest=digest, output=result.stdout)
 
     def lint(self, chart_path: Path, values: list[Path]) -> None:
         """Run `helm lint` with the given values overlays; raises on lint failure."""
@@ -509,6 +595,16 @@ def _is_local_chart_ref(chart_ref: str | Path) -> bool:
     if ref.startswith(("oci://", "http://", "https://")):
         return False
     return Path(ref).exists()
+
+
+def _helm_output_value(output: str, label: str) -> str | None:
+    """Read a single ``Label: value`` emitted by Helm."""
+    prefix = f"{label}:"
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix).strip()
+            return value or None
+    return None
 
 
 #: Memo for `mise where helm@<version>`, keyed by the runner that resolved

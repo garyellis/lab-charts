@@ -51,21 +51,30 @@ kubectl create secret generic arc-github-pat \
 
 ## kind install
 
-`values-kind-runtime.yaml` targets this repo by default. Edit it or pass
-`--set` when testing against a different repository, organization, or
-enterprise URL.
+`values-kind-runtime.yaml` targets this repo by default. The kind installer
+also resolves `harbor.kind.local` to the current Istio gateway Service IP and
+copies only the public lab root certificate into the runner namespace. This
+keeps kind-only DNS and trust settings out of the default ARC deployment.
 
 ```sh
-helm install arc-runner-set ./charts/arc-runner-set \
-  --namespace arc-runners \
-  --create-namespace \
-  --values charts/arc-runner-set/values.yaml \
-  --values charts/arc-runner-set/values-kind-runtime.yaml \
-  --set gha-runner-scale-set.githubConfigUrl="https://github.com/garyellis/lab-charts" \
-  --set gha-runner-scale-set.githubConfigSecret="arc-github-pat"
+charts/arc-runner-set/install-kind
 ```
 
-The Helm release name is the GitHub Actions `runs-on` label:
+Override its inputs with environment variables when needed:
+
+```sh
+GITHUB_CONFIG_URL="https://github.com/<owner>/<repo>" \
+GITHUB_CONFIG_SECRET="arc-github-app" \
+HARBOR_REGISTRY="harbor.kind.local" \
+charts/arc-runner-set/install-kind
+```
+
+The source CA Secret (`cert-manager/lab-root-ca-secret`), apps gateway Service,
+and GitHub credential Secret must exist before installation. Re-run the
+installer after recreating either the kind cluster or gateway Service so the
+runner `hostAliases` entry follows the current gateway ClusterIP.
+
+The kind scale set exposes the `kind` and `runner-scale-set` labels:
 
 ```yaml
 name: arc-kind-smoke
@@ -74,7 +83,7 @@ on:
 
 jobs:
   smoke:
-    runs-on: arc-runner-set
+    runs-on: [runner-scale-set, kind]
     steps:
       - run: uname -a
       - run: echo "runner from kind"
