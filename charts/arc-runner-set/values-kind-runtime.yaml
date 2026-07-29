@@ -10,6 +10,16 @@ gha-runner-scale-set:
   # the corresponding GitHub App Secret.
   githubConfigSecret: "arc-github-pat"
 
+  # Kind's apps gateway serves *.kind.local from the lab CA. The kind
+  # installer copies only that public root certificate into this namespace;
+  # ARC mounts it into every runner without changing the default runner image.
+  githubServerTLS:
+    certificateFrom:
+      configMapKeyRef:
+        name: lab-root-ca
+        key: lab-root-ca.crt
+    runnerMountPath: /usr/local/share/ca-certificates
+
   # Route workflow jobs to this kind-backed ARC scale set by capability.
   scaleSetLabels:
     - "kind"

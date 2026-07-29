@@ -15,6 +15,7 @@ from rich.table import Table
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import lifecycle as lifecycle_cli
+from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.composition import Container, Settings
@@ -147,6 +148,7 @@ validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
 lifecycle_cli.register(lifecycle_app)
 upgrade_cli.register(app)
+publish_cli.register(app)
 
 app.add_typer(events_app, name="events")
 app.add_typer(charts_app, name="charts")
@@ -678,6 +680,23 @@ def ci_changed(
 ) -> None:
     service = _container().ci_service(root)
     for chart in service.changed_charts(base):
+        console.print(chart)
+
+
+@ci_app.command("publish-charts")
+def ci_publish_charts(
+    changed_files: Annotated[
+        Path,
+        typer.Option(
+            "--changed-files",
+            help="Newline-delimited repository-relative paths.",
+        ),
+    ],
+    root: RootOption = Path("."),
+) -> None:
+    """List every chart directly owned by an explicit changed file."""
+    service = _container().ci_service(root)
+    for chart in service.directly_changed_charts(changed_files):
         console.print(chart)
 
 

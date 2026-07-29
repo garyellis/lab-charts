@@ -12,6 +12,7 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.lifecycle.impact import (
     ClusterTestImpact,
     LifecycleImpact,
@@ -40,6 +41,7 @@ class CiService:
         """
         self.root = root
         self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
+        self.charts = ChartRepository(root, charts_dir=charts_dir)
         self.impact = LifecycleImpactService(root, charts_dir=charts_dir)
         self.git = Git(root, charts_dir=charts_dir)
         self.helm = helm
@@ -54,6 +56,27 @@ class CiService:
         is not silently discarded.
         """
         return sorted({entry.chart for entry in self.cluster_test_matrix(base)})
+
+    def directly_changed_charts(self, changed_files: Path) -> list[str]:
+        """Select chart owners from an explicit newline-delimited file list.
+
+        This is deliberately a lexical projection: publishing must not inherit
+        lifecycle capability, dependency fanout, Renovate, or Git policy.
+        """
+        try:
+            paths = changed_files.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise SpecError(f"cannot read changed-files input {changed_files}: {exc}") from exc
+        current_charts = set(self.charts.list_names())
+        selected = {
+            name
+            for raw in paths
+            if raw.strip()
+            if (name := self.charts.layout.chart_name_from_repo_path(raw.strip()))
+            is not None
+            if name in current_charts
+        }
+        return sorted(selected)
 
     def lifecycle_impact(self, base: str = "origin/main") -> LifecycleImpact:
         """Analyze the explicit Git diff and fail loudly on invalid intent."""

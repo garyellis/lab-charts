@@ -35,6 +35,10 @@ class _CiService:
         self.calls.append(("list", charts))
         return tuple(ClusterTestImpact(chart, "minimal", ()) for chart in charts)
 
+    def directly_changed_charts(self, changed_files: object) -> list[str]:
+        self.calls.append(("publish", changed_files))
+        return ["alpha", "zeta"]
+
 
 def _wire(monkeypatch: pytest.MonkeyPatch, service: _CiService) -> None:
     monkeypatch.setattr(
@@ -112,3 +116,19 @@ def test_matrix_rejects_conflicting_modes(
     assert result.exit_code == 1
     assert isinstance(result.exception, main.ChartManagerError)
     assert service.calls == []
+
+
+def test_publish_charts_emits_newline_list_from_explicit_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _CiService()
+    _wire(monkeypatch, service)
+
+    result = CliRunner().invoke(
+        main.app,
+        ["ci", "publish-charts", "--changed-files", "changed.txt"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "alpha\nzeta\n"
+    assert service.calls == [("publish", main.Path("changed.txt"))]

@@ -46,6 +46,40 @@ def test_changed_charts_compatibility_projection_uses_typed_impact(
     assert service.changed_charts("main") == ["enabled"]
 
 
+def test_directly_changed_charts_uses_only_explicit_file_ownership(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("alpha")
+    make_chart("zeta")
+    listing = chart_root / "changed.txt"
+    listing.write_text(
+        "\n".join(
+            [
+                "README.md",
+                "charts/zeta/README.md",
+                "charts/alpha/templates/deployment.yaml",
+                "charts/zeta/values.yaml",
+                "kind-config.yaml",
+            ]
+        )
+    )
+
+    assert _service(chart_root).directly_changed_charts(listing) == ["alpha", "zeta"]
+
+
+def test_directly_changed_charts_skips_a_deleted_chart(chart_root: Path) -> None:
+    listing = chart_root / "changed.txt"
+    listing.write_text("charts/removed/Chart.yaml\n")
+
+    assert _service(chart_root).directly_changed_charts(listing) == []
+
+
+def test_directly_changed_charts_reports_unreadable_input(chart_root: Path) -> None:
+    with pytest.raises(SpecError, match="cannot read changed-files input"):
+        _service(chart_root).directly_changed_charts(chart_root / "missing.txt")
+
+
 def test_cluster_test_charts_returns_the_enabled_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -38,6 +38,7 @@ mise run validate -- --chart grafana --env dev
 | `uv run chart-manager lifecycle plan <name> --workflow validation --profile dev` | Compile authored intent into the exact action DAG without executing it. |
 | `uv run chart-manager lifecycle status <name> --workflow cluster-test --profile minimal --live` | Merge cached evidence with read-only Helm and Kubernetes observations. |
 | `uv run chart-manager lifecycle impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
+| `uv run chart-manager publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
 | `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
 | `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
@@ -47,9 +48,17 @@ For the full flag surface on validate, run `uv run chart-manager validate run --
 
 CI mirrors local exactly: **`mise run validate` and `mise run kind-test` are the same commands the workflow invokes.** A `prep` job inspects the PR diff and decides which charts changed; `validate` runs against the full set; `sandbox-test` fans out as a matrix with one kind job per changed chart so unrelated charts never gate your PR.
 
+PR publishing uses each chart's `Chart.yaml` version plus a prerelease suffix
+(`1.2.3-pr.<pr>.g<sha>`). The workflow logs in once and publishes all directly
+changed charts in one batch. Configure `HARBOR_REGISTRY`, `HARBOR_USERNAME`,
+and optionally `HARBOR_PROJECT` in the runner environment, plus
+`HARBOR_PASSWORD` as a GitHub secret. `HARBOR_PROJECT` defaults to `charts`,
+matching the local Harbor project and a portable ACR repository namespace; set
+it explicitly when a registry uses a different prefix.
+
 ```text
-prep ──┬── validate
-       └── sandbox-test (matrix: one job per changed chart)
+prep ──┬── validate ──────────────────────────────┐
+       └── sandbox-test (matrix per chart) ───────┴── publish (one batch)
 ```
 
 Validation selection and the sandbox chart/profile matrix are derived by the
