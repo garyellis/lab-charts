@@ -48,7 +48,11 @@ charts/*/charts/*/
 *~
 *.log
 
-# chart-manager validate render output
-.chart-manager/
+# Generated chart-manager output and local evidence. Repository-authored
+# environment and stack resources remain versioned for fresh checkouts and CI.
+.chart-manager/*
+!.chart-manager/local-cluster.yaml
+!.chart-manager/stacks/
+!.chart-manager/stacks/*.yaml
 
 *.env

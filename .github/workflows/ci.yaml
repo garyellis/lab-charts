@@ -388,10 +388,10 @@ jobs:
       - name: Install mise + tools
         uses: jdx/mise-action@v4
 
-      - name: Sandbox test
+      - name: Chart test
         id: sandbox
         run: |
-          mise run kind-test -- "$CHART" \
+          uv run chart-manager charts test --chart "$CHART" \
             --profile "$PROFILE" \
             --cluster-name "$CLUSTER_NAME"
 

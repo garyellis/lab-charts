@@ -32,10 +32,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: control-plane-ready
-            type: helm-test
-            description: Wait for the Crossplane and Crossplane RBAC manager deployments to become available.
         timeout: 10m
 
     dependentTests: []

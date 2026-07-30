@@ -5,14 +5,13 @@ import pytest
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
-    EdgeKind,
     LifecycleAction,
-    LifecycleEdge,
     LifecyclePlan,
     Workflow,
 )
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
+    ExternallySatisfiedLifecycle,
     PlanProjectionError,
     exclude_bootstrap_owned_charts,
 )
@@ -32,14 +31,6 @@ def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
         input_digest=f"digest-{chart}-{suffix}",
         chart_path=Path("charts") / chart,
     )
-
-
-def edge(
-    source: LifecycleAction,
-    target: LifecycleAction,
-    kind: EdgeKind = EdgeKind.SEQUENCE,
-) -> LifecycleEdge:
-    return LifecycleEdge(source.action_id, target.action_id, kind)
 
 
 def cluster_plan() -> LifecyclePlan:
@@ -63,80 +54,86 @@ def cluster_plan() -> LifecyclePlan:
             cilium_test,
             grafana_install,
         ),
-        edges=(
-            edge(cilium_namespace, cilium_install),
-            edge(cilium_install, cilium_test),
-            edge(grafana_namespace, grafana_install),
-            edge(grafana_dependency, grafana_install),
-            edge(cilium_test, grafana_install, EdgeKind.RUNTIME_REQUIREMENT),
-        ),
         warnings=("authored warning",),
     )
 
 
-def test_removes_bootstrap_chart_actions_and_incident_runtime_edges() -> None:
+def externally_satisfied(
+    chart: str,
+    *,
+    profile: str = "minimal",
+    namespace: str = "monitoring",
+    chart_path: Path | None = None,
+) -> ExternallySatisfiedLifecycle:
+    return ExternallySatisfiedLifecycle(
+        chart_path=(chart_path or Path("charts") / chart).resolve(),
+        chart=chart,
+        profile=profile,
+        namespace=namespace,
+    )
+
+
+def test_removes_bootstrap_chart_actions() -> None:
     original = cluster_plan()
 
-    projected = exclude_bootstrap_owned_charts(original, {"cilium"})
+    projected = exclude_bootstrap_owned_charts(
+        original,
+        {externally_satisfied("cilium")},
+    )
 
     assert [item.action_id for item in projected.actions] == [
         "cluster-test:grafana:minimal:namespace",
         "cluster-test:grafana:minimal:dependency",
         "cluster-test:grafana:minimal:install",
     ]
-    assert [(item.source, item.target) for item in projected.edges] == [
-        (
-            "cluster-test:grafana:minimal:namespace",
-            "cluster-test:grafana:minimal:install",
-        ),
-        (
-            "cluster-test:grafana:minimal:dependency",
-            "cluster-test:grafana:minimal:install",
-        ),
-    ]
-    remaining_ids = {item.action_id for item in projected.actions}
-    assert all(
-        item.source in remaining_ids and item.target in remaining_ids
-        for item in projected.edges
-    )
     assert projected.warnings == (
         "authored warning",
         EXTERNAL_BOOTSTRAP_WARNING_PREFIX
-        + "cilium; actions and incident edges were excluded from this executable plan",
+        + "cilium; environment-owned preparation/install actions were excluded "
+        "from this executable plan",
     )
     # Projection is pure: the compiler-owned input remains untouched.
     assert len(original.actions) == 6
-    assert len(original.edges) == 5
 
 
-def test_preserves_relative_order_of_remaining_actions_and_edges() -> None:
+def test_preserves_relative_order_of_remaining_actions() -> None:
     original = cluster_plan()
     original_action_ids = [item.action_id for item in original.actions]
-    original_edges = list(original.edges)
 
-    projected = exclude_bootstrap_owned_charts(original, ("cilium",))
+    projected = exclude_bootstrap_owned_charts(
+        original,
+        (externally_satisfied("cilium"),),
+    )
 
     assert [item.action_id for item in projected.actions] == [
         item for item in original_action_ids if ":cilium:" not in item
-    ]
-    assert list(projected.edges) == [
-        item
-        for item in original_edges
-        if ":cilium:" not in item.source and ":cilium:" not in item.target
     ]
 
 
 def test_absent_bootstrap_chart_is_an_idempotent_noop() -> None:
     original = cluster_plan()
 
-    projected = exclude_bootstrap_owned_charts(original, {"not-in-plan"})
+    projected = exclude_bootstrap_owned_charts(
+        original,
+        {externally_satisfied("not-in-plan")},
+    )
 
     assert projected is original
 
 
-def test_rejects_excluding_the_requested_target_chart() -> None:
-    with pytest.raises(PlanProjectionError, match="requested target chart 'grafana'"):
-        exclude_bootstrap_owned_charts(cluster_plan(), {"grafana", "cilium"})
+def test_bootstrap_requested_target_keeps_only_readiness_and_test_actions() -> None:
+    original = cluster_plan()
+    projected = exclude_bootstrap_owned_charts(
+        original,
+        {
+            externally_satisfied("grafana"),
+            externally_satisfied("cilium"),
+        },
+    )
+
+    # This fixture has no target readiness/test actions, so all target install
+    # preparation is removed. A compiled plan retains its readiness/test pair.
+    assert projected.actions == ()
 
 
 def test_rejects_projection_of_validation_plan() -> None:
@@ -146,8 +143,28 @@ def test_rejects_projection_of_validation_plan() -> None:
         chart="grafana",
         environment="dev",
         actions=(render,),
-        edges=(),
     )
 
     with pytest.raises(PlanProjectionError, match="requires a cluster-test plan"):
-        exclude_bootstrap_owned_charts(validation, {"cilium"})
+        exclude_bootstrap_owned_charts(
+            validation,
+            {externally_satisfied("cilium")},
+        )
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        externally_satisfied("cilium", profile="full"),
+        externally_satisfied("cilium", namespace="kube-system"),
+        externally_satisfied("cilium", chart_path=Path("elsewhere/cilium")),
+    ],
+)
+def test_requires_exact_managed_lifecycle_identity(
+    identity: ExternallySatisfiedLifecycle,
+) -> None:
+    original = cluster_plan()
+
+    projected = exclude_bootstrap_owned_charts(original, {identity})
+
+    assert projected is original

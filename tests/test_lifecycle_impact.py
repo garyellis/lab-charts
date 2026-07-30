@@ -126,6 +126,54 @@ def test_shared_runtime_change_fans_out_every_enabled_cluster_test_with_reasons(
     assert all("istio-base" in case.reasons[0].detail for case in impact.cluster_tests)
 
 
+def test_local_bootstrap_chart_change_fans_out_without_cni_knowledge(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("alpha")
+    make_chart("beta")
+    bootstrap = chart_root / "platform/network"
+    bootstrap.mkdir(parents=True)
+    (bootstrap / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: network\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    config = chart_root / ".chart-manager/local-cluster.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        """
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalCluster
+metadata: {name: default}
+spec:
+  cluster: {config: kind-config.yaml}
+  bootstrap:
+    releases:
+      - type: local
+        name: network
+        chart: platform/network
+        namespace: kube-system
+        values: []
+        timeout: 5m
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    impact = analyze_lifecycle_impact(
+        chart_root,
+        ["platform/network/templates/daemonset.yaml"],
+    )
+
+    assert [(case.chart, case.profile) for case in impact.cluster_tests] == [
+        ("alpha", "minimal"),
+        ("beta", "minimal"),
+    ]
+    assert all(
+        "LocalCluster bootstrap prerequisite" in case.reasons[0].detail
+        for case in impact.cluster_tests
+    )
+
+
 def test_safety_fanout_unions_declared_dependent_profiles_from_chart_changes(
     chart_root: Path,
     make_chart: MakeChart,
@@ -169,11 +217,11 @@ def test_tool_workflow_and_chart_manager_rules_are_typed_safety_fanout(
         "src/chart_manager/services/ci.py",
         "kind-config.yaml",
         ".mise.toml",
-        "pyproject.toml",
-        "uv.lock",
-        ".github/workflows/ci.yaml",
-        "charts/cilium/values.yaml",
-    ):
+            "pyproject.toml",
+            "uv.lock",
+            ".github/workflows/ci.yaml",
+            ".chart-manager/local-cluster.yaml",
+        ):
         impact = analyze_lifecycle_impact(chart_root, [changed_file])
         assert [(case.chart, case.profile) for case in impact.cluster_tests] == [
             ("app", "minimal")

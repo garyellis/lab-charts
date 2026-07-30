@@ -44,16 +44,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: control-plane-ready
-            type: helm-test
-            description: Wait for the kiali-operator Deployment to become Available.
-          - name: crds-installed
-            type: helm-test
-            description: Verify the Kiali CRD (kialis.kiali.io) is registered.
-          - name: route-configured
-            type: helm-test
-            description: Verify the Kiali VirtualService exists on the apps gateway.
         timeout: 15m
 
     dependentTests: []

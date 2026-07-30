@@ -12,13 +12,13 @@ from chart_manager.services.chart_config import (
     load_chart_lifecycle,
     require_cluster_test,
 )
-from chart_manager.services.clusters import ephemeral as ephemeral_module
+from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
+from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
 )
 from chart_manager.services.domain.cluster_tests import (
-    ClusterCheckSpec,
     ClusterTestProfile,
     ClusterTestSpec,
     SpecError,
@@ -26,12 +26,11 @@ from chart_manager.services.domain.cluster_tests import (
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
-    EdgeKind,
     LifecycleAction,
-    LifecycleEdge,
     LifecyclePlan,
     Workflow,
 )
+from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 
 
 def _alloy_spec() -> ClusterTestSpec:
@@ -47,7 +46,6 @@ def test_load_test_spec_accepts_chart_refs() -> None:
     assert minimal.requires[0].chart == "prometheus-operator"
     assert minimal.requires[0].profile == "minimal"
     assert minimal.helm_test is True
-    assert minimal.checks[0].name == "alloy-pods-ready"
 
 
 def test_unknown_profile_raises_spec_error() -> None:
@@ -78,66 +76,32 @@ def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
         )
 
 
-def test_cli_exposes_only_dependent_test_vocabulary() -> None:
+def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
     runner = CliRunner()
 
-    deps_help = runner.invoke(app, ["deps", "--help"])
-    sandbox_help = runner.invoke(app, ["sandbox", "test", "--help"])
+    root_help = runner.invoke(app, ["--help"])
+    chart_test_help = runner.invoke(app, ["charts", "test", "--help"])
 
-    assert deps_help.exit_code == 0
-    assert "dependent-tests" in deps_help.stdout
-    assert "reverse" not in deps_help.stdout
-    assert sandbox_help.exit_code == 0
-    assert "--dependent-tests" in sandbox_help.stdout
-    assert "--reverse" not in sandbox_help.stdout
-
-
-# ----- ClusterTestProfile.effective_checks ---------------------------------
-#
-# The implicit helm-test check used to be synthesized in `cli/main.py`'s
-# `deps checks` handler. It is a domain rule with one correct answer, so it
-# lives on the model and every surface sees the same list.
+    assert root_help.exit_code == 0
+    assert "deps" not in root_help.stdout
+    assert chart_test_help.exit_code == 0
+    assert "--dependent-tests" in chart_test_help.stdout
+    assert "--reverse" not in chart_test_help.stdout
 
 
-def test_effective_checks_appends_implicit_helm_test() -> None:
-    profile = ClusterTestProfile(
-        helmTest=True,
-        checks=[ClusterCheckSpec(name="pods-ready", type="pod")],
-    )
-
-    checks = profile.effective_checks()
-
-    assert [c.name for c in checks] == ["pods-ready", "helm-test"]
-    assert checks[-1].type == "helm-test"
-    assert checks[-1].description == "Run Helm test hooks for the release."
+def test_cluster_test_profile_defaults_to_running_helm_tests() -> None:
+    assert ClusterTestProfile().helm_test is True
 
 
-def test_effective_checks_omits_implicit_check_when_helm_test_disabled() -> None:
-    profile = ClusterTestProfile(
-        helmTest=False,
-        checks=[ClusterCheckSpec(name="pods-ready", type="pod")],
-    )
-
-    assert [c.name for c in profile.effective_checks()] == ["pods-ready"]
+def test_cluster_test_profile_accepts_disabled_helm_tests() -> None:
+    assert ClusterTestProfile(helmTest=False).helm_test is False
 
 
-def test_effective_checks_does_not_duplicate_an_explicit_helm_test_check() -> None:
-    # An explicitly declared helm-test check wins: the profile author gets
-    # to name and describe it.
-    explicit = ClusterCheckSpec(name="my-smoke", type="helm-test", description="custom")
-    profile = ClusterTestProfile(helmTest=True, checks=[explicit])
-
-    assert profile.effective_checks() == [explicit]
-
-
-def test_effective_checks_returns_a_fresh_list() -> None:
-    # Callers mutate the returned list (the CLI used to); it must not
-    # alias the model's own `checks`.
-    profile = ClusterTestProfile(helmTest=True, checks=[])
-
-    profile.effective_checks().append(ClusterCheckSpec(name="x"))
-
-    assert profile.checks == []
+def test_cluster_test_profile_rejects_removed_checks_configuration() -> None:
+    with pytest.raises(ValidationError, match="checks"):
+        ClusterTestProfile.model_validate(
+            {"checks": [{"name": "pods-ready", "type": "helm-test"}]}
+        )
 
 
 # ----- lifecycle-backed ephemeral execution --------------------------------
@@ -179,9 +143,16 @@ class _MigrationKubectl:
 
 
 class _MigrationHelm:
-    def __init__(self, calls: list[str], *, fail_dependency: bool = False) -> None:
+    def __init__(
+        self,
+        calls: list[str],
+        *,
+        fail_dependency: bool = False,
+        fail_lint: bool = False,
+    ) -> None:
         self.calls = calls
         self.fail_dependency = fail_dependency
+        self.fail_lint = fail_lint
 
     def dependency_update_if_stale(self, chart_path: Path) -> bool:
         self.calls.append(f"dependency:{chart_path.name}")
@@ -202,8 +173,10 @@ class _MigrationHelm:
         self.calls.append(f"test:{release}")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def lint(self, *_args: Any, **_kwargs: Any) -> None:
-        self.calls.append("lint")
+    def lint(self, chart_path: Path, *_args: Any, **_kwargs: Any) -> None:
+        self.calls.append(f"lint:{chart_path.name}")
+        if self.fail_lint:
+            raise RuntimeError("lint found an invalid template")
 
 
 def _migration_action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
@@ -223,39 +196,89 @@ def _migration_action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAct
     )
 
 
-def _migration_plan(*, include_cilium: bool = True) -> LifecyclePlan:
+def _profile_action(
+    chart: str, profile: str, suffix: str, kind: ActionKind
+) -> LifecycleAction:
+    base = _migration_action(chart, suffix, kind)
+    return LifecycleAction(
+        action_id=f"cluster-test.{chart}.{profile}.{kind.value}",
+        kind=kind,
+        target=ActionTarget(
+            workflow=Workflow.CLUSTER_TEST,
+            chart=chart,
+            profile=profile,
+            release=chart,
+            namespace="monitoring",
+        ),
+        input_digest=f"digest-{chart}-{profile}-{suffix}",
+        chart_path=Path("charts") / chart,
+        values=(Path(f"values-{profile}.yaml"),),
+        timeout=base.timeout,
+    )
+
+
+def _fanout_plan(
+    target: str,
+    profile: str = "minimal",
+    *,
+    prerequisite: tuple[str, str] | None = None,
+    lint: bool = False,
+) -> LifecyclePlan:
+    coordinates = (*(prerequisite or ()), target, profile)
+    pairs = list(zip(coordinates[::2], coordinates[1::2], strict=True))
+    actions: list[LifecycleAction] = []
+    for chart, selected_profile in pairs:
+        namespace = _profile_action(
+            chart, selected_profile, "namespace", ActionKind.NAMESPACE_ENSURE
+        )
+        dependency = _profile_action(
+            chart,
+            selected_profile,
+            "dependency",
+            ActionKind.HELM_DEPENDENCY_UPDATE,
+        )
+        install = _profile_action(
+            chart, selected_profile, "install", ActionKind.HELM_UPGRADE_INSTALL
+        )
+        lint_action = _profile_action(
+            chart, selected_profile, "lint", ActionKind.HELM_LINT
+        )
+        ready = _profile_action(
+            chart, selected_profile, "ready", ActionKind.WORKLOAD_READY
+        )
+        helm_test = _profile_action(
+            chart, selected_profile, "test", ActionKind.HELM_TEST
+        )
+        actions.extend((namespace, dependency))
+        if lint:
+            actions.append(lint_action)
+        actions.extend((install, ready, helm_test))
+    return LifecyclePlan(
+        workflow=Workflow.CLUSTER_TEST,
+        chart=target,
+        profile=profile,
+        actions=tuple(actions),
+    )
+
+
+def _migration_plan(*, lint: bool = False) -> LifecyclePlan:
     namespace = _migration_action("grafana", "namespace", ActionKind.NAMESPACE_ENSURE)
     dependency = _migration_action(
         "grafana", "dependency", ActionKind.HELM_DEPENDENCY_UPDATE
     )
+    lint_action = _migration_action("grafana", "lint", ActionKind.HELM_LINT)
     install = _migration_action("grafana", "install", ActionKind.HELM_UPGRADE_INSTALL)
     ready = _migration_action("grafana", "ready", ActionKind.WORKLOAD_READY)
     test = _migration_action("grafana", "test", ActionKind.HELM_TEST)
-    actions = [namespace, dependency, install, ready, test]
-    edges = [
-        LifecycleEdge(namespace.action_id, install.action_id, EdgeKind.SEQUENCE),
-        LifecycleEdge(dependency.action_id, install.action_id, EdgeKind.SEQUENCE),
-        LifecycleEdge(install.action_id, ready.action_id, EdgeKind.SEQUENCE),
-        LifecycleEdge(ready.action_id, test.action_id, EdgeKind.SEQUENCE),
-    ]
-    if include_cilium:
-        cilium = _migration_action(
-            "cilium", "bootstrap-owned", ActionKind.HELM_UPGRADE_INSTALL
-        )
-        actions.insert(0, cilium)
-        edges.append(
-            LifecycleEdge(
-                cilium.action_id,
-                install.action_id,
-                EdgeKind.RUNTIME_REQUIREMENT,
-            )
-        )
+    actions = [namespace, dependency]
+    if lint:
+        actions.append(lint_action)
+    actions.extend((install, ready, test))
     return LifecyclePlan(
         workflow=Workflow.CLUSTER_TEST,
         chart="grafana",
         profile="minimal",
         actions=tuple(actions),
-        edges=tuple(edges),
     )
 
 
@@ -264,18 +287,37 @@ def _migration_service(
     *,
     calls: list[str],
     fail_dependency: bool = False,
+    fail_lint: bool = False,
 ) -> tuple[EphemeralTestClusterService, _MigrationKubectl]:
+    (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
+    local_cluster = tmp_path / ".chart-manager/local-cluster.yaml"
+    local_cluster.parent.mkdir()
+    local_cluster.write_text(
+        """
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalCluster
+metadata: {name: default}
+spec:
+  cluster: {config: kind-config.yaml}
+  bootstrap: {releases: []}
+""".lstrip(),
+        encoding="utf-8",
+    )
     kubectl = _MigrationKubectl(calls)
     service = EphemeralTestClusterService(
         tmp_path,
-        helm=_MigrationHelm(calls, fail_dependency=fail_dependency),  # type: ignore[arg-type]
+        helm=_MigrationHelm(
+            calls,
+            fail_dependency=fail_dependency,
+            fail_lint=fail_lint,
+        ),  # type: ignore[arg-type]
         kind=_MigrationKind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
     )
     return service, kubectl
 
 
-def test_ephemeral_default_executes_projected_action_order_and_excludes_cilium(
+def test_ephemeral_default_executes_projected_action_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,12 +328,6 @@ def test_ephemeral_default_executes_projected_action_order_and_excludes_cilium(
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
-    monkeypatch.setattr(
-        ephemeral_module.cluster_bootstrap,
-        "bootstrap",
-        lambda *_args, **_kwargs: "deployed",
-    )
-
     result = service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
 
     assert calls == [
@@ -301,14 +337,72 @@ def test_ephemeral_default_executes_projected_action_order_and_excludes_cilium(
         "ready:monitoring:1m:app.kubernetes.io/instance=grafana",
         "test:grafana",
     ]
-    assert result.installed == ("cilium", "grafana")
+    assert result.installed == ("grafana",)
     assert result.tested == ("grafana",)
-    assert result.namespaces == ("kube-system", "monitoring")
+    assert result.namespaces == ("monitoring",)
     history = service.evidence_repository.history()
     assert len(history.records) == 5
     assert {record.target.chart for record in history.records} == {"grafana"}
     assert {record.cluster.context for record in history.records if record.cluster} == {
-        "kind-configured"
+        "kind-chart-manager"
+    }
+
+
+def test_ephemeral_no_ensure_binds_clients_to_selected_provider_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, kubectl = _migration_service(tmp_path, calls=calls)
+    handles: list[Any] = []
+    helm = service.helm
+
+    def bind(handle: Any) -> tuple[Any, Any]:
+        handles.append(handle)
+        return helm, kubectl
+
+    service._client_factory = bind  # type: ignore[assignment]
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(),
+    )
+    service.run(
+        EphemeralTestRequest(
+            chart="grafana",
+            cluster_name="selected",
+            ensure_cluster=False,
+        )
+    )
+
+    assert [handle.context for handle in handles] == ["kind-selected"]
+
+
+def test_ephemeral_evidence_uses_provider_handle_with_prebound_clients(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    custom_handle = EnvironmentHandle(
+        identity="prebound-cluster",
+        context="provider-owned-context",
+        provider_type="custom",
+    )
+    service.environment_provider = SimpleNamespace(
+        handle=lambda _spec: custom_handle,
+    )
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(),
+    )
+
+    service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
+
+    records = service.evidence_repository.history().records
+    assert {record.cluster.context for record in records if record.cluster} == {
+        "provider-owned-context"
     }
 
 
@@ -325,12 +419,7 @@ def test_ephemeral_failure_records_partial_evidence_then_reports_diagnostics(
     monkeypatch.setattr(
         service.lifecycle_compiler,
         "compile_cluster_test",
-        lambda *_args, **_kwargs: _migration_plan(include_cilium=False),
-    )
-    monkeypatch.setattr(
-        ephemeral_module.cluster_bootstrap,
-        "bootstrap",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, **_kwargs: _migration_plan(),
     )
 
     with pytest.raises(ChartManagerError, match="dependency update failed"):
@@ -343,42 +432,274 @@ def test_ephemeral_failure_records_partial_evidence_then_reports_diagnostics(
     assert "install:grafana:grafana" not in calls
 
 
-@pytest.mark.parametrize(
-    ("chart", "lint"),
-    (("grafana", True), ("cilium", False)),
-)
-def test_ephemeral_lint_and_cilium_targets_retain_legacy_execution(
+def test_ephemeral_lint_is_a_first_class_action_before_install(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    chart: str,
-    lint: bool,
 ) -> None:
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
-    legacy_calls: list[bool] = []
-    monkeypatch.setattr(service.resolver, "install_plan", lambda *_args: [])
-    monkeypatch.setattr(
-        service,
-        "_install_plan",
-        lambda *_args, lint, **_kwargs: legacy_calls.append(lint),
-    )
     monkeypatch.setattr(
         service.lifecycle_compiler,
         "compile_cluster_test",
-        lambda *_args, **_kwargs: pytest.fail("lifecycle path must not run"),
+        lambda *_args, **_kwargs: _migration_plan(lint=True),
     )
-    monkeypatch.setattr(
-        ephemeral_module.cluster_bootstrap,
-        "bootstrap",
-        lambda *_args, **_kwargs: None,
-    )
-
-    service.run(
+    result = service.run(
         EphemeralTestRequest(
-            chart=chart,
-            lint=lint,
+            chart="grafana",
+            lint=True,
             ensure_cluster=False,
         )
     )
 
-    assert legacy_calls == [lint]
+    assert calls == [
+        "namespace:monitoring",
+        "dependency:grafana",
+        "lint:grafana",
+        "install:grafana:grafana",
+        "ready:monitoring:1m:app.kubernetes.io/instance=grafana",
+        "test:grafana",
+    ]
+    assert result.installed == ("grafana",)
+    assert {
+        record.action_kind for record in service.evidence_repository.history().records
+    } == {
+        "namespace-ensure",
+        "helm-dependency-update",
+        "helm-lint",
+        "helm-upgrade-install",
+        "workload-ready",
+        "helm-test",
+    }
+
+
+def test_ephemeral_lint_failure_keeps_diagnostics_and_terminal_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, kubectl = _migration_service(tmp_path, calls=calls, fail_lint=True)
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(lint=True),
+    )
+
+    with pytest.raises(
+        ChartManagerError,
+        match=r"cluster action failed for grafana \(helm-lint\): "
+        r"lint found an invalid template",
+    ):
+        service.run(
+            EphemeralTestRequest(
+                chart="grafana",
+                lint=True,
+                ensure_cluster=False,
+            )
+        )
+
+    assert kubectl.diagnostic_namespaces == ["monitoring"]
+    assert "install:grafana:grafana" not in calls
+    records = service.evidence_repository.history().records
+    assert len(records) == 6
+    assert {record.verdict for record in records} == {"PASS", "FAIL", "SKIP"}
+
+
+def test_ephemeral_bootstrap_target_only_runs_readiness_and_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        LocalBootstrapExecutor,
+        "preflight",
+        lambda *_args, **_kwargs: frozenset(
+            {
+                ExternallySatisfiedLifecycle(
+                    chart_path=(Path("charts") / "grafana").resolve(),
+                    chart="grafana",
+                    profile="minimal",
+                    namespace="monitoring",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(lint=True),
+    )
+
+    result = service.run(
+        EphemeralTestRequest(
+            chart="grafana",
+            lint=True,
+            ensure_cluster=False,
+        )
+    )
+
+    assert calls == [
+        "ready:monitoring:1m:app.kubernetes.io/instance=grafana",
+        "test:grafana",
+    ]
+    assert result.installed == ()
+    assert result.tested == ("grafana",)
+    assert {
+        record.action_kind for record in service.evidence_repository.history().records
+    } == {"workload-ready", "helm-test"}
+
+
+def test_ephemeral_bootstrap_transitive_dependency_is_not_reinstalled_or_retested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        LocalBootstrapExecutor,
+        "preflight",
+        lambda *_args, **_kwargs: frozenset(
+            {
+                ExternallySatisfiedLifecycle(
+                    chart_path=(Path("charts") / "network").resolve(),
+                    chart="network",
+                    profile="minimal",
+                    namespace="monitoring",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "grafana", prerequisite=("network", "minimal"), lint=True
+        ),
+    )
+
+    result = service.run(
+        EphemeralTestRequest(chart="grafana", lint=True, ensure_cluster=False)
+    )
+
+    assert all("network" not in call for call in calls)
+    assert "lint:network" not in calls
+    assert calls.count("lint:grafana") == 1
+    assert "install:grafana:grafana" in calls
+    assert "test:grafana" in calls
+    assert result.tested == ("grafana",)
+
+
+def test_ephemeral_recomputes_bootstrap_satisfaction_for_every_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    identities = iter(
+        (
+            frozenset(
+                {
+                    ExternallySatisfiedLifecycle(
+                        chart_path=(Path("charts") / "grafana").resolve(),
+                        chart="grafana",
+                        profile="minimal",
+                        namespace="monitoring",
+                    )
+                }
+            ),
+            frozenset(),
+        )
+    )
+    monkeypatch.setattr(
+        LocalBootstrapExecutor,
+        "preflight",
+        lambda *_args, **_kwargs: next(identities),
+    )
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(),
+    )
+
+    service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
+    first_run_calls = tuple(calls)
+    calls.clear()
+    service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
+
+    assert first_run_calls == (
+        "ready:monitoring:1m:app.kubernetes.io/instance=grafana",
+        "test:grafana",
+    )
+    assert "install:grafana:grafana" in calls
+
+
+def test_ephemeral_dependent_fanout_dedupes_shared_profile_and_preserves_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    dependents = (
+        SimpleNamespace(chart="dependent-a", profile="minimal"),
+        SimpleNamespace(chart="dependent-b", profile="minimal"),
+    )
+    monkeypatch.setattr(service.resolver, "dependent_tests", lambda _chart: dependents)
+    plans = {
+        ("main", "minimal"): _fanout_plan(
+            "main", prerequisite=("shared", "minimal")
+        ),
+        ("dependent-a", "minimal"): _fanout_plan(
+            "dependent-a", prerequisite=("shared", "minimal")
+        ),
+        ("dependent-b", "minimal"): _fanout_plan(
+            "dependent-b", prerequisite=("shared", "minimal")
+        ),
+    }
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda chart, profile, **_kwargs: plans[(chart, profile)],
+    )
+
+    result = service.run(
+        EphemeralTestRequest(
+            chart="main",
+            ensure_cluster=False,
+            include_dependent_tests=True,
+        )
+    )
+
+    assert calls.count("install:shared:shared") == 1
+    assert calls.count("test:shared") == 1
+    assert result.tested == ("shared", "main", "dependent-a", "dependent-b")
+
+
+def test_ephemeral_fanout_reconverges_same_release_for_distinct_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        service.resolver,
+        "dependent_tests",
+        lambda _chart: (SimpleNamespace(chart="main", profile="full"),),
+    )
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda chart, profile, **_kwargs: _fanout_plan(chart, profile),
+    )
+
+    result = service.run(
+        EphemeralTestRequest(
+            chart="main",
+            profile="minimal",
+            ensure_cluster=False,
+            include_dependent_tests=True,
+        )
+    )
+
+    assert calls.count("install:main:main") == 2
+    assert calls.count("test:main") == 2
+    assert result.tested == ("main", "main")

@@ -1,4 +1,4 @@
-"""Request/result vocabulary for persistent development-cluster lifecycle verbs.
+"""Result vocabulary for persistent sandbox lifecycle operations.
 
 Pure data: no integrations, no IO, no progress. Everything here is either
 frozen (what crosses the service boundary) or an explicitly-named mutable
@@ -13,45 +13,6 @@ converge engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-DEFAULT_CLUSTER_NAME = "chart-manager"
-DEFAULT_CHART = "grafana-dashboards"
-DEFAULT_PROFILE = "prototyping"
-DEFAULT_NAMESPACE = "observability"
-
-
-@dataclass(frozen=True)
-class DevelopmentClusterUpRequest:
-    """One request to create/start and converge a development cluster."""
-
-    chart: str = DEFAULT_CHART
-    profile: str = DEFAULT_PROFILE
-    cluster_name: str = DEFAULT_CLUSTER_NAME
-    namespace: str = DEFAULT_NAMESPACE
-    # Converge-by-default is the helmfile/Argo workflow: every chart in the
-    # install plan runs `helm upgrade --install`, helm itself no-ops the
-    # ones that haven't changed. `skip_installed=True` restores the prior
-    # behavior of skipping anything already in `helm list -A` -- faster on
-    # large stacks but silently ignores values-file edits, which is exactly
-    # the surprise that motivated the converge-by-default flip.
-    skip_installed: bool = False
-
-
-@dataclass(frozen=True)
-class DevelopmentClusterSyncRequest:
-    """Targeted converge request for named charts.
-
-    Reuses `DevelopmentClusterUpRequest` fields (chart/profile drive the install-plan
-    membership check, cluster_name + namespace drive cluster ensure /
-    default namespace) but is a distinct type because `skip_installed`
-    has no meaning for sync (it's already a targeted-converge verb).
-    """
-
-    chart_names: tuple[str, ...]
-    chart: str = DEFAULT_CHART
-    profile: str = DEFAULT_PROFILE
-    cluster_name: str = DEFAULT_CLUSTER_NAME
-    namespace: str = DEFAULT_NAMESPACE
 
 
 @dataclass(frozen=True)
@@ -94,7 +55,7 @@ class DevelopmentClusterAccessHints:
 
 @dataclass(frozen=True)
 class DevelopmentClusterResult:
-    """Per-run accounting of converge outcomes, returned by `up` and `sync`.
+    """Per-run accounting returned by target convergence and reset.
 
     Buckets mirror helmfile/Argo terminology:
       * applied:   helm produced a new release revision
@@ -115,7 +76,7 @@ class DevelopmentClusterResult:
 
 @dataclass(frozen=True)
 class DevelopmentClusterActionResult:
-    """Outcome of `down` / `delete`: was the cluster there, and did we reap a forward?
+    """Outcome of a stop or destroy operation, including port-forward cleanup.
 
     `changed` is False when the cluster was already stopped / already absent
     -- both are success, so `ok` is unconditionally True (real failures raise).

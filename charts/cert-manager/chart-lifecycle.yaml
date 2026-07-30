@@ -49,10 +49,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: selfsign-issuance
-            type: helm-test
-            description: Issue a Certificate via a self-signed Issuer to verify the webhook admits cert-manager.io CRs and the controller signs.
         timeout: 10m
 
     dependentTests:

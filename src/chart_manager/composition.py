@@ -61,6 +61,10 @@ from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.ci import CiService
 from chart_manager.services.clusters.development import DevelopmentClusterService
+from chart_manager.services.clusters.environment import (
+    EnvironmentHandle,
+    KindEnvironmentProvider,
+)
 from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService
@@ -127,19 +131,19 @@ class Container:
         """
         return HelmReleaseClient(self.kubectl())
 
-    def helm(self, *, verbose: bool = True) -> Helm:
+    def helm(self, *, verbose: bool = True, context: str | None = None) -> Helm:
         """A helm client. `verbose` defaults to the adapter's own default."""
         return Helm(
             self.command_runner(),
             verbose=verbose,
-            context=self._settings.kube_context,
+            context=context if context is not None else self._settings.kube_context,
         )
 
-    def kubectl(self) -> Kubectl:
+    def kubectl(self, *, context: str | None = None) -> Kubectl:
         """A kubectl client bound to the configured kube context."""
         return Kubectl(
             self.command_runner(),
-            context=self._settings.kube_context,
+            context=context if context is not None else self._settings.kube_context,
             timeout=self._settings.command_timeout,
         )
 
@@ -214,9 +218,11 @@ class Container:
             events=self.event_writer(),
         )
 
-    def expose_service(self, *, state_dir: Path | None = None) -> ExposeService:
+    def expose_service(
+        self, *, state_dir: Path | None = None, context: str | None = None
+    ) -> ExposeService:
         """Build the detached port-forward manager."""
-        return ExposeService(state_dir=state_dir, kubectl=self.kubectl())
+        return ExposeService(state_dir=state_dir, kubectl=self.kubectl(context=context))
 
     def grafana_exporter(self) -> GrafanaExporter:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
@@ -231,27 +237,54 @@ class Container:
         `Settings`. Every cluster-facing adapter is passed in, so there is
         no path by which the service can fall back to an unconfigured one.
         """
+        kind = self.kind()
+
+        def clients(handle: EnvironmentHandle) -> tuple[Helm, Kubectl, ExposeService]:
+            return (
+                self.helm(context=handle.context),
+                self.kubectl(context=handle.context),
+                self.expose_service(context=handle.context),
+            )
+
         return DevelopmentClusterService(
             root,
             helm=self.helm(),
-            kind=self.kind(),
+            kind=kind,
             kubectl=self.kubectl(),
             expose=self.expose_service(),
             progress=progress,
             charts_dir=self._settings.charts_dir,
+            local_config=self._settings.local_config,
+            environment_provider=KindEnvironmentProvider(kind),
+            client_factory=clients,
         )
 
     def ephemeral_test_cluster_service(
-        self, root: Path, *, progress: ProgressCallback | None = None
+        self,
+        root: Path,
+        *,
+        progress: ProgressCallback | None = None,
+        charts_dir: Path | None = None,
     ) -> EphemeralTestClusterService:
-        """Build the single-chart sandbox installer for the repo at `root`."""
+        """Build the local chart-test installer for the repository at `root`."""
+        kind = self.kind()
+
+        def clients(handle: EnvironmentHandle) -> tuple[Helm, Kubectl]:
+            return (
+                self.helm(context=handle.context),
+                self.kubectl(context=handle.context),
+            )
+
         return EphemeralTestClusterService(
             root,
             helm=self.helm(),
-            kind=self.kind(),
+            kind=kind,
             kubectl=self.kubectl(),
             progress=progress,
-            charts_dir=self._settings.charts_dir,
+            charts_dir=charts_dir or self._settings.charts_dir,
+            local_config=self._settings.local_config,
+            environment_provider=KindEnvironmentProvider(kind),
+            client_factory=clients,
         )
 
     def ci_service(self, root: Path) -> CiService:
@@ -261,6 +294,7 @@ class Container:
             helm=self.helm(),
             kubectl=self.kubectl(),
             charts_dir=self._settings.charts_dir,
+            local_config=self._settings.local_config,
         )
 
     def publish_service(self, root: Path) -> PublishService:
@@ -277,13 +311,14 @@ class Container:
         *,
         progress: ProgressDisplay | None = None,
         on_warn: WarnCallback | None = None,
+        charts_dir: Path | None = None,
     ) -> ManifestValidationService:
         """Build the validate pipeline entry point (render -> schema -> policy)."""
         return ManifestValidationService(
             progress=progress,
             on_warn=on_warn,
             command_runner=self.command_runner(),
-            charts_dir=self._settings.charts_dir,
+            charts_dir=charts_dir or self._settings.charts_dir,
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:

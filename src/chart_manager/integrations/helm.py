@@ -264,6 +264,7 @@ class Helm:
         sets: dict[str, str] | None = None,
         timeout: str = "10m",
         wait: bool = True,
+        version: str | None = None,
     ) -> UpgradeResult:
         """Run `helm upgrade --install`; classify outcome as applied vs no-change.
 
@@ -301,6 +302,8 @@ class Helm:
         ]
         if wait:
             args.append("--wait")
+        if version is not None:
+            args.extend(["--version", version])
         args.extend(_values_args(values or []))
         args.extend(_set_args(sets or {}))
         # Always capture stdout so we can surface it on the result object

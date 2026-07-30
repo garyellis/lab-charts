@@ -1,51 +1,57 @@
-"""The converge engine: `up`, `sync`, `down`, `delete` and the install loop.
+"""The target convergence engine and persistent-environment lifecycle.
 
-Deliberately left whole. `up`/`sync`/`_install_plan`/`_bootstrap_cilium`
-share three hand-threaded mutable accumulators (`_DevelopmentClusterRunSummary`,
-`installed_keys`, `namespaces_created`); cutting between them would move
-that coupling across a module boundary rather than remove it. Drift
-detection and access hints, which need neither the accumulators nor the
-chart repository, live in `drift.py` / `access.py`.
+Target convergence and the install loop share three hand-threaded mutable
+accumulators (`_DevelopmentClusterRunSummary`, `installed_keys`,
+`namespaces_created`). Drift detection and access hints, which need neither
+the accumulators nor the chart repository, live in `drift.py` / `access.py`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
-from chart_manager.services.clusters import bootstrap as cluster_bootstrap
-from chart_manager.services.clusters.bootstrap import (
-    CILIUM_BOOTSTRAP_CHART,
-    CILIUM_BOOTSTRAP_NAMESPACE,
-    kind_config_path,
-)
+from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.development.access import (
     access_hints,
     wait_apps_wildcard_ready,
 )
 from chart_manager.services.clusters.development.drift import (
-    check_cilium_service_host_drift,
     warn_on_port_mapping_drift,
 )
 from chart_manager.services.clusters.development.models import (
-    DEFAULT_CLUSTER_NAME,
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
     DevelopmentClusterEntryFailure,
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterResult,
-    DevelopmentClusterSyncRequest,
-    DevelopmentClusterUpRequest,
     _DevelopmentClusterRunSummary,
+)
+from chart_manager.services.clusters.environment import (
+    EnvironmentHandle,
+    EnvironmentSpec,
+    KindEnvironmentProvider,
+    KubernetesEnvironmentProvider,
 )
 from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.services.expose import ExposeService
+from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+from chart_manager.services.local_resources import (
+    LifecycleRelease,
+    LocalResourceLoader,
+    OciChartRelease,
+    ResolvedChartTarget,
+    ResolvedLocalTarget,
+    ResolvedStackTarget,
+)
 from chart_manager.services.progress import (
     ProgressCallback,
     detail,
@@ -65,8 +71,14 @@ CERT_MANAGER_WEBHOOK_TIMEOUT = "120s"
 CERT_MANAGER_CHART = "cert-manager"
 
 
+@dataclass(frozen=True)
+class _TargetLocalExecution:
+    catalog: ClusterTestCatalog
+    plan: tuple[InstallPlanEntry, ...]
+
+
 class DevelopmentClusterService:
-    """Converge the full lab stack onto a persistent kind cluster."""
+    """Converge a chart or LocalStack onto a persistent local environment."""
 
     def __init__(
         self,
@@ -78,6 +90,10 @@ class DevelopmentClusterService:
         expose: ExposeService,
         progress: ProgressCallback | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        local_config: Path = Path(".chart-manager/local-cluster.yaml"),
+        environment_provider: KubernetesEnvironmentProvider | None = None,
+        client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl, ExposeService]]
+        | None = None,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -86,301 +102,291 @@ class DevelopmentClusterService:
         was configured in the composition root and then discarded here. The
         composition root is now the only place these are built.
         """
-        self.root = root
-        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
-        self.resolver = DependencyResolver(self.cluster_tests.get)
+        self.root = root.resolve()
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
-        # ExposeService is injected so down/delete can stop any active
+        # ExposeService is injected so lifecycle operations can stop any active
         # port-forward in the same boundary as the cluster lifecycle -- a
         # kubectl port-forward whose apiserver has just been stopped is
         # dead weight, and leaving the CLI handler to clean it up split
         # the lifecycle across two layers.
         self.expose = expose
+        self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
+        self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
+        self._client_factory = client_factory
+        self._environment_handle: EnvironmentHandle | None = None
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
-    def up(self, options: DevelopmentClusterUpRequest) -> DevelopmentClusterResult:
-        """Create/start the cluster and converge the full install plan.
+    def up_target(
+        self,
+        target: ResolvedLocalTarget,
+        *,
+        profile: str | None,
+        cluster_name: str,
+        skip_installed: bool = False,
+    ) -> DevelopmentClusterResult:
+        """Prepare LocalCluster, run bootstrap, then converge a chart or LocalStack.
 
-        Continue-on-error: per-chart failures are recorded in the returned
-        result rather than aborting the run. The result also carries the
-        access hints (CA trust, URLs, grafana creds) for the surface to
-        render after the summary.
+        All LocalCluster and target resources are loaded and preflighted before
+        Kind is mutated. Bootstrap is fail-fast; workload convergence retains
+        the development-friendly continue-on-error accounting.
         """
-        self._progress(step("Ensuring sandbox cluster", options.cluster_name))
-        # ensure_cluster handles absent/stopped/running uniformly: it will
-        # create the cluster, start its stopped node containers, or no-op.
-        self.kind.ensure_cluster(options.cluster_name, config=kind_config_path(self.root))
-
-        # After ensure_cluster the docker containers may be up but the
-        # apiserver isn't necessarily reachable yet (especially on the
-        # start-stopped path). Gate before anything that talks to it --
-        # `helm list -A` two lines down races otherwise.
+        local_cluster = self.local_resources.load_cluster()
+        releases = self._target_releases(target, profile=profile)
+        bootstrap = LocalBootstrapExecutor(
+            self.root,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            progress=self._progress,
+        )
+        bootstrap_identities = bootstrap.preflight(local_cluster)
+        executions = self._preflight_target(
+            releases,
+            excluded_lifecycle_identities=bootstrap_identities,
+        )
+        config = (self.root / local_cluster.spec.cluster.config).resolve()
+        self._progress(step("Ensuring local cluster", cluster_name))
+        environment = self._ensure_environment(cluster_name, config=config)
         self._progress(step("Waiting for kube-apiserver"))
         self.kubectl.wait_apiserver_ready()
 
         summary = _DevelopmentClusterRunSummary()
-        installed_keys: set[tuple[str, str]] = self._existing_release_keys()
-        namespaces_created: set[str] = set()
-
-        # CNI must come up before anything else. Cilium has its own
-        # bootstrap branch (sets k8sServiceHost from the live control-plane
-        # IP), so we own its lifecycle here regardless of whether it's in
-        # the install plan.
-        self._bootstrap_cilium(
-            options=options,
-            installed_keys=installed_keys,
-            namespaces_created=namespaces_created,
-            summary=summary,
-        )
-
-        plan = self.resolver.install_plan(options.chart, options.profile)
-        # Filter cilium out of the plan: it's transitively pulled in by
-        # grafana-dashboards:prototyping, but the bootstrap branch already
-        # owns its install (and is the only place that knows the live
-        # k8sServiceHost). Without this filter the summary listed cilium
-        # twice -- once from bootstrap, once from the plan.
-        plan = [entry for entry in plan if entry.chart != CILIUM_BOOTSTRAP_CHART]
-        self._install_plan(
-            plan,
-            default_namespace=options.namespace,
-            installed_keys=installed_keys,
-            namespaces_created=namespaces_created,
-            summary=summary,
-            skip_installed=options.skip_installed,
-        )
-
-        # Gate URL-print on the wildcard cert being Ready: the gateway can
-        # serve `https://*.<appsDomain>/` only once cert-manager has issued
-        # the leaf cert. Skipping the wait would print URLs that the user's
-        # browser would immediately reject with a TLS error.
-        self._wait_apps_wildcard_ready(summary)
-
-        # Warn (don't fail) on kind-config drift: editing extraPortMappings
-        # without `sandbox delete && sandbox up` leaves the cluster bound to
-        # the old host ports. The lab URLs we just printed would then return
-        # connection-refused on the host.
-        self._warn_on_port_mapping_drift(options.cluster_name)
-
-        return summary.freeze(self._access_hints(summary, namespace=options.namespace))
-
-    def sync(self, options: DevelopmentClusterSyncRequest) -> DevelopmentClusterResult:
-        """Targeted converge: `helm upgrade --install` for the named charts only.
-
-        Modeled on `argocd app sync <app>` and `helmfile sync -l name=<chart>`:
-        same cluster-ensure + apiserver wait + cilium drift check as `up`,
-        but the install loop runs only for the charts the user named. Charts
-        outside the named set are skipped entirely (not even visited), so
-        this is the fast way to pick up values-file edits on one or two
-        charts after a large `up` has already converged the stack.
-
-        Deliberately does NOT use `--reuse-values`: the whole point of this
-        verb is to pick up values changes. If a future caller needs the
-        reuse-values semantics it can be added as a flag, but doing it
-        unconditionally would defeat the verb.
-
-        Errors:
-          * Unknown chart names (not in the configured install plan) raise
-            `ChartManagerError` before any helm work runs, so a typo doesn't
-            cause a partial converge.
-        """
-        if not options.chart_names:
-            raise ChartManagerError("sandbox sync requires at least one chart name")
-
-        self._progress(step("Ensuring sandbox cluster", options.cluster_name))
-        self.kind.ensure_cluster(options.cluster_name, config=kind_config_path(self.root))
-        self._progress(step("Waiting for kube-apiserver"))
-        self.kubectl.wait_apiserver_ready()
-
-        plan = self.resolver.install_plan(options.chart, options.profile)
-        plan_charts = {entry.chart for entry in plan}
-        requested = set(options.chart_names)
-        # Cilium isn't a member of the plan we just resolved (it's bootstrap-
-        # owned and filtered out below), but it IS a legal sync target: a
-        # dev who edited cilium values needs a way to reconverge it.
-        valid_targets = plan_charts | {CILIUM_BOOTSTRAP_CHART}
-        unknown = sorted(requested - valid_targets)
-        if unknown:
-            raise ChartManagerError(
-                f"chart(s) {unknown} not in the install plan for {options.chart}:{options.profile}"
-            )
-
         installed_keys = self._existing_release_keys()
         namespaces_created: set[str] = set()
-        summary = _DevelopmentClusterRunSummary()
-
-        # Drift check still runs (it's cheap and the dev should hear about
-        # a broken cilium before we try to upgrade an unrelated chart on
-        # top of an apiserver-unreachable network).
-        cilium_key = (CILIUM_BOOTSTRAP_NAMESPACE, CILIUM_BOOTSTRAP_CHART)
-        if cilium_key in installed_keys:
-            self._check_cilium_service_host_drift(options.cluster_name)
-
-        # If the user explicitly asked to sync cilium, run the bootstrap
-        # branch (it's the only path that knows the live control-plane IP).
-        if CILIUM_BOOTSTRAP_CHART in requested:
-            self._bootstrap_cilium(
-                options=DevelopmentClusterUpRequest(
-                    chart=options.chart,
-                    profile=options.profile,
-                    cluster_name=options.cluster_name,
-                    namespace=options.namespace,
-                ),
-                installed_keys=installed_keys,
-                namespaces_created=namespaces_created,
-                summary=summary,
-                force=True,
+        for outcome in bootstrap.execute(local_cluster, environment=environment):
+            bucket = summary.applied if outcome.status == "applied" else summary.no_change
+            bucket.append(
+                DevelopmentClusterEntryOutcome(
+                    outcome.name,
+                    outcome.profile,
+                    outcome.namespace,
+                )
             )
+            installed_keys.add((outcome.namespace, outcome.name))
+            namespaces_created.add(outcome.namespace)
 
-        # Build a sub-plan filtered to the requested charts (and not cilium,
-        # which we just handled). Preserve original plan ordering so a sync
-        # of multiple charts still respects their declared dependency order.
-        sub_plan = [
-            entry
-            for entry in plan
-            if entry.chart in requested and entry.chart != CILIUM_BOOTSTRAP_CHART
-        ]
-        self._install_plan(
-            sub_plan,
-            default_namespace=options.namespace,
-            installed_keys=installed_keys,
-            namespaces_created=namespaces_created,
-            summary=summary,
-            skip_installed=False,
-        )
+        for release, execution in zip(releases, executions, strict=True):
+            if isinstance(release, LifecycleRelease):
+                assert execution is not None
+                self._install_plan(
+                    list(execution.plan),
+                    default_namespace="default",
+                    installed_keys=installed_keys,
+                    namespaces_created=namespaces_created,
+                    summary=summary,
+                    skip_installed=skip_installed,
+                    cluster_tests=execution.catalog,
+                )
+                continue
+
+            self._converge_oci_release(
+                release.name,
+                release,
+                namespace=release.namespace,
+                values=[self.root / path for path in release.values],
+                timeout=release.timeout,
+                installed_keys=installed_keys,
+                summary=summary,
+                skip_installed=skip_installed,
+            )
 
         self._wait_apps_wildcard_ready(summary)
-
-        return summary.freeze(self._access_hints(summary, namespace=options.namespace))
-
-    def _bootstrap_cilium(
-        self,
-        *,
-        options: DevelopmentClusterUpRequest,
-        installed_keys: set[tuple[str, str]],
-        namespaces_created: set[str],
-        summary: _DevelopmentClusterRunSummary,
-        force: bool = False,
-    ) -> None:
-        """Install / converge / drift-check cilium.
-
-        Three branches:
-          1. Installed AND `skip_installed=True` AND not `force` -> drift
-             check, then record as no-change and return. Fast-skip path.
-          2. Installed -> drift check, then converge (helm decides no-op
-             vs upgrade). Default path.
-          3. Not installed -> run the bootstrap (sets k8sServiceHost from
-             the live control-plane IP, which only this branch can do).
-
-        `force=True` collapses (1) into (2) so `sync cilium` always
-        converges regardless of `skip_installed`.
-        """
-        cilium_key = (CILIUM_BOOTSTRAP_NAMESPACE, CILIUM_BOOTSTRAP_CHART)
-        cilium_installed = cilium_key in installed_keys
-
-        if cilium_installed:
-            # Drift gate runs in BOTH the skip and converge paths: re-running
-            # `helm upgrade cilium` against a stale k8sServiceHost would
-            # itself silently break the cluster, so we want the loud error
-            # before any helm work touches CNI.
-            self._check_cilium_service_host_drift(options.cluster_name)
-
-        if cilium_installed and options.skip_installed and not force:
-            self._progress(
-                detail(
-                    "skip",
-                    f"cilium (already installed in {CILIUM_BOOTSTRAP_NAMESPACE})",
-                )
-            )
-            summary.no_change.append(
-                DevelopmentClusterEntryOutcome(
-                    CILIUM_BOOTSTRAP_CHART,
-                    "minimal",
-                    CILIUM_BOOTSTRAP_NAMESPACE,
-                )
-            )
-            namespaces_created.add(CILIUM_BOOTSTRAP_NAMESPACE)
-            return
-
-        try:
-            result = cluster_bootstrap.bootstrap(
-                options.cluster_name,
-                helm=self.helm,
-                kind=self.kind,
-                kubectl=self.kubectl,
-                cluster_tests=self.cluster_tests,
-                progress=self._progress,
-                lint=False,
-            )
-        except (ExternalCommandError, ChartManagerError) as exc:
-            # Continue-on-error: cilium failure leaves the rest of the
-            # plan to surface its own errors and lets the dev decide.
-            self._progress(failure("cilium bootstrap failed:", str(exc)))
-            summary.failed.append(
-                DevelopmentClusterEntryFailure(
-                    chart=CILIUM_BOOTSTRAP_CHART,
-                    profile="minimal",
-                    namespace=CILIUM_BOOTSTRAP_NAMESPACE,
-                    error=str(exc),
-                )
-            )
-            return
-
-        # bootstrap() returns the helm status, or None when the cilium
-        # chart is absent and bootstrap was skipped entirely.
-        if result is None:
-            return
-        bucket = summary.applied if result == "applied" else summary.no_change
-        bucket.append(
-            DevelopmentClusterEntryOutcome(
-                CILIUM_BOOTSTRAP_CHART,
-                "minimal",
-                CILIUM_BOOTSTRAP_NAMESPACE,
-            )
+        self._warn_on_port_mapping_drift(cluster_name, config=config)
+        fallback_namespace = next(
+            (
+                entry.namespace
+                for entry in (*summary.applied, *summary.no_change)
+                if entry.chart != local_cluster.metadata.name
+            ),
+            "default",
         )
-        installed_keys.add(cilium_key)
-        namespaces_created.add(CILIUM_BOOTSTRAP_NAMESPACE)
+        return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
 
-    def down(self, cluster_name: str = DEFAULT_CLUSTER_NAME) -> DevelopmentClusterActionResult:
+    def down(self, cluster_name: str) -> DevelopmentClusterActionResult:
         """Stop the cluster's node containers; preserve all state.
 
-        State preserved by `docker stop`: etcd, installed Helm releases,
-        PVCs, and the containerd image cache inside the node containers. A
-        subsequent `up` re-uses the same containers (no image re-pull) and
-        converges every chart through `helm upgrade --install` (which
-        helm itself no-ops when nothing changed); pass `--skip-installed`
-        to `up` for the prior fast-skip behavior.
+        The provider preserves etcd, installed Helm releases, PVCs, and its
+        image cache. A subsequent `up` converges the target again through
+        `helm upgrade --install`; use `--skip-installed` to bypass releases
+        already reported by Helm.
 
-        Also stops any active `sandbox expose` port-forward for this
-        cluster -- a kubectl port-forward whose apiserver has just been
-        stopped will exit on its own, but we reap it explicitly so the
-        state file is cleared and the next `sandbox expose` can start
-        without an "already running" error.
+        Also stops any active access port-forward for this cluster. A kubectl
+        port-forward whose apiserver has just stopped will exit on its own,
+        but its recorded process state still needs to be reaped.
         """
-        self._progress(step("Stopping sandbox cluster", cluster_name))
-        stopped = self.kind.stop_cluster(cluster_name)
+        self._progress(step("Stopping local cluster", cluster_name))
+        stopped = self.environment_provider.stop(self._handle(cluster_name))
         return DevelopmentClusterActionResult(
             cluster_name=cluster_name,
             changed=stopped,
             port_forward_pid=self.expose.stop(cluster_name),
         )
 
-    def delete(self, cluster_name: str = DEFAULT_CLUSTER_NAME) -> DevelopmentClusterActionResult:
-        """Tear down the cluster entirely (`kind delete cluster`).
+    def _destroy_environment(self, cluster_name: str) -> DevelopmentClusterActionResult:
+        """Ask the selected provider to destroy the environment entirely.
 
         Destructive: image cache, etcd, and any data in node-local PVs are
         gone. Use `down` if you want a fast restart. Any active port-forward
         is stopped for the same reason as `down`.
         """
-        self._progress(step("Deleting sandbox cluster", cluster_name))
-        deleted = self.kind.delete_cluster(cluster_name)
+        self._progress(step("Deleting local cluster", cluster_name))
+        deleted = self.environment_provider.destroy(self._handle(cluster_name))
         return DevelopmentClusterActionResult(
             cluster_name=cluster_name,
             changed=deleted,
             port_forward_pid=self.expose.stop(cluster_name),
         )
+
+    def reset_target(
+        self,
+        target: ResolvedLocalTarget,
+        *,
+        profile: str | None,
+        cluster_name: str,
+    ) -> DevelopmentClusterResult:
+        """Destroy and fully converge a chart or LocalStack."""
+        # All authored state is resolved before deleting a healthy cluster.
+        local_cluster = self.local_resources.load_cluster()
+        bootstrap = LocalBootstrapExecutor(
+            self.root,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            progress=self._progress,
+        )
+        bootstrap_identities = bootstrap.preflight(local_cluster)
+        self._preflight_target(
+            self._target_releases(target, profile=profile),
+            excluded_lifecycle_identities=bootstrap_identities,
+        )
+        self._destroy_environment(cluster_name)
+        return self.up_target(
+            target,
+            profile=profile,
+            cluster_name=cluster_name,
+            skip_installed=False,
+        )
+
+    def _handle(self, cluster_name: str) -> EnvironmentHandle:
+        """Build the provider-owned stable identity for a lifecycle operation."""
+        return self.environment_provider.handle(
+            EnvironmentSpec(
+                name=cluster_name,
+                cluster_name=cluster_name,
+            )
+        )
+
+    def _ensure_environment(
+        self,
+        cluster_name: str,
+        *,
+        config: Path | None = None,
+    ) -> EnvironmentHandle:
+        spec = EnvironmentSpec(
+            name=cluster_name,
+            cluster_name=cluster_name,
+            config=config,
+        )
+        handle = self.environment_provider.ensure(spec)
+        self._environment_handle = handle
+        if self._client_factory is not None:
+            self.helm, self.kubectl, self.expose = self._client_factory(handle)
+        return handle
+
+    def _target_releases(
+        self,
+        target: ResolvedLocalTarget,
+        *,
+        profile: str | None,
+    ) -> tuple[LifecycleRelease | OciChartRelease, ...]:
+        if isinstance(target, ResolvedChartTarget):
+            return (
+                LifecycleRelease(
+                    type="lifecycle",
+                    chart=target.path.relative_to(self.root),
+                    profile=profile or "minimal",
+                ),
+            )
+        if profile is not None:
+            raise ChartManagerError(
+                "--profile is only valid for a chart target; LocalStack releases "
+                "declare their profiles"
+            )
+        assert isinstance(target, ResolvedStackTarget)
+        return tuple(target.stack.spec.releases)
+
+    def _preflight_target(
+        self,
+        releases: tuple[LifecycleRelease | OciChartRelease, ...],
+        *,
+        excluded_lifecycle_identities: frozenset[
+            ExternallySatisfiedLifecycle
+        ] = frozenset(),
+    ) -> tuple[_TargetLocalExecution | None, ...]:
+        """Compile and validate all local identities without mutating Helm state."""
+        seen: dict[Path, tuple[str, str]] = {}
+        executions: list[_TargetLocalExecution | None] = []
+        for release in releases:
+            if isinstance(release, OciChartRelease):
+                executions.append(None)
+                continue
+            chart_document = load_yaml_file(self.root / release.chart / "Chart.yaml")
+            release_name = chart_document.get("name")
+            if not isinstance(release_name, str):
+                raise ChartManagerError(
+                    f"{release.chart}/Chart.yaml must define a string name"
+                )
+            catalog = ClusterTestCatalog(
+                self.root,
+                charts_dir=release.chart.parent,
+            )
+            root_chart = catalog.get(release_name)
+            if root_chart.path.resolve() != (self.root / release.chart).resolve():
+                raise ChartManagerError(
+                    f"local release {release_name!r} does not match "
+                    f"its chart-lifecycle chart: {release.chart}"
+                )
+            plan = DependencyResolver(catalog.get).install_plan(
+                release_name,
+                release.profile,
+            )
+            deduped: list[InstallPlanEntry] = []
+            for entry in plan:
+                chart = catalog.get(entry.chart)
+                chart_path = chart.path.resolve()
+                entry_profile = chart.spec.profile(entry.profile)
+                effective_namespace = entry_profile.namespace or "default"
+                external_identity = ExternallySatisfiedLifecycle(
+                    chart_path=chart_path,
+                    chart=entry.chart,
+                    profile=entry.profile,
+                    namespace=effective_namespace,
+                )
+                if external_identity in excluded_lifecycle_identities:
+                    continue
+                identity = (entry.profile, effective_namespace)
+                previous = seen.get(chart_path)
+                if previous == identity:
+                    continue
+                if previous is not None:
+                    raise ChartManagerError(
+                        f"conflicting local lifecycle identities for {entry.chart}: "
+                        f"first {previous[0]} in {previous[1]}, then "
+                        f"{entry.profile} in {effective_namespace}"
+                    )
+                seen[chart_path] = identity
+                deduped.append(entry)
+            executions.append(
+                _TargetLocalExecution(
+                    catalog=catalog,
+                    plan=tuple(deduped),
+                )
+            )
+        return tuple(executions)
 
     # ----- internals --------------------------------------------------------
 
@@ -409,15 +415,17 @@ class DevelopmentClusterService:
         namespaces_created: set[str],
         summary: _DevelopmentClusterRunSummary,
         skip_installed: bool,
+        cluster_tests: ClusterTestCatalog | None = None,
     ) -> None:
         """Converge each plan entry, bucketing outcomes into `summary`.
 
         Continue-on-error: a failed entry is recorded and the loop moves
         on. Mutates `installed_keys` / `namespaces_created` in place.
         """
+        catalog = cluster_tests or self.cluster_tests
         for entry in plan:
             try:
-                chart = self.cluster_tests.get(entry.chart)
+                chart = catalog.get(entry.chart)
             except ChartManagerError as exc:
                 self._progress(failure("chart resolution failed:", f"{entry.chart}: {exc}"))
                 summary.failed.append(
@@ -482,7 +490,7 @@ class DevelopmentClusterService:
                 namespaces_created.add(namespace)
 
             try:
-                values = self.cluster_tests.value_paths(chart, entry.profile)
+                values = catalog.value_paths(chart, entry.profile)
                 self._progress(step("Updating dependencies", entry.chart))
                 # mtime-gated: skips the subprocess when Chart.lock is
                 # already newer than Chart.yaml and charts/ is populated.
@@ -536,6 +544,72 @@ class DevelopmentClusterService:
                     )
                 )
                 continue
+
+    def _converge_oci_release(
+        self,
+        release: str,
+        source: OciChartRelease,
+        *,
+        namespace: str,
+        values: list[Path],
+        timeout: str,
+        installed_keys: set[tuple[str, str]],
+        summary: _DevelopmentClusterRunSummary,
+        skip_installed: bool,
+    ) -> None:
+        """Converge one immutable OCI Helm source with Helm-owned readiness."""
+        key = (namespace, release)
+        identity = source.version or source.digest or "pinned"
+        if key in installed_keys and skip_installed:
+            self._progress(detail("skip", f"{release} (already installed in {namespace})"))
+            summary.no_change.append(
+                DevelopmentClusterEntryOutcome(release, identity, namespace)
+            )
+            return
+
+        missing_values = [path for path in values if not path.is_file()]
+        if missing_values:
+            message = "OCI values file(s) not found: " + ", ".join(map(str, missing_values))
+            self._progress(failure("apply failed:", f"{release} -> {message}"))
+            summary.failed.append(
+                DevelopmentClusterEntryFailure(
+                    chart=release,
+                    profile=identity,
+                    namespace=namespace,
+                    error=message,
+                )
+            )
+            return
+
+        chart_ref = (
+            f"{source.chart}@{source.digest}"
+            if source.digest is not None
+            else source.chart
+        )
+        try:
+            self._progress(step("Converging OCI release", f"{release}@{identity}"))
+            result = self.helm.upgrade_install(
+                release,
+                chart_ref,
+                namespace=namespace,
+                values=values,
+                timeout=timeout,
+                wait=True,
+                version=source.version,
+            )
+            bucket = summary.applied if result.status == "applied" else summary.no_change
+            bucket.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
+            installed_keys.add(key)
+        except (ExternalCommandError, ChartManagerError) as exc:
+            self._progress(failure("apply failed:", f"{release}@{identity} -> {exc}"))
+            summary.failed.append(
+                DevelopmentClusterEntryFailure(
+                    chart=release,
+                    profile=identity,
+                    namespace=namespace,
+                    error=str(exc),
+                )
+            )
 
     def _post_install_hook(self, chart: str, namespace: str) -> None:
         """Best-effort follow-up wait after the chart's own rollout-ready.
@@ -606,14 +680,17 @@ class DevelopmentClusterService:
         """Resolve the post-converge advisory data (see access.py)."""
         return access_hints(summary, kubectl=self.kubectl, namespace=namespace)
 
-    def _warn_on_port_mapping_drift(self, cluster_name: str) -> None:
+    def _warn_on_port_mapping_drift(
+        self,
+        cluster_name: str,
+        *,
+        config: Path | None = None,
+    ) -> None:
         """Warn on kind-config host-port drift (see drift.py)."""
         warn_on_port_mapping_drift(
-            cluster_name, kind=self.kind, root=self.root, progress=self._progress
-        )
-
-    def _check_cilium_service_host_drift(self, cluster_name: str) -> None:
-        """Hard-fail on a confirmed cilium k8sServiceHost mismatch (see drift.py)."""
-        check_cilium_service_host_drift(
-            cluster_name, kind=self.kind, helm=self.helm, progress=self._progress
+            cluster_name,
+            kind=self.kind,
+            root=self.root,
+            progress=self._progress,
+            config=config,
         )

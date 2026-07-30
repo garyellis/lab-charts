@@ -12,7 +12,6 @@ from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.lifecycle import (
     ActionKind,
     DiagnosticSeverity,
-    EdgeKind,
     LifecycleCompiler,
     Workflow,
     doctor_lifecycle,
@@ -43,7 +42,7 @@ def _requires(*refs: str) -> dict[str, object]:
     return {"requires": parsed}
 
 
-def test_validation_compiles_the_authored_environment_to_a_linear_dag(
+def test_validation_compiles_the_authored_environment_to_an_ordered_plan(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -59,11 +58,6 @@ def test_validation_compiles_the_authored_environment_to_a_linear_dag(
         ActionKind.RENDER,
         ActionKind.SCHEMA_VALIDATE,
         ActionKind.POLICY_VALIDATE,
-    ]
-    assert [edge.kind for edge in plan.edges] == [
-        EdgeKind.SEQUENCE,
-        EdgeKind.INPUT,
-        EdgeKind.SEQUENCE,
     ]
     assert plan.actions[1].target.to_dict() == {
         "workflow": "validation",
@@ -104,7 +98,7 @@ def test_validation_compiles_the_authored_environment_to_a_linear_dag(
         ),
     ],
 )
-def test_validation_dag_omits_disabled_validators(
+def test_validation_plan_omits_disabled_validators(
     chart_root: Path,
     make_chart: MakeChart,
     validators: dict[str, bool],
@@ -119,21 +113,9 @@ def test_validation_dag_omits_disabled_validators(
     plan = LifecycleCompiler(chart_root).compile_validation("app", "dev")
 
     assert [action.kind for action in plan.actions] == expected_actions
-    assert len(plan.edges) == len(plan.actions) - 1
-    if ActionKind.POLICY_VALIDATE in expected_actions:
-        policy_edge = next(
-            edge
-            for edge in plan.edges
-            if edge.target.endswith(ActionKind.POLICY_VALIDATE.value)
-        )
-        assert policy_edge.kind is (
-            EdgeKind.SEQUENCE
-            if ActionKind.SCHEMA_VALIDATE in expected_actions
-            else EdgeKind.INPUT
-        )
 
 
-def test_cluster_test_compiles_dependency_runtime_edges_and_effective_inputs(
+def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -181,16 +163,56 @@ def test_cluster_test_compiles_dependency_runtime_edges_and_effective_inputs(
         "values.yaml",
         "values-full.yaml",
     ]
-    base_test = next(
-        action
+    assert app_install.metadata == ()
+    assert all(action.metadata == () for action in plan.actions)
+
+
+def test_cluster_test_namespace_override_wins_over_authored_profile(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("app", profiles={"minimal": {"namespace": "authored"}})
+
+    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+        "app",
+        "minimal",
+        namespace_override="requested",
+    )
+
+    assert {
+        action.target.namespace
         for action in plan.actions
-        if action.target.chart == "base" and action.kind is ActionKind.HELM_TEST
+        if action.target.namespace is not None
+    } == {"requested"}
+
+
+def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("base", profiles={"minimal": {"namespace": "foundation"}})
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "authored-app",
+                "requires": [{"chart": "base", "profile": "minimal"}],
+            }
+        },
     )
-    requirement = next(
-        edge for edge in plan.edges if edge.kind is EdgeKind.RUNTIME_REQUIREMENT
+
+    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+        "app",
+        "minimal",
+        namespace_override="requested-app",
     )
-    assert requirement.source == base_test.action_id
-    assert requirement.target == app_install.action_id
+
+    namespaces = {
+        action.target.chart: action.target.namespace
+        for action in plan.actions
+        if action.kind is ActionKind.HELM_UPGRADE_INSTALL
+    }
+    assert namespaces == {"base": "foundation", "app": "requested-app"}
 
 
 def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
@@ -207,8 +229,28 @@ def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
         ActionKind.HELM_UPGRADE_INSTALL,
         ActionKind.WORKLOAD_READY,
     ]
-    assert plan.edges[-1].source.endswith("helm-upgrade-install")
-    assert plan.edges[-1].target.endswith("workload-ready")
+
+
+def test_cluster_test_lint_is_typed_and_ordered_between_dependency_and_install(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("app")
+
+    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+        "app", "minimal", lint=True
+    )
+
+    assert [action.kind for action in plan.actions] == [
+        ActionKind.NAMESPACE_ENSURE,
+        ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.HELM_LINT,
+        ActionKind.HELM_UPGRADE_INSTALL,
+        ActionKind.WORKLOAD_READY,
+        ActionKind.HELM_TEST,
+    ]
+    lint = next(action for action in plan.actions if action.kind is ActionKind.HELM_LINT)
+    assert {path.name for path in lint.values} == {"values.yaml"}
 
 
 def test_plan_projection_is_deterministic_and_json_serializable(
@@ -226,6 +268,7 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     assert first["kind"] == "LifecyclePlan"
     assert first["actions"][0]["actionId"].startswith("cluster-test.app.minimal.")
     assert first["actions"][0]["target"]["workflow"] == "cluster-test"
+    assert "edges" not in first
 
 
 def test_validation_rejects_unknown_environment_as_a_domain_error(

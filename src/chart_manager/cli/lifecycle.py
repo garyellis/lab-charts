@@ -66,7 +66,6 @@ def register(app: typer.Typer) -> None:
     """Attach lifecycle commands to ``app``."""
 
     app.command("plan")(plan)
-    app.command("graph")(graph)
     app.command("doctor")(doctor)
     app.command("status")(status)
     app.command("impact")(impact)
@@ -112,15 +111,7 @@ def _action_value(action: dict[str, Any], *names: str, default: str = "") -> str
 
 def _render_plan_text(data: dict[str, Any]) -> None:
     actions = data.get("actions", [])
-    incoming: dict[str, list[str]] = {}
-    for edge in data.get("edges", []):
-        if not isinstance(edge, dict):
-            continue
-        source = edge.get("source")
-        target = edge.get("target")
-        if isinstance(source, str) and isinstance(target, str):
-            incoming.setdefault(target, []).append(source)
-    table = Table("Action", "Kind", "Target", "Depends on")
+    table = Table("Action", "Kind", "Target")
     for action in actions:
         if not isinstance(action, dict):
             continue
@@ -134,63 +125,12 @@ def _render_plan_text(data: dict[str, Any]) -> None:
         else:
             target_text = _action_value(action, "chart", "target", default="-")
         action_id = _action_value(action, "id", "actionId", "action_id")
-        dependencies = incoming.get(
-            action_id,
-            action.get("dependsOn", action.get("depends_on", ())),
-        )
-        if isinstance(dependencies, str):
-            dependency_text = dependencies
-        elif dependencies is None:
-            dependency_text = "-"
-        else:
-            dependency_text = ", ".join(str(item) for item in dependencies) or "-"
         table.add_row(
             action_id,
             _action_value(action, "kind", "actionKind", "action_kind"),
             target_text or "-",
-            dependency_text,
         )
     console.print(table)
-
-
-def _render_graph_text(data: dict[str, Any]) -> None:
-    edges = data.get("edges", [])
-    if not edges:
-        console.print("No dependencies.")
-        return
-    for edge in edges:
-        if isinstance(edge, dict):
-            source = _action_value(edge, "from", "source", "prerequisite")
-            target = _action_value(edge, "to", "target", "dependent")
-            kind = _action_value(edge, "kind", "type")
-        elif isinstance(edge, (list, tuple)) and len(edge) >= 2:
-            source, target = str(edge[0]), str(edge[1])
-            kind = str(edge[2]) if len(edge) > 2 else ""
-        else:
-            continue
-        suffix = f" [{kind}]" if kind else ""
-        typer.echo(f"{source} -> {target}{suffix}")
-
-
-def _graph_projection(plan: dict[str, Any]) -> dict[str, Any]:
-    """Strip execution detail from a plan while preserving graph identity."""
-
-    graph = {
-        key: plan[key]
-        for key in ("workflow", "chart", "profile", "environment")
-        if key in plan
-    }
-    graph["actions"] = [
-        {
-            key: action[key]
-            for key in ("actionId", "kind", "target")
-            if key in action
-        }
-        for action in plan.get("actions", [])
-        if isinstance(action, dict)
-    ]
-    graph["edges"] = plan.get("edges", [])
-    return graph
 
 
 def plan(
@@ -209,24 +149,6 @@ def plan(
         _yaml(data)
     else:
         _render_plan_text(data)
-
-
-def graph(
-    chart: Annotated[str, typer.Argument(help="Chart name.")],
-    workflow: WorkflowOption,
-    profile: ProfileOption,
-    fmt: FormatOption = "text",
-    root: RootOption = Path("."),
-) -> None:
-    """Display dependencies in a compiled lifecycle plan."""
-
-    data = _compile(root, chart, workflow, profile).to_dict()
-    if fmt == "json":
-        _json(_graph_projection(data))
-    elif fmt == "yaml":
-        _yaml(_graph_projection(data))
-    else:
-        _render_graph_text(data)
 
 
 def _doctor(root: Path) -> Any:
@@ -303,7 +225,12 @@ def _build_live_observers(
 
 
 def _impact_service(root: Path) -> LifecycleImpactService:
-    return LifecycleImpactService(root, charts_dir=Settings().charts_dir)
+    settings = Settings()
+    return LifecycleImpactService(
+        root,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
 
 
 def _changed_paths(

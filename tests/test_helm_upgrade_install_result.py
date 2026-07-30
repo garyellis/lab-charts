@@ -100,3 +100,18 @@ def test_upgrade_install_classifies_applied_on_revision_bump(tmp_path: Path) -> 
     assert result.status == "applied"
     assert result.revision_before == 2
     assert result.revision_after == 3
+
+
+def test_upgrade_install_passes_an_exact_oci_version() -> None:
+    runner = _scripted(list_responses=["[]", _release(1)])
+    helm = Helm(runner=runner)
+
+    helm.upgrade_install(
+        "demo",
+        "oci://example.test/charts/demo",
+        namespace="demo-ns",
+        version="1.2.3",
+    )
+
+    upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
+    assert upgrade[upgrade.index("--version") + 1] == "1.2.3"

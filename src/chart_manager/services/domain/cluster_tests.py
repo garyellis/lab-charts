@@ -16,16 +16,6 @@ class ClusterTestRef(BaseModel):
     profile: str = "minimal"
 
 
-class ClusterCheckSpec(BaseModel):
-    """A named post-install check declared by a profile."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    type: str = "helm-test"
-    description: str | None = None
-
-
 class ClusterTestProfile(BaseModel):
     """How to install and test a chart under one named profile."""
 
@@ -36,28 +26,7 @@ class ClusterTestProfile(BaseModel):
     requires: list[ClusterTestRef] = Field(default_factory=list)
     values: list[str] = Field(default_factory=lambda: ["values.yaml"])
     helm_test: bool = Field(default=True, alias="helmTest")
-    checks: list[ClusterCheckSpec] = Field(default_factory=list)
     timeout: str = "10m"
-
-    def effective_checks(self) -> list[ClusterCheckSpec]:
-        """Every check this profile actually runs, declared or implicit.
-
-        `helmTest: true` runs the chart's helm test hooks without the
-        profile having to declare a check for it, so the check list a
-        caller sees must include that implicit entry. An explicitly
-        declared `helm-test` check wins -- the profile author gets to name
-        and describe it -- so we only synthesize one when none is present.
-        """
-        checks = list(self.checks)
-        if self.helm_test and not any(check.type == "helm-test" for check in checks):
-            checks.append(
-                ClusterCheckSpec(
-                    name="helm-test",
-                    type="helm-test",
-                    description="Run Helm test hooks for the release.",
-                )
-            )
-        return checks
 
     @field_validator("values")
     @classmethod

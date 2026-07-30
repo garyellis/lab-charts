@@ -35,6 +35,7 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container, Settings
 from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
+from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
@@ -73,7 +74,7 @@ ChartOption = Annotated[
     str,
     typer.Option(
         "--chart",
-        help="Chart name resolved under the configured chart directory.",
+        help="Chart name or chart directory.",
     ),
 ]
 OutOption = Annotated[
@@ -129,9 +130,17 @@ def _container() -> Container:
     return Container()
 
 
-def _make_app(progress: ProgressDisplay | None = None) -> ManifestValidationService:
+def _make_app(
+    progress: ProgressDisplay | None = None,
+    *,
+    charts_dir: Path | None = None,
+) -> ManifestValidationService:
     """Build the ManifestValidationService (module-level so tests can override)."""
-    return _container().validate_app(progress=progress, on_warn=_warn)
+    return _container().validate_app(
+        progress=progress,
+        on_warn=_warn,
+        charts_dir=charts_dir,
+    )
 
 
 def _warn(message: str) -> None:
@@ -149,7 +158,6 @@ def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
     try:
         recording = ManifestValidationEvidenceRecorder(
             root,
-            charts_dir=Settings().charts_dir,
         ).record(outcome)
     except Exception as exc:
         _warn(f"warning: lifecycle evidence was not recorded: {exc}")
@@ -227,6 +235,19 @@ def chart(
         phases.add("schema")
     if policy:
         phases.add("policy")
+    root = root.resolve()
+    settings = Settings()
+    candidate = Path(chart)
+    charts_dir: Path | None = None
+    if candidate.is_absolute() or len(candidate.parts) > 1 or (root / candidate).exists():
+        target = resolve_chart_target(
+            root,
+            chart,
+            charts_dir=settings.charts_dir,
+            local_config=settings.local_config,
+        )
+        chart = target.name
+        charts_dir = target.path.parent.relative_to(root)
     request = RunRequest(
         root=root,
         charts=(chart,),
@@ -242,6 +263,7 @@ def chart(
         timings=timings,
         fmt=fmt,
         github_step_summary=github_step_summary,
+        charts_dir=charts_dir,
     )
 
 
@@ -402,6 +424,7 @@ def _execute(
     timings: bool,
     fmt: str,
     github_step_summary: bool,
+    charts_dir: Path | None = None,
 ) -> None:
     """Execute one prepared request and own all CLI-side run behavior.
 
@@ -429,7 +452,11 @@ def _execute(
 
     display = _resolve_display(progress, fmt=fmt)
 
-    app = _make_app(display)
+    app = (
+        _make_app(display)
+        if charts_dir is None
+        else _make_app(display, charts_dir=charts_dir)
+    )
     try:
         outcome = app.run(request)
     except ValidateInputError as exc:

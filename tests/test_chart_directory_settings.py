@@ -12,7 +12,7 @@ from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.services.upgrader.paths import resolve_chart_path
-from chart_manager.settings import RepositoryLayout, Settings
+from chart_manager.settings import DEFAULT_LOCAL_CONFIG, RepositoryLayout, Settings
 from tests.conftest import FakeCommandRunner
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
@@ -61,6 +61,16 @@ def test_log_format_has_case_insensitive_environment_override(
     assert Settings().log_format == "json"
 
 
+def test_local_resource_file_has_default_and_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHART_MANAGER_LOCAL_CONFIG", raising=False)
+    assert Settings().local_config == DEFAULT_LOCAL_CONFIG
+
+    monkeypatch.setenv("CHART_MANAGER_LOCAL_CONFIG", "ops/local-dev.yaml")
+    assert Settings().local_config == Path("ops/local-dev.yaml")
+
+
 @pytest.mark.parametrize(
     "value",
     [Path("."), Path("../charts"), Path("deploy/../charts"), Path("/tmp/charts")],
@@ -68,6 +78,15 @@ def test_log_format_has_case_insensitive_environment_override(
 def test_settings_rejects_unsafe_chart_directories(value: Path) -> None:
     with pytest.raises(ValidationError):
         Settings(charts_dir=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [Path("."), Path("../local.yaml"), Path("ops/../local.yaml"), Path("/tmp/local.yaml")],
+)
+def test_settings_rejects_unsafe_local_config_paths(value: Path) -> None:
+    with pytest.raises(ValidationError):
+        Settings(local_config=value)
 
 
 def test_repository_layout_parses_nested_chart_prefix(tmp_path: Path) -> None:

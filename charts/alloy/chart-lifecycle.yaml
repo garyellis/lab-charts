@@ -50,10 +50,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: alloy-pods-ready
-            type: helm-test
-            description: Validate the Alloy release is healthy without requiring LGTM backends.
         timeout: 10m
 
       telemetry:
@@ -71,16 +67,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: metrics-export
-            type: helm-test
-            description: Validate Alloy can run with Mimir available for Prometheus remote write.
-          - name: logs-export
-            type: helm-test
-            description: Validate Alloy can run with Loki available for log delivery.
-          - name: traces-export
-            type: helm-test
-            description: Validate Alloy can run with Tempo available for OTLP traces.
         timeout: 15m
 
       ui-e2e:
@@ -94,10 +80,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: grafana-observability-ui
-            type: helm-test
-            description: Validate data produced through Alloy can be consumed through the Grafana stack.
         timeout: 20m
 
     dependentTests: []

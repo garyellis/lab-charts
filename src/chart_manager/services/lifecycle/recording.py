@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
-from chart_manager.services.lifecycle.compiler import LifecycleCompiler
 from chart_manager.services.lifecycle.evidence import (
     EvidenceRecord,
     EvidenceStatus,
@@ -22,7 +21,6 @@ from chart_manager.services.lifecycle.models import ActionKind, LifecycleAction,
 from chart_manager.services.manifest_validation.models import (
     PhaseName,
     PhaseResult,
-    RunResult,
 )
 from chart_manager.services.manifest_validation.requests import RunOutcome
 from chart_manager.services.manifest_validation.validator_registry import (
@@ -33,7 +31,6 @@ from chart_manager.services.manifest_validation.validators import (
     provider_by_id,
     validate_registry,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 RecordingStage = Literal["compile", "write"]
 
@@ -42,13 +39,6 @@ _PHASE_ACTION_KIND: dict[PhaseName, ActionKind] = {
     "schema": ActionKind.SCHEMA_VALIDATE,
     "policy": ActionKind.POLICY_VALIDATE,
 }
-
-
-class ValidationPlanCompiler(Protocol):
-    """Compiler surface needed by the recorder."""
-
-    def compile_validation(self, chart: str, environment: str) -> LifecyclePlan:
-        """Compile the matching validation plan."""
 
 
 class EvidenceSink(Protocol):
@@ -200,38 +190,37 @@ class ManifestValidationEvidenceRecorder:
         root: Path,
         *,
         repository: EvidenceSink | None = None,
-        compiler: ValidationPlanCompiler | None = None,
         clock: Callable[[], datetime] | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
     ) -> None:
         self.root = root.resolve()
         self.repository = repository or LocalEvidenceRepository(
             self.root / ".chart-manager" / "state"
         )
-        self.compiler = compiler or LifecycleCompiler(
-            self.root,
-            charts_dir=charts_dir,
-            validator_providers=validator_providers,
-        )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.run_id_factory = run_id_factory or _new_run_id
         self.validator_providers = validate_registry(validator_providers)
 
-    def record(self, outcome: RunOutcome | RunResult) -> ValidationEvidenceRecording:
-        """Compile each row and append evidence for PASS, FAIL, and SKIP phases.
+    def record(self, outcome: RunOutcome) -> ValidationEvidenceRecording:
+        """Append evidence for PASS, FAIL, and SKIP phases.
 
         ``NOT_RUN`` is intentionally absent: it describes work that did not
         execute, so persisting it as evidence would fabricate an observation.
-        A compile or write failure is scoped to its row/phase and does not stop
-        independent rows from being recorded.
+        The action identity comes from the plan captured before execution; this
+        recorder never recompiles configuration after results exist. A plan or
+        write failure is scoped to its row/phase and does not stop independent
+        rows from being recorded.
         """
 
-        result = outcome.result if isinstance(outcome, RunOutcome) else outcome
+        result = outcome.result
         run_id = _safe_run_id(self.run_id_factory())
         paths: list[Path] = []
         diagnostics: list[RecordingDiagnostic] = []
+        snapshots = {
+            (snapshot.chart, snapshot.environment): snapshot
+            for snapshot in outcome.validation_plans
+        }
 
         for row_result in result.rows:
             row = row_result.row
@@ -273,18 +262,29 @@ class ManifestValidationEvidenceRecorder:
                 )
             if not terminal_phases:
                 continue
-            try:
-                plan = self.compiler.compile_validation(row.chart, row.env)
-            except Exception as exc:
+            snapshot = snapshots.get((row.chart, row.env))
+            if snapshot is None:
                 diagnostics.append(
                     RecordingDiagnostic(
                         stage="compile",
                         chart=row.chart,
                         environment=row.env,
-                        message=str(exc),
+                        message="validation outcome has no pre-execution lifecycle plan",
                     )
                 )
                 continue
+            if snapshot.error is not None:
+                diagnostics.append(
+                    RecordingDiagnostic(
+                        stage="compile",
+                        chart=row.chart,
+                        environment=row.env,
+                        message=snapshot.error,
+                    )
+                )
+                continue
+            plan = snapshot.plan
+            assert plan is not None
 
             for phase_name, phase, validator_id in terminal_phases:
                 try:
@@ -349,12 +349,3 @@ class ManifestValidationEvidenceRecorder:
                     )
 
         return ValidationEvidenceRecording(run_id, tuple(paths), tuple(diagnostics))
-
-
-def record_validation_evidence(
-    root: Path,
-    outcome: RunOutcome | RunResult,
-) -> ValidationEvidenceRecording:
-    """Convenience entry point using the default compiler and local repository."""
-
-    return ManifestValidationEvidenceRecorder(root).record(outcome)

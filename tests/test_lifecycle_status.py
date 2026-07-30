@@ -343,7 +343,7 @@ def test_projection_accepts_compiled_validation_plan_coordinates() -> None:
         action_id="grafana.validate.dev.render",
         kind=ActionKind.RENDER,
         target=ActionTarget(
-            workflow=Workflow.VALIDATE,
+            workflow=Workflow.VALIDATION,
             chart="grafana",
             environment="dev",
             release="grafana",
@@ -353,11 +353,10 @@ def test_projection_accepts_compiled_validation_plan_coordinates() -> None:
         chart_path=Path("charts/grafana"),
     )
     compiled_plan = LifecyclePlan(
-        workflow=Workflow.VALIDATE,
+        workflow=Workflow.VALIDATION,
         chart="grafana",
         environment="dev",
         actions=(compiled_action,),
-        edges=(),
     )
 
     status = project_status(compiled_plan, ())

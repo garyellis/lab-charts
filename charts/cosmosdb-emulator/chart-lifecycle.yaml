@@ -37,10 +37,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: emulator-ready
-            type: helm-test
-            description: Poll the emulator /ready endpoint through the in-cluster service.
         timeout: 15m
 
       routed:
@@ -53,10 +49,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: emulator-ready
-            type: helm-test
-            description: Poll the emulator /ready endpoint through the in-cluster service.
         timeout: 20m
 
     dependentTests: []

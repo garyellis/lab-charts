@@ -76,13 +76,6 @@ def _sample_plan() -> _Plan:
                     "chartPath": "charts/grafana",
                 },
             ],
-            "edges": [
-                {
-                    "source": "grafana.dev.render",
-                    "target": "grafana.dev.schema",
-                    "kind": "input",
-                }
-            ],
         }
     )
 
@@ -92,7 +85,7 @@ def test_main_registers_lifecycle_group() -> None:
 
     assert result.exit_code == 0
     assert "plan" in result.stdout
-    assert "graph" in result.stdout
+    assert "graph" not in result.stdout
     assert "doctor" in result.stdout
     assert "status" in result.stdout
     assert "impact" in result.stdout
@@ -175,57 +168,6 @@ def test_invalid_workflow_is_rejected_before_compilation(
     assert "validation, cluster-test" in result.stderr
 
 
-def test_graph_text_displays_compact_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
-    compiler = _Compiler(_sample_plan())
-    monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: compiler)
-
-    result = CliRunner().invoke(
-        _build_app(),
-        [
-            "lifecycle",
-            "graph",
-            "grafana",
-            "--workflow",
-            "validation",
-            "--profile",
-            "dev",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert "grafana.dev.render -> grafana.dev.schema [input]" in result.stdout
-
-
-def test_graph_json_omits_execution_details(monkeypatch: pytest.MonkeyPatch) -> None:
-    compiler = _Compiler(_sample_plan())
-    monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: compiler)
-
-    result = CliRunner().invoke(
-        _build_app(),
-        [
-            "lifecycle",
-            "graph",
-            "grafana",
-            "--workflow",
-            "validation",
-            "--profile",
-            "dev",
-            "--format",
-            "json",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["actions"][0] == {
-        "actionId": "grafana.dev.render",
-        "kind": "render",
-        "target": {"chart": "grafana", "environment": "dev"},
-    }
-    assert "inputDigest" not in payload["actions"][0]
-    assert payload["edges"][0]["kind"] == "input"
-
-
 def test_doctor_json_exits_nonzero_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     report = SimpleNamespace(
         ok=False,
@@ -268,7 +210,7 @@ def test_status_uses_workflow_default_profile(
     workflow: str,
     expected_profile: str,
 ) -> None:
-    plan = _Plan({"actions": [], "edges": []})
+    plan = _Plan({"actions": []})
     compiler = _Compiler(plan)
     monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: compiler)
     projected: list[Any] = []
@@ -333,7 +275,7 @@ def test_status_live_is_rejected_for_validation(monkeypatch: pytest.MonkeyPatch)
 def test_cluster_status_passes_live_observers_to_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _Plan({"actions": [], "edges": []})
+    plan = _Plan({"actions": []})
     compiler = _Compiler(plan)
     monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: compiler)
     built: list[tuple[str, str | None]] = []
@@ -385,7 +327,7 @@ def test_cluster_status_passes_live_observers_to_projection(
 def test_live_builder_domain_error_degrades_to_cached_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _Plan({"actions": [], "edges": []})
+    plan = _Plan({"actions": []})
     compiler = _Compiler(plan)
     monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: compiler)
 
@@ -444,7 +386,7 @@ def test_safe_live_observer_stops_querying_after_domain_error() -> None:
 
 
 def test_status_yaml_is_kubernetes_shaped(monkeypatch: pytest.MonkeyPatch) -> None:
-    plan = _Plan({"actions": [], "edges": []})
+    plan = _Plan({"actions": []})
     monkeypatch.setattr(lifecycle_cli, "_compiler", lambda root: _Compiler(plan))
     result_object = SimpleNamespace(
         to_dict=lambda: {

@@ -19,8 +19,6 @@ class Workflow(StrEnum):
     """Lifecycle workflows compiled from authored ChartLifecycle resources."""
 
     VALIDATION = "validation"
-    # Python enum alias retained for callers that naturally use the verb.
-    VALIDATE = "validation"
     CLUSTER_TEST = "cluster-test"
 
 
@@ -32,17 +30,10 @@ class ActionKind(StrEnum):
     SCHEMA_VALIDATE = "schema-validate"
     POLICY_VALIDATE = "policy-validate"
     NAMESPACE_ENSURE = "namespace-ensure"
+    HELM_LINT = "helm-lint"
     HELM_UPGRADE_INSTALL = "helm-upgrade-install"
     WORKLOAD_READY = "workload-ready"
     HELM_TEST = "helm-test"
-
-
-class EdgeKind(StrEnum):
-    """Why one action must complete before another may start."""
-
-    SEQUENCE = "sequence"
-    INPUT = "input"
-    RUNTIME_REQUIREMENT = "runtime-requirement"
 
 
 @dataclass(frozen=True)
@@ -85,11 +76,6 @@ class LifecycleAction:
     timeout: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
 
-    @property
-    def id(self) -> str:
-        """Compatibility-friendly short spelling for graph consumers."""
-        return self.action_id
-
     def to_dict(self) -> dict[str, Any]:
         """Return a deterministic JSON-serializable action projection."""
         result: dict[str, Any] = {
@@ -109,34 +95,12 @@ class LifecycleAction:
 
 
 @dataclass(frozen=True)
-class LifecycleEdge:
-    """A directed edge: ``source`` must complete before ``target``."""
-
-    source: str
-    target: str
-    kind: EdgeKind
-    reason: str | None = None
-
-    def to_dict(self) -> dict[str, str]:
-        """Return a deterministic JSON-serializable edge projection."""
-        result = {
-            "source": self.source,
-            "target": self.target,
-            "kind": self.kind.value,
-        }
-        if self.reason is not None:
-            result["reason"] = self.reason
-        return result
-
-
-@dataclass(frozen=True)
 class LifecyclePlan:
-    """A deterministic action DAG compiled from authored intent."""
+    """A deterministic ordered action plan compiled from authored intent."""
 
     workflow: Workflow
     chart: str
     actions: tuple[LifecycleAction, ...]
-    edges: tuple[LifecycleEdge, ...]
     profile: str | None = None
     environment: str | None = None
     warnings: tuple[str, ...] = ()
@@ -148,10 +112,6 @@ class LifecyclePlan:
                 return action
         raise KeyError(action_id)
 
-    def dependencies_of(self, action_id: str) -> tuple[LifecycleEdge, ...]:
-        """Return incoming edges in their deterministic plan order."""
-        return tuple(edge for edge in self.edges if edge.target == action_id)
-
     def to_dict(self) -> dict[str, Any]:
         """Return the stable JSON projection used by CLI and evidence layers."""
         result: dict[str, Any] = {
@@ -160,7 +120,6 @@ class LifecyclePlan:
             "workflow": self.workflow.value,
             "chart": self.chart,
             "actions": [action.to_dict() for action in self.actions],
-            "edges": [edge.to_dict() for edge in self.edges],
         }
         if self.profile is not None:
             result["profile"] = self.profile

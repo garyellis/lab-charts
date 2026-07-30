@@ -26,7 +26,7 @@ DEFAULT_PORTS: Final[tuple[str, ...]] = ("8443:443", "8080:80")
 # ever used to build an advisory URL, never to decide how to connect.
 _HTTPS_REMOTE_PORTS: Final[frozenset[str]] = frozenset({"443", "8443"})
 
-# No Gateway installed yet (pre-lab, or a single-chart sandbox test) means
+# No Gateway installed yet (pre-lab, or a single-chart cluster test) means
 # there is no apps domain to derive; `localhost` matches the appsDomain
 # default in charts/istio-gateway/values-ci.yaml.
 APPS_DOMAIN_FALLBACK: Final[str] = "localhost"

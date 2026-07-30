@@ -32,10 +32,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: false
-        checks:
-          - name: existing-github-auth-secret
-            type: manual
-            description: Pre-create Secret arc-runners/arc-github-app or override gha-runner-scale-set.githubConfigSecret before install.
         timeout: 10m
 
       kind-runtime:

@@ -15,21 +15,27 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CHARTS_DIR = Path("charts")
+DEFAULT_LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
 
 
-def validate_charts_dir(value: Path) -> Path:
+def _validate_repository_dir(value: Path, *, field: str) -> Path:
     """Require a non-empty repository-relative path without traversal."""
     path = Path(value)
     if path.is_absolute():
-        raise ValueError("charts_dir must be relative to the repository root")
+        raise ValueError(f"{field} must be relative to the repository root")
     parts = path.parts
     if not parts or path == Path(".") or any(part in {"", ".", ".."} for part in parts):
         raise ValueError(
-            "charts_dir must be a non-empty repository-relative path without '.' or '..'"
+            f"{field} must be a non-empty repository-relative path without '.' or '..'"
         )
     return Path(*parts)
+
+
+def validate_charts_dir(value: Path) -> Path:
+    """Validate the managed chart directory."""
+    return _validate_repository_dir(value, field="charts_dir")
 
 
 class Settings(BaseSettings):
@@ -46,13 +52,19 @@ class Settings(BaseSettings):
     command_timeout: float | None = None
     event_source: str = "chart-manager"
     charts_dir: Path = DEFAULT_CHARTS_DIR
+    local_config: Path = DEFAULT_LOCAL_CONFIG
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
 
     @field_validator("charts_dir")
     @classmethod
-    def _validate_charts_dir(cls, value: Path) -> Path:
+    def _validate_charts_directory(cls, value: Path) -> Path:
         return validate_charts_dir(value)
+
+    @field_validator("local_config")
+    @classmethod
+    def _validate_local_config(cls, value: Path) -> Path:
+        return _validate_repository_dir(value, field="local_config")
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -100,6 +112,7 @@ class RepositoryLayout:
 
 __all__ = [
     "DEFAULT_CHARTS_DIR",
+    "DEFAULT_LOCAL_CONFIG",
     "LogFormat",
     "LogLevel",
     "RepositoryLayout",

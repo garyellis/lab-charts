@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from pathlib import Path
 
-from chart_manager.services.lifecycle.models import LifecyclePlan, Workflow
+from chart_manager.services.lifecycle.models import (
+    ActionKind,
+    LifecycleAction,
+    LifecyclePlan,
+    Workflow,
+)
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
 
@@ -14,16 +20,26 @@ class PlanProjectionError(ValueError):
     """The requested environment projection is invalid for the supplied plan."""
 
 
+@dataclass(frozen=True)
+class ExternallySatisfiedLifecycle:
+    """Exact managed lifecycle identity already converged by an environment."""
+
+    chart_path: Path
+    chart: str
+    profile: str
+    namespace: str
+
+
 def exclude_bootstrap_owned_charts(
     plan: LifecyclePlan,
-    bootstrap_charts: Iterable[str],
+    bootstrap_lifecycles: Iterable[ExternallySatisfiedLifecycle],
 ) -> LifecyclePlan:
-    """Remove environment-bootstrap-owned chart actions from a cluster plan.
+    """Project environment-bootstrap ownership onto a cluster plan.
 
-    Every edge incident to a removed action is removed as well.  The remaining
-    action and edge tuple order is unchanged, so the compiler's deterministic
-    ordering remains authoritative.  A warning on the returned plan makes the
-    external satisfaction contract visible to ``plan``/``explain`` surfaces.
+    Transitive bootstrap charts are removed completely. If bootstrap owns the
+    requested target, readiness and Helm tests remain so the requested profile
+    is still verified without fabricating install work or evidence. Remaining
+    action order is unchanged, so compiler ordering remains authoritative.
     """
 
     if plan.workflow is not Workflow.CLUSTER_TEST:
@@ -31,16 +47,37 @@ def exclude_bootstrap_owned_charts(
             "bootstrap-owned chart projection requires a cluster-test plan"
         )
 
-    requested = frozenset(bootstrap_charts)
-    if any(not chart.strip() for chart in requested):
-        raise PlanProjectionError("bootstrap-owned chart names must not be empty")
-    if plan.chart in requested:
-        raise PlanProjectionError(
-            f"cannot exclude requested target chart {plan.chart!r} as bootstrap-owned"
+    externally_satisfied = frozenset(bootstrap_lifecycles)
+    if any(
+        not identity.chart.strip()
+        or not identity.profile.strip()
+        or not identity.namespace.strip()
+        for identity in externally_satisfied
+    ):
+        raise PlanProjectionError("bootstrap lifecycle identity fields must not be empty")
+
+    def is_satisfied(action: LifecycleAction) -> bool:
+        target = action.target
+        if target.profile is None or target.namespace is None:
+            return False
+        identity = ExternallySatisfiedLifecycle(
+            chart_path=action.chart_path.resolve(),
+            chart=target.chart,
+            profile=target.profile,
+            namespace=target.namespace,
         )
+        return identity in externally_satisfied
 
     removed_ids = frozenset(
-        action.action_id for action in plan.actions if action.target.chart in requested
+        action.action_id
+        for action in plan.actions
+        if is_satisfied(action)
+        and (
+            action.target.chart != plan.chart
+            or action.target.profile != plan.profile
+            or action.kind
+            not in (ActionKind.WORKLOAD_READY, ActionKind.HELM_TEST)
+        )
     )
     if not removed_ids:
         return plan
@@ -55,19 +92,14 @@ def exclude_bootstrap_owned_charts(
         )
     )
     actions = tuple(action for action in plan.actions if action.action_id not in removed_ids)
-    edges = tuple(
-        edge
-        for edge in plan.edges
-        if edge.source not in removed_ids and edge.target not in removed_ids
-    )
     warning = (
         EXTERNAL_BOOTSTRAP_WARNING_PREFIX
         + ", ".join(removed_charts)
-        + "; actions and incident edges were excluded from this executable plan"
+        + "; environment-owned preparation/install actions were excluded "
+        "from this executable plan"
     )
     return replace(
         plan,
         actions=actions,
-        edges=edges,
         warnings=(*plan.warnings, warning),
     )

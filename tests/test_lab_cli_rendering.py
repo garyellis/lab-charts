@@ -2,7 +2,7 @@
 
 `cli/main.py` is the only place that knows Rich exists. These tests pin
 the output shape so the services-return-results refactor stayed a refactor:
-the summary table, the access-hint blocks, the down/delete lines and the
+the summary table, the access-hint blocks, the lifecycle lines and the
 progress narration must carry the same information they did when the
 services printed them themselves.
 """
@@ -202,7 +202,7 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
     )
     out = captured.export_text()
 
-    assert "sandbox cluster stopped: chart-manager" in out
+    assert "local cluster stopped: chart-manager" in out
     assert "stopped port-forward (pid 4242)" in out
 
 
@@ -214,7 +214,7 @@ def test_cluster_action_reports_the_absent_state(captured: Console) -> None:
     )
     out = captured.export_text()
 
-    assert "sandbox cluster not present: chart-manager" in out
+    assert "local cluster not present: chart-manager" in out
     assert "port-forward" not in out
 
 
@@ -270,7 +270,7 @@ def _result(*, failed: bool) -> DevelopmentClusterResult:
 
 
 def test_a_converge_with_failures_exits_non_zero(captured: Console) -> None:
-    """`sandbox up` rendered the failure line and then exited 0.
+    """`local up` rendered the failure line and then exited 0.
 
     DevelopmentClusterResult.ok exists so a surface can branch on it; CI wrappers and
     `mise run lab-up` read success from a run in which charts failed.

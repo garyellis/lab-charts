@@ -1,4 +1,4 @@
-"""Ephemeral cluster chart testing on a kind cluster.
+"""Ephemeral chart testing on a locally configured Kubernetes cluster.
 
 CI-shaped counterpart to ``DevelopmentClusterService``; see the development
 cluster package docstring for the full contrast.
@@ -6,9 +6,8 @@ cluster package docstring for the full contrast.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -17,22 +16,32 @@ from uuid import uuid4
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
-from chart_manager.services.clusters import bootstrap as cluster_bootstrap
-from chart_manager.services.clusters.bootstrap import (
-    CILIUM_BOOTSTRAP_CHART,
-    kind_config_path,
+from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
+from chart_manager.services.clusters.environment import (
+    EnvironmentHandle,
+    EnvironmentSpec,
+    KindEnvironmentProvider,
+    KubernetesEnvironmentProvider,
 )
-from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
+from chart_manager.services.domain.install_plan import DependencyResolver
 from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     HelmTestResult,
 )
 from chart_manager.services.lifecycle.compiler import LifecycleCompiler
 from chart_manager.services.lifecycle.evidence import ClusterIdentity, LocalEvidenceRepository
-from chart_manager.services.lifecycle.models import ActionKind
-from chart_manager.services.lifecycle.plan_projection import exclude_bootstrap_owned_charts
+from chart_manager.services.lifecycle.models import (
+    ActionKind,
+    LifecycleAction,
+    LifecyclePlan,
+)
+from chart_manager.services.lifecycle.plan_projection import (
+    ExternallySatisfiedLifecycle,
+    exclude_bootstrap_owned_charts,
+)
+from chart_manager.services.local_resources import LocalCluster, LocalResourceLoader
 from chart_manager.services.progress import ProgressCallback, info, step, warn
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
@@ -47,7 +56,7 @@ class EphemeralTestRequest:
 
     chart: str
     profile: str = DEFAULT_PROFILE
-    namespace: str = DEFAULT_NAMESPACE
+    namespace: str | None = None
     cluster_name: str = DEFAULT_CLUSTER_NAME
     ensure_cluster: bool = True
     include_dependent_tests: bool = False
@@ -89,43 +98,60 @@ class EphemeralTestClusterService:
         kubectl: Kubectl,
         progress: ProgressCallback | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        local_config: Path = Path(".chart-manager/local-cluster.yaml"),
+        environment_provider: KubernetesEnvironmentProvider | None = None,
+        client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl]] | None = None,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
         See ``DevelopmentClusterService.__init__``: defaulting these silently
         discarded the composition root's cluster configuration.
         """
-        self.root = root
-        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
+        self.root = root.resolve()
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
         # repository seams once rather than patching two independent graphs.
-        self.lifecycle_compiler = LifecycleCompiler(root, charts_dir=charts_dir)
+        self.lifecycle_compiler = LifecycleCompiler(self.root, charts_dir=charts_dir)
         self.lifecycle_compiler.cluster_tests = self.cluster_tests
         self.lifecycle_compiler.resolver = self.resolver
         self.evidence_repository = LocalEvidenceRepository(
-            root / ".chart-manager" / "state"
+            self.root / ".chart-manager" / "state"
         )
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
+        self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
+        self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
+        self._local_cluster: LocalCluster | None = None
+        self._client_factory = client_factory
+        self._environment_handle: EnvironmentHandle | None = None
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
     def ensure_cluster(self, cluster_name: str = DEFAULT_CLUSTER_NAME) -> str:
-        """Create or start the sandbox kind cluster; return its name.
+        """Create or start the configured local cluster; return its name.
 
-        Owns the kind-config rule (see `cluster_bootstrap.kind_config_path`)
-        so callers never have to know where the cluster's config comes from.
-        `Kind.ensure_cluster` handles the absent/stopped/running cases.
+        ``LocalCluster`` owns the Kind config path and bootstrap sequence;
+        callers only select the cluster identity.
         """
-        self._progress(step("Ensuring sandbox cluster", cluster_name))
-        self.kind.ensure_cluster(cluster_name, config=kind_config_path(self.root))
+        local_cluster = self.local_resources.load_cluster()
+        self._local_cluster = local_cluster
+        self._progress(step("Ensuring local cluster", cluster_name))
+        spec = EnvironmentSpec(
+            name=cluster_name,
+            cluster_name=cluster_name,
+            config=(self.root / local_cluster.spec.cluster.config).resolve(),
+        )
+        handle = self.environment_provider.ensure(spec)
+        self._environment_handle = handle
+        if self._client_factory is not None:
+            self.helm, self.kubectl = self._client_factory(handle)
         return cluster_name
 
     def run(self, options: EphemeralTestRequest) -> EphemeralTestResult:
-        """Ensure the cluster, bootstrap CNI, install the plan, run helm tests.
+        """Ensure the cluster, run configured bootstrap, install, and test.
 
         Fail-fast: the first chart error propagates (contrast
         ``DevelopmentClusterService.up``,
@@ -134,6 +160,26 @@ class EphemeralTestClusterService:
         accounting of what was installed and tested; narration goes to the
         injected progress callback.
         """
+        # Bootstrap ownership is authored configuration, not process state.
+        # Reload it for every run so a long-lived service cannot carry an
+        # earlier run's externally-satisfied identities forward.
+        local_cluster = self.local_resources.load_cluster()
+        self._local_cluster = local_cluster
+        bootstrap_preflight = LocalBootstrapExecutor(
+            self.root,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            progress=self._progress,
+        )
+        bootstrap_lifecycles = bootstrap_preflight.preflight(
+            local_cluster,
+            lint=options.lint,
+        )
+        plan = self._compile_lifecycle_plan(
+            options,
+            bootstrap_lifecycles=bootstrap_lifecycles,
+        )
         if options.ensure_cluster:
             self.ensure_cluster(options.cluster_name)
             # ensure_cluster may have started stopped node containers
@@ -145,70 +191,46 @@ class EphemeralTestClusterService:
             # which races. Gate explicitly.
             self._progress(step("Waiting for kube-apiserver"))
             self.kubectl.wait_apiserver_ready()
+        else:
+            # The caller owns environment existence, but chart-manager still
+            # owns addressing. Never fall back to ambient kubeconfig merely
+            # because creation was skipped.
+            handle = self.environment_provider.handle(
+                EnvironmentSpec(
+                    name=options.cluster_name,
+                    cluster_name=options.cluster_name,
+                    config=(self.root / local_cluster.spec.cluster.config).resolve(),
+                )
+            )
+            self._environment_handle = handle
+            if self._client_factory is not None:
+                self.helm, self.kubectl = self._client_factory(handle)
 
         installed: set[str] = set()
         tested: list[str] = []
         namespaces_created: set[str] = set()
 
-        # Delegate to the shared bootstrap module so `sandbox test` and
-        # `sandbox up` exercise the exact same CNI install path. The
-        # bootstrap returns the helm status string, or None when the
-        # cilium chart is absent. Either non-None value means "ran".
-        status = cluster_bootstrap.bootstrap(
-            options.cluster_name,
+        handle = self._environment_handle or self.environment_provider.handle(
+            EnvironmentSpec(name=options.cluster_name, cluster_name=options.cluster_name)
+        )
+        bootstrap = LocalBootstrapExecutor(
+            self.root,
             helm=self.helm,
             kind=self.kind,
             kubectl=self.kubectl,
-            cluster_tests=self.cluster_tests,
             progress=self._progress,
-            lint=options.lint,
         )
-        if status is not None:
-            installed.add(CILIUM_BOOTSTRAP_CHART)
-            namespaces_created.add(cluster_bootstrap.CILIUM_BOOTSTRAP_NAMESPACE)
+        for outcome in bootstrap.execute(local_cluster, environment=handle):
+            installed.add(outcome.name)
+            namespaces_created.add(outcome.namespace)
 
-        # Lint needs the legacy per-entry hook, a Cilium target must retain
-        # the bootstrap-owned live control-plane install semantics, and
-        # dependent-test fanout currently relies on one shared dedupe set
-        # across several plans. Keep those branches explicit until their
-        # contracts have first-class lifecycle actions.
-        use_legacy = (
-            options.lint
-            or options.chart == CILIUM_BOOTSTRAP_CHART
-            or options.include_dependent_tests
+        self._execute_lifecycle_plan(
+            options,
+            plan=plan,
+            installed=installed,
+            tested=tested,
+            namespaces_created=namespaces_created,
         )
-        if use_legacy:
-            plan = self.resolver.install_plan(options.chart, options.profile)
-            self._install_plan(
-                plan,
-                options,
-                installed,
-                tested,
-                namespaces_created,
-                lint=options.lint,
-            )
-        else:
-            self._execute_lifecycle_plan(
-                options,
-                installed=installed,
-                tested=tested,
-                namespaces_created=namespaces_created,
-            )
-
-        if options.include_dependent_tests:
-            for dependent in self.resolver.dependent_tests(options.chart):
-                dependent_plan = self.resolver.install_plan(
-                    dependent.chart,
-                    dependent.profile,
-                )
-                self._install_plan(
-                    dependent_plan,
-                    options,
-                    installed,
-                    tested,
-                    namespaces_created,
-                    lint=options.lint,
-                )
 
         return EphemeralTestResult(
             chart=options.chart,
@@ -223,34 +245,33 @@ class EphemeralTestClusterService:
         self,
         options: EphemeralTestRequest,
         *,
+        plan: LifecyclePlan,
         installed: set[str],
         tested: list[str],
         namespaces_created: set[str],
     ) -> None:
-        """Execute the safe default path through the compiled lifecycle DAG."""
+        """Execute the safe default path through the compiled lifecycle plan."""
 
-        compiled = self.lifecycle_compiler.compile_cluster_test(
-            options.chart,
-            options.profile,
-            default_namespace=options.namespace,
-        )
-        plan = exclude_bootstrap_owned_charts(
-            compiled,
-            {CILIUM_BOOTSTRAP_CHART},
-        )
         executor = ClusterActionExecutor(
             helm=_ExecutorHelmAdapter(self.helm),
             kubectl=self.kubectl,
             repository=self.evidence_repository,
+            progress=self._progress,
         )
-        context = getattr(self.kubectl, "context", None) or kind_context(
-            options.cluster_name
+        handle = self._environment_handle
+        bound_context = getattr(self.kubectl, "context", None)
+        context = (
+            handle.context
+            if handle is not None
+            else bound_context or kind_context(options.cluster_name)
         )
         result = executor.execute(
             plan,
-            fail_fast=True,
             run_id=_new_lifecycle_run_id(),
-            cluster=ClusterIdentity(name=options.cluster_name, context=context),
+            cluster=ClusterIdentity(
+                name=handle.identity if handle is not None else options.cluster_name,
+                context=context,
+            ),
         )
         for diagnostic in result.diagnostics:
             self._progress(
@@ -281,9 +302,18 @@ class EphemeralTestClusterService:
         failed_action = plan.action(failure.action_id)
         namespace = failed_action.target.namespace
         if namespace is not None:
-            diagnostics = self.kubectl.diagnostics(namespace)
-            if diagnostics.strip():
-                self._progress(info(diagnostics))
+            try:
+                diagnostics = self.kubectl.diagnostics(namespace)
+            except Exception as exc:
+                self._progress(
+                    warn(
+                        f"failed to collect diagnostics for namespace "
+                        f"{namespace}: {exc}"
+                    )
+                )
+            else:
+                if diagnostics.strip():
+                    self._progress(info(diagnostics))
         if failed_action.kind is ActionKind.HELM_TEST:
             raise ChartManagerError(
                 f"helm test failed for {failed_action.target.chart}: {failure.detail}"
@@ -293,92 +323,77 @@ class EphemeralTestClusterService:
             f"({failed_action.kind.value}): {failure.detail}"
         )
 
-    def _install_plan(
+    def _compile_lifecycle_plan(
         self,
-        plan: list[InstallPlanEntry],
         options: EphemeralTestRequest,
-        installed: set[str],
-        tested: list[str],
-        namespaces_created: set[str],
         *,
-        lint: bool,
-    ) -> None:
-        """Install each plan entry once, then `helm test` where the profile asks.
+        bootstrap_lifecycles: Iterable[ExternallySatisfiedLifecycle],
+    ) -> LifecyclePlan:
+        """Compile and project all requested plans before cluster mutation."""
 
-        `installed` / `tested` / `namespaces_created` are mutated so work is
-        deduped across the main and dependent-test passes; helm tests still
-        re-run for already-installed charts (that is the point of dependent
-        tests).
-        """
-        for entry in plan:
-            chart = self.cluster_tests.get(entry.chart)
-            profile = chart.spec.profile(entry.profile)
-            values = self.cluster_tests.value_paths(chart, entry.profile)
-            release = entry.chart
-            namespace = profile.namespace or options.namespace
-
-            if namespace not in namespaces_created:
-                self.kubectl.create_namespace(namespace)
-                namespaces_created.add(namespace)
-
-            if release not in installed:
-                self._progress(step("Updating dependencies", entry.chart))
-                # mtime-gated: a CI runner that's just `helm dependency
-                # update`d this chart on the previous step sees the lock
-                # is fresh and skips the redundant subprocess. Per-process
-                # cache also dedupes across the install + dependent tests
-                # passes when both touch the same chart.
-                self.helm.dependency_update_if_stale(chart.path)
-                if lint:
-                    self._progress(step("Linting", entry.chart))
-                    self.helm.lint(chart.path, values)
-                self._progress(step("Installing", f"{entry.chart}:{entry.profile} -> {namespace}"))
-                with self._diagnostics_on_failure(namespace):
-                    self.helm.upgrade_install(
-                        release,
-                        chart.path,
-                        namespace=namespace,
-                        values=values,
-                        timeout=profile.timeout,
-                        wait=False,
-                    )
-                installed.add(release)
-
-            if profile.helm_test:
-                self._progress(step("Waiting for workloads", entry.chart))
-                self.kubectl.wait_workloads_ready(namespace, timeout=profile.timeout)
-                self._progress(step("Running helm test", entry.chart))
-                try:
-                    with self._diagnostics_on_failure(namespace):
-                        result = self.helm.test(
-                            release, namespace=namespace, timeout=profile.timeout
-                        )
-                        if result.returncode != 0:
-                            raise ExternalCommandError(
-                                f"helm test exited {result.returncode}\n"
-                                f"{result.stderr or result.stdout}"
-                            )
-                except ExternalCommandError as exc:
-                    raise ChartManagerError(f"helm test failed for {entry.chart}: {exc}") from exc
-                tested.append(entry.chart)
-
-    @contextmanager
-    def _diagnostics_on_failure(self, namespace: str) -> Iterator[None]:
-        """Emit pod/event diagnostics on ExternalCommandError, then re-raise."""
-        try:
-            yield
-        except ExternalCommandError:
-            diagnostics = self.kubectl.diagnostics(namespace)
-            if diagnostics.strip():
-                self._progress(info(diagnostics))
-            raise
-
+        requested = [(options.chart, options.profile)]
+        if options.include_dependent_tests:
+            requested.extend(
+                (dependent.chart, dependent.profile)
+                for dependent in self.resolver.dependent_tests(options.chart)
+            )
+        plans = [
+            exclude_bootstrap_owned_charts(
+                self.lifecycle_compiler.compile_cluster_test(
+                    chart,
+                    profile,
+                    default_namespace=DEFAULT_NAMESPACE,
+                    namespace_override=options.namespace,
+                    lint=options.lint,
+                ),
+                bootstrap_lifecycles,
+            )
+            for chart, profile in requested
+        ]
+        return _merge_lifecycle_plans(plans)
 
 def _new_lifecycle_run_id() -> str:
     """Mint one evidence-safe identity for an ephemeral cluster-test run."""
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"cluster-test-{timestamp}-{uuid4().hex[:12]}"
+
+
+def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
+    """Compose authored fanout plans, executing each chart/profile action once.
+
+    Action IDs include the profile, so the same release under different
+    profiles is intentionally converged and tested once per profile. Identical
+    chart/profile actions shared by multiple dependent plans are deduplicated
+    while retaining first-authored plan order.
+    """
+
+    if not plans:
+        raise ChartManagerError("cluster test produced no lifecycle plans")
+    first = plans[0]
+    actions: list[LifecycleAction] = []
+    actions_by_id: dict[str, LifecycleAction] = {}
+    warnings: list[str] = []
+    for plan in plans:
+        if plan.workflow is not first.workflow:
+            raise ChartManagerError("cannot combine lifecycle plans from different workflows")
+        for action in plan.actions:
+            previous = actions_by_id.get(action.action_id)
+            if previous is None:
+                actions_by_id[action.action_id] = action
+                actions.append(action)
+            elif previous != action:
+                raise ChartManagerError(
+                    f"conflicting lifecycle action {action.action_id!r} across test plans"
+                )
+        for warning in plan.warnings:
+            if warning not in warnings:
+                warnings.append(warning)
+    return replace(
+        first,
+        actions=tuple(actions),
+        warnings=tuple(warnings),
+    )
 
 
 class _ExecutorHelmAdapter:
@@ -389,6 +404,9 @@ class _ExecutorHelmAdapter:
 
     def dependency_update_if_stale(self, chart_path: Path) -> object:
         return self.helm.dependency_update_if_stale(chart_path)
+
+    def lint(self, chart_path: Path, values: list[Path] | None = None) -> None:
+        self.helm.lint(chart_path, values or [])
 
     def upgrade_install(
         self,

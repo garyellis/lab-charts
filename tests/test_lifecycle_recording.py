@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from chart_manager.services.lifecycle.evidence import LocalEvidenceRepository
 from chart_manager.services.lifecycle.models import (
     ActionKind,
@@ -18,7 +20,10 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.requests import RunOutcome
+from chart_manager.services.manifest_validation.requests import (
+    RunOutcome,
+    ValidationPlanSnapshot,
+)
 
 NOW = datetime(2026, 7, 26, 18, tzinfo=UTC)
 
@@ -58,22 +63,45 @@ def validation_plan(
         chart=chart,
         environment=environment,
         actions=actions,
-        edges=(),
     )
 
 
-class StubCompiler:
-    def __init__(
-        self,
-        plans: dict[tuple[str, str], LifecyclePlan | Exception],
-    ) -> None:
-        self.plans = plans
+def run_outcome(
+    result: RunResult,
+    plans: dict[tuple[str, str], LifecyclePlan | Exception],
+) -> RunOutcome:
+    snapshots = tuple(
+        ValidationPlanSnapshot(
+            chart=chart,
+            environment=environment,
+            **(
+                {"error": str(plan)}
+                if isinstance(plan, Exception)
+                else {"plan": plan}
+            ),
+        )
+        for (chart, environment), plan in plans.items()
+    )
+    return RunOutcome(
+        result=result,
+        out_dir=result.rendered_root,
+        validation_plans=snapshots,
+    )
 
-    def compile_validation(self, chart: str, environment: str) -> LifecyclePlan:
-        result = self.plans[(chart, environment)]
-        if isinstance(result, Exception):
-            raise result
-        return result
+
+def test_validation_plan_snapshot_rejects_incoherent_identity() -> None:
+    plan = validation_plan("grafana", "dev")
+
+    with pytest.raises(ValueError, match="chart does not match"):
+        ValidationPlanSnapshot(chart="loki", environment="dev", plan=plan)
+    with pytest.raises(ValueError, match="environment does not match"):
+        ValidationPlanSnapshot(chart="grafana", environment="prod", plan=plan)
+    with pytest.raises(ValueError, match="validation workflow"):
+        ValidationPlanSnapshot(
+            chart="grafana",
+            environment="dev",
+            plan=replace(plan, workflow=Workflow.CLUSTER_TEST),
+        )
 
 
 def row_result(
@@ -133,11 +161,13 @@ def test_records_pass_fail_and_skip_but_not_not_run_or_dependency_update(
     outcome = RunOutcome(
         result=RunResult(rows=(first, second), rendered_root=tmp_path / "rendered"),
         out_dir=tmp_path / "rendered",
+        validation_plans=(
+            ValidationPlanSnapshot(chart="grafana", environment="dev", plan=plan),
+        ),
     )
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): plan}),
         clock=lambda: NOW,
         run_id_factory=lambda: "validation test/run",
     )
@@ -185,17 +215,19 @@ def test_compile_failure_does_not_prevent_an_independent_row_from_recording(
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler(
-            {
-                ("broken", "dev"): ValueError("invalid chart configuration"),
-                ("grafana", "prod"): validation_plan("grafana", "prod"),
-            }
-        ),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
 
-    result = recorder.record(RunResult(rows=(failed, healthy), rendered_root=tmp_path))
+    result = recorder.record(
+        run_outcome(
+            RunResult(rows=(failed, healthy), rendered_root=tmp_path),
+            {
+                ("broken", "dev"): ValueError("invalid chart configuration"),
+                ("grafana", "prod"): validation_plan("grafana", "prod"),
+            },
+        )
+    )
 
     assert not result.ok
     assert len(result.paths) == 1
@@ -206,6 +238,76 @@ def test_compile_failure_does_not_prevent_an_independent_row_from_recording(
         "message": "invalid chart configuration",
     }
     assert repository.history().records[0].target.chart == "grafana"
+
+
+def test_write_failure_does_not_prevent_later_phases_or_rows_from_recording(
+    tmp_path: Path,
+) -> None:
+    class FailOneAppend:
+        def __init__(self) -> None:
+            self.records = []
+
+        def append(self, record):  # type: ignore[no-untyped-def]
+            if record.target.chart == "broken" and record.action_kind == "schema-validate":
+                raise OSError("state temporarily unavailable")
+            self.records.append(record)
+            return tmp_path / f"{len(self.records)}.json"
+
+    sink = FailOneAppend()
+    broken = row_result(
+        "broken",
+        "dev",
+        render=PhaseResult(phase="render", status="PASS"),
+        schema=PhaseResult(phase="schema", status="FAIL"),
+        policy=PhaseResult(
+            phase="policy",
+            status="SKIP",
+            skip_cause="upstream_failed",
+        ),
+    )
+    healthy = row_result(
+        "healthy",
+        "prod",
+        render=PhaseResult(phase="render", status="PASS"),
+        schema=PhaseResult(phase="schema", status="PASS"),
+        policy=PhaseResult(phase="policy", status="PASS"),
+    )
+    recorder = ManifestValidationEvidenceRecorder(
+        tmp_path,
+        repository=sink,
+        clock=lambda: NOW,
+        run_id_factory=lambda: "run-1",
+    )
+
+    recording = recorder.record(
+        run_outcome(
+            RunResult(rows=(broken, healthy), rendered_root=tmp_path),
+            {
+                ("broken", "dev"): validation_plan("broken", "dev"),
+                ("healthy", "prod"): validation_plan("healthy", "prod"),
+            },
+        )
+    )
+
+    assert not recording.ok
+    assert len(recording.paths) == 5
+    assert recording.diagnostics[0].to_dict() == {
+        "stage": "write",
+        "chart": "broken",
+        "environment": "dev",
+        "phase": "schema",
+        "message": "state temporarily unavailable",
+    }
+    assert [
+        (record.target.chart, record.action_kind)
+        for record in sink.records
+    ] == [
+        ("broken", "render"),
+        ("broken", "policy-validate"),
+        ("healthy", "render"),
+        ("healthy", "schema-validate"),
+        ("healthy", "policy-validate"),
+    ]
 
 
 def test_disabled_validator_skip_needs_no_action_or_evidence_record(
@@ -236,12 +338,16 @@ def test_disabled_validator_skip_needs_no_action_or_evidence_record(
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): plan}),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
 
-    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+    recording = recorder.record(
+        run_outcome(
+            RunResult(rows=(result,), rendered_root=tmp_path),
+            {("grafana", "dev"): plan},
+        )
+    )
 
     assert recording.ok
     assert len(recording.paths) == 2
@@ -281,12 +387,16 @@ def test_disabled_validators_need_no_actions_when_render_fails(tmp_path: Path) -
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): plan}),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
 
-    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+    recording = recorder.record(
+        run_outcome(
+            RunResult(rows=(result,), rendered_root=tmp_path),
+            {("grafana", "dev"): plan},
+        )
+    )
 
     assert recording.ok
     assert len(recording.paths) == 1
@@ -319,12 +429,16 @@ def test_disabled_policy_needs_no_action_when_schema_fails(tmp_path: Path) -> No
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): plan}),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
 
-    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+    recording = recorder.record(
+        run_outcome(
+            RunResult(rows=(result,), rendered_root=tmp_path),
+            {("grafana", "dev"): plan},
+        )
+    )
 
     assert recording.ok
     assert len(recording.paths) == 2
@@ -363,12 +477,16 @@ def test_missing_enabled_validator_action_remains_a_diagnostic(tmp_path: Path) -
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): plan}),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
 
-    recording = recorder.record(RunResult(rows=(result,), rendered_root=tmp_path))
+    recording = recorder.record(
+        run_outcome(
+            RunResult(rows=(result,), rendered_root=tmp_path),
+            {("grafana", "dev"): plan},
+        )
+    )
 
     assert not recording.ok
     assert len(recording.paths) == 2
@@ -394,11 +512,10 @@ def test_recorded_digest_projects_stale_after_plan_inputs_change(tmp_path: Path)
     recorder = ManifestValidationEvidenceRecorder(
         tmp_path,
         repository=repository,
-        compiler=StubCompiler({("grafana", "dev"): original}),
         clock=lambda: NOW,
         run_id_factory=lambda: "run-1",
     )
-    recorder.record(result)
+    recorder.record(run_outcome(result, {("grafana", "dev"): original}))
     changed_render = replace(
         original.actions[1],
         input_digest="render-v2",

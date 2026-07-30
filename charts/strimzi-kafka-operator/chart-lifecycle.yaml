@@ -32,16 +32,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: control-plane-ready
-            type: helm-test
-            description: Wait for the Strimzi cluster operator deployment to become available.
-          - name: crds-installed
-            type: helm-test
-            description: Verify the Strimzi Kafka and StrimziPodSet CRDs exist.
-          - name: kafka-ready
-            type: helm-test
-            description: Wait for the lab Kafka cluster to report Ready.
         timeout: 10m
 
     dependentTests: []

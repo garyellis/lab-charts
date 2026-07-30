@@ -27,7 +27,6 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 def _result() -> RunResult:
@@ -70,9 +69,8 @@ def test_record_lifecycle_evidence_records_outcome(
     recorded: list[RunOutcome] = []
 
     class Recorder:
-        def __init__(self, root: Path, *, charts_dir: Path) -> None:
+        def __init__(self, root: Path) -> None:
             assert root == tmp_path
-            assert charts_dir == DEFAULT_CHARTS_DIR
 
         def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
             recorded.append(outcome)
@@ -91,8 +89,8 @@ def test_record_lifecycle_evidence_is_nonfatal_and_warns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Recorder:
-        def __init__(self, root: Path, *, charts_dir: Path) -> None:
-            assert charts_dir == DEFAULT_CHARTS_DIR
+        def __init__(self, root: Path) -> None:
+            assert root == tmp_path
 
         def record(self, outcome: RunOutcome):  # type: ignore[no-untyped-def]
             raise OSError("read-only state directory")
@@ -528,7 +526,48 @@ def test_chart_delegates_to_shared_execution_boundary(
         "timings": True,
         "fmt": "md",
         "github_step_summary": True,
+        "charts_dir": None,
     }
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_chart_accepts_a_chart_directory_like_charts_test(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    absolute: bool,
+) -> None:
+    chart_path = tmp_path / "fixtures" / "cert-manager"
+    chart_path.mkdir(parents=True)
+    (chart_path / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: cert-manager\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def execute(request, **options):  # type: ignore[no-untyped-def]
+        calls.append((request, options))
+
+    monkeypatch.setattr(validate_cli, "_execute", execute)
+    chart_arg = str(chart_path if absolute else Path("fixtures/cert-manager"))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate",
+            "chart",
+            "--chart",
+            chart_arg,
+            "--all",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    request, options = calls[0]
+    assert request.root == tmp_path
+    assert request.charts == ("cert-manager",)
+    assert options["charts_dir"] == Path("fixtures")
 
 
 def test_run_delegates_to_shared_execution_boundary(

@@ -11,8 +11,13 @@ from typing import Any
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.lifecycle.models import LIFECYCLE_API_VERSION
+from chart_manager.services.local_resources import (
+    LifecycleRelease,
+    LocalChartRelease,
+    load_local_cluster,
+)
 from chart_manager.services.manifest_validation.planner import build_worklist
-from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
+from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
 
 
 class ImpactReasonCode(StrEnum):
@@ -159,9 +164,16 @@ _STATIC_CLUSTER_FANOUT_RULES = (
 class LifecycleImpactService:
     """Derive both lifecycle worklists from an explicit changed-file list."""
 
-    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        charts_dir: Path = DEFAULT_CHARTS_DIR,
+        local_config: Path = DEFAULT_LOCAL_CONFIG,
+    ) -> None:
         self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
         self.root = self.layout.root
+        self.local_config = local_config
         self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
@@ -245,7 +257,7 @@ class LifecycleImpactService:
         fanout_matches = [
             (path, rule)
             for path in changes
-            for rule in _cluster_fanout_rules(self.layout)
+            for rule in _cluster_fanout_rules(self.layout, self.local_config)
             if rule.matches(path)
         ]
         if fanout_matches:
@@ -307,9 +319,14 @@ def analyze_lifecycle_impact(
     changed_files: list[str] | tuple[str, ...],
     *,
     charts_dir: Path = DEFAULT_CHARTS_DIR,
+    local_config: Path = DEFAULT_LOCAL_CONFIG,
 ) -> LifecycleImpact:
     """Convenience wrapper for explicit changed-file impact analysis."""
-    return LifecycleImpactService(root, charts_dir=charts_dir).analyze(changed_files)
+    return LifecycleImpactService(
+        root,
+        charts_dir=charts_dir,
+        local_config=local_config,
+    ).analyze(changed_files)
 
 
 def _default_profile(profiles: Mapping[str, object]) -> str:
@@ -357,21 +374,44 @@ def _validation_reason(
     )
 
 
-def _cluster_fanout_rules(layout: RepositoryLayout) -> tuple[_FanoutRule, ...]:
-    """Return static safety rules plus chart-root-relative shared prerequisites."""
-    return (
+def _cluster_fanout_rules(
+    layout: RepositoryLayout,
+    local_config: Path,
+) -> tuple[_FanoutRule, ...]:
+    """Return static rules plus repository-defined bootstrap prerequisites."""
+    rules = [
         *_STATIC_CLUSTER_FANOUT_RULES,
         _FanoutRule(
-            "cilium-bootstrap",
-            "Cilium is environment-owned bootstrap used by every ephemeral cluster",
-            prefix=(*layout.charts_dir.parts, "cilium"),
+            "local-cluster",
+            "LocalCluster configuration affects every local cluster test",
+            exact=local_config.parts,
         ),
         _FanoutRule(
             "istio-base",
             "Istio base is a shared runtime prerequisite across cluster tests",
             prefix=(*layout.charts_dir.parts, "istio-base"),
         ),
-    )
+    ]
+    cluster_path = layout.root / local_config
+    if cluster_path.is_file():
+        try:
+            cluster = load_local_cluster(cluster_path)
+        except SpecError:
+            pass
+        else:
+            for release in cluster.spec.bootstrap.releases:
+                if isinstance(release, (LifecycleRelease, LocalChartRelease)):
+                    rules.append(
+                        _FanoutRule(
+                            f"local-bootstrap-{release.chart.name}",
+                            (
+                                f"{release.chart} is a LocalCluster bootstrap "
+                                "prerequisite used by every cluster test"
+                            ),
+                            prefix=release.chart.parts,
+                        )
+                    )
+    return tuple(rules)
 
 
 def _append_reason(

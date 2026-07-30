@@ -1,9 +1,8 @@
-"""Compile authored ChartLifecycle resources into lifecycle action DAGs."""
+"""Compile authored ChartLifecycle resources into ordered lifecycle actions."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from pathlib import Path
 
@@ -13,9 +12,7 @@ from chart_manager.services.domain.install_plan import DependencyResolver
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
-    EdgeKind,
     LifecycleAction,
-    LifecycleEdge,
     LifecyclePlan,
     Workflow,
 )
@@ -29,7 +26,6 @@ from chart_manager.services.manifest_validation.validator_registry import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
-    ValidatorCategory,
     ValidatorProvider,
     validate_registry,
 )
@@ -37,7 +33,7 @@ from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class LifecycleCompiler:
-    """Compile authored lifecycle capabilities into a common typed action graph."""
+    """Compile authored lifecycle capabilities into common ordered action plans."""
 
     def __init__(
         self,
@@ -116,7 +112,7 @@ class LifecycleCompiler:
         actions: list[LifecycleAction] = []
         for kind, digest_values, metadata, additional_paths in definitions:
             action_id = _action_id(
-                Workflow.VALIDATE,
+                Workflow.VALIDATION,
                 target.name,
                 environment,
                 kind,
@@ -140,50 +136,11 @@ class LifecycleCompiler:
                 )
             )
 
-        edges: list[LifecycleEdge] = [
-            LifecycleEdge(
-                actions[0].action_id,
-                actions[1].action_id,
-                EdgeKind.SEQUENCE,
-                "chart dependencies must be current before rendering",
-            ),
-        ]
-        validator_actions = tuple(zip(actions[2:], enabled_invocations, strict=True))
-        schema_actions = tuple(
-            action
-            for action, invocation in validator_actions
-            if invocation.category is ValidatorCategory.SCHEMA
-        )
-        policy_actions = tuple(
-            action
-            for action, invocation in validator_actions
-            if invocation.category is ValidatorCategory.POLICY
-        )
-        for action in schema_actions or policy_actions:
-            edges.append(
-                LifecycleEdge(
-                    actions[1].action_id,
-                    action.action_id,
-                    EdgeKind.INPUT,
-                    "validation consumes rendered manifests",
-                )
-            )
-        for predecessor in schema_actions:
-            for successor in policy_actions:
-                edges.append(
-                    LifecycleEdge(
-                        predecessor.action_id,
-                        successor.action_id,
-                        EdgeKind.SEQUENCE,
-                        "preserve the authored validation phase order",
-                    )
-                )
         return LifecyclePlan(
-            workflow=Workflow.VALIDATE,
+            workflow=Workflow.VALIDATION,
             chart=target.name,
             environment=environment,
             actions=tuple(actions),
-            edges=tuple(edges),
             warnings=resolved.warnings,
         )
 
@@ -193,18 +150,17 @@ class LifecycleCompiler:
         profile: str,
         *,
         default_namespace: str = "default",
+        namespace_override: str | None = None,
+        lint: bool = False,
     ) -> LifecyclePlan:
-        """Compile a dependency-first live cluster-test action DAG.
+        """Compile a dependency-first live cluster-test action plan.
 
-        Kind creation, API readiness, and environment-owned bootstrap (notably
-        Cilium's live control-plane addressing) intentionally remain outside
-        chart-authored intent and therefore outside this chart plan.
+        Cluster creation, API readiness, and LocalCluster bootstrap
+        intentionally remain outside chart-authored intent and therefore
+        outside this chart plan.
         """
         install_plan = self.resolver.install_plan(chart, profile)
         actions: list[LifecycleAction] = []
-        edges: list[LifecycleEdge] = []
-        final_by_key: dict[tuple[str, str], str] = {}
-        install_by_key: dict[tuple[str, str], str] = {}
 
         for entry in install_plan:
             cluster_chart = self.cluster_tests.get(entry.chart)
@@ -213,7 +169,12 @@ class LifecycleCompiler:
                 path.resolve()
                 for path in self.cluster_tests.value_paths(cluster_chart, entry.profile)
             )
-            namespace = profile_spec.namespace or default_namespace
+            is_requested_target = entry.chart == chart and entry.profile == profile
+            namespace = (
+                namespace_override
+                if is_requested_target and namespace_override is not None
+                else profile_spec.namespace or default_namespace
+            )
             target_coordinates = ActionTarget(
                 workflow=Workflow.CLUSTER_TEST,
                 chart=entry.chart,
@@ -226,11 +187,15 @@ class LifecycleCompiler:
             for kind in (
                 ActionKind.NAMESPACE_ENSURE,
                 ActionKind.HELM_DEPENDENCY_UPDATE,
+                *((ActionKind.HELM_LINT,) if lint else ()),
                 ActionKind.HELM_UPGRADE_INSTALL,
             ):
                 action_id = _action_id(*prefix, kind)
-                action_values = values if kind is ActionKind.HELM_UPGRADE_INSTALL else ()
-                metadata = (("target", str(entry.target).lower()),)
+                action_values = (
+                    values
+                    if kind in (ActionKind.HELM_LINT, ActionKind.HELM_UPGRADE_INSTALL)
+                    else ()
+                )
                 entry_actions.append(
                     LifecycleAction(
                         action_id=action_id,
@@ -241,7 +206,7 @@ class LifecycleCompiler:
                             action_id=action_id,
                             chart_path=cluster_chart.path,
                             values=action_values,
-                            metadata=metadata,
+                            metadata=(),
                         ),
                         chart_path=cluster_chart.path.resolve(),
                         values=action_values,
@@ -250,28 +215,9 @@ class LifecycleCompiler:
                             if kind is ActionKind.HELM_UPGRADE_INSTALL
                             else None
                         ),
-                        metadata=metadata,
                     )
                 )
             actions.extend(entry_actions)
-            namespace_action, dependency_action, install_action = entry_actions
-            install_by_key[(entry.chart, entry.profile)] = install_action.action_id
-            edges.extend(
-                (
-                    LifecycleEdge(
-                        namespace_action.action_id,
-                        install_action.action_id,
-                        EdgeKind.SEQUENCE,
-                        "release namespace must exist before installation",
-                    ),
-                    LifecycleEdge(
-                        dependency_action.action_id,
-                        install_action.action_id,
-                        EdgeKind.SEQUENCE,
-                        "Helm dependencies must be current before installation",
-                    ),
-                )
-            )
 
             ready_id = _action_id(*prefix, ActionKind.WORKLOAD_READY)
             ready = LifecycleAction(
@@ -288,18 +234,8 @@ class LifecycleCompiler:
                 chart_path=cluster_chart.path.resolve(),
                 values=values,
                 timeout=profile_spec.timeout,
-                metadata=(("target", str(entry.target).lower()),),
             )
             actions.append(ready)
-            edges.append(
-                LifecycleEdge(
-                    install_action.action_id,
-                    ready.action_id,
-                    EdgeKind.SEQUENCE,
-                    "installed workloads must become ready",
-                )
-            )
-            final_action = ready
             if profile_spec.helm_test:
                 test_id = _action_id(*prefix, ActionKind.HELM_TEST)
                 helm_test = LifecycleAction(
@@ -311,102 +247,20 @@ class LifecycleCompiler:
                         action_id=test_id,
                         chart_path=cluster_chart.path,
                         values=values,
-                        metadata=(
-                            ("timeout", profile_spec.timeout),
-                            (
-                                "checks",
-                                json.dumps(
-                                    [
-                                        {
-                                            "name": check.name,
-                                            "type": check.type,
-                                            "description": check.description,
-                                        }
-                                        for check in profile_spec.effective_checks()
-                                    ],
-                                    sort_keys=True,
-                                ),
-                            ),
-                        ),
+                        metadata=(("timeout", profile_spec.timeout),),
                     ),
                     chart_path=cluster_chart.path.resolve(),
                     values=values,
                     timeout=profile_spec.timeout,
-                    metadata=(
-                        ("target", str(entry.target).lower()),
-                        (
-                            "checks",
-                            json.dumps([check.name for check in profile_spec.effective_checks()]),
-                        ),
-                    ),
                 )
                 actions.append(helm_test)
-                edges.append(
-                    LifecycleEdge(
-                        ready.action_id,
-                        helm_test.action_id,
-                        EdgeKind.SEQUENCE,
-                        "Helm tests run against ready workloads",
-                    )
-                )
-                final_action = helm_test
-            final_by_key[(entry.chart, entry.profile)] = final_action.action_id
-
-        # Encode the authored runtime graph explicitly rather than relying on
-        # the tuple order inherited from the dependency resolver.
-        for entry in install_plan:
-            cluster_chart = self.cluster_tests.get(entry.chart)
-            profile_spec = cluster_chart.spec.profile(entry.profile)
-            dependent_install = install_by_key[(entry.chart, entry.profile)]
-            for required in profile_spec.requires:
-                required_final = final_by_key[(required.chart, required.profile)]
-                edges.append(
-                    LifecycleEdge(
-                        required_final,
-                        dependent_install,
-                        EdgeKind.RUNTIME_REQUIREMENT,
-                        f"{entry.chart}:{entry.profile} requires "
-                        f"{required.chart}:{required.profile}",
-                    )
-                )
 
         return LifecyclePlan(
             workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile=profile,
             actions=tuple(actions),
-            edges=tuple(edges),
         )
-
-
-def compile_validation_plan(
-    root: Path,
-    chart: str,
-    environment: str,
-    *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
-) -> LifecyclePlan:
-    """Convenience wrapper for one validation plan."""
-    return LifecycleCompiler(
-        root,
-        charts_dir=charts_dir,
-    ).compile_validation(chart, environment)
-
-
-def compile_cluster_test_plan(
-    root: Path,
-    chart: str,
-    profile: str,
-    *,
-    default_namespace: str = "default",
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
-) -> LifecyclePlan:
-    """Convenience wrapper for one cluster-test plan."""
-    return LifecycleCompiler(root, charts_dir=charts_dir).compile_cluster_test(
-        chart,
-        profile,
-        default_namespace=default_namespace,
-    )
 
 
 def _action_id(*parts: object) -> str:

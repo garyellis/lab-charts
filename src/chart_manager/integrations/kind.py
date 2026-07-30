@@ -144,12 +144,9 @@ class Kind:
         Note: relies on the `<name>-control-plane` naming convention, unlike
         the label-based discovery used elsewhere in this class.
         """
-        # cilium replaces kube-proxy and needs the API server reachable
-        # without a Service VIP. On kind the control-plane container's
-        # IP on the `kind` docker network is what cluster-internal
-        # traffic uses; we look it up via `docker inspect` rather than
-        # `kubectl get endpoints` so this works before the cluster has
-        # a CNI and pods/endpoints can reconcile.
+        # A bootstrap chart may need the API server before cluster networking
+        # exists. The control-plane container IP on Kind's Docker network is
+        # available at that stage, unlike a Kubernetes Service VIP.
         container = f"{name}-control-plane"
         result = self._run(
             [

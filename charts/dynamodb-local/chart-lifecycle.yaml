@@ -37,10 +37,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: dynamodb-list-tables
-            type: helm-test
-            description: Run aws dynamodb list-tables against the in-cluster service endpoint.
         timeout: 10m
 
       routed:
@@ -53,10 +49,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: dynamodb-list-tables
-            type: helm-test
-            description: Run aws dynamodb list-tables against the in-cluster service endpoint.
         timeout: 15m
 
     dependentTests: []
