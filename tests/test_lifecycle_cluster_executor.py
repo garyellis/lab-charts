@@ -8,11 +8,6 @@ from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     ClusterPlanError,
 )
-from chart_manager.services.lifecycle.evidence import (
-    ClusterIdentity,
-    EvidenceRecord,
-    LocalEvidenceRepository,
-)
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
@@ -133,12 +128,10 @@ def executor(
     calls: list[str],
     *,
     helm: FakeHelm | None = None,
-    repository: LocalEvidenceRepository | None = None,
 ) -> ClusterActionExecutor:
     return ClusterActionExecutor(
         helm=helm or FakeHelm(calls),
         kubectl=FakeKubectl(calls),
-        repository=repository,
         clock=lambda: NOW,
     )
 
@@ -300,68 +293,6 @@ def test_executes_lint_with_selected_values() -> None:
 
     assert result.ok
     assert calls == ["lint:grafana:1"]
-
-
-def test_records_evidence_for_executed_and_skipped_actions(tmp_path: Path) -> None:
-    dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
-    install = action("cluster:grafana:install", ActionKind.HELM_UPGRADE_INSTALL)
-    lifecycle_plan = plan((dependency, install))
-    calls: list[str] = []
-    repository = LocalEvidenceRepository(tmp_path / "state")
-    cluster = ClusterIdentity(name="chart-manager", context="kind-chart-manager", uid="node-1")
-
-    result = executor(
-        calls,
-        helm=FakeHelm(calls, fail_dependency=True),
-        repository=repository,
-    ).execute(
-        lifecycle_plan,
-        run_id="cluster-run-1",
-        cluster=cluster,
-    )
-    history = repository.history()
-
-    assert len(result.evidence_paths) == 2
-    assert result.diagnostics == ()
-    assert {record.verdict for record in history.records} == {"FAIL", "SKIP"}
-    assert {record.input_digest for record in history.records} == {
-        dependency.input_digest,
-        install.input_digest,
-    }
-    assert all(record.cluster == cluster for record in history.records)
-    assert all(record.target.workflow == "cluster-test" for record in history.records)
-
-
-def test_evidence_failures_are_non_fatal_and_every_action_is_attempted() -> None:
-    class FailingEvidenceSink:
-        def __init__(self) -> None:
-            self.action_ids: list[str] = []
-
-        def append(self, record: EvidenceRecord) -> Path:
-            action_id = record.action_id
-            self.action_ids.append(action_id)
-            raise OSError(f"cannot persist {action_id}")
-
-    namespace = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
-    dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
-    calls: list[str] = []
-    sink = FailingEvidenceSink()
-    lifecycle_plan = plan((namespace, dependency))
-    result = ClusterActionExecutor(
-        helm=FakeHelm(calls),
-        kubectl=FakeKubectl(calls),
-        repository=sink,
-        clock=lambda: NOW,
-    ).execute(
-        lifecycle_plan,
-        run_id="cluster-run-1",
-        cluster=ClusterIdentity(name="test", context="kind-test"),
-    )
-
-    assert result.ok
-    assert [outcome.verdict for outcome in result.outcomes] == ["PASS", "PASS"]
-    assert sink.action_ids == [namespace.action_id, dependency.action_id]
-    assert [diagnostic.action_id for diagnostic in result.diagnostics] == sink.action_ids
 
 
 def test_rejects_validation_plan_before_calling_cluster_integrations() -> None:

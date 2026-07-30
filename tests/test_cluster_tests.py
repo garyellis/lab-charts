@@ -13,7 +13,6 @@ from chart_manager.services.chart_config import (
     require_cluster_test,
 )
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
-from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
@@ -340,12 +339,6 @@ def test_ephemeral_default_executes_projected_action_order(
     assert result.installed == ("grafana",)
     assert result.tested == ("grafana",)
     assert result.namespaces == ("monitoring",)
-    history = service.evidence_repository.history()
-    assert len(history.records) == 5
-    assert {record.target.chart for record in history.records} == {"grafana"}
-    assert {record.cluster.context for record in history.records if record.cluster} == {
-        "kind-chart-manager"
-    }
 
 
 def test_ephemeral_no_ensure_binds_clients_to_selected_provider_context(
@@ -378,34 +371,6 @@ def test_ephemeral_no_ensure_binds_clients_to_selected_provider_context(
     assert [handle.context for handle in handles] == ["kind-selected"]
 
 
-def test_ephemeral_evidence_uses_provider_handle_with_prebound_clients(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-    service, _kubectl = _migration_service(tmp_path, calls=calls)
-    custom_handle = EnvironmentHandle(
-        identity="prebound-cluster",
-        context="provider-owned-context",
-        provider_type="custom",
-    )
-    service.environment_provider = SimpleNamespace(
-        handle=lambda _spec: custom_handle,
-    )
-    monkeypatch.setattr(
-        service.lifecycle_compiler,
-        "compile_cluster_test",
-        lambda *_args, **_kwargs: _migration_plan(),
-    )
-
-    service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
-
-    records = service.evidence_repository.history().records
-    assert {record.cluster.context for record in records if record.cluster} == {
-        "provider-owned-context"
-    }
-
-
 def test_ephemeral_failure_records_partial_evidence_then_reports_diagnostics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -425,9 +390,6 @@ def test_ephemeral_failure_records_partial_evidence_then_reports_diagnostics(
     with pytest.raises(ChartManagerError, match="dependency update failed"):
         service.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
 
-    history = service.evidence_repository.history()
-    assert {record.verdict for record in history.records} == {"PASS", "FAIL", "SKIP"}
-    assert len(history.records) == 5
     assert kubectl.diagnostic_namespaces == ["monitoring"]
     assert "install:grafana:grafana" not in calls
 
@@ -460,16 +422,6 @@ def test_ephemeral_lint_is_a_first_class_action_before_install(
         "test:grafana",
     ]
     assert result.installed == ("grafana",)
-    assert {
-        record.action_kind for record in service.evidence_repository.history().records
-    } == {
-        "namespace-ensure",
-        "helm-dependency-update",
-        "helm-lint",
-        "helm-upgrade-install",
-        "workload-ready",
-        "helm-test",
-    }
 
 
 def test_ephemeral_lint_failure_keeps_diagnostics_and_terminal_evidence(
@@ -499,9 +451,6 @@ def test_ephemeral_lint_failure_keeps_diagnostics_and_terminal_evidence(
 
     assert kubectl.diagnostic_namespaces == ["monitoring"]
     assert "install:grafana:grafana" not in calls
-    records = service.evidence_repository.history().records
-    assert len(records) == 6
-    assert {record.verdict for record in records} == {"PASS", "FAIL", "SKIP"}
 
 
 def test_ephemeral_bootstrap_target_only_runs_readiness_and_tests(
@@ -544,9 +493,6 @@ def test_ephemeral_bootstrap_target_only_runs_readiness_and_tests(
     ]
     assert result.installed == ()
     assert result.tested == ("grafana",)
-    assert {
-        record.action_kind for record in service.evidence_repository.history().records
-    } == {"workload-ready", "helm-test"}
 
 
 def test_ephemeral_bootstrap_transitive_dependency_is_not_reinstalled_or_retested(

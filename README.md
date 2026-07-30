@@ -40,11 +40,8 @@ uv run chart-manager validate chart --chart grafana --env dev
 | `uv run chart-manager local reset --chart <name-or-path>` | Destroy and recreate that chart's cluster, then converge it. Use `--stack` for a stack. |
 | `mise run charts` | List every chart wrapper the CLI knows about. |
 | `mise run test` | Run the Python unit tests for the CLI. |
-| `uv run chart-manager lifecycle plan <name> --workflow validation --profile dev` | Compile authored intent into the exact ordered action plan without executing it. |
-| `uv run chart-manager lifecycle status <name> --workflow cluster-test --profile minimal --live` | Merge cached evidence with read-only Helm and Kubernetes observations. |
-| `uv run chart-manager lifecycle impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
+| `uv run chart-manager ci impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
 | `uv run chart-manager publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
-| `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
 | `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
 Local operation has three authored concepts:
@@ -204,6 +201,6 @@ files out to every declared environment.
   isolated Renovate upgrades, dependency coverage, versioning, and callback
   security.
 - [`docs/MENTAL_MODEL.md`](docs/MENTAL_MODEL.md) — how the pieces fit together.
-- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent,
-  compiled action plans, evidence, and synthesized status.
+- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent
+  and compiled action plans.
 - [`docs/validate-pipeline-plan.md`](docs/validate-pipeline-plan.md) — design rationale for the validate pipeline.

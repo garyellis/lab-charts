@@ -8,13 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
 
 from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kind import Kind, kind_context
+from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
@@ -31,7 +29,6 @@ from chart_manager.services.lifecycle.cluster_executor import (
     HelmTestResult,
 )
 from chart_manager.services.lifecycle.compiler import LifecycleCompiler
-from chart_manager.services.lifecycle.evidence import ClusterIdentity, LocalEvidenceRepository
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
@@ -116,9 +113,6 @@ class EphemeralTestClusterService:
         self.lifecycle_compiler = LifecycleCompiler(self.root, charts_dir=charts_dir)
         self.lifecycle_compiler.cluster_tests = self.cluster_tests
         self.lifecycle_compiler.resolver = self.resolver
-        self.evidence_repository = LocalEvidenceRepository(
-            self.root / ".chart-manager" / "state"
-        )
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
@@ -255,31 +249,9 @@ class EphemeralTestClusterService:
         executor = ClusterActionExecutor(
             helm=_ExecutorHelmAdapter(self.helm),
             kubectl=self.kubectl,
-            repository=self.evidence_repository,
             progress=self._progress,
         )
-        handle = self._environment_handle
-        bound_context = getattr(self.kubectl, "context", None)
-        context = (
-            handle.context
-            if handle is not None
-            else bound_context or kind_context(options.cluster_name)
-        )
-        result = executor.execute(
-            plan,
-            run_id=_new_lifecycle_run_id(),
-            cluster=ClusterIdentity(
-                name=handle.identity if handle is not None else options.cluster_name,
-                context=context,
-            ),
-        )
-        for diagnostic in result.diagnostics:
-            self._progress(
-                warn(
-                    f"lifecycle evidence write failed for "
-                    f"{diagnostic.action_id}: {diagnostic.message}"
-                )
-            )
+        result = executor.execute(plan)
 
         for outcome in result.outcomes:
             if outcome.verdict != "PASS":
@@ -351,13 +323,6 @@ class EphemeralTestClusterService:
             for chart, profile in requested
         ]
         return _merge_lifecycle_plans(plans)
-
-def _new_lifecycle_run_id() -> str:
-    """Mint one evidence-safe identity for an ephemeral cluster-test run."""
-
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"cluster-test-{timestamp}-{uuid4().hex[:12]}"
-
 
 def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
     """Compose authored fanout plans, executing each chart/profile action once.

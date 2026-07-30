@@ -7,7 +7,7 @@ learning the shape of ``chart-lifecycle.yaml``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -129,65 +129,3 @@ class LifecyclePlan:
             result["warnings"] = list(self.warnings)
         return result
 
-
-class DiagnosticSeverity(StrEnum):
-    """Severity of a catalog doctor finding."""
-
-    ERROR = "error"
-    WARNING = "warning"
-
-
-@dataclass(frozen=True)
-class LifecycleDiagnostic:
-    """One structured catalog or runtime-reference finding."""
-
-    severity: DiagnosticSeverity
-    code: str
-    message: str
-    chart: str | None = None
-    profile: str | None = None
-    path: Path | None = None
-
-    def to_dict(self) -> dict[str, str]:
-        """Return a compact JSON-safe finding."""
-        result = {
-            "severity": self.severity.value,
-            "code": self.code,
-            "message": self.message,
-        }
-        for key, value in (
-            ("chart", self.chart),
-            ("profile", self.profile),
-            ("path", str(self.path) if self.path is not None else None),
-        ):
-            if value is not None:
-                result[key] = value
-        return result
-
-
-@dataclass(frozen=True)
-class DoctorReport:
-    """Repository-wide lifecycle configuration health."""
-
-    checked_charts: int
-    diagnostics: tuple[LifecycleDiagnostic, ...] = field(default_factory=tuple)
-
-    @property
-    def ok(self) -> bool:
-        """Whether no error-severity findings were discovered."""
-        return not any(
-            diagnostic.severity is DiagnosticSeverity.ERROR
-            for diagnostic in self.diagnostics
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a deterministic JSON-safe report."""
-        return {
-            "apiVersion": LIFECYCLE_API_VERSION,
-            "kind": "LifecycleDoctorReport",
-            "ok": self.ok,
-            "checkedCharts": self.checked_charts,
-            "diagnostics": [
-                diagnostic.to_dict() for diagnostic in self.diagnostics
-            ],
-        }

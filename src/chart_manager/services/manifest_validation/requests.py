@@ -18,14 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.lifecycle.models import LifecyclePlan, Workflow
 from chart_manager.services.manifest_validation.models import ALL_PHASES, RunResult
 
 __all__ = [
     "RunOutcome",
     "RunRequest",
     "ValidateInputError",
-    "ValidationPlanSnapshot",
 ]
 
 
@@ -87,39 +85,6 @@ class RunRequest:
 
 
 @dataclass(frozen=True)
-class ValidationPlanSnapshot:
-    """The lifecycle identity resolved before one validation row executed.
-
-    Evidence recording consumes this immutable snapshot instead of reading
-    configuration and compiling a second, potentially different plan after
-    validation has finished.  A compile error is retained alongside the
-    result because evidence remains a best-effort observational side effect.
-    """
-
-    chart: str
-    environment: str
-    plan: LifecyclePlan | None = None
-    error: str | None = None
-
-    def __post_init__(self) -> None:
-        """Require one coherent validation plan or its compile error."""
-        if (self.plan is None) == (self.error is None):
-            raise ValueError("validation plan snapshot requires exactly one of plan or error")
-        if self.plan is None:
-            return
-        if self.plan.workflow is not Workflow.VALIDATION:
-            raise ValueError("validation plan snapshot requires a validation workflow")
-        if self.plan.chart != self.chart:
-            raise ValueError(
-                "validation plan snapshot chart does not match its compiled plan"
-            )
-        if self.plan.environment != self.environment:
-            raise ValueError(
-                "validation plan snapshot environment does not match its compiled plan"
-            )
-
-
-@dataclass(frozen=True)
 class RunOutcome:
     """Everything one validate run produced.
 
@@ -141,7 +106,6 @@ class RunOutcome:
     charts_unvalidated: int = 0
     rows_filtered_out: int = 0
     enabled_phases: frozenset[str] = ALL_PHASES
-    validation_plans: tuple[ValidationPlanSnapshot, ...] = ()
 
     @property
     def exit_code(self) -> int:

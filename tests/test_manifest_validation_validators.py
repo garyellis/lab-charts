@@ -4,10 +4,6 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.lifecycle.compiler import LifecycleCompiler
-from chart_manager.services.lifecycle.recording import (
-    ManifestValidationEvidenceRecorder,
-)
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -20,10 +16,6 @@ from chart_manager.services.manifest_validation.compiler import (
     row_config_for,
 )
 from chart_manager.services.manifest_validation.models import PhaseResult, WorklistRow
-from chart_manager.services.manifest_validation.requests import (
-    RunOutcome,
-    ValidationPlanSnapshot,
-)
 from chart_manager.services.manifest_validation.runner import (
     ManifestValidationRunner,
     RowConfig,
@@ -188,35 +180,12 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     )
     runner.helm = _HelmStub()  # type: ignore[assignment]
 
-    plan = LifecycleCompiler(
-        tmp_path,
-        validator_providers=(provider,),
-    ).compile_validation("demo", "dev")
     result = runner.run([config])
 
     assert len(third.calls) == 1
     assert result.rows[0].phases["schema"].status == "SKIP"
     assert result.rows[0].phases["policy"].status == "PASS"
     assert result.rows[0].validator_results["third"].detail == "third validator passed"
-
-    recording = ManifestValidationEvidenceRecorder(
-        tmp_path,
-        validator_providers=(provider,),
-    ).record(
-        RunOutcome(
-            result=result,
-            out_dir=result.rendered_root,
-            validation_plans=(
-                ValidationPlanSnapshot(
-                    chart="demo",
-                    environment="dev",
-                    plan=plan,
-                ),
-            ),
-        )
-    )
-    assert recording.diagnostics == ()
-    assert len(recording.paths) == 2
 
     coexisting = _Provider(
         "third",

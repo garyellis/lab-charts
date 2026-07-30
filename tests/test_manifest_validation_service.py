@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.lifecycle.compiler import LifecycleCompiler
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -184,77 +183,6 @@ def test_run_passes_resolved_workers_to_the_runner(
     _app(rec).run(RunRequest(root=tmp_path, all_charts=True))
 
     assert rec.runs[0][0].max_workers == 4
-
-
-def test_run_captures_lifecycle_plan_before_row_execution(tmp_path: Path) -> None:
-    _chart(tmp_path, "alpha")
-    events: list[str] = []
-    delegate = LifecycleCompiler(tmp_path)
-
-    class PlanCompiler:
-        def compile_validation(self, chart: str, environment: str):
-            events.append(f"compile:{chart}/{environment}")
-            return delegate.compile_validation(chart, environment)
-
-    rec = Recorder()
-
-    def runner_factory(spec: RunnerSpec) -> FakeRunner:
-        runner = FakeRunner(spec, rec.runs)
-        original_run = runner.run
-
-        def run(configs, **kwargs):  # type: ignore[no-untyped-def]
-            events.append("execute")
-            return original_run(configs, **kwargs)
-
-        runner.run = run  # type: ignore[method-assign]
-        return runner
-
-    outcome = ManifestValidationService(
-        runner_factory=runner_factory,
-        run_id_factory=lambda: "RUNID",
-        lifecycle_compiler=PlanCompiler(),
-    ).run(
-        RunRequest(
-            root=tmp_path,
-            charts=("alpha",),
-            envs=("dev",),
-        )
-    )
-
-    assert events == ["compile:alpha/dev", "execute"]
-    assert len(outcome.validation_plans) == 1
-    snapshot = outcome.validation_plans[0]
-    assert snapshot.error is None
-    assert snapshot.plan is not None
-    assert snapshot.plan.chart == "alpha"
-    assert snapshot.plan.environment == "dev"
-
-
-def test_lifecycle_plan_compile_failure_does_not_change_validation_result(
-    tmp_path: Path,
-) -> None:
-    _chart(tmp_path, "alpha")
-
-    class BrokenPlanCompiler:
-        def compile_validation(self, chart: str, environment: str):
-            raise OSError(f"cannot fingerprint {chart}/{environment}")
-
-    rec = Recorder()
-    outcome = _app(
-        rec,
-        lifecycle_compiler=BrokenPlanCompiler(),
-    ).run(
-        RunRequest(
-            root=tmp_path,
-            charts=("alpha",),
-            envs=("dev",),
-        )
-    )
-
-    assert outcome.exit_code == 0
-    assert len(rec.configs) == 1
-    assert outcome.validation_plans[0].plan is None
-    assert outcome.validation_plans[0].error == "cannot fingerprint alpha/dev"
 
 
 def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:

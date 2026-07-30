@@ -34,7 +34,6 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
-from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
 from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
@@ -146,30 +145,6 @@ def _make_app(
 def _warn(message: str) -> None:
     """Print a service-emitted operator warning."""
     console.print(f"[yellow]{message}[/yellow]")
-
-
-def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
-    """Best-effort projection of validation phases into local lifecycle evidence.
-
-    Evidence is an observational side effect, not the validation deliverable:
-    an unavailable local state directory must never turn a truthful validation
-    result into a different process verdict.
-    """
-    try:
-        recording = ManifestValidationEvidenceRecorder(
-            root,
-        ).record(outcome)
-    except Exception as exc:
-        _warn(f"warning: lifecycle evidence was not recorded: {exc}")
-        return
-    for diagnostic in recording.diagnostics:
-        phase = f"/{diagnostic.phase}" if diagnostic.phase else ""
-        _warn(
-            "warning: lifecycle evidence "
-            f"{diagnostic.stage} failed for "
-            f"{diagnostic.chart}/{diagnostic.environment}{phase}: "
-            f"{diagnostic.message}"
-        )
 
 
 def chart(
@@ -430,8 +405,8 @@ def _execute(
 
     ``chart`` and ``run`` differ only in how they select work and build a
     :class:`RunRequest`. This boundary keeps service invocation, presentation,
-    evidence recording, retention, and process exit identical without coupling
-    one Typer command to another command's Python defaults.
+    retention, and process exit identical without coupling one Typer command
+    to another command's Python defaults.
     """
     if progress not in _PROGRESS_MODES:
         raise typer.BadParameter(
@@ -461,8 +436,6 @@ def _execute(
         outcome = app.run(request)
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
-
-    _record_lifecycle_evidence(request.root, outcome)
 
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with --format all the sidecars are written into the render

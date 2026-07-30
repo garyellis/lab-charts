@@ -34,14 +34,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
 
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.lifecycle.compiler import LifecycleCompiler
-from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.compiler import (
     ResolvedManifestValidation,
@@ -64,7 +61,6 @@ from chart_manager.services.manifest_validation.requests import (
     RunOutcome,
     RunRequest,
     ValidateInputError,
-    ValidationPlanSnapshot,
 )
 from chart_manager.services.manifest_validation.runner import (
     EventCallback,
@@ -154,14 +150,6 @@ class RunnerSpec:
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
 
 
-class ValidationPlanCompiler(Protocol):
-    """Narrow compiler adapter used to capture pre-execution evidence identity."""
-
-    def compile_validation(self, chart: str, environment: str) -> LifecyclePlan:
-        """Compile one validation lifecycle plan."""
-        ...
-
-
 # --- the app ---------------------------------------------------------------
 
 
@@ -185,7 +173,6 @@ class ManifestValidationService:
         run_id_factory: Callable[[], str] | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
-        lifecycle_compiler: ValidationPlanCompiler | None = None,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self._charts_dir = validate_charts_dir(charts_dir)
@@ -197,7 +184,6 @@ class ManifestValidationService:
         self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
-        self._lifecycle_compiler = lifecycle_compiler
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -280,12 +266,6 @@ class ManifestValidationService:
         grouped: dict[tuple[str | None, str | None], list[RowConfig]] = {}
         compiled_by_chart: dict[str, ResolvedManifestValidation] = {}
         compile_warnings: list[str] = []
-        lifecycle_compiler = self._lifecycle_compiler or LifecycleCompiler(
-            repo_root,
-            charts_dir=self._charts_dir,
-            validator_providers=self._validator_providers,
-        )
-        validation_plans: list[ValidationPlanSnapshot] = []
         for row in rows:
             # Indexed, not `.get(...) or continue`: `build_worklist` only
             # materializes rows for charts in `build.targets`, and selection
@@ -307,27 +287,6 @@ class ManifestValidationService:
             grouped.setdefault((spec.helm_version, spec.helm_binary), []).append(
                 row_config_for(compiled_by_chart[row.chart], row)
             )
-            try:
-                lifecycle_plan = lifecycle_compiler.compile_validation(
-                    row.chart,
-                    row.env,
-                )
-            except Exception as exc:
-                validation_plans.append(
-                    ValidationPlanSnapshot(
-                        chart=row.chart,
-                        environment=row.env,
-                        error=str(exc),
-                    )
-                )
-            else:
-                validation_plans.append(
-                    ValidationPlanSnapshot(
-                        chart=row.chart,
-                        environment=row.env,
-                        plan=lifecycle_plan,
-                    )
-                )
 
         workers = resolve_workers(request.workers)
         # Streamed subprocess output from >1 worker interleaves into
@@ -417,7 +376,6 @@ class ManifestValidationService:
             charts_unvalidated=build.chart_count_unvalidated,
             rows_filtered_out=filtered_out,
             enabled_phases=request.phases,
-            validation_plans=tuple(validation_plans),
         )
 
     # --- artifact lifetime -------------------------------------------------

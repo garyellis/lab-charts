@@ -8,16 +8,11 @@ and operates only on actions explicitly present in a compiled cluster plan.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from chart_manager.services.lifecycle.evidence import (
-    ClusterIdentity,
-    EvidenceRecord,
-    TargetCoordinates,
-)
 from chart_manager.services.lifecycle.models import (
     LIFECYCLE_API_VERSION,
     ActionKind,
@@ -102,13 +97,6 @@ class ClusterKubectl(Protocol):
         """Wait for workloads in a namespace to become ready."""
 
 
-class EvidenceSink(Protocol):
-    """Append-only evidence sink."""
-
-    def append(self, record: EvidenceRecord) -> Path:
-        """Persist one evidence record."""
-
-
 class ClusterPlanError(ValueError):
     """The supplied plan cannot be executed by the cluster action executor."""
 
@@ -143,24 +131,10 @@ class ClusterActionOutcome:
 
 
 @dataclass(frozen=True)
-class ClusterExecutionDiagnostic:
-    """A non-action failure, currently evidence persistence."""
-
-    action_id: str
-    stage: Literal["evidence"]
-    message: str
-
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
 class ClusterExecutionResult:
-    """All action outcomes and any non-fatal evidence diagnostics."""
+    """Every planned action's terminal outcome, in execution order."""
 
     outcomes: tuple[ClusterActionOutcome, ...]
-    evidence_paths: tuple[Path, ...] = ()
-    diagnostics: tuple[ClusterExecutionDiagnostic, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -174,8 +148,6 @@ class ClusterExecutionResult:
             "kind": "ClusterExecutionResult",
             "ok": self.ok,
             "outcomes": [outcome.to_dict() for outcome in self.outcomes],
-            "evidencePaths": [str(path) for path in self.evidence_paths],
-            "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
         }
 
 
@@ -183,18 +155,6 @@ def _required(value: str | None, action: LifecycleAction, field: str) -> str:
     if value:
         return value
     raise ClusterPlanError(f"action {action.action_id!r} requires target.{field}")
-
-
-def _target(action: LifecycleAction) -> TargetCoordinates:
-    target = action.target
-    return TargetCoordinates(
-        chart=target.chart,
-        workflow=str(target.workflow),
-        profile=target.profile,
-        environment=target.environment,
-        release=target.release,
-        namespace=target.namespace,
-    )
 
 
 class ClusterActionExecutor:
@@ -205,23 +165,15 @@ class ClusterActionExecutor:
         *,
         helm: ClusterHelm,
         kubectl: ClusterKubectl,
-        repository: EvidenceSink | None = None,
         clock: Callable[[], datetime] | None = None,
         progress: ProgressCallback | None = None,
     ) -> None:
         self.helm = helm
         self.kubectl = kubectl
-        self.repository = repository
         self.clock = clock or (lambda: datetime.now(UTC))
         self.progress = progress
 
-    def execute(
-        self,
-        plan: LifecyclePlan,
-        *,
-        run_id: str | None = None,
-        cluster: ClusterIdentity | None = None,
-    ) -> ClusterExecutionResult:
+    def execute(self, plan: LifecyclePlan) -> ClusterExecutionResult:
         """Execute a cluster plan and return a terminal outcome for every action."""
 
         if plan.workflow is not Workflow.CLUSTER_TEST:
@@ -240,19 +192,12 @@ class ClusterActionExecutor:
         if unsupported:
             kinds = ", ".join(sorted({action.kind.value for action in unsupported}))
             raise ClusterPlanError(f"unsupported cluster action kind(s): {kinds}")
-        if self.repository is not None and (run_id is None or cluster is None):
-            raise ClusterPlanError(
-                "run_id and cluster identity are required when evidence recording is enabled"
-            )
-
         # Validate coordinates before starting, preventing a late malformed
         # action from leaving an avoidable partial deployment.
         for action in plan.actions:
             self._validate_coordinates(action)
 
         outcomes: list[ClusterActionOutcome] = []
-        evidence_paths: list[Path] = []
-        diagnostics: list[ClusterExecutionDiagnostic] = []
         failed = False
 
         for action in plan.actions:
@@ -279,29 +224,8 @@ class ClusterActionExecutor:
                     )
 
             outcomes.append(outcome)
-            if self.repository is not None:
-                assert run_id is not None
-                assert cluster is not None
-                try:
-                    evidence_paths.append(
-                        self.repository.append(
-                            self._evidence(action, outcome, run_id=run_id, cluster=cluster)
-                        )
-                    )
-                except Exception as exc:
-                    diagnostics.append(
-                        ClusterExecutionDiagnostic(
-                            action_id=action.action_id,
-                            stage="evidence",
-                            message=str(exc),
-                        )
-                    )
 
-        return ClusterExecutionResult(
-            tuple(outcomes),
-            tuple(evidence_paths),
-            tuple(diagnostics),
-        )
+        return ClusterExecutionResult(tuple(outcomes))
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
         if action.target.workflow is not Workflow.CLUSTER_TEST:
@@ -418,32 +342,3 @@ class ClusterActionExecutor:
             ActionKind.WORKLOAD_READY: "Waiting for workloads",
             ActionKind.HELM_TEST: "Running Helm tests",
         }[action.kind]
-
-    @staticmethod
-    def _evidence(
-        action: LifecycleAction,
-        outcome: ClusterActionOutcome,
-        *,
-        run_id: str,
-        cluster: ClusterIdentity,
-    ) -> EvidenceRecord:
-        return EvidenceRecord(
-            run_id=run_id,
-            action_id=action.action_id,
-            action_kind=action.kind.value,
-            target=_target(action),
-            verdict=outcome.verdict,
-            status=outcome.verdict,
-            reason=outcome.reason,
-            detail=outcome.detail,
-            input_digest=action.input_digest,
-            toolchain={
-                key: value
-                for key, value in action.metadata
-                if key.endswith(("Version", "Binary"))
-            },
-            cluster=cluster,
-            started_at=outcome.started_at,
-            finished_at=outcome.finished_at,
-            recorded_at=outcome.finished_at,
-        )

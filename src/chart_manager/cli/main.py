@@ -5,16 +5,16 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
-from chart_manager.cli import lifecycle as lifecycle_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
@@ -35,6 +35,7 @@ from chart_manager.services.clusters.ephemeral import (
     DEFAULT_PROFILE,
     EphemeralTestRequest,
 )
+from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.local_resources import (
     LocalTargetResolver,
     ResolvedChartTarget,
@@ -127,10 +128,6 @@ validate_app = typer.Typer(
     no_args_is_help=True,
     help="Static chart validation: render plus configured validators.",
 )
-lifecycle_app = typer.Typer(
-    no_args_is_help=True,
-    help="Compile lifecycle intent into plans, diagnostics, and status.",
-)
 
 # setup the events command interface
 events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
@@ -138,7 +135,6 @@ events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle eve
 events_cli.register(events_app)
 validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
-lifecycle_cli.register(lifecycle_app)
 upgrade_cli.register(app)
 publish_cli.register(app)
 
@@ -149,7 +145,6 @@ app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
-app.add_typer(lifecycle_app, name="lifecycle")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
@@ -165,6 +160,35 @@ NamespaceOverrideOption = Annotated[
         help="Override the namespace declared by the selected ChartLifecycle profile.",
     ),
 ]
+
+_FORMATS = ("text", "json", "yaml")
+
+
+def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
+    if value not in allowed:
+        raise typer.BadParameter(
+            f"unknown value: {value} (allowed: {', '.join(allowed)})",
+            param_hint=option,
+        )
+    return value
+
+
+FormatOption = Annotated[
+    str,
+    typer.Option(
+        "--format",
+        help="Output format: text, json, or yaml.",
+        callback=lambda value: _choice(value, _FORMATS, "--format"),
+    ),
+]
+
+
+def _emit_json(data: dict[str, Any]) -> None:
+    typer.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _emit_yaml(data: dict[str, Any]) -> None:
+    typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
 
 
 @charts_app.command("list")
@@ -685,6 +709,107 @@ def ci_cluster_test_matrix(
         ]
     }
     typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+
+
+def _impact_service(root: Path) -> LifecycleImpactService:
+    """Build the impact service at a seam tests can replace."""
+    settings = Settings()
+    return LifecycleImpactService(
+        root,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
+
+
+def _changed_paths(
+    changed_files: Path | None,
+    changed_file: list[str],
+) -> list[str]:
+    changes: list[str] = []
+    if changed_files is not None:
+        try:
+            contents = changed_files.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise typer.BadParameter(
+                f"cannot read changed-files input {changed_files}: {exc}",
+                param_hint="--changed-files",
+            ) from exc
+        changes.extend(line.strip() for line in contents.splitlines() if line.strip())
+    changes.extend(path.strip() for path in changed_file if path.strip())
+    if not changes:
+        raise typer.BadParameter(
+            "provide at least one changed path via --changed-files or --changed-file",
+            param_hint="--changed-files / --changed-file",
+        )
+    return changes
+
+
+def _render_impact_text(result: Any) -> None:
+    typer.echo("Validation:")
+    if not result.validation:
+        typer.echo("  none")
+    for case in result.validation:
+        typer.echo(f"  {case.chart}/{case.environment}")
+        for reason in case.reasons:
+            typer.echo(
+                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+            )
+
+    typer.echo("Cluster tests:")
+    if not result.cluster_tests:
+        typer.echo("  none")
+    for case in result.cluster_tests:
+        typer.echo(f"  {case.chart}/{case.profile}")
+        for reason in case.reasons:
+            typer.echo(
+                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+            )
+
+    if result.warnings:
+        typer.echo("Warnings:")
+        for warning in result.warnings:
+            typer.echo(f"  - {warning}")
+    if result.spec_errors:
+        typer.echo("Spec errors:")
+        for error in result.spec_errors:
+            typer.echo(f"  - {error}")
+
+
+@ci_app.command("impact")
+def ci_impact(
+    changed_files: Annotated[
+        Path | None,
+        typer.Option(
+            "--changed-files",
+            help="Path to a newline-delimited changed-file list.",
+        ),
+    ] = None,
+    changed_file: Annotated[
+        list[str],
+        typer.Option(
+            "--changed-file",
+            help="Changed repository-relative path (repeatable).",
+        ),
+    ] = [],
+    fmt: FormatOption = "text",
+    root: RootOption = Path("."),
+) -> None:
+    """Explain the validation and cluster-test work selected by changed paths.
+
+    The explain-mode twin of `cluster-test-matrix`, which computes the same
+    selection and projects away the reasons. Answers "why is this chart in my
+    matrix?" and, via warnings, "why is nothing selected?".
+    """
+    result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
+    data = result.to_dict()
+    if fmt == "json":
+        _emit_json(data)
+    elif fmt == "yaml":
+        _emit_yaml(data)
+    else:
+        _render_impact_text(result)
+    if result.spec_errors:
+        raise typer.Exit(1)
 
 
 @ci_app.command("install")
