@@ -158,10 +158,9 @@ validate_app = typer.Typer(
     help="Deprecated. Use `chart validate` and `chart cache clean`.",
 )
 
-# setup the events command interface
-events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
-
-events_cli.register(events_app)
+# The `event` group owns its own tree (group, `emit` subgroup, and the hidden
+# pre-P1 `events` spelling), so it mounts onto the root like upgrade/publish.
+events_cli.register(app)
 helmrelease_cli.register(helmrelease_app)
 validate_cli.register_validate(chart_app)
 validate_cli.register_cache(chart_cache_app)
@@ -172,7 +171,6 @@ upgrade_cli.register_finalize(app)
 
 chart_app.add_typer(chart_cache_app, name="cache")
 
-app.add_typer(events_app, name="events")
 app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
 app.add_typer(ci_app, name="ci")

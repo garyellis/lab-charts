@@ -12,17 +12,21 @@ and artifact digest.
 
 ```
   # build lifecycle (charts repo CI)
-  chart-manager events build \
-    --chart redis --version 1.2.0 \
+  chart-manager event emit build redis@1.2.0 \
     --phase published \
     --build-correlation-id "$GITHUB_REPOSITORY#$PR_NUMBER" \
     --pr-url "$PR_URL" --git-sha "$GITHUB_SHA"
 
   # promotion lifecycle (flux repo CI)
-  chart-manager events promote \
-    --chart redis --version 1.2.0 --environment dev \
+  chart-manager event emit promote redis@1.2.0 --environment dev \
     --phase reached_prod --pr-url "$PR_URL"
 ```
+
+The `chart@version` positional is parsed by `ref.py`, not by the CLI: it is
+already the `correlation_id` the writer composes, so its grammar belongs to
+this package. The pre-P1 spelling (`events build|promote`, with `--chart` and
+`--version` as separate flags) still works as a hidden deprecated alias and is
+removed in 0.6.
 
 ## python service bindings
 continue adding to helmrelease actions. test, monitor, and promote. the process/instance

@@ -111,6 +111,20 @@ _CASES: dict[tuple[str, ...], tuple[str, ...]] = {
     # `directly_changed_charts` reads the file itself, so the file must exist;
     # `/dev/null` is an empty change set and selects no charts.
     ("ci", "publish-charts"): ("--changed-files", "/dev/null", "--root", "{root}"),
+    # P1.5 -- the `event` group. These emit commands are safe to run for real
+    # here: `tests/conftest.py` pins `EVENTS_BACKEND=none` for the whole suite,
+    # so both spellings write to `NullEventStore` -- no network, no clock in the
+    # output, and the `emitted ...` confirmation is narration on stderr, leaving
+    # stdout empty on both sides of the byte comparison.
+    ("events", "build"): ("grafana@1.2.3", "--phase", "published"),
+    # `--environment`, not `--env`: P1.3 owns that rename.
+    ("events", "promote"): (
+        "grafana@1.2.3",
+        "--environment",
+        "dev",
+        "--phase",
+        "promoted",
+    ),
 }
 
 

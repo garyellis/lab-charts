@@ -186,7 +186,10 @@ _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("ci", "cluster-test-matrix"): ("plan", "-o", "github"),
     ("ci", "impact"): ("plan", "-o", "table"),
     ("ci", "publish-charts"): ("plan", "--for", "publish"),
-    ("events",): ("events",),
+    # P1.5: `events build|promote` -> `event emit build|promote`. The value
+    # is a two-token prefix, so a test written as `cli("events", "build", ...)`
+    # reaches the command at its new depth with its arguments untouched.
+    ("events",): ("event", "emit"),
     ("grafana",): ("grafana",),
     ("helmrelease",): ("helmrelease",),
     ("local",): ("local",),

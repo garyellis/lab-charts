@@ -29,6 +29,7 @@ be both, so (c) is checked here instead of weakening (a).
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -155,6 +156,17 @@ def _probe(modules: list[str]) -> str:
 
     A subprocess is required because this test process has already imported
     Rich (via other test modules), so its own `sys.modules` proves nothing.
+
+    `PYTHONPATH` is pinned to `_SRC` -- the tree `_service_modules()` just
+    enumerated -- because a bare subprocess inherits none of pytest's
+    `pythonpath = ["src"]` and would import whatever `chart_manager` happens
+    to be installed in `sys.executable`'s environment instead. Those are the
+    same directory in a plain checkout, and different ones in a git worktree,
+    where the installed editable package still points at the main checkout.
+    The failure mode is silent for existing modules and a confusing
+    `ModuleNotFoundError` for a newly added one: the scan lists a file the
+    probe cannot import. Enumerating one tree and importing another is not a
+    property worth preserving.
     """
     script = (
         "import sys\n"
@@ -162,7 +174,12 @@ def _probe(modules: list[str]) -> str:
         + f"leaked = sorted({{m.split('.')[0] for m in sys.modules}} & set({_FORBIDDEN_ROOTS!r}))\n"
         "print(','.join(leaked))\n"
     )
-    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(_SRC)},
+    )
     if proc.returncode != 0:
         pytest.fail(
             f"importing the services layer failed:\nmodules: {', '.join(modules)}\n{proc.stderr}"
