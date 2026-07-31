@@ -9,6 +9,10 @@ that assert containment rather than an inventory.
 
 `FakeCommandRunner` is the single record-and-replay subprocess seam. See its
 docstring for why there is exactly one of it.
+
+`cli()` is the single seam through which tests name a CLI command. See
+`_COMMAND_PATHS` for why the suite never writes a group name into an
+`invoke()` call directly.
 """
 from __future__ import annotations
 
@@ -18,7 +22,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
+import typer
+import typer.main
 import yaml
+from typer.testing import CliRunner, Result
 
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
@@ -125,6 +132,162 @@ def make_chart(chart_root: Path) -> MakeChart:
         return chart_dir
 
     return build
+
+
+# --- the CLI argv seam -------------------------------------------------------
+#
+# Every test that drives the CLI names a command as a sequence of argv
+# tokens, and Typer resolves those tokens against the registered command
+# tree. A rename in `cli/main.py` therefore breaks every test that spelled
+# the old name -- silently at the source level, loudly and in bulk at run
+# time. Before this seam existed, ~49 assertion sites across nine modules
+# each carried a literal group name, so renaming one group was a nine-file
+# diff mixed in with the rename that motivated it, and the review could not
+# tell a mechanical edit from a behavioural one.
+#
+# The invariant this seam buys:
+#
+#     A test names a command in the vocabulary it was WRITTEN in.
+#     `_COMMAND_PATHS` translates that vocabulary into the one the app
+#     currently registers.
+#
+# So renaming `charts list` to `chart list` is one edit -- the value of the
+# `("charts",)` entry below -- and every test that says `cli("charts",
+# "list", ...)` keeps passing, unmodified, still asserting exactly what it
+# asserted before. The keys are frozen history; only the values move.
+
+
+#: Test vocabulary -> the command path the app actually registers.
+#:
+#: Longest matching prefix wins, so a group rename is one entry and a command
+#: that *moves between groups* (`validate run` -> `chart validate`) is a
+#: second, more specific entry that overrides it. The right-hand side is a
+#: full argv prefix, not a single token, which is what lets a command that
+#: gains a flag in its new home (`ci cluster-test-matrix` -> `plan -o
+#: github`) be expressed here rather than at 7 call sites.
+#:
+#: Entries are identity today: nothing has been renamed yet. That is the
+#: point -- the table is installed *before* the rename wave so the wave is a
+#: table diff. `tests/test_cli_argv_table.py` guards it both ways: every
+#: right-hand side must resolve against the live app, and every command the
+#: app registers must appear here, so a new group cannot quietly bypass the
+#: seam.
+_COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("charts",): ("charts",),
+    ("ci",): ("ci",),
+    ("events",): ("events",),
+    ("grafana",): ("grafana",),
+    ("helmrelease",): ("helmrelease",),
+    ("local",): ("local",),
+    ("publish",): ("publish",),
+    ("upgrade",): ("upgrade",),
+    ("validate",): ("validate",),
+    ("version",): ("version",),
+    # FROZEN. `renovate-global.json` pins the literal string
+    # `chart-manager upgrade-finalize --path <dir>` in a security allowlist
+    # regex, flag order included. This value must never change; the entry
+    # exists so that intent is visible here rather than only in a doc.
+    ("upgrade-finalize",): ("upgrade-finalize",),
+}
+
+
+def _root_app() -> typer.Typer:
+    """The real CLI app, imported lazily.
+
+    Lazily so that a conftest import -- which every test in the suite pays
+    for, including the ones that never touch the surface -- does not drag
+    Rich, Typer's command tree and the whole service layer into the process,
+    and so that an import error in `cli/` fails the CLI tests rather than
+    collection of the entire suite.
+    """
+    from chart_manager.cli.main import app
+
+    return app
+
+
+def _global_option_arity() -> dict[str, int]:
+    """Long/short option -> how many argv tokens follow it, for root options.
+
+    Read off the live root callback rather than hard-coded: the set of
+    global options is exactly what Click will consume before it starts
+    looking for a subcommand, so deriving it here keeps `resolve_argv`
+    correct when a global option is added or removed.
+    """
+    command = typer.main.get_command(_root_app())
+    arity: dict[str, int] = {}
+    for param in command.params:
+        takes_value = not (getattr(param, "is_flag", False) or getattr(param, "count", False))
+        for opt in param.opts + param.secondary_opts:
+            arity[opt] = param.nargs if takes_value else 0
+    return arity
+
+
+def _split_leading_options(argv: Sequence[str], arity: Mapping[str, int]) -> int:
+    """Index of the first token Click would treat as the command path.
+
+    An unrecognised leading option stops the scan instead of being skipped:
+    `cli("-o", "json", "version")` asserts that no global `-o` exists, and
+    must reach the app spelled exactly as the test wrote it.
+    """
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if not token.startswith("-") or token == "-" or token == "--":
+            break
+        name, _, inline_value = token.partition("=")
+        if name in arity:
+            index += 1 if inline_value else 1 + arity[name]
+            continue
+        # Clustered short flags, e.g. `-vv` for a counted `-v`.
+        if (
+            not token.startswith("--")
+            and len(token) > 2
+            and all(arity.get(f"-{char}") == 0 for char in token[1:])
+        ):
+            index += 1
+            continue
+        break
+    return index
+
+
+def resolve_argv(argv: Sequence[str]) -> list[str]:
+    """Translate one argv from the test vocabulary into the app's.
+
+    Exposed separately from `cli()` so the translation itself can be
+    asserted on (`tests/test_cli_argv_table.py`).
+    """
+    tokens = list(argv)
+    start = _split_leading_options(tokens, _global_option_arity())
+    path = tokens[start:]
+    for length in range(min(len(path), max((len(k) for k in _COMMAND_PATHS), default=0)), 0, -1):
+        replacement = _COMMAND_PATHS.get(tuple(path[:length]))
+        if replacement is not None:
+            return [*tokens[:start], *replacement, *path[length:]]
+    return tokens
+
+
+def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> Result:
+    """Invoke the real CLI with `argv` written in the test's own vocabulary.
+
+    Use this instead of `CliRunner().invoke(main.app, [...])` everywhere, so
+    a command rename stays a `_COMMAND_PATHS` diff.
+
+    Deliberately offers no `app=` override. `_COMMAND_PATHS` is expressed in
+    *root-app* paths, and a module that assembles a partial app from a
+    `cli/*.py` `register()` function (`tests/test_cli_publish.py`,
+    `tests/test_cli_upgrade.py`, `tests/test_cli_helmrelease.py`) registers
+    those commands flat, with no group above them. Translating a root path
+    into such an app would rewrite `publish` to `chart publish` against an
+    app where only `publish` exists. Those modules are already insulated --
+    `register()` owns the command name, `main.py` owns the group name -- so
+    they keep a plain `CliRunner` and need nothing from this table.
+    """
+    return CliRunner().invoke(
+        _root_app(),
+        resolve_argv(argv),
+        input=input,
+        catch_exceptions=catch_exceptions,
+    )
 
 
 # --- the command-runner seam -------------------------------------------------

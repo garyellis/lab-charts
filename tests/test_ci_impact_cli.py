@@ -16,10 +16,10 @@ from typing import Any
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
 from chart_manager.cli import main as main_cli
-from chart_manager.cli.main import app
+
+from .conftest import cli
 
 
 def _impact_result(
@@ -103,10 +103,8 @@ def test_root_help_no_longer_exposes_the_lifecycle_group() -> None:
     help -- "lifecycle" legitimately appears in the `events` and `charts`
     descriptions, so a substring check would pass for the wrong reason.
     """
-    runner = CliRunner()
-
-    removed = runner.invoke(app, ["lifecycle", "--help"])
-    ci_help = runner.invoke(app, ["ci", "--help"])
+    removed = cli("lifecycle", "--help")
+    ci_help = cli("ci", "--help")
 
     assert removed.exit_code == 2
     assert ci_help.exit_code == 0
@@ -132,20 +130,17 @@ def test_impact_combines_changed_file_sources_and_emits_json(
         ),
     )
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "ci",
-            "impact",
-            "--changed-files",
-            str(changed_files),
-            "--changed-file",
-            "kind-config.yaml",
-            "--format",
-            "json",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "ci",
+        "impact",
+        "--changed-files",
+        str(changed_files),
+        "--changed-file",
+        "kind-config.yaml",
+        "--format",
+        "json",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -154,7 +149,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
 
 
 def test_impact_requires_an_explicit_change_source() -> None:
-    result = CliRunner().invoke(app, ["ci", "impact"])
+    result = cli("ci", "impact")
 
     assert result.exit_code == 2
     assert "--changed-files / --changed-file" in result.stderr
@@ -163,7 +158,7 @@ def test_impact_requires_an_explicit_change_source() -> None:
 def test_impact_changed_files_read_error_is_bad_parameter(tmp_path: Path) -> None:
     missing = tmp_path / "missing.txt"
 
-    result = CliRunner().invoke(app, ["ci", "impact", "--changed-files", str(missing)])
+    result = cli("ci", "impact", "--changed-files", str(missing))
 
     assert result.exit_code == 2
     assert "--changed-files" in result.stderr
@@ -179,10 +174,7 @@ def test_impact_rejects_an_unknown_format_before_analysis(
         lambda root: pytest.fail("service should not be constructed"),
     )
 
-    result = CliRunner().invoke(
-        app,
-        ["ci", "impact", "--changed-file", "kind-config.yaml", "--format", "toml"],
-    )
+    result = cli("ci", "impact", "--changed-file", "kind-config.yaml", "--format", "toml")
 
     assert result.exit_code == 2
     assert "--format" in result.stderr
@@ -202,10 +194,7 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
 
-    result = CliRunner().invoke(
-        app,
-        ["ci", "impact", "--changed-file", "charts/grafana/values-dev.yaml"],
-    )
+    result = cli("ci", "impact", "--changed-file", "charts/grafana/values-dev.yaml")
 
     assert result.exit_code == 1
     assert "Validation:" in result.stdout
@@ -229,16 +218,13 @@ def test_impact_yaml_preserves_machine_envelope(
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "ci",
-            "impact",
-            "--changed-file",
-            "charts/grafana/values-dev.yaml",
-            "--format",
-            "yaml",
-        ],
+    result = cli(
+        "ci",
+        "impact",
+        "--changed-file",
+        "charts/grafana/values-dev.yaml",
+        "--format",
+        "yaml",
     )
 
     assert result.exit_code == 0

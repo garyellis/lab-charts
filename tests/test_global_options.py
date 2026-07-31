@@ -29,10 +29,12 @@ from pathlib import Path
 
 import pytest
 import typer.main
-from typer.testing import CliRunner, Result
+from typer.testing import Result
 
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
+
+from .conftest import cli
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +70,7 @@ def _config(directory: Path, root: Path) -> Path:
 
 def _charts(*argv: str) -> Result:
     """`charts list` is the cheapest command whose output names the root used."""
-    return CliRunner().invoke(main.app, [*argv])
+    return cli(*argv)
 
 
 # --------------------------------------------------------------------------
@@ -160,9 +162,7 @@ def test_the_global_root_reaches_a_nested_group(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
-    result = CliRunner().invoke(
-        main.app, ["--root", str(elsewhere), "grafana", "lint-dashboards"]
-    )
+    result = cli("--root", str(elsewhere), "grafana", "lint-dashboards")
 
     # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
@@ -289,7 +289,7 @@ def test_verbosity_is_a_count_not_a_boolean(
 
 
 def test_version_command_prints_the_version_on_stdout() -> None:
-    result = CliRunner().invoke(main.app, ["version"])
+    result = cli("version")
 
     assert result.exit_code == 0
     assert result.stdout.strip() == main._package_version()
@@ -311,7 +311,7 @@ def test_there_is_no_global_output_flag() -> None:
     assert "-o" not in _root_option_names()
     assert "--output" not in _root_option_names()
 
-    result = CliRunner().invoke(main.app, ["-o", "json", "version"])
+    result = cli("-o", "json", "version")
     assert result.exit_code == 2
 
 
@@ -319,7 +319,7 @@ def test_there_is_no_global_version_flag() -> None:
     """`--version` is the *chart* version elsewhere; the CLI's is a command."""
     assert "--version" not in _root_option_names()
 
-    result = CliRunner().invoke(main.app, ["--version"])
+    result = cli("--version")
     assert result.exit_code == 2
 
 

@@ -17,10 +17,8 @@ from unittest.mock import patch
 
 import pytest
 import typer
-from typer.testing import CliRunner
 
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.main import app
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
@@ -28,6 +26,8 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
+
+from .conftest import cli
 
 
 def _result() -> RunResult:
@@ -251,8 +251,7 @@ def test_github_step_summary_unwritable_does_not_crash(
 
 @pytest.mark.parametrize("subcommand", ["chart", "run"])
 def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", subcommand, "--help"])
+    result = cli("validate", subcommand, "--help")
     assert result.exit_code == 0
     assert "--github-step-summary" in result.output
 
@@ -265,16 +264,14 @@ def test_validate_format_rejects_unknown_value() -> None:
 
 
 def test_run_help_lists_format_option() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--help"])
+    result = cli("validate", "run", "--help")
     assert result.exit_code == 0
     assert "--format" in result.output
 
 
 @pytest.mark.parametrize("subcommand", ["chart", "run"])
 def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", subcommand, "--help"])
+    result = cli("validate", subcommand, "--help")
     assert result.exit_code == 0
     assert "--format" in result.output
 
@@ -394,16 +391,14 @@ def test_resolve_display_live_without_tty_falls_back(
 
 
 def test_run_help_lists_new_flags() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--help"])
+    result = cli("validate", "run", "--help")
     assert result.exit_code == 0
     for flag in ("--workers", "--progress", "--timings", "--verbose"):
         assert flag in result.output
 
 
 def test_run_rejects_unknown_progress_mode() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--progress", "fancy", "--all"])
+    result = cli("validate", "run", "--progress", "fancy", "--all")
     assert result.exit_code != 0
     assert "progress" in result.output.lower()
 
@@ -476,10 +471,7 @@ def test_chart_resolves_a_bare_configured_name_through_the_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", "--chart", "alpha", "--all", "--root", str(tmp_path)],
-    )
+    result = cli("validate", "chart", "--chart", "alpha", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -504,10 +496,7 @@ def test_chart_leaves_an_unresolvable_name_to_the_validation_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", "--chart", "ghost", "--all", "--root", str(tmp_path)],
-    )
+    result = cli("validate", "chart", "--chart", "ghost", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -525,28 +514,25 @@ def test_chart_delegates_to_shared_execution_boundary(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--no-policy",
-            "--keep",
-            "--out",
-            str(tmp_path / "rendered"),
-            "--progress",
-            "plain",
-            "--timings",
-            "--format",
-            "md",
-            "--github-step-summary",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "validate",
+        "chart",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--no-policy",
+        "--keep",
+        "--out",
+        str(tmp_path / "rendered"),
+        "--progress",
+        "plain",
+        "--timings",
+        "--format",
+        "md",
+        "--github-step-summary",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -588,17 +574,14 @@ def test_chart_accepts_a_chart_directory_like_charts_test(
     monkeypatch.setattr(validate_cli, "_execute", execute)
     chart_arg = str(chart_path if absolute else Path("fixtures/cert-manager"))
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            chart_arg,
-            "--all",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "validate",
+        "chart",
+        "--chart",
+        chart_arg,
+        "--all",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -619,42 +602,39 @@ def test_run_delegates_to_shared_execution_boundary(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--base",
-            "main",
-            "--changed-files",
-            str(changed),
-            "--all",
-            "--phases",
-            "render,policy",
-            "--out",
-            str(tmp_path / "rendered"),
-            "--keep",
-            "--workers",
-            "3",
-            "--progress",
-            "none",
-            "--timings",
-            "--verbose",
-            "--row-timeout",
-            "12",
-            "--dep-update-timeout",
-            "42",
-            "--fail-fast",
-            "--format",
-            "all",
-            "--github-step-summary",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "validate",
+        "run",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--base",
+        "main",
+        "--changed-files",
+        str(changed),
+        "--all",
+        "--phases",
+        "render,policy",
+        "--out",
+        str(tmp_path / "rendered"),
+        "--keep",
+        "--workers",
+        "3",
+        "--progress",
+        "none",
+        "--timings",
+        "--verbose",
+        "--row-timeout",
+        "12",
+        "--dep-update-timeout",
+        "42",
+        "--fail-fast",
+        "--format",
+        "all",
+        "--github-step-summary",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -688,28 +668,25 @@ def test_run_builds_a_request_from_its_flags(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--all",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--phases",
-            "render,schema",
-            "--workers",
-            "3",
-            "--row-timeout",
-            "12",
-            "--fail-fast",
-            "--root",
-            str(tmp_path),
-            "--progress",
-            "none",
-        ],
+    result = cli(
+        "validate",
+        "run",
+        "--all",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--phases",
+        "render,schema",
+        "--workers",
+        "3",
+        "--row-timeout",
+        "12",
+        "--fail-fast",
+        "--root",
+        str(tmp_path),
+        "--progress",
+        "none",
     )
 
     assert result.exit_code == 0
@@ -730,10 +707,7 @@ def test_run_defaults_to_continuing_after_failures(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
-    )
+    result = cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     assert fake.requests[0].fail_fast is False
@@ -744,9 +718,7 @@ def test_run_exits_with_the_outcome_exit_code(
 ) -> None:
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
 
-    result = CliRunner().invoke(
-        app, ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)]
-    )
+    result = cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 1
 
@@ -759,19 +731,16 @@ def test_run_applies_retention_only_after_the_summary_is_written(
     fake = _FakeApp(_outcome(out_dir))
     _install(monkeypatch, fake)
 
-    CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--all",
-            "--progress",
-            "none",
-            "--format",
-            "all",
-            "--root",
-            str(tmp_path),
-        ],
+    cli(
+        "validate",
+        "run",
+        "--all",
+        "--progress",
+        "none",
+        "--format",
+        "all",
+        "--root",
+        str(tmp_path),
     )
 
     assert fake.cleanups == [fake.outcome]
@@ -786,9 +755,7 @@ def test_run_maps_a_rejected_input_onto_its_flag(
         _FakeApp(error=ValidateInputError("cannot read it", hint="changed_files")),
     )
 
-    result = CliRunner().invoke(
-        app, ["validate", "run", "--progress", "none", "--root", str(tmp_path)]
-    )
+    result = cli("validate", "run", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 2
     assert "--changed-files" in result.output
@@ -802,10 +769,7 @@ def test_run_emits_extra_warnings_from_the_outcome(
     _install(monkeypatch, fake)
 
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
-        )
+        lambda: cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
     ).stderr
 
     assert "chart x has no spec" in narration
@@ -904,9 +868,8 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
     monkeypatch.setattr(validate_cli, "_make_app", _make)
 
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)],
+        lambda: cli(
+            "validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)
         )
     ).stderr
 
@@ -925,9 +888,8 @@ def test_verbose_with_one_worker_does_not_warn(
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out")))
 
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)],
+        lambda: cli(
+            "validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)
         )
     ).stderr
 
@@ -940,19 +902,16 @@ def test_chart_builds_a_spec_driven_all_environments_request(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--all",
-            "--progress",
-            "none",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "validate",
+        "chart",
+        "--chart",
+        "alpha",
+        "--all",
+        "--progress",
+        "none",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -969,22 +928,19 @@ def test_chart_honors_environment_and_validator_toggles(
 ) -> None:
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--no-kubeconform",
-            "--policy",
-            "--progress",
-            "none",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "validate",
+        "chart",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--no-kubeconform",
+        "--policy",
+        "--progress",
+        "none",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -1001,10 +957,7 @@ def test_chart_honors_environment_and_validator_toggles(
     ],
 )
 def test_chart_requires_exactly_one_environment_selection(args: list[str]) -> None:
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", *args],
-    )
+    result = cli("validate", "chart", *args)
 
     assert result.exit_code == 2
     assert "--env" in result.output
@@ -1012,21 +965,21 @@ def test_chart_requires_exactly_one_environment_selection(args: list[str]) -> No
 
 @pytest.mark.parametrize("command", ["render", "schema", "policy"])
 def test_legacy_validate_commands_are_removed(command: str) -> None:
-    result = CliRunner().invoke(app, ["validate", command, "--help"])
+    result = cli("validate", command, "--help")
 
     assert result.exit_code == 2
     assert "No such command" in result.output
 
 
 def test_run_rejects_an_unknown_phase() -> None:
-    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", "lint"])
+    result = cli("validate", "run", "--all", "--phases", "lint")
 
     assert result.exit_code == 2
     assert "unknown phase" in result.output
 
 
 def test_run_rejects_an_empty_phase_list() -> None:
-    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", " ,"])
+    result = cli("validate", "run", "--all", "--phases", " ,")
 
     assert result.exit_code == 2
     assert "at least one phase" in result.output

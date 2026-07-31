@@ -4,9 +4,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from typer.testing import CliRunner
 
-from chart_manager.cli.main import app
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.chart_config import (
     load_chart_lifecycle,
@@ -30,6 +28,8 @@ from chart_manager.services.lifecycle.models import (
     Workflow,
 )
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+
+from .conftest import cli
 
 
 def _alloy_spec() -> ClusterTestSpec:
@@ -76,10 +76,8 @@ def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
 
 
 def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
-    runner = CliRunner()
-
-    root_help = runner.invoke(app, ["--help"])
-    chart_test_help = runner.invoke(app, ["charts", "test", "--help"])
+    root_help = cli("--help")
+    chart_test_help = cli("charts", "test", "--help")
 
     assert root_help.exit_code == 0
     assert "deps" not in root_help.stdout

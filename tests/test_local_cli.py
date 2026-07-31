@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from chart_manager.cli import main
 from chart_manager.services.clusters.development import (
@@ -13,6 +12,8 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterResult,
 )
 from chart_manager.services.local_resources import ResolvedStackTarget
+
+from .conftest import cli
 
 
 def _chart(root: Path, name: str = "alloy") -> Path:
@@ -50,7 +51,7 @@ spec:
 
 
 def test_local_help_centers_the_three_lifecycle_verbs() -> None:
-    result = CliRunner().invoke(main.app, ["local", "--help"])
+    result = cli("local", "--help")
 
     assert result.exit_code == 0
     for command in ("up", "down", "reset"):
@@ -60,7 +61,7 @@ def test_local_help_centers_the_three_lifecycle_verbs() -> None:
 
 
 def test_sandbox_group_is_removed_without_an_alias() -> None:
-    result = CliRunner().invoke(main.app, ["sandbox", "--help"])
+    result = cli("sandbox", "--help")
 
     assert result.exit_code == 2
     assert "No such command" in result.output
@@ -68,7 +69,7 @@ def test_sandbox_group_is_removed_without_an_alias() -> None:
 
 @pytest.mark.parametrize("command", ["up", "reset"])
 def test_local_commands_require_exactly_one_explicit_selector(command: str) -> None:
-    result = CliRunner().invoke(main.app, ["local", command])
+    result = cli("local", command)
 
     assert result.exit_code != 0
     assert "select exactly one of --chart or --stack" in str(result.exception)
@@ -76,7 +77,7 @@ def test_local_commands_require_exactly_one_explicit_selector(command: str) -> N
 
 @pytest.mark.parametrize("command", ["up", "reset"])
 def test_local_commands_use_named_selectors_without_a_positional_target(command: str) -> None:
-    result = CliRunner().invoke(main.app, ["local", command, "--help"])
+    result = cli("local", command, "--help")
 
     assert result.exit_code == 0
     assert "--chart" in result.output
@@ -88,11 +89,8 @@ def test_local_commands_use_named_selectors_without_a_positional_target(command:
 
 
 def test_local_down_has_no_target_selector() -> None:
-    help_result = CliRunner().invoke(main.app, ["local", "down", "--help"])
-    rejected = CliRunner().invoke(
-        main.app,
-        ["local", "down", "--chart", "cert-manager"],
-    )
+    help_result = cli("local", "down", "--help")
+    rejected = cli("local", "down", "--chart", "cert-manager")
 
     assert help_result.exit_code == 0
     assert "--chart" not in help_result.output
@@ -103,10 +101,7 @@ def test_local_down_has_no_target_selector() -> None:
 def test_local_up_rejects_the_old_positional_chart_shape(tmp_path: Path) -> None:
     chart = _chart(tmp_path)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["local", "up", str(chart), "--root", str(tmp_path)],
-    )
+    result = cli("local", "up", str(chart), "--root", str(tmp_path))
 
     assert result.exit_code == 2
     assert "unexpected extra argument" in result.output.lower()
@@ -136,19 +131,16 @@ def test_chart_up_delegates_profile_and_skip_installed(
             return Service()
 
     monkeypatch.setattr(main, "_container", Container)
-    result = CliRunner().invoke(
-        main.app,
-        [
-            "local",
-            "up",
-            "--chart",
-            str(chart),
-            "--profile",
-            "telemetry",
-            "--skip-installed",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "local",
+        "up",
+        "--chart",
+        str(chart),
+        "--profile",
+        "telemetry",
+        "--skip-installed",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0, result.output
@@ -176,10 +168,7 @@ def test_named_stack_up_loads_the_authored_composition(
             return Service()
 
     monkeypatch.setattr(main, "_container", Container)
-    result = CliRunner().invoke(
-        main.app,
-        ["local", "up", "--stack", "platform", "--root", str(tmp_path)],
-    )
+    result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
     target = calls[0]
@@ -194,18 +183,15 @@ def test_profile_is_rejected_for_a_stack(
     command: str,
 ) -> None:
     _stack(tmp_path)
-    result = CliRunner().invoke(
-        main.app,
-        [
-            "local",
-            command,
-            "--stack",
-            "platform",
-            "--profile",
-            "minimal",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "local",
+        command,
+        "--stack",
+        "platform",
+        "--profile",
+        "minimal",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code != 0
@@ -241,15 +227,8 @@ def test_down_and_reset_address_the_same_cluster(
             return Service()
 
     monkeypatch.setattr(main, "_container", Container)
-    runner = CliRunner()
-    down = runner.invoke(
-        main.app,
-        ["local", "down", "--root", str(tmp_path)],
-    )
-    reset = runner.invoke(
-        main.app,
-        ["local", "reset", "--stack", "platform", "--root", str(tmp_path)],
-    )
+    down = cli("local", "down", "--root", str(tmp_path))
+    reset = cli("local", "reset", "--stack", "platform", "--root", str(tmp_path))
     assert down.exit_code == reset.exit_code == 0
     assert down_calls == ["chart-manager"]
     assert reset_calls == ["chart-manager"]
@@ -299,17 +278,14 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
             return Service()
 
     monkeypatch.setattr(main, "_container", Container)
-    result = CliRunner().invoke(
-        main.app,
-        [
-            "charts",
-            "test",
-            "--chart",
-            "alloy",
-            "--root",
-            str(tmp_path),
-            *extra,
-        ],
+    result = cli(
+        "charts",
+        "test",
+        "--chart",
+        "alloy",
+        "--root",
+        str(tmp_path),
+        *extra,
     )
 
     assert result.exit_code == 0, result.output
@@ -322,9 +298,6 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
 def test_charts_test_rejects_a_positional_chart(tmp_path: Path) -> None:
     chart = _chart(tmp_path)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["charts", "test", str(chart), "--root", str(tmp_path)],
-    )
+    result = cli("charts", "test", str(chart), "--root", str(tmp_path))
 
     assert result.exit_code == 2

@@ -10,15 +10,13 @@ from pathlib import Path
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
-from chart_manager.cli.main import app
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.domain.charts import ChartRepository
 
-from .conftest import REPO_ROOT, MakeChart
+from .conftest import REPO_ROOT, MakeChart, cli
 
 
 def test_list_charts_discovers_wrappers(chart_root: Path, make_chart: MakeChart) -> None:
@@ -176,7 +174,7 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
     chart = make_chart("broken")
     (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
-    result = CliRunner().invoke(app, ["charts", "list", "--root", str(chart_root)])
+    result = cli("charts", "list", "--root", str(chart_root))
 
     assert result.exit_code == 1
     assert "broken" in result.stdout
@@ -189,10 +187,7 @@ def test_charts_lifecycle_prints_the_normalized_envelope(
 ) -> None:
     make_chart("alloy")
 
-    result = CliRunner().invoke(
-        app,
-        ["charts", "lifecycle", "alloy", "--root", str(chart_root)],
-    )
+    result = cli("charts", "lifecycle", "alloy", "--root", str(chart_root))
 
     assert result.exit_code == 0
     assert '"apiVersion": "lifecycle.cmg.io/v1alpha1"' in result.stdout
