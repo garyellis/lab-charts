@@ -13,7 +13,7 @@ from .conftest import MakeChart
 
 
 def _service(root: Path) -> CiService:
-    return CiService(root, helm=object(), kubectl=object())  # type: ignore[arg-type]
+    return CiService(root)
 
 
 def _dependent_test(
@@ -28,22 +28,6 @@ def _dependent_test(
         {"chart": target, "profile": profile}
     ]
     path.write_text(yaml.safe_dump(config))
-
-
-def test_changed_charts_compatibility_projection_uses_typed_impact(
-    chart_root: Path,
-    make_chart: MakeChart,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    make_chart("enabled")
-    service = _service(chart_root)
-    monkeypatch.setattr(
-        service.git,
-        "changed_files",
-        lambda _base: ["charts/enabled/values.yaml", "charts/unmanaged/values.yaml"],
-    )
-
-    assert service.changed_charts("main") == ["enabled"]
 
 
 def test_directly_changed_charts_uses_only_explicit_file_ownership(
@@ -80,20 +64,6 @@ def test_directly_changed_charts_reports_unreadable_input(chart_root: Path) -> N
         _service(chart_root).directly_changed_charts(chart_root / "missing.txt")
 
 
-def test_cluster_test_charts_returns_the_enabled_catalog(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _service(tmp_path)
-    monkeypatch.setattr(
-        service.cluster_tests,
-        "enabled_names",
-        lambda: ["alloy", "grafana"],
-    )
-
-    assert service.cluster_test_charts() == ["alloy", "grafana"]
-
-
 def test_cluster_test_matrix_preserves_declared_dependent_profile_and_reasons(
     chart_root: Path,
     make_chart: MakeChart,
@@ -116,9 +86,6 @@ def test_cluster_test_matrix_preserves_declared_dependent_profile_and_reasons(
         ("source", "minimal"),
     ]
     assert matrix[0].reasons[0].code.value == "declared-dependent-test"
-    # The compatibility surface can only project chart names; it nevertheless
-    # uses the same selection owner and includes the dependent chart.
-    assert service.changed_charts("main") == ["consumer", "source"]
 
 
 def test_cluster_test_matrix_applies_repository_safety_fanout(

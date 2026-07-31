@@ -288,11 +288,9 @@ class Container:
         )
 
     def ci_service(self, root: Path) -> CiService:
-        """Build the per-chart CI verbs for the repo at `root`."""
+        """Build the CI selection verbs for the repo at `root`."""
         return CiService(
             root,
-            helm=self.helm(),
-            kubectl=self.kubectl(),
             charts_dir=self._settings.charts_dir,
             local_config=self._settings.local_config,
         )

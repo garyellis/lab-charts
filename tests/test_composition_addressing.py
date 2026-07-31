@@ -100,11 +100,10 @@ def test_lab_service_gets_every_adapter_configured() -> None:
     assert service.expose.kubectl.context == "kind-b"
 
 
-def test_sandbox_and_ci_services_get_configured_adapters() -> None:
+def test_sandbox_service_gets_configured_adapters() -> None:
     container = _configured()
 
     assert container.ephemeral_test_cluster_service(Path(".")).kubectl.context == "kind-b"
-    assert container.ci_service(Path(".")).kubectl.context == "kind-b"
 
 
 def test_two_containers_address_two_clusters_in_one_process() -> None:

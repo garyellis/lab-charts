@@ -95,7 +95,7 @@ class Helm:
         self._helm_bin = _resolve(self.runner, version, binary)
         self._context = context
         # verbose=True preserves the pre-existing stream-to-terminal contract
-        # for kind test / ci install callers. validate run constructs with
+        # for kind test / local up callers. validate run constructs with
         # verbose=False so concurrent helm invocations don't interleave
         # stdout/stderr into an unreadable mess.
         self.verbose = verbose

@@ -642,16 +642,6 @@ def _render_cluster_action(
         console.print(f"stopped port-forward (pid {result.port_forward_pid})")
 
 
-@ci_app.command("changed")
-def ci_changed(
-    root: RootOption = Path("."),
-    base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
-) -> None:
-    service = _container().ci_service(root)
-    for chart in service.changed_charts(base):
-        console.print(chart)
-
-
 @ci_app.command("publish-charts")
 def ci_publish_charts(
     changed_files: Annotated[
@@ -666,13 +656,6 @@ def ci_publish_charts(
     """List every chart directly owned by an explicit changed file."""
     service = _container().ci_service(root)
     for chart in service.directly_changed_charts(changed_files):
-        console.print(chart)
-
-
-@ci_app.command("cluster-test-charts")
-def ci_cluster_test_charts(root: RootOption = Path(".")) -> None:
-    """List every chart enabled for live-cluster tests."""
-    for chart in _container().ci_service(root).cluster_test_charts():
         console.print(chart)
 
 
@@ -810,29 +793,6 @@ def ci_impact(
         _render_impact_text(result)
     if result.spec_errors:
         raise typer.Exit(1)
-
-
-@ci_app.command("install")
-def ci_install(
-    chart: str,
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
-) -> None:
-    _container().ci_service(root).install_source_chart(chart, profile, namespace)
-
-
-@ci_app.command("upgrade")
-def ci_upgrade(
-    chart: str,
-    oci_ref: Annotated[
-        str, typer.Option("--from-oci", help="OCI chart ref for the main-branch artifact.")
-    ],
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
-) -> None:
-    _container().ci_service(root).upgrade_from_oci(chart, profile, namespace, oci_ref)
 
 
 def main() -> None:
