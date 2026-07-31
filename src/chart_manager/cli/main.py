@@ -22,6 +22,8 @@ from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.services.ci import MatrixSelection, select_cluster_tests
+from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
     LAB_CA_SECRET_NAMESPACE,
@@ -710,21 +712,20 @@ def ci_cluster_test_matrix(
     ] = None,
 ) -> None:
     """Emit a GitHub-ready chart/profile cluster-test matrix as JSON."""
+    # Flag exclusivity is the one part of this that is genuinely the
+    # surface's: it classifies how the caller was *invoked*. Which selector
+    # runs, and what shape the answer takes, belong to services/.
     if all_charts and charts:
         raise ChartManagerError("--all and --chart are mutually exclusive")
-    service = _container().ci_service(root)
-    if all_charts:
-        entries = service.all_cluster_test_matrix()
-    elif charts:
-        entries = service.explicit_cluster_test_matrix(charts)
-    else:
-        entries = service.cluster_test_matrix(base)
-    payload = {
-        "include": [
-            {"chart": entry.chart, "profile": entry.profile}
-            for entry in entries
-        ]
-    }
+    selection = MatrixSelection(
+        base=base,
+        all_charts=all_charts,
+        charts=tuple(charts or ()),
+    )
+    entries = select_cluster_tests(_container().ci_service(root), selection)
+    payload = cluster_test_matrix_to_dict(entries)
+    # Compact separators and sorted keys because this lands in a shell
+    # variable in `.github/workflows/ci.yaml`, not in a human's terminal.
     typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 
