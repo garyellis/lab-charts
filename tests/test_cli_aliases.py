@@ -68,8 +68,22 @@ from chart_manager.cli.main import app as real_app
 #: duration, a timestamp or an unordered set rendered into stdout will
 #: flake. A command with no such argv needs its own test, not an entry here.
 #:
-#: EMPTY BY DESIGN -- P1 has not landed a rename yet. One line per alias.
-_CASES: dict[tuple[str, ...], tuple[str, ...]] = {}
+#: The emit commands are safe to run for real here: `tests/conftest.py`
+#: pins `EVENTS_BACKEND=none` for the whole suite, so both spellings write to
+#: `NullEventStore` -- no network, no clock in the output, and the `emitted
+#: ...` confirmation is narration on stderr, leaving stdout empty on both
+#: sides of the byte comparison.
+_CASES: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("events", "build"): ("grafana@1.2.3", "--phase", "published"),
+    # `--environment`, not `--env`: P1.3 owns that rename.
+    ("events", "promote"): (
+        "grafana@1.2.3",
+        "--environment",
+        "dev",
+        "--phase",
+        "promoted",
+    ),
+}
 
 
 # --------------------------------------------------------------------------

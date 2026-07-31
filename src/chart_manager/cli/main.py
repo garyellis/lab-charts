@@ -145,16 +145,14 @@ validate_app = typer.Typer(
     help="Static chart validation: render plus configured validators.",
 )
 
-# setup the events command interface
-events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
-
-events_cli.register(events_app)
+# The `event` group owns its own tree (group, `emit` subgroup, and the hidden
+# pre-P1 `events` spelling), so it mounts onto the root like upgrade/publish.
+events_cli.register(app)
 validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
 upgrade_cli.register(app)
 publish_cli.register(app)
 
-app.add_typer(events_app, name="events")
 app.add_typer(charts_app, name="charts")
 app.add_typer(local_app, name="local")
 app.add_typer(ci_app, name="ci")
