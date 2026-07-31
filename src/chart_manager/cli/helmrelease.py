@@ -23,6 +23,7 @@ from chart_manager.cli.helmrelease_render import (
     render_test_json,
     render_test_pretty,
 )
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.helmrelease import (
@@ -107,8 +108,24 @@ def _coerce_namespace(ns: str | None) -> str | None:
 
 
 def _make_console(no_color: bool) -> Console:
-    """Create the output console, honoring --no-color."""
-    return Console(no_color=no_color)
+    """Console for the selected `--output` projection (stdout), honoring --no-color.
+
+    Also the console `_resolve_output_mode` probes for `is_terminal`: the
+    `auto` decision is "is the *data* going to a terminal", so it must ask
+    about stdout, not about wherever narration happens to go.
+    """
+    return data_console(no_color=no_color)
+
+
+def _make_narration_console(no_color: bool) -> Console:
+    """Console for progress and status (stderr), honoring --no-color.
+
+    Progress tables and promote's status lines are not the projection, so
+    they belong on stderr regardless of `--output`. Previously they shared
+    the stdout console and were safe only because json mode bypassed them;
+    this makes the separation structural instead of mode-dependent.
+    """
+    return narration_console(no_color=no_color)
 
 
 def _pr_url(result: PromoteResult) -> str:
@@ -145,6 +162,7 @@ def monitor(
 ) -> None:
     """Wait for matched HelmReleases to converge on chart@version."""
     console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
     mode = _resolve_output_mode(output, console)
     _setup_logging_for_mode(mode)
 
@@ -160,7 +178,7 @@ def monitor(
         environment=environment,
     )
 
-    result = _run_monitor(mode, console, request)
+    result = _run_monitor(mode, narration, request)
 
     if mode == "pretty":
         render_monitor_pretty(result, console, chart=chart, version=version)
@@ -173,12 +191,16 @@ def monitor(
 
 def _run_monitor(
     mode: str,
-    console: Console,
+    narration: Console,
     request: MonitorRequest,
 ) -> MonitorResult:
-    """Run the monitor service, wiring a live progress table only in pretty mode."""
+    """Run the monitor service, wiring a live progress table only in pretty mode.
+
+    The driver renders onto the narration console: progress is never the
+    selected projection.
+    """
     if mode == "pretty":
-        with _PrettyProgressDriver(console) as driver:
+        with _PrettyProgressDriver(narration) as driver:
             return _make_monitor_service(progress=driver).monitor(request)
     return _make_monitor_service(progress=None).monitor(request)
 
@@ -209,6 +231,7 @@ def test(
 ) -> None:
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
     console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
     mode = _resolve_output_mode(output, console)
     _setup_logging_for_mode(mode)
 
@@ -224,7 +247,7 @@ def test(
         environment=environment,
     )
 
-    result = _run_test(mode, console, request)
+    result = _run_test(mode, narration, request)
 
     if mode == "pretty":
         render_test_pretty(result, console, chart=chart, version=version)
@@ -237,12 +260,16 @@ def test(
 
 def _run_test(
     mode: str,
-    console: Console,
+    narration: Console,
     request: TestRequest,
 ) -> TestResult:
-    """Run the test service, wiring a live progress table only in pretty mode."""
+    """Run the test service, wiring a live progress table only in pretty mode.
+
+    The driver renders onto the narration console: progress is never the
+    selected projection.
+    """
     if mode == "pretty":
-        with _PrettyProgressDriver(console) as driver:
+        with _PrettyProgressDriver(narration) as driver:
             return _make_test_service(progress=driver).test(request)
     return _make_test_service(progress=None).test(request)
 
@@ -291,18 +318,21 @@ def promote(
     ] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
-    console = _make_console(no_color=False)
+    # `promote` has no `--output` projection yet (P0.3 adds one), so every
+    # line below is narration and goes to stderr. When the json projection
+    # lands it writes to a `data_console()` and none of this moves.
+    narration = _make_narration_console(no_color=False)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
         """Prompt to proceed on a detected downgrade; auto-yes when --allow-downgrade is set."""
-        console.print(
+        narration.print(
             f"[yellow]downgrade detected[/yellow]: target {target} is older than:"
         )
         for m in downgrades:
             ns = f"{m.namespace}/" if m.namespace else ""
-            console.print(f"  - {ns}{m.name} ({m.path.name}): {m.current_version}")
+            narration.print(f"  - {ns}{m.name} ({m.path.name}): {m.current_version}")
         if allow_downgrade:
-            console.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
+            narration.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
             return True
         return typer.confirm("Proceed with the downgrade?", default=False)
 
@@ -323,17 +353,17 @@ def promote(
     # `changed_files` empty by construction, so hoisting it is print-identical
     # and lets the status be decoded exactly once, in one exhaustive match.
     for changed in result.changed_files:
-        console.print(f"updated [bold]{changed}[/bold]")
+        narration.print(f"updated [bold]{changed}[/bold]")
 
     match result.status:
         case PromoteStatus.NO_CHANGES:
             count = len(result.matches)
             noun = "release" if count == 1 else "releases"
-            console.print(
+            narration.print(
                 f"[green]no changes[/green]: {count} {noun} already at {version} under {path}"
             )
         case PromoteStatus.ABORTED:
-            console.print(
+            narration.print(
                 "[yellow]aborted[/yellow]: declined downgrade prompt; no PR opened"
             )
         case PromoteStatus.ALREADY_OPEN:
@@ -341,13 +371,13 @@ def promote(
             # `already_open and result.pull_request is not None` guard let the
             # impossible pair fall through to the "pushed branch=..." line,
             # which tells the operator the opposite of what happened.
-            console.print(f"[yellow]pr already open[/yellow]: {_pr_url(result)}")
+            narration.print(f"[yellow]pr already open[/yellow]: {_pr_url(result)}")
         case PromoteStatus.DRY_RUN:
-            console.print(f"[yellow]dry-run[/yellow] branch={result.branch}")
+            narration.print(f"[yellow]dry-run[/yellow] branch={result.branch}")
         case PromoteStatus.PR_OPENED:
-            console.print(f"[green]pr opened[/green]: {_pr_url(result)}")
+            narration.print(f"[green]pr opened[/green]: {_pr_url(result)}")
         case PromoteStatus.PUSHED:
-            console.print(f"[green]pushed[/green] branch={result.branch}")
+            narration.print(f"[green]pushed[/green] branch={result.branch}")
 
 
 def register(app: typer.Typer) -> None:

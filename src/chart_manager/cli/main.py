@@ -9,7 +9,6 @@ from typing import Annotated, Any
 
 import typer
 import yaml
-from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
@@ -18,6 +17,7 @@ from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
@@ -45,7 +45,13 @@ from chart_manager.services.local_resources import (
 )
 from chart_manager.services.progress import ProgressEvent
 
-console = Console()
+#: The selected `--output` projection -- tables, listings, JSON documents.
+#: Goes to stdout, because that is what a caller pipes or captures.
+console = data_console()
+#: Everything the caller did not ask for as output -- progress, hints,
+#: warnings, errors. Goes to stderr so it can never corrupt `console`.
+#: See `cli/streams.py` for the rule.
+narration = narration_console()
 
 
 def _container() -> Container:
@@ -93,7 +99,7 @@ def _print_progress(event: ProgressEvent) -> None:
         text = f"[{style}]{label}[/{style}] {message}".rstrip()
     else:
         text = f"{label} {message}".rstrip()
-    console.print(text)
+    narration.print(text)
 
 
 def _exit_if_failed(ok: bool) -> None:
@@ -355,7 +361,7 @@ def grafana_export_dashboard(
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(payload)
-        console.print(f"[green]wrote[/green] {output}")
+        narration.print(f"[green]wrote[/green] {output}")
 
 
 @grafana_app.command("lint-dashboards")
@@ -378,20 +384,22 @@ def grafana_lint_dashboards(
         else discover_dashboards(root, charts_dir=Settings().charts_dir)
     )
     if not targets:
-        console.print("[yellow]no dashboards found[/yellow]")
+        narration.print("[yellow]no dashboards found[/yellow]")
         raise typer.Exit(0)
 
     result = lint_paths(targets)
+    # The findings are this command's report -- its data projection.
     for finding in result.findings:
         console.print(finding.render())
 
+    # The pass/fail tally narrates the run rather than reporting a finding.
     if not result.ok:
-        console.print(
+        narration.print(
             f"\n[red]{len(result.findings)} findings across "
             f"{result.files_with_findings}/{result.files_scanned} dashboards[/red]"
         )
         raise typer.Exit(1)
-    console.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
+    narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
 
 
 def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
@@ -560,33 +568,42 @@ def _render_development_cluster_result(result: DevelopmentClusterResult) -> None
         table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
     for failed in result.failed:
         table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
+    # The summary table is the result projection; the rest narrates.
     console.print(table)
     if not result.ok:
-        console.print(f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above")
+        narration.print(
+            f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above"
+        )
     _render_access_hints(result.hints)
 
 
 def _render_access_hints(hints: DevelopmentClusterAccessHints) -> None:
-    """Print the CA-trust block and the URL block for a finished converge."""
+    """Print the CA-trust block and the URL block for a finished converge.
+
+    All of this is narration: it is advice for the operator about how to
+    reach what was just installed, not the result of the command. It goes
+    to stderr so `local up` can grow an `--output json` projection later
+    without these blocks landing in the payload.
+    """
     if hints.ca_trust_hint:
         _print_ca_import_hint()
     if hints.urls_error is not None:
-        console.print(f"[yellow]warn:[/yellow] {hints.urls_error}")
+        narration.print(f"[yellow]warn:[/yellow] {hints.urls_error}")
         return
     if not hints.urls:
         return
-    console.print("\n[bold]URLs:[/bold]")
+    narration.print("\n[bold]URLs:[/bold]")
     for url in hints.urls:
-        console.print(f"  {url}")
+        narration.print(f"  {url}")
         if url != hints.grafana_url:
             continue
         if hints.grafana_error is not None:
-            console.print(
+            narration.print(
                 f"    [yellow]could not read admin password:[/yellow] {hints.grafana_error}"
             )
         elif hints.grafana_credentials is not None:
             user, password = hints.grafana_credentials
-            console.print(f"    user: {user}\n    pass: {password}")
+            narration.print(f"    user: {user}\n    pass: {password}")
 
 
 def _print_ca_import_hint() -> None:
@@ -609,24 +626,24 @@ def _print_ca_import_hint() -> None:
         f"-n {LAB_CA_SECRET_NAMESPACE} "
         "-o jsonpath='{.data.tls\\.crt}' | base64 -d > ~/lab-ca.crt"
     )
-    console.print("\n[bold]Trust the lab CA[/bold] (one-time, per workstation):")
-    console.print(f"  [dim]{cmd}[/dim]")
-    console.print("  Then import ~/lab-ca.crt into your OS keychain and mark it trusted.")
+    narration.print("\n[bold]Trust the lab CA[/bold] (one-time, per workstation):")
+    narration.print(f"  [dim]{cmd}[/dim]")
+    narration.print("  Then import ~/lab-ca.crt into your OS keychain and mark it trusted.")
     if sys.platform == "darwin":
         macos_trust = (
             "security add-trusted-cert -d -r trustRoot "
             "-k ~/Library/Keychains/login.keychain-db ~/lab-ca.crt"
         )
-        console.print(f"  [dim]macOS one-liner: {macos_trust}[/dim]")
-    console.print(
+        narration.print(f"  [dim]macOS one-liner: {macos_trust}[/dim]")
+    narration.print(
         "  [dim]Re-import after every 'local reset' -- the lab CA is "
         "regenerated each fresh install.[/dim]"
     )
-    console.print(
+    narration.print(
         "  [dim]Firefox users: also set network.dns.localDomains = "
         '"localhost" in about:config[/dim]'
     )
-    console.print(
+    narration.print(
         "  [dim]Optional for curl/k6: "
         'echo "127.0.0.1 grafana.localhost" | sudo tee -a /etc/hosts[/dim]'
     )
@@ -635,11 +652,15 @@ def _print_ca_import_hint() -> None:
 def _render_cluster_action(
     result: DevelopmentClusterActionResult, *, verb: str, absent: str
 ) -> None:
-    """Print the outcome of ``down`` plus any port-forward we reaped."""
+    """Print the outcome of ``down`` plus any port-forward we reaped.
+
+    A mutation status line, not a projection: `local down` produces no
+    document to pipe, so this narrates.
+    """
     state = verb if result.changed else absent
-    console.print(f"local cluster {state}: {result.cluster_name}")
+    narration.print(f"local cluster {state}: {result.cluster_name}")
     if result.port_forward_pid is not None:
-        console.print(f"stopped port-forward (pid {result.port_forward_pid})")
+        narration.print(f"stopped port-forward (pid {result.port_forward_pid})")
 
 
 @ci_app.command("publish-charts")
@@ -809,11 +830,11 @@ def main() -> None:
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
     except MissingToolError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
+        narration.print(f"[red]error:[/red] {escape(str(exc))}")
         sys.exit(127)
     except ChartManagerError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
+        narration.print(f"[red]error:[/red] {escape(str(exc))}")
         sys.exit(1)
     except FileNotFoundError as exc:
-        console.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
+        narration.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
         sys.exit(1)

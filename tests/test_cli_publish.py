@@ -62,7 +62,7 @@ def test_publish_passes_multiple_charts_in_one_service_call(
     )
 
     assert result.exit_code == 0
-    assert "sha256:abc" in result.stdout
+    assert "sha256:abc" in result.stderr
     assert calls == [
         (
             ["grafana", "loki"],
@@ -103,7 +103,7 @@ def test_publish_exits_nonzero_for_consolidated_push_failure(
     )
 
     assert result.exit_code == 1
-    assert "registry rejected upload" in result.stdout
+    assert "registry rejected upload" in result.stderr
 
 
 def test_publish_forwards_event_metadata_and_strict_failure_exits_nonzero(
@@ -148,7 +148,7 @@ def test_publish_forwards_event_metadata_and_strict_failure_exits_nonzero(
     )
 
     assert result.exit_code == 1
-    assert "event failed" in result.stdout
+    assert "event failed" in result.stderr
     assert calls[0]["publish_kind"] == publish.PublishKind.RELEASE
     assert calls[0]["build_correlation_id"] == "owner/repository#9"
     assert calls[0]["pr_url"] == "https://github.test/owner/repository/pull/9"

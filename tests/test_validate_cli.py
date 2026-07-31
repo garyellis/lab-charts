@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
@@ -45,21 +46,43 @@ def _result() -> RunResult:
     )
 
 
-def _capture_stdout(fn) -> str:
-    """Capture validate_cli.console output AND raw sys.stdout writes."""
-    buf = io.StringIO()
-    # Replace the module-level Rich console with one writing to our buffer.
+class _Captured(NamedTuple):
+    """The two streams `cli/validate.py` writes to, kept apart."""
+
+    stdout: str
+    stderr: str
+
+
+def _capture(fn) -> _Captured:
+    """Capture the data projection and the narration separately.
+
+    `validate_cli.console` is the `--format` projection and shares a buffer
+    with raw `sys.stdout.write` (json/md go out that way); `validate_cli.
+    narration` is everything else. Keeping them in two buffers is what lets
+    a test assert that a warning did *not* land in the JSON document.
+    """
     from rich.console import Console as _Console
 
-    new_console = _Console(file=buf, force_terminal=False, no_color=True, width=200)
-    old_console = validate_cli.console
-    validate_cli.console = new_console
+    out, err = io.StringIO(), io.StringIO()
+
+    def _recorder(buf: io.StringIO) -> _Console:
+        return _Console(file=buf, force_terminal=False, no_color=True, width=200)
+
+    old_console, old_narration = validate_cli.console, validate_cli.narration
+    validate_cli.console = _recorder(out)
+    validate_cli.narration = _recorder(err)
     try:
-        with patch("sys.stdout", buf):
+        with patch("sys.stdout", out):
             fn()
     finally:
         validate_cli.console = old_console
-    return buf.getvalue()
+        validate_cli.narration = old_narration
+    return _Captured(out.getvalue(), err.getvalue())
+
+
+def _capture_stdout(fn) -> str:
+    """The data projection only -- see `_capture` for the narration half."""
+    return _capture(fn).stdout
 
 
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
@@ -165,16 +188,16 @@ def test_github_step_summary_warns_when_flag_passed_but_env_unset(
 ) -> None:
     """Flag asserts intent; missing env var should warn but not crash."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    output = _capture_stdout(
+    narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
             fmt="text",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
-    )
-    assert "GITHUB_STEP_SUMMARY" in output
-    assert "not set" in output
+    ).stderr
+    assert "GITHUB_STEP_SUMMARY" in narration
+    assert "not set" in narration
 
 
 def test_github_step_summary_appends_across_calls(
@@ -215,15 +238,15 @@ def test_github_step_summary_unwritable_does_not_crash(
     bad_target = blocker / "step-summary.md"  # parent is a file, not a dir
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(bad_target))
     # Must not raise.
-    output = _capture_stdout(
+    narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
             fmt="text",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
-    )
-    assert "could not write GITHUB_STEP_SUMMARY" in output
+    ).stderr
+    assert "could not write GITHUB_STEP_SUMMARY" in narration
 
 
 @pytest.mark.parametrize("subcommand", ["chart", "run"])
@@ -719,14 +742,14 @@ def test_run_emits_extra_warnings_from_the_outcome(
     fake = _FakeApp(_outcome(tmp_path / "out", warnings=("chart x has no spec",)))
     _install(monkeypatch, fake)
 
-    output = _capture_stdout(
+    narration = _capture(
         lambda: CliRunner().invoke(
             app,
             ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
         )
-    )
+    ).stderr
 
-    assert "chart x has no spec" in output
+    assert "chart x has no spec" in narration
 
 
 def test_run_summary_reports_unvalidated_charts_and_spec_errors(tmp_path: Path) -> None:
@@ -740,12 +763,12 @@ def test_run_summary_reports_unvalidated_charts_and_spec_errors(tmp_path: Path) 
         charts_unvalidated=2,
     )
 
-    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+    narration = _capture(lambda: validate_cli._print_summary(outcome)).stderr
 
-    assert "spec error: charts/broken: boom" in output
-    assert "1 spec error(s)" in output
-    assert "2 chart(s) unvalidated" in output
-    assert "0 rows" in output
+    assert "spec error: charts/broken: boom" in narration
+    assert "1 spec error(s)" in narration
+    assert "2 chart(s) unvalidated" in narration
+    assert "0 rows" in narration
 
 
 def _outcome_with_not_run(
@@ -788,10 +811,10 @@ def test_summary_ignores_phases_the_caller_disabled(tmp_path: Path) -> None:
         not_run=frozenset({"schema", "policy"}),
     )
 
-    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+    narration = _capture(lambda: validate_cli._print_summary(outcome)).stderr
 
-    assert "NOT_RUN" not in output
-    assert "summary:" not in output
+    assert "NOT_RUN" not in narration
+    assert "summary:" not in narration
 
 
 def test_summary_still_reports_a_not_run_phase_the_caller_asked_for(
@@ -804,9 +827,9 @@ def test_summary_still_reports_a_not_run_phase_the_caller_asked_for(
         not_run=frozenset({"schema", "policy"}),
     )
 
-    output = _capture_stdout(lambda: validate_cli._print_summary(outcome))
+    narration = _capture(lambda: validate_cli._print_summary(outcome)).stderr
 
-    assert "2 phase(s) NOT_RUN" in output
+    assert "2 phase(s) NOT_RUN" in narration
 
 
 def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
@@ -821,17 +844,17 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
 
     monkeypatch.setattr(validate_cli, "_make_app", _make)
 
-    output = _capture_stdout(
+    narration = _capture(
         lambda: CliRunner().invoke(
             app,
             ["validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)],
         )
-    )
+    ).stderr
 
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
 
     assert isinstance(seen[0], PlainNarrationDisplay)
-    assert "--verbose forces --workers=1" in output
+    assert "--verbose forces --workers=1" in narration
     # The service is told the truth; it owns the actual clamp.
     assert fake.requests[0].verbose is True
     assert fake.requests[0].workers == 4
@@ -842,14 +865,14 @@ def test_verbose_with_one_worker_does_not_warn(
 ) -> None:
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out")))
 
-    output = _capture_stdout(
+    narration = _capture(
         lambda: CliRunner().invoke(
             app,
             ["validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)],
         )
-    )
+    ).stderr
 
-    assert "forces --workers=1" not in output
+    assert "forces --workers=1" not in narration
 
 
 def test_chart_builds_a_spec_driven_all_environments_request(

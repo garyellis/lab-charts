@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.console import Console
 from rich.markup import escape
 
+from chart_manager.cli.streams import narration_console
 from chart_manager.composition import Container
 from chart_manager.services.publish import PublishKind
 
-console = Console()
+#: `publish` has no `--output` projection: every line it prints is a
+#: per-chart mutation status, so all of it narrates on stderr. When
+#: `--dry-run`/`-o json` lands this module gains a `data_console()` for the
+#: payload and these lines stay exactly where they are.
+narration = narration_console()
 
 
 def _container() -> Container:
@@ -87,17 +91,17 @@ def publish(
     for chart in result.charts:
         if chart.ok:
             digest = f" ({chart.digest})" if chart.digest else ""
-            console.print(
+            narration.print(
                 f"published [bold]{escape(chart.chart)}[/bold] "
                 f"{escape(chart.reference or '')}{escape(digest)}"
             )
         else:
-            console.print(
+            narration.print(
                 f"[red]failed[/red] [bold]{escape(chart.chart)}[/bold]: "
                 f"{escape(chart.error or 'unknown push failure')}"
             )
     for failure in result.telemetry_failures:
-        console.print(
+        narration.print(
             f"[yellow]event failed[/yellow] [bold]{escape(failure.chart)}[/bold] "
             f"{escape(failure.version)}: {escape(failure.error)}"
         )
