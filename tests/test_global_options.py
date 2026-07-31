@@ -69,7 +69,7 @@ def _config(directory: Path, root: Path) -> Path:
 
 
 def _charts(*argv: str) -> Result:
-    """`charts list` is the cheapest command whose output names the root used."""
+    """`chart list` is the cheapest command whose output names the root used."""
     return cli(*argv)
 
 
@@ -83,7 +83,7 @@ def test_root_defaults_to_the_working_directory(
 ) -> None:
     monkeypatch.chdir(_repo_with_chart(tmp_path, "zeta"))
 
-    result = _charts("charts", "list")
+    result = _charts("chart", "list")
 
     assert result.exit_code == 0
     assert "zeta" in result.stdout
@@ -95,7 +95,7 @@ def test_config_file_beats_the_default(
     monkeypatch.chdir(tmp_path)
     from_file = _repo_with_chart(tmp_path / "file", "beta")
 
-    result = _charts("--config", str(_config(tmp_path, from_file)), "charts", "list")
+    result = _charts("--config", str(_config(tmp_path, from_file)), "chart", "list")
 
     assert result.exit_code == 0
     assert "beta" in result.stdout
@@ -109,7 +109,7 @@ def test_env_beats_the_config_file(
     from_env = _repo_with_chart(tmp_path / "env", "gama")
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(from_env))
 
-    result = _charts("--config", str(_config(tmp_path, from_file)), "charts", "list")
+    result = _charts("--config", str(_config(tmp_path, from_file)), "chart", "list")
 
     assert result.exit_code == 0
     assert "gama" in result.stdout
@@ -122,7 +122,7 @@ def test_flag_beats_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     from_flag = _repo_with_chart(tmp_path / "flag", "zeta")
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(from_env))
 
-    result = _charts("--root", str(from_flag), "charts", "list")
+    result = _charts("--root", str(from_flag), "chart", "list")
 
     assert result.exit_code == 0
     assert "zeta" in result.stdout
@@ -142,7 +142,7 @@ def test_a_commands_own_root_beats_the_global_root(
     command_root = _repo_with_chart(tmp_path / "cmd", "zeta")
 
     result = _charts(
-        "--root", str(global_root), "charts", "list", "--root", str(command_root)
+        "--root", str(global_root), "chart", "list", "--root", str(command_root)
     )
 
     assert result.exit_code == 0
@@ -184,7 +184,7 @@ def test_settings_is_never_mutated_to_carry_the_root(
     assert Settings.model_config["frozen"] is True
 
     other = _repo_with_chart(tmp_path / "other", "zeta")
-    assert _charts("--root", str(other), "charts", "list").exit_code == 0
+    assert _charts("--root", str(other), "chart", "list").exit_code == 0
 
     assert Settings().root == Path(".")
 
@@ -196,7 +196,7 @@ def test_an_absent_config_file_is_not_an_error(
     monkeypatch.chdir(_repo_with_chart(tmp_path, "zeta"))
     assert not (tmp_path / DEFAULT_CONFIG_FILE).exists()
 
-    result = _charts("charts", "list")
+    result = _charts("chart", "list")
 
     assert result.exit_code == 0
 
@@ -326,7 +326,7 @@ def test_there_is_no_global_version_flag() -> None:
 def test_chart_version_flag_still_belongs_to_the_commands_that_own_it() -> None:
     """Guard the guard for the test above: prove the collision is real."""
     command = typer.main.get_command(main.app)
-    publish = command.commands["publish"]
+    publish = command.commands["chart"].commands["publish"]
 
     assert "--version" in {opt for param in publish.params for opt in param.opts}
 

@@ -324,7 +324,7 @@ class Container:
 
         Gets the same memoized writer as the promotion services: `PR_OPEN` is
         the *start* of the build timeline whose `merged`/`published` phases CI
-        emits through `chart-manager events build`, so it has to land on the
+        emits through `chart-manager event emit build`, so it has to land on the
         same store or the timeline is split across two backends.
         """
         resolved_root = root.resolve()

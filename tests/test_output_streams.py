@@ -8,7 +8,7 @@ The rule, stated once so it is never re-derived:
 This is deliberately more precise than "stdout is data, stderr is
 narration". A human-readable table *is* the selected projection when the
 format resolves to text, so it belongs on stdout. Get that backwards and
-`chart-manager charts list | less` shows an empty page. What belongs on
+`chart-manager chart list | less` shows an empty page. What belongs on
 stderr is everything the caller did not ask for as output: progress,
 warnings, access hints, deprecation notices, and error detail.
 
@@ -79,15 +79,15 @@ def _argv(name: str, root: Path) -> list[str]:
     """Commands that reach a real projection without a cluster or network."""
     return {
         "validate-json": [
-            "validate", "run", "--all", "--format", "json",
+            "chart", "validate", "--all", "--format", "json",
             "--progress", "none", "--root", str(root),
         ],
         "validate-json-with-warning": [
-            "validate", "run", "--all", "--format", "json",
+            "chart", "validate", "--all", "--format", "json",
             "--progress", "none", "--github-step-summary", "--root", str(root),
         ],
         "cluster-test-matrix": [
-            "ci", "cluster-test-matrix", "--all", "--root", str(root),
+            "plan", "-o", "github", "--all", "--root", str(root),
         ],
     }[name]
 
@@ -131,10 +131,10 @@ def test_the_warning_case_actually_warns(root: Path, monkeypatch: pytest.MonkeyP
 def _narration_case(name: str, root: Path) -> tuple[list[str], str]:
     """(argv, the narration fragment it must print) for cluster-free commands."""
     if name == "nothing-to-clean":
-        return ["validate", "clean", "--root", str(root)], "nothing to clean"
+        return ["chart", "cache", "clean", "--root", str(root)], "nothing to clean"
     if name == "cleaned":
         (root / ".chart-manager" / "rendered").mkdir(parents=True)
-        return ["validate", "clean", "--root", str(root)], "cleaned:"
+        return ["chart", "cache", "clean", "--root", str(root)], "cleaned:"
     if name == "no-dashboards":
         return ["grafana", "lint-dashboards", "--root", str(root)], "no dashboards found"
     raise AssertionError(f"unknown narration case: {name}")
@@ -151,12 +151,12 @@ def test_narration_goes_to_stderr_and_never_to_stdout(case: str, root: Path) -> 
 
 
 def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> None:
-    """`validate clean` produces no document, so stdout must be empty.
+    """`chart cache clean` produces no document, so stdout must be empty.
 
     This is the property that makes `cmd >/dev/null` a safe way to silence
     a mutating command without also silencing its errors.
     """
-    result = cli("validate", "clean", "--root", str(root))
+    result = cli("chart", "cache", "clean", "--root", str(root))
 
     assert result.stdout == ""
     assert result.stderr != ""

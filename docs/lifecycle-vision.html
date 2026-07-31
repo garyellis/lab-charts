@@ -396,7 +396,7 @@ version has reached prod. Nothing auto-merges — humans approve every PR; every
       matrix of changed charts only.</div>
     <div class="parts">
       <div class="part"><span class="pd built"></span>.github/workflows/ci.yaml</div>
-      <div class="part"><span class="pd built"></span>chart-manager validate run</div>
+      <div class="part"><span class="pd built"></span>chart-manager chart validate</div>
       <div class="part"><span class="pd built"></span>chart-manager sandbox test</div>
       <div class="part"><span class="pd planned"></span>ci upgrade-test (update mode)</div>
     </div>
@@ -542,7 +542,7 @@ in lab-charts CI today on every PR; the third runs per env after rollout.</p>
 <!-- ============================= AUDIT TRAIL ============================= -->
 <h2><span class="n">5</span>The audit trail spine</h2>
 <p class="h2sub">Every stage emits a typed lifecycle event keyed by correlation id, so one upstream release is
-traceable from bump PR to prod. Capture is <b>built</b> — <code>chart-manager events build|promote</code> with
+traceable from bump PR to prod. Capture is <b>built</b> — <code>chart-manager event emit build|promote</code> with
 DynamoDB and Cosmos DB backends. <code>promote</code>, <code>monitor</code> and <code>test</code> emit the phases themselves —
 9 of the 11 declared <code>PromotionPhase</code> members — so a promotion's duration is computable end to end.
 The query layer (dashboards, lead-time metrics) is the deferred Phase 5.</p>

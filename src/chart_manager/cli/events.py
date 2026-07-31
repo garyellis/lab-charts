@@ -19,7 +19,6 @@ from typing import Annotated
 
 import typer
 
-from chart_manager.cli.deprecation import ALIASES
 from chart_manager.composition import Container
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
@@ -102,12 +101,10 @@ def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) 
     command. Both branches hand raw strings to `services/events/ref.py`,
     which owns what a chart name and a version may be.
 
-    The flag form deliberately does not narrate a deprecation line.
-    `cli/deprecation.py` models deprecated *command paths*, and the alias
-    gate asserts exactly one notice per invocation, so a second, flag-shaped
-    notice would need its own mechanism. Building one here would collide with
-    P1.3, which is unifying flag dual-accept (`--environment`/`--env`,
-    `--strict`/`--strict-events`) across the whole surface.
+    The flag form deliberately does not narrate a deprecation line. Building
+    one here would collide with P1.3, which is unifying flag dual-accept
+    (`--environment`/`--env`, `--strict`/`--strict-events`) across the whole
+    surface.
     """
     if ref is not None and (chart is not None or chart_version is not None):
         raise typer.BadParameter(
@@ -229,9 +226,8 @@ def promote(
 # --- the command tree ------------------------------------------------------
 #
 # Assembled here rather than in `cli/main.py` so the whole `event` group --
-# including the deprecated spelling and, later, P1b's read side -- is one
-# file. `main.py` mounts it, the way it already mounts `upgrade` and
-# `publish`.
+# including, later, P1b's read side -- is one file. `main.py` mounts it, the
+# way it already mounts `upgrade` and `publish`.
 
 emit_app = typer.Typer(no_args_is_help=True, help="Emit one platform lifecycle event.")
 emit_app.command("build")(build)
@@ -240,23 +236,10 @@ emit_app.command("promote")(promote)
 event_app = typer.Typer(no_args_is_help=True, help="Platform lifecycle events.")
 event_app.add_typer(emit_app, name="emit")
 
-# The pre-P1 spelling: `events build` / `events promote`, one level shallower.
-# `ALIASES.group` is the usual tool for a renamed group, but it does not apply
-# here: this is not a pure rename, it inserts an `emit` level, so the old and
-# new paths sit at different depths and mounting the same Typer instance under
-# `events` would produce `events emit build`. `ALIASES.command` registers the
-# *same function objects* under the old paths instead, which reaches the same
-# byte-identical guarantee -- Typer reads the parameters off the wrapped
-# signature, so the deprecated commands cannot drift from these.
-events_app = typer.Typer(no_args_is_help=True, help="Deprecated; use `event emit`.")
-ALIASES.command(events_app, build, old="events build", new="event emit build")
-ALIASES.command(events_app, promote, old="events promote", new="event emit promote")
-
 
 def register(app: typer.Typer) -> None:
-    """Mount the `event` group, plus the hidden pre-P1 `events` spelling."""
+    """Mount the `event` group."""
     app.add_typer(event_app, name="event")
-    app.add_typer(events_app, name="events", hidden=True)
 
 
-__all__ = ["build", "emit_app", "event_app", "events_app", "promote", "register"]
+__all__ = ["build", "emit_app", "event_app", "promote", "register"]

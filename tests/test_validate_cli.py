@@ -249,9 +249,15 @@ def test_github_step_summary_unwritable_does_not_crash(
     assert "could not write GITHUB_STEP_SUMMARY" in narration
 
 
-@pytest.mark.parametrize("subcommand", ["chart", "run"])
-def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) -> None:
-    result = cli("validate", subcommand, "--help")
+def test_validate_help_lists_github_step_summary_flag() -> None:
+    """One command, one help page.
+
+    Was parametrized over `validate chart` and `validate run`, which were two
+    names for one function. Both are now spelled `chart validate`, so the
+    parameter distinguished nothing and the second case asserted twice about
+    the same help text.
+    """
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
     assert "--github-step-summary" in result.output
 
@@ -263,15 +269,13 @@ def test_validate_format_rejects_unknown_value() -> None:
     assert "text" in str(exc.value)  # lists allowed values
 
 
-def test_run_help_lists_format_option() -> None:
-    result = cli("validate", "run", "--help")
-    assert result.exit_code == 0
-    assert "--format" in result.output
+def test_validate_help_lists_format_option() -> None:
+    """See `test_validate_help_lists_github_step_summary_flag`.
 
-
-@pytest.mark.parametrize("subcommand", ["chart", "run"])
-def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
-    result = cli("validate", subcommand, "--help")
+    This absorbed `test_each_subcommand_help_lists_format_option`, which was
+    the same assertion parametrized over the two old spellings.
+    """
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
     assert "--format" in result.output
 
@@ -391,14 +395,14 @@ def test_resolve_display_live_without_tty_falls_back(
 
 
 def test_run_help_lists_new_flags() -> None:
-    result = cli("validate", "run", "--help")
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
     for flag in ("--workers", "--progress", "--timings", "--verbose"):
         assert flag in result.output
 
 
 def test_run_rejects_unknown_progress_mode() -> None:
-    result = cli("validate", "run", "--progress", "fancy", "--all")
+    result = cli("chart", "validate", "--progress", "fancy", "--all")
     assert result.exit_code != 0
     assert "progress" in result.output.lower()
 
@@ -471,7 +475,7 @@ def test_chart_resolves_a_bare_configured_name_through_the_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = cli("validate", "chart", "--chart", "alpha", "--all", "--root", str(tmp_path))
+    result = cli("chart", "validate", "--chart", "alpha", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -496,7 +500,7 @@ def test_chart_leaves_an_unresolvable_name_to_the_validation_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = cli("validate", "chart", "--chart", "ghost", "--all", "--root", str(tmp_path))
+    result = cli("chart", "validate", "--chart", "ghost", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -515,8 +519,8 @@ def test_chart_delegates_to_shared_execution_boundary(
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
     result = cli(
-        "validate",
         "chart",
+        "validate",
         "--chart",
         "alpha",
         "--env",
@@ -575,8 +579,8 @@ def test_chart_accepts_a_chart_directory_like_charts_test(
     chart_arg = str(chart_path if absolute else Path("fixtures/cert-manager"))
 
     result = cli(
-        "validate",
         "chart",
+        "validate",
         "--chart",
         chart_arg,
         "--all",
@@ -603,8 +607,8 @@ def test_run_delegates_to_shared_execution_boundary(
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
     result = cli(
+        "chart",
         "validate",
-        "run",
         "--chart",
         "alpha",
         "--env",
@@ -674,8 +678,8 @@ def test_run_builds_a_request_from_its_flags(
     _install(monkeypatch, fake)
 
     result = cli(
+        "chart",
         "validate",
-        "run",
         "--all",
         "--chart",
         "alpha",
@@ -727,8 +731,8 @@ def test_a_chart_is_selected_the_same_way_however_it_is_spelled(
     _install(monkeypatch, fake)
     tail = ("--progress", "none", "--root", str(tmp_path))
 
-    positional = cli("validate", "run", "alpha", *tail)
-    flag = cli("validate", "run", "--chart", "alpha", *tail)
+    positional = cli("chart", "validate", "alpha", *tail)
+    flag = cli("chart", "validate", "--chart", "alpha", *tail)
 
     assert positional.exit_code == flag.exit_code == 0
     assert fake.requests[0] == fake.requests[1]
@@ -753,7 +757,7 @@ def test_an_explicit_changed_file_list_still_narrows_a_named_chart(
     _install(monkeypatch, fake)
 
     result = cli(
-        "validate", "run",
+        "chart", "validate",
         "--chart", "alpha",
         "--changed-files", str(changed),
         "--progress", "none",
@@ -779,7 +783,7 @@ def test_no_policy_subtracts_from_the_selected_phases(
     _install(monkeypatch, fake)
 
     result = cli(
-        "validate", "run",
+        "chart", "validate",
         "--all",
         "--phases", "render,policy",
         "--no-policy",
@@ -797,7 +801,7 @@ def test_run_defaults_to_continuing_after_failures(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
+    result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     assert fake.requests[0].fail_fast is False
@@ -808,7 +812,7 @@ def test_run_exits_with_the_outcome_exit_code(
 ) -> None:
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
 
-    result = cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
+    result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 1
 
@@ -822,8 +826,8 @@ def test_run_applies_retention_only_after_the_summary_is_written(
     _install(monkeypatch, fake)
 
     cli(
+        "chart",
         "validate",
-        "run",
         "--all",
         "--progress",
         "none",
@@ -845,7 +849,7 @@ def test_run_maps_a_rejected_input_onto_its_flag(
         _FakeApp(error=ValidateInputError("cannot read it", hint="changed_files")),
     )
 
-    result = cli("validate", "run", "--progress", "none", "--root", str(tmp_path))
+    result = cli("chart", "validate", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 2
     assert "--changed-files" in result.output
@@ -859,7 +863,7 @@ def test_run_emits_extra_warnings_from_the_outcome(
     _install(monkeypatch, fake)
 
     narration = _capture(
-        lambda: cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
+        lambda: cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
     ).stderr
 
     assert "chart x has no spec" in narration
@@ -959,7 +963,7 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
 
     narration = _capture(
         lambda: cli(
-            "validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)
+            "chart", "validate", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)
         )
     ).stderr
 
@@ -979,7 +983,7 @@ def test_verbose_with_one_worker_does_not_warn(
 
     narration = _capture(
         lambda: cli(
-            "validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)
+            "chart", "validate", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)
         )
     ).stderr
 
@@ -993,8 +997,8 @@ def test_chart_builds_a_spec_driven_all_environments_request(
     _install(monkeypatch, fake)
 
     result = cli(
-        "validate",
         "chart",
+        "validate",
         "--chart",
         "alpha",
         "--all",
@@ -1019,8 +1023,8 @@ def test_chart_honors_environment_and_validator_toggles(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
     result = cli(
-        "validate",
         "chart",
+        "validate",
         "--chart",
         "alpha",
         "--env",
@@ -1067,7 +1071,7 @@ def test_naming_a_chart_no_longer_requires_an_environment_selection(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = cli("validate", "chart", *args, "--progress", "none", "--root", str(tmp_path))
+    result = cli("chart", "validate", *args, "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert fake.requests[0].charts == ("alpha",)
@@ -1075,22 +1079,30 @@ def test_naming_a_chart_no_longer_requires_an_environment_selection(
 
 
 @pytest.mark.parametrize("command", ["render", "schema", "policy"])
-def test_legacy_validate_commands_are_removed(command: str) -> None:
-    result = cli("validate", command, "--help")
+def test_phase_named_commands_are_not_a_surface(command: str) -> None:
+    """A validation *phase* is a `--phases` value, never a command.
+
+    Retargeted from `validate <phase>` to `chart <phase>`: the whole
+    `validate` group is gone, so asserting against it would have passed for
+    the wrong reason -- "no such group" rather than "no such command". The
+    property under test is that the phases did not reappear as commands in
+    the group that now owns validation.
+    """
+    result = cli("chart", command, "--help")
 
     assert result.exit_code == 2
     assert "No such command" in result.output
 
 
 def test_run_rejects_an_unknown_phase() -> None:
-    result = cli("validate", "run", "--all", "--phases", "lint")
+    result = cli("chart", "validate", "--all", "--phases", "lint")
 
     assert result.exit_code == 2
     assert "unknown phase" in result.output
 
 
 def test_run_rejects_an_empty_phase_list() -> None:
-    result = cli("validate", "run", "--all", "--phases", " ,")
+    result = cli("chart", "validate", "--all", "--phases", " ,")
 
     assert result.exit_code == 2
     assert "at least one phase" in result.output

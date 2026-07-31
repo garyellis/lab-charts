@@ -147,62 +147,49 @@ def make_chart(chart_root: Path) -> MakeChart:
 #
 # The invariant this seam buys:
 #
-#     A test names a command in the vocabulary it was WRITTEN in.
-#     `_COMMAND_PATHS` translates that vocabulary into the one the app
-#     currently registers.
+#     A rename is one table edit first, and a call-site sweep second, and the
+#     suite is green after each.
 #
-# So renaming `charts list` to `chart list` is one edit -- the value of the
-# `("charts",)` entry below -- and every test that says `cli("charts",
-# "list", ...)` keeps passing, unmodified, still asserting exactly what it
-# asserted before. The keys are frozen history; only the values move.
+# Renaming `charts list` to `chart list` starts as one edit -- point the
+# `("charts",)` entry at `("chart",)` -- and every `cli("charts", "list", ...)`
+# keeps passing unmodified, still asserting exactly what it asserted before.
+# That decouples "did the rename break behaviour?" from "did the sweep touch
+# the right lines?", which is the whole value: the reviewer reads two small
+# diffs instead of one large mixed one.
+#
+# The second half is not optional. Once the sweep lands, the entry goes back
+# to identity. A table left permanently translating an old spelling would let
+# the suite go on exercising a vocabulary the CLI has stopped accepting -- a
+# test lying about the product, and precisely what the deprecation aliases
+# were deleted to prevent.
 
 
 #: Test vocabulary -> the command path the app actually registers.
 #:
 #: Longest matching prefix wins, so a group rename is one entry and a command
-#: that *moves between groups* (`validate run` -> `chart validate`) is a
-#: second, more specific entry that overrides it. The right-hand side is a
-#: full argv prefix, not a single token, which is what lets a command that
-#: gains a flag in its new home (`ci cluster-test-matrix` -> `plan -o
-#: github`) be expressed here rather than at 7 call sites.
+#: that *moves between groups* is a second, more specific entry that overrides
+#: it. The right-hand side is a full argv prefix, not a single token, so a
+#: command that gains a flag in its new home (`plan -o github`) can be
+#: expressed here rather than at N call sites.
 #:
-#: Entries are identity today: nothing has been renamed yet. That is the
-#: point -- the table is installed *before* the rename wave so the wave is a
-#: table diff. `tests/test_cli_argv_table.py` guards it both ways: every
-#: right-hand side must resolve against the live app, and every command the
-#: app registers must appear here, so a new group cannot quietly bypass the
-#: seam.
+#: **Every entry is identity, and that is the steady state.** The CLI accepts
+#: exactly one spelling per command -- there are no deprecation aliases -- so
+#: a test written in an older vocabulary would be a test asserting against a
+#: product that no longer exists. When the next rename lands, point the
+#: affected entry at the new path, let the suite stay green in one commit,
+#: then migrate the call sites and restore the entry to identity. The table is
+#: a *migration* seam, not a permanent translation layer.
+#:
+#: `tests/test_cli_argv_table.py` guards it both ways: every right-hand side
+#: must resolve against the live app, and every command the app registers must
+#: appear here, so a new group cannot quietly bypass the seam.
 _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
-    # P1.2 folded `charts`, `validate`, root `publish` and root `upgrade`
-    # into one `chart` group. Every entry below is that rename and nothing
-    # else: not one assertion in the suite moved, which is the property the
-    # table exists to buy.
-    ("charts",): ("chart",),
-    ("charts", "lifecycle"): ("chart", "show"),
-    ("ci",): ("ci",),
-    # P1.6 collapsed the three surviving `ci` commands into `plan` plus a
-    # flag. The keys are the vocabulary those tests were written in; the
-    # values are the projection of `plan` each old name meant.
-    ("ci", "cluster-test-matrix"): ("plan", "-o", "github"),
-    ("ci", "impact"): ("plan", "-o", "table"),
-    ("ci", "publish-charts"): ("plan", "--for", "publish"),
-    # P1.5: `events build|promote` -> `event emit build|promote`. The value
-    # is a two-token prefix, so a test written as `cli("events", "build", ...)`
-    # reaches the command at its new depth with its arguments untouched.
-    ("events",): ("event", "emit"),
+    ("chart",): ("chart",),
+    ("event",): ("event",),
     ("grafana",): ("grafana",),
     ("helmrelease",): ("helmrelease",),
     ("local",): ("local",),
     ("plan",): ("plan",),
-    ("publish",): ("chart", "publish"),
-    ("upgrade",): ("chart", "upgrade"),
-    # `validate chart` and `validate run` merged into one command; which one
-    # you got is now argv shape (a CHART argument) rather than a name, so
-    # both old spellings resolve to the same place.
-    ("validate",): ("validate",),
-    ("validate", "chart"): ("chart", "validate"),
-    ("validate", "run"): ("chart", "validate"),
-    ("validate", "clean"): ("chart", "cache", "clean"),
     ("version",): ("version",),
     # FROZEN. `renovate-global.json` pins the literal string
     # `chart-manager upgrade-finalize --path <dir>` in a security allowlist
@@ -297,9 +284,10 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
     *root-app* paths, and a module that assembles a partial app from a
     `cli/*.py` `register()` function (`tests/test_cli_publish.py`,
     `tests/test_cli_upgrade.py`, `tests/test_cli_helmrelease.py`) registers
-    those commands flat, with no group above them. Translating a root path
-    into such an app would rewrite `publish` to `chart publish` against an
-    app where only `publish` exists. Those modules are already insulated --
+    those commands flat, with no group above them. Mid-migration, when an
+    entry is non-identity, translating a root path into such an app would
+    rewrite e.g. `publish` to `chart publish` against an app where only
+    `publish` exists. Those modules are already insulated --
     `register()` owns the command name, `main.py` owns the group name -- so
     they keep a plain `CliRunner` and need nothing from this table.
     """

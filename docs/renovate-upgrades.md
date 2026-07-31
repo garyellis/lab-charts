@@ -1,11 +1,11 @@
 # Renovate-driven chart upgrades
 
-`chart-manager upgrade` asks Renovate to discover dependency updates for one
+`chart-manager chart upgrade` asks Renovate to discover dependency updates for one
 wrapper chart and turns the completed update into one repeatable pull request.
 
 ```bash
-uv run chart-manager upgrade --path charts/cert-manager
-uv run chart-manager upgrade --path charts/cert-manager --dry-run --format json
+uv run chart-manager chart upgrade --path charts/cert-manager
+uv run chart-manager chart upgrade --path charts/cert-manager --dry-run --format json
 ```
 
 The path is resolved inside the current repository. Renovate performs the
