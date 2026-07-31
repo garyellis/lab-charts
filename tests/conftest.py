@@ -175,10 +175,17 @@ def make_chart(chart_root: Path) -> MakeChart:
 _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("charts",): ("charts",),
     ("ci",): ("ci",),
+    # P1.6 collapsed the three surviving `ci` commands into `plan` plus a
+    # flag. The keys are the vocabulary those tests were written in; the
+    # values are the projection of `plan` each old name meant.
+    ("ci", "cluster-test-matrix"): ("plan", "-o", "github"),
+    ("ci", "impact"): ("plan", "-o", "table"),
+    ("ci", "publish-charts"): ("plan", "--for", "publish"),
     ("events",): ("events",),
     ("grafana",): ("grafana",),
     ("helmrelease",): ("helmrelease",),
     ("local",): ("local",),
+    ("plan",): ("plan",),
     ("publish",): ("publish",),
     ("upgrade",): ("upgrade",),
     ("validate",): ("validate",),
