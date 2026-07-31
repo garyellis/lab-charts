@@ -20,6 +20,7 @@ from chart_manager.cli.helmrelease_render import (
     _PrettyProgressDriver,
     render_monitor_json,
     render_monitor_pretty,
+    render_promote_json,
     render_test_json,
     render_test_pretty,
 )
@@ -27,6 +28,7 @@ from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.helmrelease import (
+    PROMOTE_EXIT_CODE,
     HelmReleaseMatch,
     HelmReleaseRef,
     MonitorRequest,
@@ -98,6 +100,29 @@ def _setup_logging_for_mode(mode: str) -> None:
     """In json mode, route log records to stderr so stdout stays machine-parseable."""
     if mode == "json":
         logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
+
+
+def _is_interactive() -> bool:
+    """True when it is legitimate to block the run on a prompt.
+
+    Design §6.6: never prompt when stdin is not a TTY or `CI=true`. Both
+    legs matter. `isatty()` alone misses a runner that sets `CI=true` while
+    still allocating a pty -- there the prompt would not EOF, it would sit
+    there until the job's wall-clock timeout. `CI=true` alone misses a
+    `cron` job or a `docker run` without `-i`, where stdin is closed and
+    `typer.confirm` raises `Abort` on EOF instead of asking anything.
+
+    The `CI` test is spelled exactly as `_resolve_output_mode` spells it, so
+    "am I in CI" cannot mean two different things inside one command.
+    """
+    if os.environ.get("CI") == "true":
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        # stdin replaced with a non-stream object, or closed. Either way
+        # there is nobody to answer.
+        return False
 
 
 def _coerce_namespace(ns: str | None) -> str | None:
@@ -316,12 +341,18 @@ def promote(
             help="Proceed without prompting when target version is older than what's currently in the file.",
         ),
     ] = False,
+    output: Annotated[str, typer.Option("--output", help="pretty | json | auto")] = "auto",
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
-    # `promote` has no `--output` projection yet (P0.3 adds one), so every
-    # line below is narration and goes to stderr. When the json projection
-    # lands it writes to a `data_console()` and none of this moves.
-    narration = _make_narration_console(no_color=False)
+    # Every status line below is narration and goes to stderr, in `pretty`
+    # mode too: promote's human output is a running commentary on a mutation,
+    # not a document, so `promote >/dev/null` must still show what happened.
+    # The one thing on stdout is the json projection, written at the end.
+    console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
+    mode = _resolve_output_mode(output, console)
+    _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
         """Prompt to proceed on a detected downgrade; auto-yes when --allow-downgrade is set."""
@@ -334,6 +365,19 @@ def promote(
         if allow_downgrade:
             narration.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
             return True
+        if not _is_interactive():
+            # §6.6. Prompting here used to hand a non-TTY runner an EOF,
+            # which `typer.confirm` turned into a declined downgrade -- and
+            # a declined downgrade then exited 0. Two silent failures in a
+            # row. Refuse up front, as a usage error (exit 2), and name the
+            # flag that resolves it.
+            raise typer.BadParameter(
+                f"refusing to downgrade {chart_name} to {target}: "
+                f"{len(downgrades)} HelmRelease(s) are at a newer version and "
+                "stdin is not a terminal (or CI=true), so the confirmation "
+                "prompt cannot be answered. Re-run with --allow-downgrade to "
+                "promote anyway."
+            )
         return typer.confirm("Proceed with the downgrade?", default=False)
 
     service = _make_promote_service(confirm_downgrade=_confirm_downgrade)
@@ -378,6 +422,24 @@ def promote(
             narration.print(f"[green]pr opened[/green]: {_pr_url(result)}")
         case PromoteStatus.PUSHED:
             narration.print(f"[green]pushed[/green] branch={result.branch}")
+
+    if mode == "json":
+        render_promote_json(
+            result,
+            sys.stdout,
+            chart=chart_name,
+            version=version,
+            environment=environment,
+            path=path,
+        )
+
+    # The status -> code table lives in `services/helmrelease/wire.py` beside
+    # the payload's `ok`, so the exit status and the json a CI step reads are
+    # the same judgement. Before this, *no* branch raised Exit: a declined
+    # downgrade printed "aborted" and exited 0, which reads as success.
+    exit_code = PROMOTE_EXIT_CODE[result.status]
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 def register(app: typer.Typer) -> None:
