@@ -17,10 +17,16 @@ from rich.table import Table
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
+from chart_manager.cli import output as output_mod
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.cli.streams import (
+    data_console,
+    error_console,
+    narration_console,
+    set_narration_quiet,
+)
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
@@ -61,7 +67,10 @@ narration = narration_console()
 #: Terminal error reporting. Same stream as `narration`, separate console
 #: because `-q` silences narration and must not silence the reason a command
 #: failed -- a quiet run that dies with no output is unsupportable.
-errors = narration_console()
+#: `error_console()` rather than `narration_console()` is what makes that
+#: structural: only narration consoles are registered with
+#: `streams.set_narration_quiet`, which `-q` and `--output json` both drive.
+errors = error_console()
 
 
 def _container() -> Container:
@@ -162,6 +171,7 @@ app.add_typer(local_app, name="local")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(helmrelease_app, name="helmrelease")
 
+
 @dataclass(frozen=True)
 class GlobalOptions:
     """The resolved global options for one invocation.
@@ -178,6 +188,12 @@ class GlobalOptions:
     quiet: bool
     verbosity: int
     no_color: bool
+    #: The invocation-wide `-o`. Read by `cli/output.resolve` via `ctx.obj`
+    #: and deliberately NOT seeded into `ctx.default_map`: `grafana
+    #: export-dashboard` has a `Path`-typed parameter also named `output`,
+    #: and seeding by name would redirect the dashboard into a file called
+    #: `json`. See `cli/output.py` for the full note.
+    output: str
 
 
 def _package_version() -> str:
@@ -253,15 +269,23 @@ def global_options(
         bool,
         typer.Option("--no-color", help="Disable color. The NO_COLOR environment variable does the same."),
     ] = False,
+    output: output_mod.GlobalOutputOption = output_mod.AUTO,
 ) -> None:
     """Local and CI workflows for lab Helm charts.
 
-    Deliberately absent, and not oversights:
+    `-o/--output` sets the default projection for whichever command runs.
+    A command's own `-o` still wins, so `chart-manager -o json plan -o table`
+    prints a table. Commands that have no projection ignore it.
 
-    * **No global `-o/--output`.** `grafana export-dashboard -o PATH` and
-      `helmrelease --output pretty|json` still exist, so a root `-o` would
-      ship a release in which one flag means three things. It arrives with
-      the format unification (design doc 6.2).
+    It does **not** collide with `grafana export-dashboard -o PATH`, which
+    still writes a file: Click scopes options per command, so the root's `-o`
+    and a subcommand's `-o` are separate parameters, and this callback
+    deliberately does not propagate `output` through `ctx.default_map` the
+    way it propagates `root`. See `cli/output.py`. That flag flips meaning in
+    P2.2, on purpose and with no alias.
+
+    Deliberately absent, and not an oversight:
+
     * **No global `--version` flag.** `--version` already means the *chart*
       version on `event emit build/promote`, `chart publish`, and all three
       `helmrelease` commands. One flag, two meanings by position, is a bad
@@ -285,7 +309,12 @@ def global_options(
     # Only narration is silenced. `console` carries the projection the caller
     # asked for and `errors` carries why it failed; `-q` must not swallow
     # either, or `-q` becomes indistinguishable from `2>/dev/null`.
-    narration.quiet = quiet
+    #
+    # Process-wide rather than `narration.quiet = quiet`: `cli/validate.py`,
+    # `cli/publish.py` and `cli/deprecation.py` hold their own narration
+    # consoles, so assigning only to this module's left `-q` a no-op for most
+    # of the surface's output.
+    set_narration_quiet(quiet)
 
     if verbose:
         setup_logging("DEBUG", fmt=settings.log_format)
@@ -296,6 +325,7 @@ def global_options(
         quiet=quiet,
         verbosity=verbose,
         no_color=disable_color,
+        output=output,
     )
     ctx.default_map = _root_default_map(ctx.command, resolved_root)
 
@@ -908,12 +938,10 @@ def _render_impact_text(
             typer.echo(f"  - {error}")
 
 
-#: `plan`'s output vocabulary. Deliberately local to this command rather than
-#: a global `-o`: `github` is meaningless for `chart list` or `local status`,
-#: and unifying the surface's three `--format` vocabularies is a separate,
-#: later change. `table` is the default so a bare `plan` explains itself to a
-#: human; CI asks for `github` or `json` explicitly.
-_PLAN_OUTPUTS = ("table", "json", "yaml", "github")
+#: `plan`'s output vocabulary: the core three plus its own `github`, the
+#: GitHub Actions matrix document. `github` stays command-local because it is
+#: meaningless for `chart list` or `local status` -- see `cli/output.py`.
+_PLAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML, output_mod.GITHUB)
 
 #: The kinds of work a plan can cover. `all` is the default because the
 #: question the command answers -- "given a change set, what work is
@@ -921,13 +949,8 @@ _PLAN_OUTPUTS = ("table", "json", "yaml", "github")
 _PLAN_KINDS = ("validate", "test", "publish", "all")
 
 PlanOutputOption = Annotated[
-    str,
-    typer.Option(
-        "--output",
-        "-o",
-        help="Output projection: table, json, yaml, or github (GHA matrix JSON).",
-        callback=lambda value: _choice(value, _PLAN_OUTPUTS, "--output"),
-    ),
+    str | None,
+    output_mod.output_option(*_PLAN_OUTPUTS, extra_help=" github is the GHA matrix JSON."),
 ]
 
 PlanForOption = Annotated[
@@ -976,6 +999,7 @@ def _plan_cluster_tests(
 
 @app.command("plan")
 def plan(
+    ctx: typer.Context,
     base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
     changed_files: Annotated[
         Path | None,
@@ -1003,7 +1027,7 @@ def plan(
         ),
     ] = None,
     for_: PlanForOption = "all",
-    output: PlanOutputOption = "table",
+    output: PlanOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
     """Answer "given a change set, what work is selected?".
@@ -1021,7 +1045,13 @@ def plan(
     deliberately emit the *complete* impact document whatever `--for` says:
     the payload is a versioned wire contract owned by `services/`, and
     deleting a key from it here would fork that contract in the surface.
+
+    The output default is `auto`, so a bare `plan` in a pipe emits `json`
+    rather than the table a terminal gets. `--for publish -o table` is the
+    newline-delimited chart list `.github/workflows/ci.yaml` captures, and it
+    names `-o table` explicitly for exactly that reason.
     """
+    output = output_mod.resolve(output, ctx, allowed=_PLAN_OUTPUTS, console=console)
     if output == "github" and for_ in {"validate", "publish"}:
         raise typer.BadParameter(
             f"-o github is the cluster-test matrix, which has no '{for_}' projection",

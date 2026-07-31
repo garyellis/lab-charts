@@ -302,17 +302,66 @@ def _root_option_names() -> set[str]:
     return {opt for param in command.params for opt in param.opts}
 
 
-def test_there_is_no_global_output_flag() -> None:
-    """`-o` still means an output *path* on `grafana export-dashboard`.
+def test_there_is_a_global_output_flag() -> None:
+    """P1.4 landed the root `-o`, together with the vocabulary unification.
 
-    Landing a root `-o table|json` before that is unified would ship a
-    release where one flag means three things (design doc 6.2 / 8.x).
+    It was deliberately held back from P0.10 (design doc 6.2 / plan 2.7)
+    until there was one vocabulary for it to name, so that no release ever
+    shipped `-o` meaning three different things.
     """
-    assert "-o" not in _root_option_names()
-    assert "--output" not in _root_option_names()
+    assert "-o" in _root_option_names()
+    assert "--output" in _root_option_names()
 
     result = cli("-o", "json", "version")
-    assert result.exit_code == 2
+    assert result.exit_code == 0
+
+
+def test_the_global_output_does_not_reach_grafana_export_dashboards_path() -> None:
+    """The collision that kept `-o` out of P0.10, proven absent.
+
+    `grafana export-dashboard` has its own `-o`, and it is a *file path*.
+    Two things could have broken it, and this asserts both are fine:
+
+      1. Click scopes options per command, so a root `-o` and a subcommand
+         `-o` are separate parameters and the subcommand's wins after its
+         own name.
+      2. `cli/main.global_options` seeds `ctx.default_map` for `--root` by
+         parameter *name*. Doing the same for `output` would hand this
+         command `Path("json")` and write the dashboard into a file called
+         `json` -- silently, exiting 0. It deliberately does not.
+
+    P2.2 flips this flag to a format on purpose, with no alias. Until then
+    it means a path, including under a global `-o`.
+    """
+    root_command = typer.main.get_command(main.app)
+    command = root_command.commands["grafana"].commands["export-dashboard"]
+    output_param = next(p for p in command.params if p.name == "output")
+    assert "-o" in output_param.opts
+    assert output_param.default is None
+
+    # Leg 2, checked against the whole nested tree rather than its top level.
+    # `_root_default_map` returns `{"grafana": {"export-dashboard": {...}}}`,
+    # so a top-level `"output" not in ...` would pass no matter what and prove
+    # nothing. Walk it.
+    def _keys(mapping: dict[str, object]) -> set[str]:
+        found: set[str] = set()
+        for key, value in mapping.items():
+            if isinstance(value, dict):
+                found |= _keys(value)
+            else:
+                found.add(key)
+        return found
+
+    seeded = main._root_default_map(root_command, Path(".")) or {}
+    assert _keys(seeded) == {"root"}, (
+        "the global callback may seed only `root` into default_map; seeding "
+        "`output` would redirect `grafana export-dashboard` into a file named "
+        "after the projection"
+    )
+
+    # And end to end: a global `-o json` must not become this command's path.
+    result = cli("-o", "json", "grafana", "export-dashboard", "--help")
+    assert result.exit_code == 0
 
 
 def test_there_is_no_global_version_flag() -> None:

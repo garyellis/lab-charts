@@ -5,7 +5,7 @@
 `chart-manager chart publish` emits these build transitions automatically after
 successful OCI pushes. A publish using `--version-suffix` is a PR/preview
 artifact and emits `preview_published`; an unsuffixed publish emits
-`published`. Use `--publish-kind` to state the intent explicitly. Push
+`published`. Use `--kind` to state the intent explicitly. Push
 failures emit nothing, event failures are non-fatal unless the CLI is invoked
 with `--strict-events`, and retries are deduplicated by phase, chart, version,
 and artifact digest.
@@ -18,7 +18,7 @@ and artifact digest.
     --pr-url "$PR_URL" --git-sha "$GITHUB_SHA"
 
   # promotion lifecycle (flux repo CI)
-  chart-manager event emit promote redis@1.2.0 --environment dev \
+  chart-manager event emit promote redis@1.2.0 --env dev \
     --phase reached_prod --pr-url "$PR_URL"
 ```
 

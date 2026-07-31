@@ -5,7 +5,7 @@ wrapper chart and turns the completed update into one repeatable pull request.
 
 ```bash
 uv run chart-manager chart upgrade --path charts/cert-manager
-uv run chart-manager chart upgrade --path charts/cert-manager --dry-run --format json
+uv run chart-manager chart upgrade --path charts/cert-manager --dry-run --output json
 ```
 
 The path is resolved inside the current repository. Renovate performs the
@@ -103,7 +103,7 @@ baseline is reported as a diagnostic. Renovate independently marks such a branch
 with a warning in the pull-request body and a failing artifact-error status
 check.
 
-`--format json` keeps stdout stable for automation and includes the chart, path,
+`--output json` keeps stdout stable for automation and includes the chart, path,
 current and proposed wrapper versions, branch, outcome, pull-request data, and
 diagnostics.
 

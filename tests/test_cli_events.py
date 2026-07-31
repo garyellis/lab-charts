@@ -85,7 +85,7 @@ def test_promote_splits_the_positional_and_keeps_the_environment(
 ) -> None:
     result = cli(
         "event", "emit", "promote", "grafana@1.2.3",
-        "--environment", "staging", "--phase", "reached_prod",
+        "--env", "staging", "--phase", "reached_prod",
     )
 
     assert result.exit_code == 0
@@ -201,7 +201,7 @@ def test_the_flag_pair_works_on_promote_too(writer: RecordingWriter) -> None:
     cli(
         "event", "emit", "promote",
         "--chart", "grafana", "--version", "1.2.3",
-        "--environment", "dev", "--phase", "promoted",
+        "--env", "dev", "--phase", "promoted",
     )
 
     assert writer.promote_calls[0]["chart_name"] == "grafana"
@@ -281,7 +281,7 @@ def test_strict_turns_a_failed_emit_into_a_failure(
 
     # `--strict`, not `--strict-events`: P1.3 owns that rename.
     result = cli(
-        "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "--strict"
+        "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "--strict-events"
     )
 
     assert result.exit_code != 0
@@ -301,7 +301,7 @@ def test_the_confirmation_names_the_ref_in_its_wire_form(
     """The summary quotes `chart@version` -- the correlation id, not two words."""
     result = cli(
         "event", "emit", "promote", "grafana@1.2.3",
-        "--environment", "dev", "--phase", "promoted",
+        "--env", "dev", "--phase", "promoted",
     )
 
     assert "emitted promote:promoted for grafana@1.2.3 -> dev" in result.stderr

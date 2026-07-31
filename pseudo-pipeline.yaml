@@ -15,7 +15,7 @@ stages:
 
   dev:
     promote:
-      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path dev/ --environment DEV
+      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path dev/ --env DEV
 
     pull-requests-merged:
       cmg github pr wait --merged
@@ -37,7 +37,7 @@ stages:
   test:
     # promote to next stage
     promote:
-      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --environment TEST
+      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
 
     pull-requests-merged:
       cmg github pr wait --merged
@@ -57,7 +57,7 @@ stages:
   prod:
     # promote to next stage
     promote:
-      chart-manager helmrelease promote --chart-name cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --environment TEST
+      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
 
     pull-requests-merged:
       cmg github pr wait --merged

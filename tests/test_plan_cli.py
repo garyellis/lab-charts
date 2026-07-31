@@ -156,7 +156,10 @@ def test_for_narrows_the_table_to_one_kind_of_work(
 ) -> None:
     _wire_impact(monkeypatch, _impact(warnings=("unmatched chart change README.md",)))
 
-    result = cli("plan", "--changed-file", "charts/grafana/values-dev.yaml", "--for", kind)
+    result = cli(
+        "plan", "--changed-file", "charts/grafana/values-dev.yaml", "--for", kind,
+        "-o", "table",
+    )
 
     assert result.exit_code == 0
     assert present in result.stdout
@@ -171,7 +174,7 @@ def test_for_all_is_the_default_and_shows_both_sections(
 ) -> None:
     _wire_impact(monkeypatch, _impact())
 
-    result = cli("plan", "--changed-file", "charts/grafana/values-dev.yaml")
+    result = cli("plan", "--changed-file", "charts/grafana/values-dev.yaml", "-o", "table")
 
     assert result.exit_code == 0
     assert "Validation:" in result.stdout
@@ -216,7 +219,7 @@ def test_publish_plan_is_direct_ownership_and_never_the_impact_service(
     changed = tmp_path / "changed.txt"
     changed.write_text("charts/alpha/values.yaml\n", encoding="utf-8")
 
-    result = cli("plan", "--for", "publish", "--changed-files", str(changed))
+    result = cli("plan", "--for", "publish", "--changed-files", str(changed), "-o", "table")
 
     assert result.exit_code == 0
     assert result.stdout == "alpha\nzeta\n"

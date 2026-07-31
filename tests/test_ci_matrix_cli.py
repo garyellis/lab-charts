@@ -162,7 +162,12 @@ def test_publish_charts_emits_newline_list_from_explicit_file(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = cli("plan", "--for", "publish", "--changed-files", "changed.txt")
+    # `-o table` names the projection under test. The output default is
+    # `auto`, which resolves to json off a terminal -- which is what
+    # CliRunner is, and what CI is. This is the exact contract
+    # `.github/workflows/ci.yaml` depends on: it captures this stdout and
+    # reads it with `while IFS= read -r chart`, so it passes `-o table` too.
+    result = cli("plan", "--for", "publish", "-o", "table", "--changed-files", "changed.txt")
 
     assert result.exit_code == 0
     assert result.stdout == "alpha\nzeta\n"

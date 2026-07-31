@@ -2,7 +2,7 @@
 
 Thin CLI surface over EventWriter so CI (GitHub Actions) can emit lifecycle
 events as shell steps. Emission is non-fatal by default: a failed write logs
-a warning and exits 0 so telemetry never breaks a build. --strict overrides.
+a warning and exits 0 so telemetry never breaks a build. --strict-events overrides.
 
 The chart and version arrive as one `CHART@VERSION` positional, parsed by
 `services/events/ref.py`. Nothing here looks for an `@`: the token is the
@@ -101,10 +101,13 @@ def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) 
     command. Both branches hand raw strings to `services/events/ref.py`,
     which owns what a chart name and a version may be.
 
-    The flag form deliberately does not narrate a deprecation line. Building
-    one here would collide with P1.3, which is unifying flag dual-accept
-    (`--environment`/`--env`, `--strict`/`--strict-events`) across the whole
-    surface.
+    The flag form deliberately does not narrate a deprecation line, and there
+    is no flag-level deprecation mechanism anywhere in `cli/`. Every other
+    renamed flag on this surface was renamed outright, with its in-repo
+    callers updated in the same commit, because every caller of this CLI
+    lives in this repository. `--chart`/`--chart-version` survive here only
+    because they are a *shape* change (two flags collapsing into one
+    positional), not a rename, so there is nothing to alias them to.
     """
     if ref is not None and (chart is not None or chart_version is not None):
         raise typer.BadParameter(
@@ -168,7 +171,10 @@ def build(
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
     at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp (default: now). For backfill/seeding.")] = None,
-    strict: Annotated[bool, typer.Option(help="Fail the step on emit error.")] = False,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict-events", help="Fail the step on emit error."),
+    ] = False,
     ) -> None:
     """Emit a build-lifecycle event (charts repo CI)."""
     # `phase` leads the signature only because Python forbids a required
@@ -189,7 +195,7 @@ def build(
     )
 
 def promote(
-    environment: Annotated[str, typer.Option(help="Target environment.")],
+    environment: Annotated[str, typer.Option("--env", help="Target environment.")],
     phase: Annotated[PromotionPhase, typer.Option(help="Promotion lifecycle phase.")],
     ref: RefArgument = None,
     chart: ChartOption = None,
@@ -199,14 +205,12 @@ def promote(
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
     at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp (default: now). For backfill/seeding.")] = None,
-    strict: Annotated[bool, typer.Option(help="Fail the step on emit error.")] = False,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict-events", help="Fail the step on emit error."),
+    ] = False,
     ) -> None:
     """Emit a promotion-lifecycle event (flux repo CI)."""
-    # `--environment` and `--strict` keep today's spelling on purpose. Design
-    # doc 5 renames them to `--env` and `--strict-events` with the old names
-    # kept as aliases, but that dual-accept mechanism is P1.3's and applies
-    # to `helmrelease` and `publish` in the same stroke; two half-mechanisms
-    # would be worse than one late one.
     resolved = _resolve_ref(ref, chart, chart_version)
     timestamp = _parse_at(at)
     _emit(

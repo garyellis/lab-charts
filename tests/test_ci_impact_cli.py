@@ -209,7 +209,10 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
 
-    result = cli("plan", "--changed-file", "charts/grafana/values-dev.yaml")
+    # `-o table` names the projection under test: every assertion below is
+    # about the human-readable table, and the `auto` default resolves to json
+    # off a terminal.
+    result = cli("plan", "-o", "table", "--changed-file", "charts/grafana/values-dev.yaml")
 
     assert result.exit_code == 1
     assert "Validation:" in result.stdout

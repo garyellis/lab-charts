@@ -20,7 +20,7 @@ renders from, so the two stay separate siblings rather than one wrapping
 the other.
 
 Displays are stderr-only. Never touch stdout — JSON/markdown output must
-remain pipeline-safe (`... --format json | jq ...`). Worker threads call
+remain pipeline-safe (`... -o json | jq ...`). Worker threads call
 `on_event` concurrently, so implementations must be thread-safe.
 
 Wiring example (what the CLI does):
