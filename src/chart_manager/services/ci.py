@@ -1,7 +1,9 @@
 """CiService -- CI selection verbs: change detection and cluster-test matrices."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.errors import (
@@ -16,6 +18,65 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpactService,
 )
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
+
+
+@dataclass(frozen=True)
+class MatrixSelection:
+    """How a caller wants the cluster-test matrix chosen.
+
+    One value object instead of three positional arguments, so a surface
+    states its *intent* and the dispatch below decides which selector runs.
+    Previously the surface made that decision with an if/elif chain, which
+    meant a second surface had to reproduce the precedence exactly.
+    """
+
+    base: str = "origin/main"
+    all_charts: bool = False
+    charts: tuple[str, ...] = ()
+
+
+class ClusterTestMatrixSource(Protocol):
+    """The three selectors `select_cluster_tests` dispatches between.
+
+    Structural rather than nominal so the dispatch is testable against a
+    stand-in, and so a future non-Git source (a stored plan, a webhook
+    payload) can satisfy it without subclassing `CiService`.
+    """
+
+    def cluster_test_matrix(self, base: str) -> tuple[ClusterTestImpact, ...]:
+        """Entries selected by diffing against `base`."""
+        ...
+
+    def all_cluster_test_matrix(self) -> tuple[ClusterTestImpact, ...]:
+        """Every chart with cluster tests enabled."""
+        ...
+
+    def explicit_cluster_test_matrix(
+        self,
+        charts: list[str],
+    ) -> tuple[ClusterTestImpact, ...]:
+        """Exactly the named charts, rejecting the complete bad set."""
+        ...
+
+
+def select_cluster_tests(
+    source: ClusterTestMatrixSource,
+    selection: MatrixSelection,
+) -> tuple[ClusterTestImpact, ...]:
+    """Resolve a `MatrixSelection` against a matrix source.
+
+    Precedence is `all_charts` > explicit `charts` > diff against `base`.
+    Whether `all_charts` and `charts` together is an *error* is a usage
+    question that only a surface can classify -- Click exits 2 for a bad flag
+    combination, and an HTTP surface would answer 400 -- so the exclusivity
+    check stays at the surface and this function documents the fallback
+    rather than raising.
+    """
+    if selection.all_charts:
+        return source.all_cluster_test_matrix()
+    if selection.charts:
+        return source.explicit_cluster_test_matrix(list(selection.charts))
+    return source.cluster_test_matrix(selection.base)
 
 
 class CiService:
@@ -72,6 +133,15 @@ class CiService:
             detail = "\n".join(f"- {error}" for error in impact.spec_errors)
             raise SpecError(f"lifecycle impact analysis found spec errors:\n{detail}")
         return impact
+
+    def matrix(self, selection: MatrixSelection) -> tuple[ClusterTestImpact, ...]:
+        """Resolve any `MatrixSelection` -- the one entry point for a matrix.
+
+        The three selectors below stay public because they are meaningfully
+        different questions; this is the door a caller uses when the answer
+        depends on flags it was handed rather than on a question it asked.
+        """
+        return select_cluster_tests(self, selection)
 
     def cluster_test_matrix(
         self,
