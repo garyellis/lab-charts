@@ -295,9 +295,53 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
     assert charts_dir == Path("charts")
 
 
-def test_charts_test_rejects_a_positional_chart(tmp_path: Path) -> None:
-    chart = _chart(tmp_path)
+def test_chart_test_accepts_the_chart_positionally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`chart test X` and `chart test --chart X` must reach the same request.
 
-    result = cli("charts", "test", str(chart), "--root", str(tmp_path))
+    P1.2 adds the positional and keeps `--chart` permanently, so the two
+    spellings are not a migration -- they are two ways to say one thing, and
+    a divergence between them would be invisible until CI (which uses the
+    flag) and a human (who uses the argument) disagreed.
+    """
+    _chart(tmp_path)
+    charts: list[str] = []
 
-    assert result.exit_code == 2
+    class Service:
+        def run(self, request: object) -> None:
+            charts.append(request.chart)  # type: ignore[attr-defined]
+
+    class Container:
+        def ephemeral_test_cluster_service(
+            self, _root: Path, *, progress: object, charts_dir: Path
+        ) -> Service:
+            return Service()
+
+    monkeypatch.setattr(main, "_container", Container)
+    positional = cli("chart", "test", "alloy", "--root", str(tmp_path))
+    flag = cli("chart", "test", "--chart", "alloy", "--root", str(tmp_path))
+
+    assert positional.exit_code == flag.exit_code == 0, positional.output
+    assert charts == ["alloy", "alloy"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param([], id="neither"),
+        pytest.param(["alloy", "--chart", "alloy"], id="both"),
+    ],
+)
+def test_chart_test_requires_exactly_one_chart(tmp_path: Path, argv: list[str]) -> None:
+    """Naming the chart twice is as unusable as not naming it at all.
+
+    Silently letting one spelling win would make `chart test a --chart b`
+    install *something*, and which one is not guessable from the command line.
+    """
+    _chart(tmp_path)
+
+    result = cli("chart", "test", *argv, "--root", str(tmp_path))
+
+    assert result.exit_code != 0
+    assert "exactly one chart" in str(result.exception)

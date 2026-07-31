@@ -125,9 +125,19 @@ def _exit_if_failed(ok: bool) -> None:
 
 
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
+chart_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inspect, validate, test, publish, and upgrade Helm charts.",
+)
+chart_cache_app = typer.Typer(
+    no_args_is_help=True,
+    help="Manage chart-manager's on-disk render artifacts.",
+)
+#: Deprecated spelling of `chart`. Holds nothing but hidden aliases; see the
+#: registration block at the bottom of this module.
 charts_app = typer.Typer(
     no_args_is_help=True,
-    help="Inspect Helm charts and their lifecycle intent.",
+    help="Deprecated. Use `chart`.",
 )
 local_app = typer.Typer(
     no_args_is_help=True,
@@ -139,28 +149,34 @@ helmrelease_app = typer.Typer(
     help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
 )
 # Grafana-specific subcommands. Anything that knows about Grafana JSON / API
-# conventions lives here, not under the generic `charts` group.
+# conventions lives here, not under the generic `chart` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
+#: Deprecated spelling of the validation commands, which now live under
+#: `chart`. Holds nothing but hidden aliases.
 validate_app = typer.Typer(
     no_args_is_help=True,
-    help="Static chart validation: render plus configured validators.",
+    help="Deprecated. Use `chart validate` and `chart cache clean`.",
 )
 
 # setup the events command interface
 events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
 
 events_cli.register(events_app)
-validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
-upgrade_cli.register(app)
-publish_cli.register(app)
+validate_cli.register_validate(chart_app)
+validate_cli.register_cache(chart_cache_app)
+publish_cli.register(chart_app)
+upgrade_cli.register_upgrade(chart_app)
+# Root-level and frozen: `renovate-global.json` pins its literal spelling.
+upgrade_cli.register_finalize(app)
+
+chart_app.add_typer(chart_cache_app, name="cache")
 
 app.add_typer(events_app, name="events")
-app.add_typer(charts_app, name="charts")
+app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
 app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
-app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
 
 @dataclass(frozen=True)
@@ -352,7 +368,7 @@ def _emit_yaml(data: dict[str, Any]) -> None:
     typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
 
 
-@charts_app.command("list")
+@chart_app.command("list")
 def list_charts(root: RootOption = Path(".")) -> None:
     """List Helm charts and their lifecycle capability status."""
     service = ChartCatalogService(root, charts_dir=Settings().charts_dir)
@@ -422,15 +438,19 @@ def _run_chart_test(
     )
 
 
-@charts_app.command("test")
+@chart_app.command("test")
 def chart_test(
+    chart_argument: Annotated[
+        str | None,
+        typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
+    ] = None,
     chart: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--chart",
-            help="Chart name or chart directory.",
+            help="Chart name or chart directory. Retained alongside the CHART argument.",
         ),
-    ],
+    ] = None,
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
@@ -448,9 +468,18 @@ def chart_test(
     ] = False,
     lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
 ) -> None:
-    """Install and exercise one chart on an ephemeral local Kubernetes cluster."""
+    """Install and exercise one chart on an ephemeral local Kubernetes cluster.
+
+    The chart is named positionally; `--chart` is the older spelling and is
+    kept permanently, because `.github/workflows/ci.yaml` uses it and the
+    flag costs nothing to keep once the positional exists.
+    """
+    if (chart_argument is None) == (chart is None):
+        raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
+    selected = chart_argument if chart_argument is not None else chart
+    assert selected is not None
     _run_chart_test(
-        chart,
+        selected,
         root=root,
         profile=profile,
         namespace=namespace,
@@ -461,7 +490,7 @@ def chart_test(
     )
 
 
-@charts_app.command("lifecycle")
+@chart_app.command("show")
 def show_lifecycle(chart: str, root: RootOption = Path(".")) -> None:
     """Print one chart's normalized ChartLifecycle intent."""
     lifecycle = ChartCatalogService(
@@ -1088,6 +1117,31 @@ def plan(
         raise typer.Exit(1)
 
 
+# --- deprecated spellings, hidden ------------------------------------------
+#
+# Every command the `chart` group absorbed keeps working under the name it
+# had, until P3 deletes this block and `cli/deprecation.py` with it. Each
+# registration below re-registers *the same function object*, so an alias
+# cannot drift from its replacement -- see `cli/deprecation.py` for why that
+# is the whole design, and `tests/test_cli_aliases.py` for the gate that
+# proves it, one case per line here.
+#
+# `ALIASES.group` is deliberately not used for `charts` or `validate`. It
+# mounts one Typer instance under a second name, which is right only when a
+# group moved wholesale; here every member moved *and* two were renamed
+# (`charts lifecycle` -> `chart show`, `validate clean` -> `chart cache
+# clean`), so a group alias would leave the old spellings dead while
+# advertising `charts publish` and `charts cache`, which never existed.
+# Per-command aliases also keep the stderr notice naming the real target.
+ALIASES.command(charts_app, list_charts, old="charts list", new="chart list")
+ALIASES.command(charts_app, show_lifecycle, old="charts lifecycle", new="chart show")
+ALIASES.command(charts_app, chart_test, old="charts test", new="chart test")
+ALIASES.command(validate_app, validate_cli.validate, old="validate chart", new="chart validate")
+ALIASES.command(validate_app, validate_cli.validate, old="validate run", new="chart validate")
+ALIASES.command(validate_app, validate_cli.clean, old="validate clean", new="chart cache clean")
+ALIASES.command(app, publish_cli.publish, old="publish", new="chart publish")
+ALIASES.command(app, upgrade_cli.upgrade, old="upgrade", new="chart upgrade")
+
 # The three surviving `ci` commands are projections of `plan`, so they are
 # registered as `plan` itself with the flags their old names meant frozen in.
 # See `cli/deprecation.py` for why `bind` removes the frozen flag from the
@@ -1115,6 +1169,9 @@ ALIASES.command(
     new="plan --for publish",
     bind={"for_": "publish"},
 )
+
+app.add_typer(charts_app, name="charts", hidden=True)
+app.add_typer(validate_app, name="validate", hidden=True)
 
 
 def main() -> None:

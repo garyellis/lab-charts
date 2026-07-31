@@ -659,6 +659,11 @@ def test_run_delegates_to_shared_execution_boundary(
         "timings": True,
         "fmt": "all",
         "github_step_summary": True,
+        # The merged command always reports what it resolved, even when that
+        # is "nothing": `alpha` is not on disk under this root, so the
+        # repository-wide charts dir stands. `_execute` treats None and
+        # omitted identically.
+        "charts_dir": None,
     }
 
 
@@ -699,6 +704,91 @@ def test_run_builds_a_request_from_its_flags(
     assert request.row_timeout == 12.0
     assert request.fail_fast is True
     assert request.root == tmp_path
+
+
+# --- the `validate chart` + `validate run` merge ---------------------------
+#
+# One command now serves two, so the three clauses that make that lossless
+# each get a test. Without them the merge is asserted only by
+# `tests/test_cli_aliases.py`, which proves the aliases reach this function
+# but says nothing about whether this function still means what they meant.
+
+
+def test_a_chart_is_selected_the_same_way_however_it_is_spelled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`chart validate X` and `chart validate --chart X` are one request.
+
+    `--chart` is `validate run`'s spelling and is kept so its callers -- the
+    `validate chart` alias among them -- keep working. If the two spellings
+    built different requests, the alias would be a rename in name only.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+    tail = ("--progress", "none", "--root", str(tmp_path))
+
+    positional = cli("validate", "run", "alpha", *tail)
+    flag = cli("validate", "run", "--chart", "alpha", *tail)
+
+    assert positional.exit_code == flag.exit_code == 0
+    assert fake.requests[0] == fake.requests[1]
+    assert fake.requests[0].charts == ("alpha",)
+    assert fake.requests[0].skip_change_detection is True
+
+
+def test_an_explicit_changed_file_list_still_narrows_a_named_chart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--changed-files` outranks a named chart, as it did for `validate run`.
+
+    This is the one combination where "named chart means validate it" would
+    have changed `validate run --chart X --changed-files F` from "the
+    environments F touches, within X" to "every environment of X" -- silently
+    widening a CI run that exists to be narrow. Change detection stays on, so
+    the service reads the file.
+    """
+    changed = tmp_path / "changed.txt"
+    changed.write_text("charts/alpha/values.yaml\n", encoding="utf-8")
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli(
+        "validate", "run",
+        "--chart", "alpha",
+        "--changed-files", str(changed),
+        "--progress", "none",
+        "--root", str(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].skip_change_detection is False
+    assert fake.requests[0].changed_files == changed
+
+
+def test_no_policy_subtracts_from_the_selected_phases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--no-kubeconform`/`--no-policy` narrow `--phases` rather than replacing it.
+
+    `validate chart` built its phase set from these two flags alone. Making
+    them subtractive means that at the `--phases` default they reproduce that
+    set exactly, and that combining them with an explicit `--phases` -- newly
+    possible, since the two commands are one -- narrows instead of surprising.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli(
+        "validate", "run",
+        "--all",
+        "--phases", "render,policy",
+        "--no-policy",
+        "--progress", "none",
+        "--root", str(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].phases == frozenset({"render"})
 
 
 def test_run_defaults_to_continuing_after_failures(
@@ -952,15 +1042,36 @@ def test_chart_honors_environment_and_validator_toggles(
 @pytest.mark.parametrize(
     "args",
     [
-        ["--chart", "alpha"],
-        ["--chart", "alpha", "--env", "dev", "--all"],
+        pytest.param(["--chart", "alpha"], id="no-environment-selection"),
+        pytest.param(["--chart", "alpha", "--env", "dev", "--all"], id="--all-with---env"),
     ],
 )
-def test_chart_requires_exactly_one_environment_selection(args: list[str]) -> None:
-    result = cli("validate", "chart", *args)
+def test_naming_a_chart_no_longer_requires_an_environment_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, args: list[str]
+) -> None:
+    """The merged command drops `validate chart`'s `--env` xor `--all` rule.
 
-    assert result.exit_code == 2
-    assert "--env" in result.output
+    That rule existed because `validate chart` had no other way to say "this
+    chart, every environment" -- it never consulted git, so an empty `envs`
+    would have been ambiguous. The merged command resolves that ambiguity
+    from argv instead: a named chart already means "validate it", so no
+    `--env` means every declared environment, exactly as `--all` did. Keeping
+    the rule would have made `chart validate grafana` -- the design doc's own
+    example -- an error.
+
+    `--all` alongside `--env` is likewise now legal, because that is what
+    `validate run` always did (see
+    `test_run_builds_a_request_from_its_flags`), and one merged command
+    cannot enforce both halves of a contradiction.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli("validate", "chart", *args, "--progress", "none", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert fake.requests[0].charts == ("alpha",)
+    assert fake.requests[0].skip_change_detection is True
 
 
 @pytest.mark.parametrize("command", ["render", "schema", "policy"])

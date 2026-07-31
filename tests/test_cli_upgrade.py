@@ -33,8 +33,17 @@ class _Finalize:
 
 
 def _app() -> typer.Typer:
+    """Both commands flat, as `cli/main.py` no longer registers them together.
+
+    `upgrade` now lives under `chart` and `upgrade-finalize` stays frozen at
+    the root, so they have separate registration functions. This module
+    tests transport -- flag shape, encoding, service call -- which is
+    independent of where each one is mounted, so it keeps mounting both flat
+    and driving them with a plain `CliRunner`.
+    """
     app = typer.Typer()
-    upgrade_cli.register(app)
+    upgrade_cli.register_upgrade(app)
+    upgrade_cli.register_finalize(app)
     return app
 
 
