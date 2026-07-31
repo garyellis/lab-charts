@@ -15,11 +15,13 @@ from typing import Any
 
 import yaml
 
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.domain.charts import (
     ChartDependency,
+    ChartRepository,
     load_chart_metadata,
 )
+from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml
 # near the front of an ordinary tar stream, but we scan the complete bounded
@@ -34,6 +36,28 @@ _MAX_CHART_YAML_BYTES = 1024 * 1024
 class _DependencyIdentity:
     name: str
     version: str
+
+
+def build_helm_dependency_index(
+    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+) -> dict[str, set[str]]:
+    """Map each managed chart to the chart names that depend on it.
+
+    Loads ordinary Helm chart metadata, so charts without enabled cluster
+    tests — including library charts — still enter the index. Malformed
+    charts are skipped by this best-effort repository-wide scan; explicitly
+    requested charts remain strict.
+    """
+    index: dict[str, set[str]] = {}
+    repository = ChartRepository(root, charts_dir=charts_dir)
+    for name in repository.list_names():
+        try:
+            chart = repository.get(name)
+        except ChartManagerError:
+            continue
+        for dependency in chart.metadata.dependencies:
+            index.setdefault(dependency.name, set()).add(chart.name)
+    return index
 
 
 def chart_has_dependencies(chart_path: Path) -> bool:

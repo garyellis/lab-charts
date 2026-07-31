@@ -251,6 +251,26 @@ class Kubectl:
             f"(recent responses: {detail})"
         )
 
+    def wait_nodes_ready(self, *, timeout: str = "10m") -> None:
+        """Wait until every cluster node reports Ready.
+
+        Local bootstrap uses this CNI-neutral gate after installing whichever
+        networking chart the repository selected.
+        """
+        self.runner.run(
+            self._with_context(
+                [
+                    "kubectl",
+                    "wait",
+                    "--for=condition=Ready",
+                    "nodes",
+                    "--all",
+                    f"--timeout={timeout}",
+                ]
+            ),
+            timeout=self.timeout,
+        )
+
     def wait_certificate_ready(
         self, name: str, *, namespace: str, timeout: str = "120s"
     ) -> None:
@@ -326,7 +346,7 @@ class Kubectl:
         """Return all Gateway `.spec.servers[].hosts[]` across the cluster.
 
         Mirrors `list_virtualservice_hosts`: best-effort, dedup'd, sorted.
-        Used to derive the lab apps-domain for the `sandbox expose` URL
+        Used to derive the lab apps-domain for access URLs.
         print -- the gateway's hosts are the source of truth for the
         domain the gateway listener will admit.
         """

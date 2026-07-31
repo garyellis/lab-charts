@@ -18,7 +18,7 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpact,
     LifecycleImpactService,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR
+from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 
 class CiService:
@@ -31,6 +31,7 @@ class CiService:
         helm: Helm,
         kubectl: Kubectl,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        local_config: Path = DEFAULT_LOCAL_CONFIG,
     ) -> None:
         """Wire repository/git against `root`; take cluster adapters injected.
 
@@ -42,7 +43,11 @@ class CiService:
         self.root = root
         self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
         self.charts = ChartRepository(root, charts_dir=charts_dir)
-        self.impact = LifecycleImpactService(root, charts_dir=charts_dir)
+        self.impact = LifecycleImpactService(
+            root,
+            charts_dir=charts_dir,
+            local_config=local_config,
+        )
         self.git = Git(root, charts_dir=charts_dir)
         self.helm = helm
         self.kubectl = kubectl

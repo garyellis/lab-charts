@@ -32,13 +32,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: control-plane-ready
-            type: helm-test
-            description: Wait for the controller, webhook, and certificate controller deployments.
-          - name: crds-installed
-            type: helm-test
-            description: Verify the core external-secrets.io CRDs exist.
         timeout: 10m
 
     dependentTests: []

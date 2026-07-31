@@ -5,16 +5,16 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
-from chart_manager.cli import lifecycle as lifecycle_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
@@ -23,19 +23,11 @@ from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.clusters.development import (
-    DEFAULT_CHART as DEVELOPMENT_DEFAULT_CHART,
-)
-from chart_manager.services.clusters.development import (
-    DEFAULT_PROFILE as DEVELOPMENT_DEFAULT_PROFILE,
-)
-from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
     LAB_CA_SECRET_NAMESPACE,
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
     DevelopmentClusterResult,
-    DevelopmentClusterSyncRequest,
-    DevelopmentClusterUpRequest,
 )
 from chart_manager.services.clusters.ephemeral import (
     DEFAULT_CLUSTER_NAME,
@@ -43,8 +35,14 @@ from chart_manager.services.clusters.ephemeral import (
     DEFAULT_PROFILE,
     EphemeralTestRequest,
 )
-from chart_manager.services.expose import ExposeRequest
-from chart_manager.services.install_plan import InstallPlanService
+from chart_manager.services.lifecycle.impact import LifecycleImpactService
+from chart_manager.services.local_resources import (
+    LocalTargetResolver,
+    ResolvedChartTarget,
+    ResolvedLocalTarget,
+    ResolvedStackTarget,
+    resolve_chart_target,
+)
 from chart_manager.services.progress import ProgressEvent
 
 console = Console()
@@ -114,14 +112,9 @@ charts_app = typer.Typer(
     no_args_is_help=True,
     help="Inspect Helm charts and their lifecycle intent.",
 )
-deps_app = typer.Typer(no_args_is_help=True, help="Resolve test dependencies.")
-sandbox_app = typer.Typer(
+local_app = typer.Typer(
     no_args_is_help=True,
-    help=(
-        "Local development cluster lifecycle. "
-        "Bring up the full stack, exercise individual charts, expose services, "
-        "stop, or delete."
-    ),
+    help="Create, stop, and reset local Kubernetes chart development environments.",
 )
 ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
 helmrelease_app = typer.Typer(
@@ -135,10 +128,6 @@ validate_app = typer.Typer(
     no_args_is_help=True,
     help="Static chart validation: render plus configured validators.",
 )
-lifecycle_app = typer.Typer(
-    no_args_is_help=True,
-    help="Compile lifecycle intent into plans, graphs, diagnostics, and status.",
-)
 
 # setup the events command interface
 events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
@@ -146,24 +135,60 @@ events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle eve
 events_cli.register(events_app)
 validate_cli.register(validate_app)
 helmrelease_cli.register(helmrelease_app)
-lifecycle_cli.register(lifecycle_app)
 upgrade_cli.register(app)
 publish_cli.register(app)
 
 app.add_typer(events_app, name="events")
 app.add_typer(charts_app, name="charts")
-app.add_typer(deps_app, name="deps")
-app.add_typer(sandbox_app, name="sandbox")
+app.add_typer(local_app, name="local")
 app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
-app.add_typer(lifecycle_app, name="lifecycle")
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
 ClusterNameOption = Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")]
-NamespaceOption = Annotated[str, typer.Option("--namespace", help="Kubernetes namespace.")]
+NamespaceOption = Annotated[
+    str,
+    typer.Option("--namespace", help="Kubernetes namespace."),
+]
+NamespaceOverrideOption = Annotated[
+    str | None,
+    typer.Option(
+        "--namespace",
+        help="Override the namespace declared by the selected ChartLifecycle profile.",
+    ),
+]
+
+_FORMATS = ("text", "json", "yaml")
+
+
+def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
+    if value not in allowed:
+        raise typer.BadParameter(
+            f"unknown value: {value} (allowed: {', '.join(allowed)})",
+            param_hint=option,
+        )
+    return value
+
+
+FormatOption = Annotated[
+    str,
+    typer.Option(
+        "--format",
+        help="Output format: text, json, or yaml.",
+        callback=lambda value: _choice(value, _FORMATS, "--format"),
+    ),
+]
+
+
+def _emit_json(data: dict[str, Any]) -> None:
+    typer.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _emit_yaml(data: dict[str, Any]) -> None:
+    typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
 
 
 @charts_app.command("list")
@@ -201,6 +226,78 @@ def list_charts(root: RootOption = Path(".")) -> None:
     console.print(table)
     if invalid:
         raise typer.Exit(1)
+
+
+def _run_chart_test(
+    chart: str,
+    *,
+    root: Path,
+    profile: str,
+    namespace: str | None,
+    cluster_name: str,
+    dependent_tests: bool,
+    no_ensure_cluster: bool,
+    lint: bool,
+) -> None:
+    """Run one chart test through the canonical charts command."""
+    root = root.resolve()
+    target = _resolve_chart_target(root, chart)
+    charts_dir = target.path.parent.relative_to(root)
+    service = _container().ephemeral_test_cluster_service(
+        root,
+        progress=_print_progress,
+        charts_dir=charts_dir,
+    )
+    service.run(
+        EphemeralTestRequest(
+            chart=target.name,
+            profile=profile,
+            namespace=namespace,
+            cluster_name=cluster_name,
+            ensure_cluster=not no_ensure_cluster,
+            include_dependent_tests=dependent_tests,
+            lint=lint,
+        )
+    )
+
+
+@charts_app.command("test")
+def chart_test(
+    chart: Annotated[
+        str,
+        typer.Option(
+            "--chart",
+            help="Chart name or chart directory.",
+        ),
+    ],
+    root: RootOption = Path("."),
+    profile: ProfileOption = DEFAULT_PROFILE,
+    namespace: NamespaceOverrideOption = None,
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    dependent_tests: Annotated[
+        bool,
+        typer.Option(
+            "--dependent-tests",
+            help="Run cluster tests affected by this chart.",
+        ),
+    ] = False,
+    no_ensure_cluster: Annotated[
+        bool,
+        typer.Option("--no-ensure-cluster", help="Do not create the test cluster if missing."),
+    ] = False,
+    lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
+) -> None:
+    """Install and exercise one chart on an ephemeral local Kubernetes cluster."""
+    _run_chart_test(
+        chart,
+        root=root,
+        profile=profile,
+        namespace=namespace,
+        cluster_name=cluster_name,
+        dependent_tests=dependent_tests,
+        no_ensure_cluster=no_ensure_cluster,
+        lint=lint,
+    )
 
 
 @charts_app.command("lifecycle")
@@ -297,80 +394,68 @@ def grafana_lint_dashboards(
     console.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
 
 
-@deps_app.command("plan")
-def dependency_plan(
-    chart: str,
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-) -> None:
-    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
-    table = Table("Order", "Chart", "Profile", "Target")
-    for index, entry in enumerate(service.install_plan(chart, profile), start=1):
-        table.add_row(str(index), entry.chart, entry.profile, "yes" if entry.target else "")
-    console.print(table)
+def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
+    """Resolve a chart directory or LocalStack through configured repository paths."""
+    return LocalTargetResolver(root, local_config=Settings().local_config).resolve(target)
 
 
-@deps_app.command("checks")
-def dependency_checks(
-    chart: str,
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-) -> None:
-    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
-    table = Table("Order", "Chart", "Profile", "Check", "Type", "Description")
-    row = 0
-    for entry in service.plan_checks(chart, profile):
-        for check in entry.checks:
-            row += 1
-            table.add_row(
-                str(row),
-                entry.chart,
-                entry.profile,
-                check.name,
-                check.type,
-                check.description or "",
-            )
-    console.print(table)
+def _resolve_chart_target(root: Path, chart: str) -> ResolvedChartTarget:
+    """Resolve either a configured chart name or an explicit chart directory."""
+    settings = Settings()
+    return resolve_chart_target(
+        root,
+        chart,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
 
 
-@deps_app.command("dependent-tests")
-def dependent_tests(chart: str, root: RootOption = Path(".")) -> None:
-    service = InstallPlanService(root, charts_dir=Settings().charts_dir)
-    table = Table("Chart", "Profile")
-    for ref in service.dependent_tests(chart):
-        table.add_row(ref.chart, ref.profile)
-    console.print(table)
+def _resolve_stack_target(root: Path, stack: str) -> ResolvedStackTarget:
+    resolved = _resolve_local_target(root, stack)
+    if not isinstance(resolved, ResolvedStackTarget):
+        raise ChartManagerError(f"--stack must select a LocalStack, not {resolved.kind}")
+    return resolved
 
 
-@sandbox_app.command("ensure")
-def ensure_kind(
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    root: RootOption = Path("."),
-) -> None:
-    # No progress callback: this command's whole output is the one line
-    # below, so the service's "Ensuring sandbox cluster" step would be noise.
-    _container().ephemeral_test_cluster_service(root.resolve()).ensure_cluster(cluster_name)
-    console.print(f"sandbox cluster ready: {cluster_name}")
+def _resolve_local_selection(
+    root: Path,
+    *,
+    chart: str | None,
+    stack: str | None,
+) -> ResolvedLocalTarget:
+    if (chart is None) == (stack is None):
+        raise ChartManagerError("select exactly one of --chart or --stack")
+    if chart is not None:
+        return _resolve_chart_target(root, chart)
+    assert stack is not None
+    return _resolve_stack_target(root, stack)
 
 
-@sandbox_app.command("up")
-def sandbox_up(
+def _validate_local_profile(target: ResolvedLocalTarget, profile: str | None) -> None:
+    if profile is not None and isinstance(target, ResolvedStackTarget):
+        raise ChartManagerError(
+            "--profile is only valid for a chart target; LocalStack releases "
+            "declare their own profiles"
+        )
+
+
+@local_app.command("up")
+def local_up(
     chart: Annotated[
-        str,
-        typer.Option(
-            "--chart",
-            help="Entry chart whose profile is the install plan source.",
-        ),
-    ] = DEVELOPMENT_DEFAULT_CHART,
+        str | None,
+        typer.Option("--chart", help="Chart name or chart directory."),
+    ] = None,
+    stack: Annotated[
+        str | None,
+        typer.Option("--stack", help="Named LocalStack or LocalStack YAML file."),
+    ] = None,
     profile: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--profile",
-            help="Profile on --chart to resolve into the install plan.",
+            help=("Profile for a single chart. Authored stack files declare profiles per release."),
         ),
-    ] = DEVELOPMENT_DEFAULT_PROFILE,
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    ] = None,
     skip_installed: Annotated[
         bool,
         typer.Option(
@@ -383,120 +468,81 @@ def sandbox_up(
     ] = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Bring up the sandbox cluster and install the full stack.
+    """Create or start a local cluster and converge the chart or stack.
 
-    Works whether the cluster is missing, stopped, or already running:
-    `kind ensure_cluster` handles all three. Continue-on-error: a failing
-    chart is reported in the summary but does not abort the run.
+    Works whether the environment is missing, stopped, or already running.
+    Continue-on-error: a failing chart is reported in the summary but does
+    not abort the run.
 
     Default: converge -- every chart in the install plan runs `helm
     upgrade --install`, helm itself no-ops the ones whose rendered
     manifests haven't changed. This is the helmfile/Argo workflow and
-    picks up values-file edits on re-run. Pass `--skip-installed` to
-    restore the prior fast-skip behavior (don't even invoke helm for
-    releases already in `helm list -A`).
+    picks up values-file edits on re-run. Pass `--skip-installed` to avoid
+    invoking Helm for releases already in `helm list -A`.
     """
+    resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
+    _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
-    result = service.up(
-        DevelopmentClusterUpRequest(
-            chart=chart,
-            profile=profile,
-            cluster_name=cluster_name,
-            namespace=namespace,
-            skip_installed=skip_installed,
-        )
+    result = service.up_target(
+        resolved,
+        profile=profile,
+        cluster_name=DEFAULT_CLUSTER_NAME,
+        skip_installed=skip_installed,
     )
     _render_development_cluster_result(result)
     _exit_if_failed(result.ok)
 
 
-@sandbox_app.command("sync")
-def sandbox_sync(
-    chart_names: Annotated[
-        list[str],
-        typer.Argument(
-            min=1,
-            help="Chart names to re-apply (must be members of the install plan).",
-        ),
-    ],
-    chart: Annotated[
-        str,
-        typer.Option(
-            "--chart",
-            help="Entry chart whose profile is the install plan source.",
-        ),
-    ] = DEVELOPMENT_DEFAULT_CHART,
-    profile: Annotated[
-        str,
-        typer.Option(
-            "--profile",
-            help="Profile on --chart to resolve into the install plan.",
-        ),
-    ] = DEVELOPMENT_DEFAULT_PROFILE,
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+@local_app.command("down")
+def local_down(
     root: RootOption = Path("."),
 ) -> None:
-    """Re-apply specific charts (pick up values edits without a full up).
+    """Stop the configured local cluster while preserving its state.
 
-    Runs `helm upgrade --install` for ONLY the named charts. Charts not
-    named are not visited. Useful after editing a values file on one chart
-    when the rest of the stack is already converged.
+    Installed Helm releases, PVCs, and provider-owned caches survive. Use
+    `local up` to bring it back. Any active port-forward for the
+    environment is stopped with it.
 
-    Errors if any named chart is not a member of the configured install
-    plan, so a typo can't quietly do nothing.
-    """
-    service = _container().development_cluster_service(root, progress=_print_progress)
-    result = service.sync(
-        DevelopmentClusterSyncRequest(
-            chart_names=tuple(chart_names),
-            chart=chart,
-            profile=profile,
-            cluster_name=cluster_name,
-            namespace=namespace,
-        )
-    )
-    _render_development_cluster_result(result)
-    _exit_if_failed(result.ok)
-
-
-@sandbox_app.command("down")
-def sandbox_down(
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    root: RootOption = Path("."),
-) -> None:
-    """Stop the sandbox cluster's containers; preserve all state.
-
-    `docker stop` on the kind node containers. Installed Helm releases,
-    PVCs, etcd, and the containerd image cache survive. Use `sandbox up`
-    to bring it back. Any active port-forward for this cluster is also
-    stopped, since its kubectl process will lose the apiserver anyway.
     """
     _render_cluster_action(
-        _container().development_cluster_service(root, progress=_print_progress).down(cluster_name),
+        _container()
+        .development_cluster_service(root, progress=_print_progress)
+        .down(DEFAULT_CLUSTER_NAME),
         verb="stopped",
         absent="not running",
     )
 
 
-@sandbox_app.command("delete")
-def sandbox_delete(
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+@local_app.command("reset")
+def local_reset(
+    chart: Annotated[
+        str | None,
+        typer.Option("--chart", help="Chart name or chart directory."),
+    ] = None,
+    stack: Annotated[
+        str | None,
+        typer.Option("--stack", help="Named LocalStack or LocalStack YAML file."),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help=("Profile for a single chart. Authored stack files declare profiles per release."),
+        ),
+    ] = None,
     root: RootOption = Path("."),
 ) -> None:
-    """Tear down the sandbox cluster entirely.
-
-    `kind delete cluster`: destructive, the image cache goes with it and
-    the next `sandbox up` will re-pull. Use `sandbox down` if you just
-    want to stop the cluster.
-    """
-    _render_cluster_action(
-        _container()
-        .development_cluster_service(root, progress=_print_progress)
-        .delete(cluster_name),
-        verb="deleted",
-        absent="not present",
+    """Destroy and recreate a local cluster, then converge the chart or stack."""
+    resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
+    _validate_local_profile(resolved, profile)
+    service = _container().development_cluster_service(root, progress=_print_progress)
+    result = service.reset_target(
+        resolved,
+        profile=profile,
+        cluster_name=DEFAULT_CLUSTER_NAME,
     )
+    _render_development_cluster_result(result)
+    _exit_if_failed(result.ok)
 
 
 def _render_development_cluster_result(result: DevelopmentClusterResult) -> None:
@@ -573,7 +619,7 @@ def _print_ca_import_hint() -> None:
         )
         console.print(f"  [dim]macOS one-liner: {macos_trust}[/dim]")
     console.print(
-        "  [dim]Re-import after every 'sandbox delete' -- the lab CA is "
+        "  [dim]Re-import after every 'local reset' -- the lab CA is "
         "regenerated each fresh install.[/dim]"
     )
     console.print(
@@ -589,88 +635,11 @@ def _print_ca_import_hint() -> None:
 def _render_cluster_action(
     result: DevelopmentClusterActionResult, *, verb: str, absent: str
 ) -> None:
-    """Print the outcome of `down` / `delete` plus any port-forward we reaped."""
+    """Print the outcome of ``down`` plus any port-forward we reaped."""
     state = verb if result.changed else absent
-    console.print(f"sandbox cluster {state}: {result.cluster_name}")
+    console.print(f"local cluster {state}: {result.cluster_name}")
     if result.port_forward_pid is not None:
         console.print(f"stopped port-forward (pid {result.port_forward_pid})")
-
-
-@sandbox_app.command("expose")
-def kind_expose(
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    service: Annotated[
-        str,
-        typer.Option("--service", help="namespace/name of the Service to forward."),
-    ] = "istio-ingress/istio-gateway",
-    port: Annotated[
-        list[str],
-        typer.Option(
-            "--port", "-p", help="LOCAL:REMOTE mapping (repeatable). Defaults to 8443:443 8080:80."
-        ),
-    ] = [],
-    stop: Annotated[
-        bool, typer.Option("--stop", help="Stop the running port-forward for this cluster.")
-    ] = False,
-) -> None:
-    expose = _container().expose_service()
-
-    if stop:
-        stopped = expose.stop(cluster_name)
-        if stopped is None:
-            console.print(f"no port-forward state for cluster [bold]{cluster_name}[/bold]")
-        else:
-            console.print(f"stopped port-forward (pid {stopped})")
-        return
-
-    # An empty --port list is the "use the lab defaults" signal; ExposeRequest
-    # owns which mappings that means.
-    status = expose.start(
-        ExposeRequest(cluster_name=cluster_name, service=service, ports=list(port))
-    )
-
-    console.print(
-        f"[bold]port-forward running[/bold] (pid {status.pid})  "
-        f"cluster={cluster_name}  service={service}"
-    )
-    for exposed in status.urls:
-        console.print(f"  {exposed.url}  ->  {service}:{exposed.remote_port}")
-    console.print(f"  log:  {status.log}")
-    console.print(f"  stop: chart-manager sandbox expose --cluster-name {cluster_name} --stop")
-
-
-@sandbox_app.command("test")
-def sandbox_test(
-    chart: str,
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    dependent_tests: Annotated[
-        bool,
-        typer.Option(
-            "--dependent-tests",
-            help="Run cluster tests affected by this chart.",
-        ),
-    ] = False,
-    no_ensure_cluster: Annotated[
-        bool,
-        typer.Option("--no-ensure-cluster", help="Do not create the sandbox cluster if missing."),
-    ] = False,
-    lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
-) -> None:
-    service = _container().ephemeral_test_cluster_service(root, progress=_print_progress)
-    service.run(
-        EphemeralTestRequest(
-            chart=chart,
-            profile=profile,
-            namespace=namespace,
-            cluster_name=cluster_name,
-            ensure_cluster=not no_ensure_cluster,
-            include_dependent_tests=dependent_tests,
-            lint=lint,
-        )
-    )
 
 
 @ci_app.command("changed")
@@ -740,6 +709,107 @@ def ci_cluster_test_matrix(
         ]
     }
     typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+
+
+def _impact_service(root: Path) -> LifecycleImpactService:
+    """Build the impact service at a seam tests can replace."""
+    settings = Settings()
+    return LifecycleImpactService(
+        root,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
+
+
+def _changed_paths(
+    changed_files: Path | None,
+    changed_file: list[str],
+) -> list[str]:
+    changes: list[str] = []
+    if changed_files is not None:
+        try:
+            contents = changed_files.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise typer.BadParameter(
+                f"cannot read changed-files input {changed_files}: {exc}",
+                param_hint="--changed-files",
+            ) from exc
+        changes.extend(line.strip() for line in contents.splitlines() if line.strip())
+    changes.extend(path.strip() for path in changed_file if path.strip())
+    if not changes:
+        raise typer.BadParameter(
+            "provide at least one changed path via --changed-files or --changed-file",
+            param_hint="--changed-files / --changed-file",
+        )
+    return changes
+
+
+def _render_impact_text(result: Any) -> None:
+    typer.echo("Validation:")
+    if not result.validation:
+        typer.echo("  none")
+    for case in result.validation:
+        typer.echo(f"  {case.chart}/{case.environment}")
+        for reason in case.reasons:
+            typer.echo(
+                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+            )
+
+    typer.echo("Cluster tests:")
+    if not result.cluster_tests:
+        typer.echo("  none")
+    for case in result.cluster_tests:
+        typer.echo(f"  {case.chart}/{case.profile}")
+        for reason in case.reasons:
+            typer.echo(
+                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+            )
+
+    if result.warnings:
+        typer.echo("Warnings:")
+        for warning in result.warnings:
+            typer.echo(f"  - {warning}")
+    if result.spec_errors:
+        typer.echo("Spec errors:")
+        for error in result.spec_errors:
+            typer.echo(f"  - {error}")
+
+
+@ci_app.command("impact")
+def ci_impact(
+    changed_files: Annotated[
+        Path | None,
+        typer.Option(
+            "--changed-files",
+            help="Path to a newline-delimited changed-file list.",
+        ),
+    ] = None,
+    changed_file: Annotated[
+        list[str],
+        typer.Option(
+            "--changed-file",
+            help="Changed repository-relative path (repeatable).",
+        ),
+    ] = [],
+    fmt: FormatOption = "text",
+    root: RootOption = Path("."),
+) -> None:
+    """Explain the validation and cluster-test work selected by changed paths.
+
+    The explain-mode twin of `cluster-test-matrix`, which computes the same
+    selection and projects away the reasons. Answers "why is this chart in my
+    matrix?" and, via warnings, "why is nothing selected?".
+    """
+    result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
+    data = result.to_dict()
+    if fmt == "json":
+        _emit_json(data)
+    elif fmt == "yaml":
+        _emit_yaml(data)
+    else:
+        _render_impact_text(result)
+    if result.spec_errors:
+        raise typer.Exit(1)
 
 
 @ci_app.command("install")

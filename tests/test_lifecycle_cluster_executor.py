@@ -8,19 +8,14 @@ from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     ClusterPlanError,
 )
-from chart_manager.services.lifecycle.evidence import (
-    ClusterIdentity,
-    LocalEvidenceRepository,
-)
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
-    EdgeKind,
     LifecycleAction,
-    LifecycleEdge,
     LifecyclePlan,
     Workflow,
 )
+from chart_manager.services.progress import ProgressEvent
 
 NOW = datetime(2026, 7, 27, 9, tzinfo=UTC)
 
@@ -48,6 +43,9 @@ class FakeHelm:
         self.calls.append(f"dependency:{chart_path.name}")
         if self.fail_dependency:
             raise RuntimeError("dependency update failed")
+
+    def lint(self, chart_path: Path, values: list[Path] | None = None) -> None:
+        self.calls.append(f"lint:{chart_path.name}:{len(values or [])}")
 
     def upgrade_install(
         self,
@@ -113,13 +111,8 @@ def action(
     )
 
 
-def edge(source: LifecycleAction, target: LifecycleAction) -> LifecycleEdge:
-    return LifecycleEdge(source.action_id, target.action_id, EdgeKind.RUNTIME_REQUIREMENT)
-
-
 def plan(
     actions: tuple[LifecycleAction, ...],
-    edges: tuple[LifecycleEdge, ...],
     *,
     workflow: Workflow = Workflow.CLUSTER_TEST,
 ) -> LifecyclePlan:
@@ -128,7 +121,6 @@ def plan(
         chart="grafana",
         profile="smoke",
         actions=actions,
-        edges=edges,
     )
 
 
@@ -136,31 +128,22 @@ def executor(
     calls: list[str],
     *,
     helm: FakeHelm | None = None,
-    repository: LocalEvidenceRepository | None = None,
 ) -> ClusterActionExecutor:
     return ClusterActionExecutor(
         helm=helm or FakeHelm(calls),
         kubectl=FakeKubectl(calls),
-        repository=repository,
         clock=lambda: NOW,
     )
 
 
-def test_executes_cluster_actions_in_deterministic_dependency_order() -> None:
+def test_executes_cluster_actions_in_authoritative_plan_order() -> None:
     namespace = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
     dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
     install = action("cluster:grafana:install", ActionKind.HELM_UPGRADE_INSTALL)
     ready = action("cluster:grafana:ready", ActionKind.WORKLOAD_READY)
     helm_test = action("cluster:grafana:test", ActionKind.HELM_TEST)
     lifecycle_plan = plan(
-        # Intentionally not topologically sorted.
-        (install, helm_test, dependency, namespace, ready),
-        (
-            edge(namespace, install),
-            edge(dependency, install),
-            edge(install, ready),
-            edge(ready, helm_test),
-        ),
+        (dependency, namespace, install, ready, helm_test),
     )
     calls: list[str] = []
 
@@ -183,20 +166,12 @@ def test_executes_cluster_actions_in_deterministic_dependency_order() -> None:
     ]
 
 
-def test_diamond_graph_executes_shared_prerequisite_once() -> None:
+def test_each_ordered_action_executes_once() -> None:
     shared = action("cluster:shared:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
     left = action("cluster:left:namespace", ActionKind.NAMESPACE_ENSURE, namespace="left")
     right = action("cluster:right:namespace", ActionKind.NAMESPACE_ENSURE, namespace="right")
     final = action("cluster:final:install", ActionKind.HELM_UPGRADE_INSTALL)
-    lifecycle_plan = plan(
-        (shared, left, right, final),
-        (
-            edge(shared, left),
-            edge(shared, right),
-            edge(left, final),
-            edge(right, final),
-        ),
-    )
+    lifecycle_plan = plan((shared, left, right, final))
     calls: list[str] = []
 
     result = executor(calls).execute(lifecycle_plan)
@@ -207,15 +182,12 @@ def test_diamond_graph_executes_shared_prerequisite_once() -> None:
     assert len({outcome.action_id for outcome in result.outcomes}) == 4
 
 
-def test_failure_skips_only_downstream_actions_and_keeps_complete_outcomes() -> None:
+def test_failure_skips_every_later_action_and_keeps_complete_outcomes() -> None:
     dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
     namespace = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
     install = action("cluster:grafana:install", ActionKind.HELM_UPGRADE_INSTALL)
     ready = action("cluster:grafana:ready", ActionKind.WORKLOAD_READY)
-    lifecycle_plan = plan(
-        (dependency, namespace, install, ready),
-        (edge(dependency, install), edge(namespace, install), edge(install, ready)),
-    )
+    lifecycle_plan = plan((dependency, namespace, install, ready))
     calls: list[str] = []
     helm = FakeHelm(calls, fail_dependency=True)
 
@@ -224,25 +196,73 @@ def test_failure_skips_only_downstream_actions_and_keeps_complete_outcomes() -> 
     assert not result.ok
     assert [outcome.verdict for outcome in result.outcomes] == [
         "FAIL",
-        "PASS",
+        "SKIP",
         "SKIP",
         "SKIP",
     ]
-    assert result.outcomes[2].reason == "PrerequisiteFailed"
-    assert result.outcomes[3].reason == "PrerequisiteFailed"
-    assert calls == ["dependency:grafana", "namespace:monitoring"]
+    assert all(outcome.reason == "FailFast" for outcome in result.outcomes[1:])
+    assert calls == ["dependency:grafana"]
 
 
-def test_fail_fast_marks_remaining_independent_work_skipped() -> None:
+def test_emits_ordered_progress_for_completion_failure_and_skip() -> None:
+    dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
+    install = action("cluster:grafana:install", ActionKind.HELM_UPGRADE_INSTALL)
+    events: list[ProgressEvent] = []
+    calls: list[str] = []
+    lifecycle_plan = plan((dependency, install))
+
+    result = ClusterActionExecutor(
+        helm=FakeHelm(calls, fail_dependency=True),
+        kubectl=FakeKubectl(calls),
+        clock=lambda: NOW,
+        progress=events.append,
+    ).execute(lifecycle_plan)
+
+    assert [outcome.verdict for outcome in result.outcomes] == ["FAIL", "SKIP"]
+    assert [
+        (event.severity, event.label, event.message) for event in events
+    ] == [
+        ("step", "Updating dependencies", "grafana:smoke in monitoring"),
+        (
+            "error",
+            "Failed",
+            "grafana:smoke in monitoring: dependency update failed",
+        ),
+        ("detail", "Skipped", "grafana:smoke in monitoring"),
+    ]
+
+
+def test_emits_start_then_completion_for_each_successful_action() -> None:
+    namespace = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
+    lint = action("cluster:grafana:lint", ActionKind.HELM_LINT)
+    events: list[ProgressEvent] = []
+    calls: list[str] = []
+
+    ClusterActionExecutor(
+        helm=FakeHelm(calls),
+        kubectl=FakeKubectl(calls),
+        clock=lambda: NOW,
+        progress=events.append,
+    ).execute(plan((namespace, lint)))
+
+    assert [(event.label, event.message) for event in events] == [
+        ("Ensuring namespace", "grafana:smoke in monitoring"),
+        ("Completed", "grafana:smoke in monitoring"),
+        ("Linting", "grafana:smoke in monitoring"),
+        ("Completed", "grafana:smoke in monitoring"),
+    ]
+
+
+def test_fail_fast_is_unconditional() -> None:
     dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
     namespace = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
-    lifecycle_plan = plan((dependency, namespace), ())
+    lifecycle_plan = plan((dependency, namespace))
     calls: list[str] = []
 
     result = executor(
         calls,
         helm=FakeHelm(calls, fail_dependency=True),
-    ).execute(lifecycle_plan, fail_fast=True)
+    ).execute(lifecycle_plan)
 
     assert [outcome.verdict for outcome in result.outcomes] == ["FAIL", "SKIP"]
     assert result.outcomes[1].reason == "FailFast"
@@ -257,7 +277,7 @@ def test_nonzero_helm_test_is_a_failed_terminal_outcome() -> None:
         test_result=FakeHelmTestResult(returncode=1, stderr="pod assertion failed"),
     )
 
-    result = executor(calls, helm=helm).execute(plan((helm_test,), ()))
+    result = executor(calls, helm=helm).execute(plan((helm_test,)))
 
     assert not result.ok
     assert result.outcomes[0].verdict == "FAIL"
@@ -265,34 +285,14 @@ def test_nonzero_helm_test_is_a_failed_terminal_outcome() -> None:
     assert result.outcomes[0].detail == "helm test exited 1: pod assertion failed"
 
 
-def test_records_evidence_for_executed_and_skipped_actions(tmp_path: Path) -> None:
-    dependency = action("cluster:grafana:dependency", ActionKind.HELM_DEPENDENCY_UPDATE)
-    install = action("cluster:grafana:install", ActionKind.HELM_UPGRADE_INSTALL)
-    lifecycle_plan = plan((dependency, install), (edge(dependency, install),))
+def test_executes_lint_with_selected_values() -> None:
+    lint = action("cluster:grafana:lint", ActionKind.HELM_LINT)
     calls: list[str] = []
-    repository = LocalEvidenceRepository(tmp_path / "state")
-    cluster = ClusterIdentity(name="chart-manager", context="kind-chart-manager", uid="node-1")
 
-    result = executor(
-        calls,
-        helm=FakeHelm(calls, fail_dependency=True),
-        repository=repository,
-    ).execute(
-        lifecycle_plan,
-        run_id="cluster-run-1",
-        cluster=cluster,
-    )
-    history = repository.history()
+    result = executor(calls).execute(plan((lint,)))
 
-    assert len(result.evidence_paths) == 2
-    assert result.diagnostics == ()
-    assert {record.verdict for record in history.records} == {"FAIL", "SKIP"}
-    assert {record.input_digest for record in history.records} == {
-        dependency.input_digest,
-        install.input_digest,
-    }
-    assert all(record.cluster == cluster for record in history.records)
-    assert all(record.target.workflow == "cluster-test" for record in history.records)
+    assert result.ok
+    assert calls == ["lint:grafana:1"]
 
 
 def test_rejects_validation_plan_before_calling_cluster_integrations() -> None:
@@ -300,7 +300,7 @@ def test_rejects_validation_plan_before_calling_cluster_integrations() -> None:
     calls: list[str] = []
 
     with pytest.raises(ClusterPlanError, match="requires workflow"):
-        executor(calls).execute(plan((render,), (), workflow=Workflow.VALIDATION))
+        executor(calls).execute(plan((render,), workflow=Workflow.VALIDATION))
 
     assert calls == []
 
@@ -309,6 +309,16 @@ def test_rejects_empty_cluster_plan_instead_of_reporting_vacuous_success() -> No
     calls: list[str] = []
 
     with pytest.raises(ClusterPlanError, match="contains no actions"):
-        executor(calls).execute(plan((), ()))
+        executor(calls).execute(plan(()))
+
+    assert calls == []
+
+
+def test_rejects_duplicate_action_ids_before_calling_integrations() -> None:
+    duplicate = action("cluster:grafana:namespace", ActionKind.NAMESPACE_ENSURE)
+    calls: list[str] = []
+
+    with pytest.raises(ClusterPlanError, match="duplicate action id"):
+        executor(calls).execute(plan((duplicate, duplicate)))
 
     assert calls == []

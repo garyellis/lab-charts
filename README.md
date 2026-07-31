@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-A collection of Helm wrapper charts under `charts/`, a Python CLI (`chart-manager`) that renders, schema-checks, and sandbox-tests them on ephemeral kind clusters, and a CI pipeline that runs the same commands. Everything you do locally is what CI does on a pull request.
+A collection of Helm wrapper charts under `charts/`, a Python CLI (`chart-manager`) that renders, schema-checks, and tests them on local Kubernetes clusters, and a CI pipeline that runs the same commands. Everything you do locally is what CI does on a pull request.
 
 ## Prerequisites
 
@@ -33,22 +33,96 @@ uv run chart-manager validate chart --chart grafana --env dev
 | `uv run chart-manager validate chart --chart <name> --env <env>` | Render one chart for one authored env, then run its enabled validators. |
 | `uv run chart-manager validate chart --chart <name> --all` | Validate every environment authored for one chart. |
 | `mise run validate -- --all` | Same as above, fanned out across every chart and every env declared in the repo. |
-| `mise run kind-test -- <name> --profile minimal` | Spin up an ephemeral kind cluster, do a real `helm install` of the chart, run smoke checks, and tear the cluster down. |
+| `uv run chart-manager charts test --chart <name-or-path> --profile minimal` | Spin up a local Kubernetes test cluster, install the chart, and run its Helm test hooks when enabled. `--namespace` explicitly overrides the profile namespace. |
+| `uv run chart-manager local up --chart <name-or-path> --profile minimal` | Create or start the chart's local cluster, run configured bootstrap releases, and converge the chart. |
+| `uv run chart-manager local up --stack <name-or-path>` | Converge a `LocalStack` from `.chart-manager/stacks/<name>.yaml` or an explicit YAML path. |
+| `uv run chart-manager local down` | Stop the configured local cluster while preserving releases, data, and image caches. |
+| `uv run chart-manager local reset --chart <name-or-path>` | Destroy and recreate that chart's cluster, then converge it. Use `--stack` for a stack. |
 | `mise run charts` | List every chart wrapper the CLI knows about. |
 | `mise run test` | Run the Python unit tests for the CLI. |
-| `uv run chart-manager lifecycle plan <name> --workflow validation --profile dev` | Compile authored intent into the exact action DAG without executing it. |
-| `uv run chart-manager lifecycle status <name> --workflow cluster-test --profile minimal --live` | Merge cached evidence with read-only Helm and Kubernetes observations. |
-| `uv run chart-manager lifecycle impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
+| `uv run chart-manager ci impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
 | `uv run chart-manager publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
-| `uv run chart-manager lifecycle doctor` | Validate lifecycle inputs, cross-chart references, and dependency cycles repository-wide. |
 | `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
+
+Local operation has three authored concepts:
+
+- `LocalCluster` in `.chart-manager/local-cluster.yaml` owns the Kind config
+  path and an ordered, fail-fast bootstrap sequence. Bootstrap entries may use
+  a local `ChartLifecycle` profile, a raw local chart, or a version/digest-pinned
+  OCI chart. Chart-manager does not select a CNI.
+- `ChartLifecycle` owns each local chart's profile, values, namespace, timeout,
+  dependencies, and Helm test gate.
+- `LocalStack` optionally composes lifecycle releases and pinned OCI releases.
+  It is intentionally narrower than Helmfile: composition only, with no
+  templating or orchestration language.
+
+All `local up`, `local down`, and `local reset` targets use the single
+`chart-manager` cluster by default. This avoids duplicate Kind clusters and
+host-port conflicts from the shared `kind-config.yaml`. Select another
+Pydantic-configured `.chart-manager` directory when a different
+`LocalCluster` and Kind configuration are needed.
+
+The repository's `kind-config.yaml` controls its Kubernetes version, topology,
+container runtime integration, and whether Kind's default CNI is disabled.
+This repository chooses its Cilium wrapper in `LocalCluster`; another
+repository can select a different networking chart or retain Kind's default
+without any chart-manager code change. Run
+`chart-manager local reset --chart <name-or-path>` (or `--stack`) after
+changing creation-time Kind settings.
+
+Set `CHART_MANAGER_LOCAL_CONFIG` to another repository-relative LocalCluster
+file when `.chart-manager/local-cluster.yaml` is not the desired environment.
+Named stacks are resolved from the selected file's sibling `stacks/` directory.
+
+This repository's bootstrap is ordinary authored configuration:
+
+```yaml
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalCluster
+metadata: {name: default}
+spec:
+  cluster: {config: kind-config.yaml}
+  bootstrap:
+    releases:
+      - type: lifecycle
+        chart: charts/cilium
+        profile: minimal
+        runtimeValues:
+          cilium.k8sServiceHost: ${kind.controlPlaneHost}
+          cilium.k8sServicePort: ${kind.controlPlanePort}
+        readiness:
+          nodesReady: true
+          workloadsReady: {namespace: kube-system, timeout: 15m}
+```
+
+A named stack is similarly small:
+
+```yaml
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalStack
+metadata: {name: platform}
+spec:
+  releases:
+    - {type: lifecycle, chart: charts/grafana, profile: minimal}
+    - type: oci
+      name: metrics-server
+      chart: oci://registry.example/charts/metrics-server
+      version: 1.2.3
+      namespace: kube-system
+      values: []
+      timeout: 5m
+```
 
 Use `uv run chart-manager validate chart --help` for local chart validation and
 `uv run chart-manager validate run --help` for changed-worklist and repository-wide runs.
 
 ## CI
 
-CI mirrors local exactly: **`mise run validate` and `mise run kind-test` are the same commands the workflow invokes.** A `prep` job inspects the PR diff and decides which charts changed; `validate` runs against the full set; `sandbox-test` fans out as a matrix with one kind job per changed chart so unrelated charts never gate your PR.
+CI uses the same **`chart-manager charts test`** execution path as
+`mise run kind-test`. A `prep` job inspects the PR diff and decides which charts
+changed; `validate` runs against the full set; `sandbox-test` fans out as a
+matrix with one kind job per changed chart so unrelated charts never gate your
+PR.
 
 PR publishing uses each chart's `Chart.yaml` version plus a prerelease suffix
 (`1.2.3-pr.<pr>.g<sha>`). The workflow logs in once and publishes all directly
@@ -72,7 +146,7 @@ heuristic in YAML.
 
 - Open the failed run and download `rendered-manifests-<run_id>` (validate) or `sandbox-logs-<chart>-<run_id>` (sandbox-test) from the Artifacts panel.
 - Reproduce a validate failure locally with `uv run chart-manager validate chart --chart <name> --env <env>`.
-- Reproduce a sandbox-test failure locally with `mise run kind-test -- <name> --profile minimal`.
+- Reproduce a sandbox-test failure locally with `mise run kind-test -- --chart <name> --profile minimal`.
 
 ## Adding or editing a chart
 
@@ -81,7 +155,8 @@ Each managed chart owns one standalone
 `apiVersion: lifecycle.cmg.io/v1alpha1` and `kind: ChartLifecycle`.
 `spec.validation` declares environments, composed values, triggers, policies,
 and default-true `validators.kubeconform` / `validators.policy` gates.
-`spec.clusterTest` declares live-cluster install profiles and checks;
+`spec.clusterTest` declares live-cluster install profiles and whether each runs
+Helm test hooks;
 `dependentTests` lists chart/profile tests that should rerun when this chart
 changes. Either capability can be absent or explicitly disabled, and
 `spec.enabled` pauses both.
@@ -126,6 +201,6 @@ files out to every declared environment.
   isolated Renovate upgrades, dependency coverage, versioning, and callback
   security.
 - [`docs/MENTAL_MODEL.md`](docs/MENTAL_MODEL.md) — how the pieces fit together.
-- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent,
-  compiled action plans, evidence, and synthesized status.
+- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent
+  and compiled action plans.
 - [`docs/validate-pipeline-plan.md`](docs/validate-pipeline-plan.md) — design rationale for the validate pipeline.

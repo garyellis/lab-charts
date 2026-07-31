@@ -1,10 +1,4 @@
-"""EphemeralTestClusterService result accounting + the `ensure` verb.
-
-`sandbox ensure` used to reach through the service into its injected Kind
-integration and own the "kind-config.yaml at repo root if it exists" rule
-in the CLI handler. Both now belong to the service, and `run` returns what
-it did instead of printing it.
-"""
+"""Local ephemeral-cluster result accounting and environment setup."""
 
 from __future__ import annotations
 
@@ -15,7 +9,7 @@ import pytest
 
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
-from chart_manager.services.clusters import ephemeral as sandbox_module
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
@@ -93,7 +87,6 @@ def _stub_chart(name: str, *, helm_test: bool = True) -> ClusterTestChart:
         timeout="1m",
         requires=[],
         helmTest=helm_test,
-        checks=[],
     )
     return ClusterTestChart(
         chart=HelmChart(
@@ -105,7 +98,33 @@ def _stub_chart(name: str, *, helm_test: bool = True) -> ClusterTestChart:
     )
 
 
-def _service(tmp_path: Path, *, kind: _Kind, helm: _Helm, progress: _Recorder | None = None):
+def _local_cluster(tmp_path: Path) -> None:
+    (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
+    config = tmp_path / ".chart-manager/local-cluster.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        """
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalCluster
+metadata: {name: default}
+spec:
+  cluster: {config: kind-config.yaml}
+  bootstrap: {releases: []}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _service(
+    tmp_path: Path,
+    *,
+    kind: _Kind,
+    helm: _Helm,
+    progress: _Recorder | None = None,
+    configure: bool = True,
+):
+    if configure:
+        _local_cluster(tmp_path)
     return EphemeralTestClusterService(
         tmp_path,
         helm=helm,  # type: ignore[arg-type]
@@ -119,7 +138,6 @@ def _service(tmp_path: Path, *, kind: _Kind, helm: _Helm, progress: _Recorder | 
 
 
 def test_ensure_passes_the_repo_kind_config_when_present(tmp_path: Path) -> None:
-    (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n")
     kind = _Kind()
 
     name = _service(tmp_path, kind=kind, helm=_Helm()).ensure_cluster("chart-manager")
@@ -128,12 +146,14 @@ def test_ensure_passes_the_repo_kind_config_when_present(tmp_path: Path) -> None
     assert kind.ensure_calls == [("chart-manager", tmp_path / "kind-config.yaml")]
 
 
-def test_ensure_passes_no_config_when_the_repo_has_none(tmp_path: Path) -> None:
-    kind = _Kind()
-
-    _service(tmp_path, kind=kind, helm=_Helm()).ensure_cluster("chart-manager")
-
-    assert kind.ensure_calls == [("chart-manager", None)]
+def test_ensure_requires_local_cluster_resource(tmp_path: Path) -> None:
+    with pytest.raises(ChartManagerError, match="local resource file does not exist"):
+        _service(
+            tmp_path,
+            kind=_Kind(),
+            helm=_Helm(),
+            configure=False,
+        ).ensure_cluster("chart-manager")
 
 
 def test_ensure_narrates_through_the_progress_callback(tmp_path: Path) -> None:
@@ -141,7 +161,7 @@ def test_ensure_narrates_through_the_progress_callback(tmp_path: Path) -> None:
 
     _service(tmp_path, kind=_Kind(), helm=_Helm(), progress=progress).ensure_cluster("c")
 
-    assert "Ensuring sandbox cluster c" in progress.text
+    assert "Ensuring local cluster c" in progress.text
 
 
 # ----- run result -----------------------------------------------------------
@@ -165,9 +185,6 @@ def wired(
             InstallPlanEntry(chart="grafana", profile="minimal"),
         ],
     )
-    # The real bootstrap reads cilium's chart from disk; collapse it to the
-    # "chart absent, nothing to do" answer.
-    monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
     return svc, helm
 
 
@@ -201,8 +218,6 @@ def test_run_omits_charts_whose_profile_disables_helm_test(
         "install_plan",
         lambda _c, _p: [InstallPlanEntry(chart="grafana", profile="minimal")],
     )
-    monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
-
     result = svc.run(EphemeralTestRequest(chart="grafana", ensure_cluster=False))
 
     assert result.installed == ("grafana",)
@@ -216,14 +231,31 @@ def test_run_ensures_the_cluster_and_narrates_it(
     kind = _Kind()
     progress = _Recorder()
     svc = _service(tmp_path, kind=kind, helm=_Helm(), progress=progress)
-    monkeypatch.setattr(svc.resolver, "install_plan", lambda _c, _p: [])
-    monkeypatch.setattr(sandbox_module.cluster_bootstrap, "bootstrap", lambda *_a, **_k: None)
+    monkeypatch.setattr(svc, "_compile_lifecycle_plan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(svc, "_execute_lifecycle_plan", lambda *_args, **_kwargs: None)
 
-    # This test intentionally supplies an empty legacy install plan because
-    # it covers cluster ensuring/narration only. Opt into the lint legacy
-    # branch; the lifecycle executor correctly rejects zero-action plans.
-    svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx", lint=True))
+    # Chart execution is covered separately; this test isolates environment
+    # ensuring and its user-facing narration.
+    svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx"))
 
-    assert kind.ensure_calls == [("sbx", None)]
-    assert "Ensuring sandbox cluster sbx" in progress.text
+    assert kind.ensure_calls == [("sbx", tmp_path / "kind-config.yaml")]
+    assert "Ensuring local cluster sbx" in progress.text
     assert "Waiting for kube-apiserver" in progress.text
+
+
+def test_run_preflights_the_complete_plan_before_cluster_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kind = _Kind()
+    svc = _service(tmp_path, kind=kind, helm=_Helm())
+
+    def reject_plan(*_args: Any, **_kwargs: Any) -> None:
+        raise ChartManagerError("later release is malformed")
+
+    monkeypatch.setattr(svc, "_compile_lifecycle_plan", reject_plan)
+
+    with pytest.raises(ChartManagerError, match="later release is malformed"):
+        svc.run(EphemeralTestRequest(chart="grafana", cluster_name="sbx"))
+
+    assert kind.ensure_calls == []

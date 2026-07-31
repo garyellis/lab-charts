@@ -7,6 +7,10 @@ across the absent/stopped/running tri-state.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+import yaml
+
 from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
 from tests.conftest import FakeCommandRunner, Predicate
 
@@ -202,6 +206,38 @@ def test_ensure_cluster_creates_when_absent() -> None:
     assert len(create_calls) == 1
     assert "--name" in create_calls[0]
     assert "chart-manager" in create_calls[0]
+    assert "--image" not in create_calls[0]
+
+
+def test_ensure_cluster_passes_kind_config_without_overriding_its_image() -> None:
+    runner = FakeCommandRunner()
+    runner.respond(_is_kind_get_clusters, stdout="")
+    kind = Kind(runner=runner)
+
+    kind.ensure_cluster("chart-manager", config=Path("kind-config.yaml"))
+
+    create_call = next(c for c in runner.calls if c[:3] == ("kind", "create", "cluster"))
+    assert create_call == (
+        "kind",
+        "create",
+        "cluster",
+        "--name",
+        "chart-manager",
+        "--config",
+        "kind-config.yaml",
+    )
+
+
+def test_repository_kind_configs_own_the_digest_pinned_node_image() -> None:
+    root = Path(__file__).resolve().parents[1]
+    configs = (root / "kind-config.yaml",)
+
+    for config in configs:
+        document = yaml.safe_load(config.read_text(encoding="utf-8"))
+        nodes = document["nodes"]
+        assert nodes
+        images = {node["image"] for node in nodes}
+        assert all("@sha256:" in image for image in images)
 
 
 # ----- daemon addressing ----------------------------------------------------

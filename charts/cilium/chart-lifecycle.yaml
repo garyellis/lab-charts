@@ -42,11 +42,8 @@ spec:
     enabled: true
     profiles:
       minimal:
-        description: Install Cilium with base + kind (CI) overlay; ServiceMonitors require prometheus-operator CRDs.
+        description: Install the local Cilium wrapper as the Kind networking bootstrap.
         namespace: kube-system
-        requires:
-          - chart: prometheus-operator
-            profile: minimal
         values:
           - values.yaml
           - values-ci.yaml

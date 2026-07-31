@@ -2,9 +2,9 @@
 
 Used by DevelopmentClusterService.up's port-mapping drift check: if kind-config.yaml
 declares extraPortMappings the user has since edited but the cluster was
-recreated only via `sandbox down` + `sandbox up`, the running container
+recreated only via `local down` + `local up`, the running container
 keeps the old port bindings. We surface the missing host ports as a
-warning row in the summary so the dev runs `sandbox delete && sandbox up`.
+warning row in the summary so the dev runs `local reset`.
 
 Discovery is label-based (`io.x-k8s.kind.cluster=<name>`) and unions
 host ports across all node containers, so multi-node clusters that bind

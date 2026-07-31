@@ -4,9 +4,6 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.lifecycle.recording import (
-    ManifestValidationEvidenceRecorder,
-)
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -189,13 +186,6 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     assert result.rows[0].phases["schema"].status == "SKIP"
     assert result.rows[0].phases["policy"].status == "PASS"
     assert result.rows[0].validator_results["third"].detail == "third validator passed"
-
-    recording = ManifestValidationEvidenceRecorder(
-        tmp_path,
-        validator_providers=(provider,),
-    ).record(result)
-    assert recording.diagnostics == ()
-    assert len(recording.paths) == 2
 
     coexisting = _Provider(
         "third",

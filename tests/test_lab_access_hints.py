@@ -23,7 +23,6 @@ from chart_manager.services.clusters import development as lab_module
 from chart_manager.services.clusters.development import (
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterService,
-    DevelopmentClusterUpRequest,
 )
 from chart_manager.services.domain.charts import (
     ChartMetadata,
@@ -33,6 +32,10 @@ from chart_manager.services.domain.charts import (
 from chart_manager.services.domain.cluster_tests import ClusterTestProfile
 from chart_manager.services.domain.cluster_tests import ClusterTestSpec as _TestSpec
 from chart_manager.services.domain.install_plan import InstallPlanEntry
+from chart_manager.services.lifecycle.plan_projection import (
+    ExternallySatisfiedLifecycle,
+)
+from chart_manager.services.local_resources import LifecycleRelease, ResolvedChartTarget
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
@@ -194,7 +197,6 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestCh
         timeout="1m",
         requires=[],
         helmTest=False,
-        checks=[],
     )
     spec = _TestSpec(profiles={"minimal": profile}, dependentTests=[])
     return ClusterTestChart(
@@ -211,11 +213,8 @@ def _wire_repo(
     monkeypatch: pytest.MonkeyPatch,
     service: DevelopmentClusterService,
     *,
-    plan: list[InstallPlanEntry],
     charts: dict[str, ClusterTestChart],
 ) -> None:
-    monkeypatch.setattr(service.resolver, "install_plan", lambda _c, _p: list(plan))
-
     def _get(name: str) -> ClusterTestChart:
         return charts[name]
 
@@ -223,8 +222,20 @@ def _wire_repo(
     monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
 
 
-def _disable_cilium(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(lab_module.bootstrap, "bootstrap", lambda *_a, **_k: "applied")
+def _install_plan(
+    service: DevelopmentClusterService,
+    plan: list[InstallPlanEntry],
+) -> lab_module._DevelopmentClusterRunSummary:
+    summary = lab_module._DevelopmentClusterRunSummary()
+    service._install_plan(
+        plan,
+        default_namespace="observability",
+        installed_keys=set(),
+        namespaces_created=set(),
+        summary=summary,
+        skip_installed=False,
+    )
+    return summary
 
 
 # ----- _access_hints --------------------------------------------------------
@@ -386,10 +397,8 @@ def test_webhook_wait_runs_after_cert_manager_apply(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    _wire_repo(monkeypatch, svc, charts=charts)
+    _install_plan(svc, plan)
 
     assert kubectl.webhook_waits == [("cert-manager-webhook", "cert-manager", "120s")]
 
@@ -403,11 +412,113 @@ def test_webhook_wait_skipped_for_other_charts(
 
     plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
-    _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    _wire_repo(monkeypatch, svc, charts=charts)
+    _install_plan(svc, plan)
     assert kubectl.webhook_waits == []
+
+
+def test_local_install_uses_the_chart_lifecycle_profile_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helm = _Helm(status="applied")
+    svc = _service(
+        tmp_path,
+        helm=helm,
+        kind=_Kind(),
+        kubectl=_RecordingKubectl(),
+    )
+    _wire_repo(
+        monkeypatch,
+        svc,
+        charts={"grafana": _stub_chart("grafana", namespace="monitoring")},
+    )
+
+    summary = _install_plan(
+        svc,
+        [InstallPlanEntry(chart="grafana", profile="minimal")],
+    )
+
+    assert helm.upgrade_calls == [("grafana", "monitoring")]
+    assert summary.applied[0].namespace == "monitoring"
+
+
+def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
+    tmp_path: Path,
+) -> None:
+    for name, requires in (("network", ""), ("app", "        requires:\n          - chart: network\n            profile: minimal\n")):
+        chart = tmp_path / "charts" / name
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
+            encoding="utf-8",
+        )
+        (chart / "chart-lifecycle.yaml").write_text(
+            (
+                "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+                "kind: ChartLifecycle\n"
+                f"metadata: {{name: {name}}}\n"
+                "spec:\n"
+                "  clusterTest:\n"
+                "    profiles:\n"
+                "      minimal:\n"
+                f"{requires}"
+                "        namespace: kube-system\n"
+                "        values: []\n"
+            ),
+            encoding="utf-8",
+        )
+    svc = _service(
+        tmp_path,
+        helm=_Helm(),
+        kind=_Kind(),
+        kubectl=_RecordingKubectl(),
+    )
+
+    executions = svc._preflight_target(
+        (
+            LifecycleRelease(
+                type="lifecycle",
+                chart=Path("charts/app"),
+                profile="minimal",
+            ),
+        ),
+        excluded_lifecycle_identities=frozenset(
+            {
+                ExternallySatisfiedLifecycle(
+                    chart_path=(tmp_path / "charts/network").resolve(),
+                    chart="network",
+                    profile="minimal",
+                    namespace="kube-system",
+                )
+            }
+        ),
+    )
+
+    assert executions[0] is not None
+    assert [entry.chart for entry in executions[0].plan] == ["app"]
+
+
+def test_relative_repository_root_accepts_an_absolute_resolved_chart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart = tmp_path / "charts/cert-manager"
+    chart.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    svc = _service(
+        Path("."),
+        helm=_Helm(),
+        kind=_Kind(),
+        kubectl=_RecordingKubectl(),
+    )
+
+    releases = svc._target_releases(
+        ResolvedChartTarget(name="cert-manager", path=chart.resolve()),
+        profile=None,
+    )
+
+    assert releases[0].chart == Path("charts/cert-manager")
 
 
 def test_webhook_wait_warning_does_not_abort_run(
@@ -424,10 +535,8 @@ def test_webhook_wait_warning_does_not_abort_run(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, plan=plan, charts=charts)
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    _wire_repo(monkeypatch, svc, charts=charts)
+    _install_plan(svc, plan)
     assert "cert-manager webhook not Available" in progress.text
 
 
@@ -456,11 +565,10 @@ def test_port_mapping_drift_warning_when_live_missing_expected(
     progress = _Recorder()
     svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
 
-    plan: list[InstallPlanEntry] = []
-    _wire_repo(monkeypatch, svc, plan=plan, charts={})
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    svc._warn_on_port_mapping_drift(
+        "chart-manager",
+        config=tmp_path / "kind-config.yaml",
+    )
     assert "kind cluster port mappings do not match kind-config" in progress.text
     assert "443" in progress.text
 
@@ -484,10 +592,10 @@ def test_port_mapping_drift_no_warning_when_matching(
     helm = _Helm(status="applied")
     progress = _Recorder()
     svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
-    _wire_repo(monkeypatch, svc, plan=[], charts={})
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    svc._warn_on_port_mapping_drift(
+        "chart-manager",
+        config=tmp_path / "kind-config.yaml",
+    )
     assert "kind cluster port mappings do not match" not in progress.text
 
 
@@ -501,10 +609,10 @@ def test_port_mapping_drift_silent_when_kind_config_absent(
     helm = _Helm(status="applied")
     progress = _Recorder()
     svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
-    _wire_repo(monkeypatch, svc, plan=[], charts={})
-    _disable_cilium(monkeypatch)
-
-    svc.up(DevelopmentClusterUpRequest())
+    svc._warn_on_port_mapping_drift(
+        "chart-manager",
+        config=tmp_path / "kind-config.yaml",
+    )
     assert "kind cluster port mappings" not in progress.text
 
 

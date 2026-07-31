@@ -1,4 +1,4 @@
-"""Shared executor for compiled cluster-test lifecycle action DAGs.
+"""Shared executor for compiled cluster-test lifecycle action plans.
 
 Cluster creation, API-server readiness, and environment-owned bootstrap are
 intentionally outside this module.  The executor begins at namespace ensure
@@ -7,25 +7,25 @@ and operates only on actions explicitly present in a compiled cluster plan.
 
 from __future__ import annotations
 
-import heapq
-from collections import defaultdict
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from chart_manager.services.lifecycle.evidence import (
-    ClusterIdentity,
-    EvidenceRecord,
-    TargetCoordinates,
-)
 from chart_manager.services.lifecycle.models import (
     LIFECYCLE_API_VERSION,
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
     Workflow,
+)
+from chart_manager.services.progress import (
+    ProgressCallback,
+    detail,
+    emit,
+    failure,
+    step,
 )
 
 ActionVerdict = Literal["PASS", "FAIL", "SKIP"]
@@ -34,6 +34,7 @@ _SUPPORTED_ACTIONS = frozenset(
     {
         ActionKind.NAMESPACE_ENSURE,
         ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.HELM_LINT,
         ActionKind.HELM_UPGRADE_INSTALL,
         ActionKind.WORKLOAD_READY,
         ActionKind.HELM_TEST,
@@ -54,6 +55,9 @@ class ClusterHelm(Protocol):
 
     def dependency_update_if_stale(self, chart_path: Path) -> object:
         """Refresh chart dependencies when necessary."""
+
+    def lint(self, chart_path: Path, values: list[Path] | None = None) -> None:
+        """Validate one chart with its selected values."""
 
     def upgrade_install(
         self,
@@ -93,13 +97,6 @@ class ClusterKubectl(Protocol):
         """Wait for workloads in a namespace to become ready."""
 
 
-class EvidenceSink(Protocol):
-    """Append-only evidence sink."""
-
-    def append(self, record: EvidenceRecord) -> Path:
-        """Persist one evidence record."""
-
-
 class ClusterPlanError(ValueError):
     """The supplied plan cannot be executed by the cluster action executor."""
 
@@ -134,24 +131,10 @@ class ClusterActionOutcome:
 
 
 @dataclass(frozen=True)
-class ClusterExecutionDiagnostic:
-    """A non-action failure, currently evidence persistence."""
-
-    action_id: str
-    stage: Literal["evidence"]
-    message: str
-
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
 class ClusterExecutionResult:
-    """All action outcomes and any non-fatal evidence diagnostics."""
+    """Every planned action's terminal outcome, in execution order."""
 
     outcomes: tuple[ClusterActionOutcome, ...]
-    evidence_paths: tuple[Path, ...] = ()
-    diagnostics: tuple[ClusterExecutionDiagnostic, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -165,8 +148,6 @@ class ClusterExecutionResult:
             "kind": "ClusterExecutionResult",
             "ok": self.ok,
             "outcomes": [outcome.to_dict() for outcome in self.outcomes],
-            "evidencePaths": [str(path) for path in self.evidence_paths],
-            "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
         }
 
 
@@ -176,89 +157,23 @@ def _required(value: str | None, action: LifecycleAction, field: str) -> str:
     raise ClusterPlanError(f"action {action.action_id!r} requires target.{field}")
 
 
-def _target(action: LifecycleAction) -> TargetCoordinates:
-    target = action.target
-    return TargetCoordinates(
-        chart=target.chart,
-        workflow=str(target.workflow),
-        profile=target.profile,
-        environment=target.environment,
-        release=target.release,
-        namespace=target.namespace,
-    )
-
-
-def _topological_order(plan: LifecyclePlan) -> tuple[
-    tuple[LifecycleAction, ...], Mapping[str, frozenset[str]]
-]:
-    actions_by_id: dict[str, LifecycleAction] = {}
-    positions: dict[str, int] = {}
-    for position, action in enumerate(plan.actions):
-        if action.action_id in actions_by_id:
-            raise ClusterPlanError(f"duplicate action id: {action.action_id}")
-        actions_by_id[action.action_id] = action
-        positions[action.action_id] = position
-
-    successors: dict[str, set[str]] = defaultdict(set)
-    predecessors: dict[str, set[str]] = defaultdict(set)
-    for edge in plan.edges:
-        if edge.source not in actions_by_id:
-            raise ClusterPlanError(f"edge source does not exist: {edge.source}")
-        if edge.target not in actions_by_id:
-            raise ClusterPlanError(f"edge target does not exist: {edge.target}")
-        successors[edge.source].add(edge.target)
-        predecessors[edge.target].add(edge.source)
-
-    indegree = {action_id: len(predecessors[action_id]) for action_id in actions_by_id}
-    ready = [
-        positions[action_id] for action_id, degree in indegree.items() if degree == 0
-    ]
-    heapq.heapify(ready)
-    ordered: list[LifecycleAction] = []
-    while ready:
-        position = heapq.heappop(ready)
-        action = plan.actions[position]
-        ordered.append(action)
-        for successor in sorted(successors[action.action_id], key=positions.__getitem__):
-            indegree[successor] -= 1
-            if indegree[successor] == 0:
-                heapq.heappush(ready, positions[successor])
-
-    if len(ordered) != len(plan.actions):
-        cyclic = sorted(
-            (action_id for action_id, degree in indegree.items() if degree),
-            key=positions.__getitem__,
-        )
-        raise ClusterPlanError(f"cluster action graph contains a cycle: {', '.join(cyclic)}")
-    return tuple(ordered), {
-        action_id: frozenset(required) for action_id, required in predecessors.items()
-    }
-
-
 class ClusterActionExecutor:
-    """Execute a compiled cluster-test action graph exactly once per action."""
+    """Execute a compiled cluster-test action plan exactly once per action."""
 
     def __init__(
         self,
         *,
         helm: ClusterHelm,
         kubectl: ClusterKubectl,
-        repository: EvidenceSink | None = None,
         clock: Callable[[], datetime] | None = None,
+        progress: ProgressCallback | None = None,
     ) -> None:
         self.helm = helm
         self.kubectl = kubectl
-        self.repository = repository
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.progress = progress
 
-    def execute(
-        self,
-        plan: LifecyclePlan,
-        *,
-        fail_fast: bool = False,
-        run_id: str | None = None,
-        cluster: ClusterIdentity | None = None,
-    ) -> ClusterExecutionResult:
+    def execute(self, plan: LifecyclePlan) -> ClusterExecutionResult:
         """Execute a cluster plan and return a terminal outcome for every action."""
 
         if plan.workflow is not Workflow.CLUSTER_TEST:
@@ -268,70 +183,49 @@ class ClusterActionExecutor:
             )
         if not plan.actions:
             raise ClusterPlanError("cluster plan contains no actions")
+        action_ids: set[str] = set()
+        for action in plan.actions:
+            if action.action_id in action_ids:
+                raise ClusterPlanError(f"duplicate action id: {action.action_id}")
+            action_ids.add(action.action_id)
         unsupported = [action for action in plan.actions if action.kind not in _SUPPORTED_ACTIONS]
         if unsupported:
             kinds = ", ".join(sorted({action.kind.value for action in unsupported}))
             raise ClusterPlanError(f"unsupported cluster action kind(s): {kinds}")
-        if self.repository is not None and (run_id is None or cluster is None):
-            raise ClusterPlanError(
-                "run_id and cluster identity are required when evidence recording is enabled"
-            )
-
-        ordered, predecessors = _topological_order(plan)
         # Validate coordinates before starting, preventing a late malformed
         # action from leaving an avoidable partial deployment.
-        for action in ordered:
+        for action in plan.actions:
             self._validate_coordinates(action)
 
         outcomes: list[ClusterActionOutcome] = []
-        by_id: dict[str, ClusterActionOutcome] = {}
-        evidence_paths: list[Path] = []
-        diagnostics: list[ClusterExecutionDiagnostic] = []
         failed = False
 
-        for action in ordered:
-            prerequisite_failures = [
-                predecessor
-                for predecessor in predecessors.get(action.action_id, ())
-                if by_id[predecessor].verdict != "PASS"
-            ]
-            if failed and fail_fast:
+        for action in plan.actions:
+            if failed:
                 outcome = self._skip(action, "FailFast", "an earlier action failed")
-            elif prerequisite_failures:
-                outcome = self._skip(
-                    action,
-                    "PrerequisiteFailed",
-                    "prerequisite did not pass: " + ", ".join(sorted(prerequisite_failures)),
+                emit(
+                    self.progress,
+                    detail("Skipped", self._progress_subject(action)),
                 )
             else:
+                subject = self._progress_subject(action)
+                emit(self.progress, step(self._progress_label(action), subject))
                 outcome = self._execute_action(action)
                 failed = failed or outcome.verdict == "FAIL"
+                if outcome.verdict == "PASS":
+                    emit(self.progress, detail("Completed", subject))
+                else:
+                    emit(
+                        self.progress,
+                        failure(
+                            "Failed",
+                            f"{subject}: {outcome.detail or 'unknown error'}",
+                        ),
+                    )
 
             outcomes.append(outcome)
-            by_id[action.action_id] = outcome
-            if self.repository is not None:
-                assert run_id is not None
-                assert cluster is not None
-                try:
-                    evidence_paths.append(
-                        self.repository.append(
-                            self._evidence(action, outcome, run_id=run_id, cluster=cluster)
-                        )
-                    )
-                except Exception as exc:
-                    diagnostics.append(
-                        ClusterExecutionDiagnostic(
-                            action_id=action.action_id,
-                            stage="evidence",
-                            message=str(exc),
-                        )
-                    )
 
-        return ClusterExecutionResult(
-            tuple(outcomes),
-            tuple(evidence_paths),
-            tuple(diagnostics),
-        )
+        return ClusterExecutionResult(tuple(outcomes))
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
         if action.target.workflow is not Workflow.CLUSTER_TEST:
@@ -360,6 +254,8 @@ class ClusterActionExecutor:
                 )
             elif action.kind is ActionKind.HELM_DEPENDENCY_UPDATE:
                 self.helm.dependency_update_if_stale(action.chart_path)
+            elif action.kind is ActionKind.HELM_LINT:
+                self.helm.lint(action.chart_path, list(action.values))
             elif action.kind is ActionKind.HELM_UPGRADE_INSTALL:
                 self.helm.upgrade_install(
                     _required(action.target.release, action, "release"),
@@ -429,30 +325,20 @@ class ClusterActionExecutor:
         return observed_at
 
     @staticmethod
-    def _evidence(
-        action: LifecycleAction,
-        outcome: ClusterActionOutcome,
-        *,
-        run_id: str,
-        cluster: ClusterIdentity,
-    ) -> EvidenceRecord:
-        return EvidenceRecord(
-            run_id=run_id,
-            action_id=action.action_id,
-            action_kind=action.kind.value,
-            target=_target(action),
-            verdict=outcome.verdict,
-            status=outcome.verdict,
-            reason=outcome.reason,
-            detail=outcome.detail,
-            input_digest=action.input_digest,
-            toolchain={
-                key: value
-                for key, value in action.metadata
-                if key.endswith(("Version", "Binary"))
-            },
-            cluster=cluster,
-            started_at=outcome.started_at,
-            finished_at=outcome.finished_at,
-            recorded_at=outcome.finished_at,
+    def _progress_subject(action: LifecycleAction) -> str:
+        profile = f":{action.target.profile}" if action.target.profile else ""
+        namespace = (
+            f" in {action.target.namespace}" if action.target.namespace is not None else ""
         )
+        return f"{action.target.chart}{profile}{namespace}"
+
+    @staticmethod
+    def _progress_label(action: LifecycleAction) -> str:
+        return {
+            ActionKind.NAMESPACE_ENSURE: "Ensuring namespace",
+            ActionKind.HELM_DEPENDENCY_UPDATE: "Updating dependencies",
+            ActionKind.HELM_LINT: "Linting",
+            ActionKind.HELM_UPGRADE_INSTALL: "Installing",
+            ActionKind.WORKLOAD_READY: "Waiting for workloads",
+            ActionKind.HELM_TEST: "Running Helm tests",
+        }[action.kind]

@@ -84,10 +84,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: dashboards-loaded
-            type: helm-test
-            description: Verify each dashboard ConfigMap is created with the sidecar label and that the Grafana sidecar discovers them.
         timeout: 30m
 
       prototyping:
@@ -95,8 +91,6 @@ spec:
         namespace: observability
         requires:
           - chart: cert-manager
-            profile: minimal
-          - chart: cilium
             profile: minimal
           - chart: prometheus-operator
             profile: minimal
@@ -128,10 +122,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: dashboards-loaded
-            type: helm-test
-            description: Verify dashboards land in Grafana with the full mesh + CNI + telemetry stack underneath them.
         timeout: 45m
 
     dependentTests: []

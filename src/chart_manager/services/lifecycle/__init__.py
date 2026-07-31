@@ -1,11 +1,6 @@
-"""Public lifecycle planning and configuration-health API."""
+"""Public lifecycle planning and change-impact API."""
 
-from chart_manager.services.lifecycle.compiler import (
-    LifecycleCompiler,
-    compile_cluster_test_plan,
-    compile_validation_plan,
-)
-from chart_manager.services.lifecycle.doctor import doctor_lifecycle
+from chart_manager.services.lifecycle.compiler import LifecycleCompiler
 from chart_manager.services.lifecycle.impact import (
     ClusterTestImpact,
     ImpactReason,
@@ -19,12 +14,7 @@ from chart_manager.services.lifecycle.models import (
     LIFECYCLE_API_VERSION,
     ActionKind,
     ActionTarget,
-    DiagnosticSeverity,
-    DoctorReport,
-    EdgeKind,
     LifecycleAction,
-    LifecycleDiagnostic,
-    LifecycleEdge,
     LifecyclePlan,
     Workflow,
 )
@@ -34,22 +24,14 @@ __all__ = [
     "ActionKind",
     "ActionTarget",
     "ClusterTestImpact",
-    "DiagnosticSeverity",
-    "DoctorReport",
-    "EdgeKind",
     "ImpactReason",
     "ImpactReasonCode",
     "LifecycleAction",
     "LifecycleCompiler",
-    "LifecycleDiagnostic",
-    "LifecycleEdge",
     "LifecycleImpact",
     "LifecycleImpactService",
     "LifecyclePlan",
     "ValidationImpact",
     "Workflow",
     "analyze_lifecycle_impact",
-    "compile_cluster_test_plan",
-    "compile_validation_plan",
-    "doctor_lifecycle",
 ]

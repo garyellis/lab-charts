@@ -65,8 +65,7 @@ def info(message: str) -> ProgressEvent:
 def emit(progress: ProgressCallback | None, event: ProgressEvent) -> None:
     """Deliver `event` if a callback is wired; no-op otherwise.
 
-    Free function (rather than a no-op default callback) because
-    `cluster_bootstrap` is a module of functions, not a class.
+    A free function keeps optional progress reporting uniform across services.
     """
     if progress is not None:
         progress(event)

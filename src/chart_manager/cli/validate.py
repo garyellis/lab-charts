@@ -34,7 +34,7 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
-from chart_manager.services.lifecycle.recording import ManifestValidationEvidenceRecorder
+from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
@@ -73,7 +73,7 @@ ChartOption = Annotated[
     str,
     typer.Option(
         "--chart",
-        help="Chart name resolved under the configured chart directory.",
+        help="Chart name or chart directory.",
     ),
 ]
 OutOption = Annotated[
@@ -129,39 +129,22 @@ def _container() -> Container:
     return Container()
 
 
-def _make_app(progress: ProgressDisplay | None = None) -> ManifestValidationService:
+def _make_app(
+    progress: ProgressDisplay | None = None,
+    *,
+    charts_dir: Path | None = None,
+) -> ManifestValidationService:
     """Build the ManifestValidationService (module-level so tests can override)."""
-    return _container().validate_app(progress=progress, on_warn=_warn)
+    return _container().validate_app(
+        progress=progress,
+        on_warn=_warn,
+        charts_dir=charts_dir,
+    )
 
 
 def _warn(message: str) -> None:
     """Print a service-emitted operator warning."""
     console.print(f"[yellow]{message}[/yellow]")
-
-
-def _record_lifecycle_evidence(root: Path, outcome: RunOutcome) -> None:
-    """Best-effort projection of validation phases into local lifecycle evidence.
-
-    Evidence is an observational side effect, not the validation deliverable:
-    an unavailable local state directory must never turn a truthful validation
-    result into a different process verdict.
-    """
-    try:
-        recording = ManifestValidationEvidenceRecorder(
-            root,
-            charts_dir=Settings().charts_dir,
-        ).record(outcome)
-    except Exception as exc:
-        _warn(f"warning: lifecycle evidence was not recorded: {exc}")
-        return
-    for diagnostic in recording.diagnostics:
-        phase = f"/{diagnostic.phase}" if diagnostic.phase else ""
-        _warn(
-            "warning: lifecycle evidence "
-            f"{diagnostic.stage} failed for "
-            f"{diagnostic.chart}/{diagnostic.environment}{phase}: "
-            f"{diagnostic.message}"
-        )
 
 
 def chart(
@@ -227,6 +210,19 @@ def chart(
         phases.add("schema")
     if policy:
         phases.add("policy")
+    root = root.resolve()
+    settings = Settings()
+    candidate = Path(chart)
+    charts_dir: Path | None = None
+    if candidate.is_absolute() or len(candidate.parts) > 1 or (root / candidate).exists():
+        target = resolve_chart_target(
+            root,
+            chart,
+            charts_dir=settings.charts_dir,
+            local_config=settings.local_config,
+        )
+        chart = target.name
+        charts_dir = target.path.parent.relative_to(root)
     request = RunRequest(
         root=root,
         charts=(chart,),
@@ -242,6 +238,7 @@ def chart(
         timings=timings,
         fmt=fmt,
         github_step_summary=github_step_summary,
+        charts_dir=charts_dir,
     )
 
 
@@ -402,13 +399,14 @@ def _execute(
     timings: bool,
     fmt: str,
     github_step_summary: bool,
+    charts_dir: Path | None = None,
 ) -> None:
     """Execute one prepared request and own all CLI-side run behavior.
 
     ``chart`` and ``run`` differ only in how they select work and build a
     :class:`RunRequest`. This boundary keeps service invocation, presentation,
-    evidence recording, retention, and process exit identical without coupling
-    one Typer command to another command's Python defaults.
+    retention, and process exit identical without coupling one Typer command
+    to another command's Python defaults.
     """
     if progress not in _PROGRESS_MODES:
         raise typer.BadParameter(
@@ -429,13 +427,15 @@ def _execute(
 
     display = _resolve_display(progress, fmt=fmt)
 
-    app = _make_app(display)
+    app = (
+        _make_app(display)
+        if charts_dir is None
+        else _make_app(display, charts_dir=charts_dir)
+    )
     try:
         outcome = app.run(request)
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
-
-    _record_lifecycle_evidence(request.root, outcome)
 
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with --format all the sidecars are written into the render

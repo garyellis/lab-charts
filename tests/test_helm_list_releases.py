@@ -2,7 +2,7 @@
 
 The lab installer's skip-if-already-installed loop is driven by this; if
 helm's JSON contract drifts we want a unit test to flag it rather than a
-mysterious "always reinstalling" symptom in `sandbox up`.
+mysterious "always reinstalling" symptom in `local up`.
 """
 from __future__ import annotations
 

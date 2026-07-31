@@ -40,9 +40,9 @@ def test_install_plan_orders_requirements_before_target(
         "alloy", "minimal"
     )
 
-    assert [(entry.chart, entry.target) for entry in plan] == [
-        ("prometheus-operator", False),
-        ("alloy", True),
+    assert [entry.chart for entry in plan] == [
+        "prometheus-operator",
+        "alloy",
     ]
 
 
@@ -68,7 +68,6 @@ def test_install_plan_expands_nested_profiles(chart_root: Path, make_chart: Make
         "tempo",
         "grafana",
     ]
-    assert plan[-1].target is True
 
 
 def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
@@ -101,7 +100,6 @@ def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
         "alloy",
     ]
     assert plan[-1].profile == "ui-e2e"
-    assert plan[-1].target is True
 
 
 def test_a_shared_dependency_is_planned_once_before_both_dependents(
@@ -193,6 +191,6 @@ def test_the_repo_dependency_graph_resolves() -> None:
         "alloy", "ui-e2e"
     )
 
-    assert plan[-1] == InstallPlanEntry("alloy", "ui-e2e", target=True)
+    assert plan[-1] == InstallPlanEntry("alloy", "ui-e2e")
     keys = [(entry.chart, entry.profile) for entry in plan]
     assert len(keys) == len(set(keys)), "install plan must not repeat a chart:profile"

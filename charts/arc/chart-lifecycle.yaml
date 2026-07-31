@@ -30,10 +30,6 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        checks:
-          - name: arc-controller-release
-            type: helm-test
-            description: Verify the controller HelmRelease is ready; the upstream controller chart has no functional runner test without a runner scale set.
         timeout: 10m
 
     dependentTests: []

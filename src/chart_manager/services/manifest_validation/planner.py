@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from chart_manager.services.chart_config import LIFECYCLE_FILENAME
-from chart_manager.services.domain.install_plan import build_helm_dependency_index
+from chart_manager.services.domain.chart_deps import build_helm_dependency_index
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import (
     ManifestValidationTarget,
