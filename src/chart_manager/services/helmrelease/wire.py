@@ -18,57 +18,23 @@ settings.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from chart_manager.plumbing.exit_codes import Outcome
+
 from .monitor import MonitorOutcome, MonitorResult
 from .promote import PromoteResult
 from .scanner import HelmReleaseMatch
-from .state import PromoteStatus, Transition
+from .state import PROMOTE_OUTCOME, Transition
 from .test import TestOutcome, TestResult
 
 # Bump only on a breaking change to the payload shape; additive fields are
 # safe at this version.
 SCHEMA_VERSION = 1
 
-#: promote terminal state -> process exit code, per the exit-code table in
-#: `docs/plans/2026-07-30-cli-surface-and-events-refactor.md` §6.1:
-#:
-#:   0 = success · 1 = "the thing you asked about failed"
-#:
-#: It lives here, beside the payload, because the payload's `ok` field and the
-#: CLI's exit status are the same judgement expressed twice. Splitting them
-#: is how `promote` shipped a state (`ABORTED`) that printed a failure and
-#: exited 0.
-#:
-#: Why each arm:
-#:   PR_OPENED / PUSHED  -- the PR exists; that is the whole request.
-#:   ALREADY_OPEN        -- idempotent re-run; the requested PR is open and
-#:                          `PROMOTE_PHASE` records it as a real forward
-#:                          transition (AWAITING_MERGE), not a failure.
-#:   NO_CHANGES          -- every match is already at the target version, so
-#:                          the desired state holds. A promote must be safe to
-#:                          re-run in CI.
-#:   DRY_RUN             -- §6.3: a dry run prints the plan and exits 0.
-#:   ABORTED             -- §6.1 names this verbatim: "promote aborted/declined"
-#:                          is an exit-1 case. Nothing was promoted.
-#:
-#: Deliberately no code 2 here: 2 is reserved for usage errors, which the
-#: surface raises during argument handling and which never reach a
-#: `PromoteResult`. Tool error stays on its current code until P2.
-PROMOTE_EXIT_CODE: Mapping[PromoteStatus, int] = {
-    PromoteStatus.NO_CHANGES: 0,
-    PromoteStatus.DRY_RUN: 0,
-    PromoteStatus.ALREADY_OPEN: 0,
-    PromoteStatus.PR_OPENED: 0,
-    PromoteStatus.PUSHED: 0,
-    PromoteStatus.ABORTED: 1,
-}
-
 __all__ = [
-    "PROMOTE_EXIT_CODE",
     "SCHEMA_VERSION",
     "monitor_to_dict",
     "promote_to_dict",
@@ -129,9 +95,11 @@ def promote_to_dict(
     step reading this off stdout has no other handle on which promotion it is
     looking at.
 
-    `ok` is `PROMOTE_EXIT_CODE[status] == 0`, never an independent predicate,
-    so a consumer branching on `.ok` and a shell branching on `$?` can never
-    disagree.
+    `ok` is `PROMOTE_OUTCOME[status] is Outcome.SUCCESS`, never an
+    independent predicate. The CLI exits with `exit_code_for` of that same
+    lookup, so a consumer branching on `.ok` and a shell branching on `$?`
+    read one judgement made in one place -- see
+    `plumbing/exit_codes.py` for why the number itself is not decided here.
     """
     pr = result.pull_request
     return {
@@ -141,7 +109,7 @@ def promote_to_dict(
         "version": version,
         "environment": environment,
         "path": str(path),
-        "ok": PROMOTE_EXIT_CODE[result.status] == 0,
+        "ok": PROMOTE_OUTCOME[result.status] is Outcome.SUCCESS,
         "status": str(result.status),
         "branch": result.branch,
         "pull_request": (

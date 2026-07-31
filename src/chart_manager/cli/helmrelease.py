@@ -27,8 +27,9 @@ from chart_manager.cli.helmrelease_render import (
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.helmrelease import (
-    PROMOTE_EXIT_CODE,
+    PROMOTE_OUTCOME,
     HelmReleaseMatch,
     HelmReleaseRef,
     MonitorRequest,
@@ -433,11 +434,14 @@ def promote(
             path=path,
         )
 
-    # The status -> code table lives in `services/helmrelease/wire.py` beside
-    # the payload's `ok`, so the exit status and the json a CI step reads are
-    # the same judgement. Before this, *no* branch raised Exit: a declined
+    # Two lookups, one judgement. `PROMOTE_OUTCOME` is the service's answer to
+    # "did this promote succeed" -- the same lookup `wire.promote_to_dict`
+    # publishes as the payload's `ok` -- and `exit_code_for` is plumbing's
+    # answer to "what number is that worth" (design §6.1). Neither layer
+    # re-derives the other's half, so the exit status and the json a CI step
+    # reads cannot disagree. Before this, *no* branch raised Exit: a declined
     # downgrade printed "aborted" and exited 0, which reads as success.
-    exit_code = PROMOTE_EXIT_CODE[result.status]
+    exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
     if exit_code:
         raise typer.Exit(code=exit_code)
 

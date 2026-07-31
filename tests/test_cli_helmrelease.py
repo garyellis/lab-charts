@@ -27,9 +27,10 @@ from chart_manager.integrations.helmrelease import (
     OwnedWorkload,
     WorkloadRollout,
 )
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     NO_MATCH_REF,
-    PROMOTE_EXIT_CODE,
+    PROMOTE_OUTCOME,
     HelmReleaseMatch,
     MonitorOutcome,
     MonitorResult,
@@ -855,19 +856,26 @@ def _install_fake_promote(
     return fake
 
 
-def test_promote_exit_code_table_covers_every_status() -> None:
+def test_promote_outcome_table_covers_every_status() -> None:
     """Guard the guard: a seventh PromoteStatus must not silently exit 0.
 
     Without this, adding a state and forgetting the table would raise
     KeyError at runtime -- or, if someone "fixed" that with
-    `.get(status, 0)`, reintroduce the exact defect this commit closes.
+    `.get(status, Outcome.SUCCESS)`, reintroduce the exact defect this
+    guards. `PROMOTE_OUTCOME` is now the sole input to both the wire `ok`
+    field and the process exit code, so one missing arm breaks both.
     """
-    assert set(PROMOTE_EXIT_CODE) == set(PromoteStatus)
+    assert set(PROMOTE_OUTCOME) == set(PromoteStatus)
+    # The headline regression, pinned at the layer that decides it.
+    assert PROMOTE_OUTCOME[PromoteStatus.ABORTED] is Outcome.FAILED
 
 
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
+        # Literal integers on purpose: this is the behavioural pin. It must
+        # fail if the tables it exercises change what a status is worth,
+        # which a table-derived expectation could not do.
         (PromoteStatus.NO_CHANGES, 0),
         (PromoteStatus.DRY_RUN, 0),
         (PromoteStatus.ALREADY_OPEN, 0),
@@ -899,7 +907,14 @@ def test_promote_aborted_exits_nonzero(
 
 
 def test_promote_json_ok_agrees_with_the_exit_code() -> None:
-    """`.ok` and `$?` are one judgement; a consumer may branch on either."""
+    """`.ok` and `$?` are one judgement; a consumer may branch on either.
+
+    The two live in different layers now -- `ok` is
+    `PROMOTE_OUTCOME[status] is Outcome.SUCCESS` in `services/`, the exit
+    code is `exit_code_for(...)` in `plumbing/` -- so this is the test that
+    ties them together. It fails if `EXIT_CODE[Outcome.SUCCESS]` ever stops
+    being 0, or if `ok` is re-derived from anything but the outcome table.
+    """
     for status in PromoteStatus:
         payload = promote_to_dict(
             _promote_result(status),
@@ -908,7 +923,7 @@ def test_promote_json_ok_agrees_with_the_exit_code() -> None:
             environment="prod",
             path=Path("prod"),
         )
-        assert payload["ok"] is (PROMOTE_EXIT_CODE[status] == 0), status
+        assert payload["ok"] is (exit_code_for(PROMOTE_OUTCOME[status]) == 0), status
 
 
 # ----- promote: the non-interactive downgrade guard ------------------------
