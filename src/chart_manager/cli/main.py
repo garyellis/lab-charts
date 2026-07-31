@@ -173,7 +173,10 @@ chart_app.add_typer(chart_cache_app, name="cache")
 
 app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
-app.add_typer(ci_app, name="ci")
+# Hidden: every command `ci` still holds is a deprecated alias of `plan`, so
+# an advertised `ci` would be an empty group in `--help` recruiting callers to
+# a spelling P3 deletes. Same treatment as `charts`/`validate`/`events`.
+app.add_typer(ci_app, name="ci", hidden=True)
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(helmrelease_app, name="helmrelease")
 
@@ -278,7 +281,7 @@ def global_options(
       ship a release in which one flag means three things. It arrives with
       the format unification (design doc 6.2).
     * **No global `--version` flag.** `--version` already means the *chart*
-      version on `events build/promote`, `publish`, and all three
+      version on `event emit build/promote`, `chart publish`, and all three
       `helmrelease` commands. One flag, two meanings by position, is a bad
       flag -- so the CLI's own version is the `version` command (8.6).
     """
@@ -336,9 +339,6 @@ NamespaceOverrideOption = Annotated[
     ),
 ]
 
-_FORMATS = ("text", "json", "yaml")
-
-
 def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
     if value not in allowed:
         raise typer.BadParameter(
@@ -346,16 +346,6 @@ def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
             param_hint=option,
         )
     return value
-
-
-FormatOption = Annotated[
-    str,
-    typer.Option(
-        "--format",
-        help="Output format: text, json, or yaml.",
-        callback=lambda value: _choice(value, _FORMATS, "--format"),
-    ),
-]
 
 
 def _emit_json(data: dict[str, Any]) -> None:
