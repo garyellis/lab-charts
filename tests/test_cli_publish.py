@@ -76,6 +76,7 @@ def test_publish_passes_multiple_charts_in_one_service_call(
                 "pr_url": None,
                 "git_sha": None,
                 "operation_id": None,
+                "dry_run": False,
             },
         )
     ]
@@ -154,3 +155,76 @@ def test_publish_forwards_event_metadata_and_strict_failure_exits_nonzero(
     assert calls[0]["pr_url"] == "https://github.test/owner/repository/pull/9"
     assert calls[0]["git_sha"] == "abcdef12"
     assert calls[0]["operation_id"] == "200.1"
+
+
+def _plan_service(
+    monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, object]]
+) -> None:
+    """Stub the service so the surface is tested, not the plan computation."""
+
+    def run(*_args: object, **kwargs: object) -> PublishResult:
+        calls.append(kwargs)
+        return PublishResult(
+            (
+                PublishedChart(
+                    "grafana",
+                    "1.2.3-pr.4.gabc",
+                    "oci://harbor/library/grafana:1.2.3-pr.4.gabc",
+                ),
+            ),
+            publish_kind=publish.PublishKind.PREVIEW,
+            dry_run=True,
+        )
+
+    monkeypatch.setattr(
+        publish,
+        "_container",
+        lambda: SimpleNamespace(publish_service=lambda _root: SimpleNamespace(publish=run)),
+    )
+
+
+def test_dry_run_is_forwarded_to_the_service_not_handled_in_the_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flag is a service argument; the CLI must not fake the plan itself."""
+    calls: list[dict[str, object]] = []
+    _plan_service(monkeypatch, calls)
+
+    result = CliRunner().invoke(
+        _app(),
+        ["publish", "grafana", "--repository", "oci://harbor/library", "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0]["dry_run"] is True
+
+
+def test_dry_run_plan_is_data_on_stdout_and_narration_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The plan is the selected projection, so `... --dry-run | ...` works."""
+    _plan_service(monkeypatch, [])
+
+    result = CliRunner().invoke(
+        _app(),
+        ["publish", "grafana", "--repository", "oci://harbor/library", "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert "oci://harbor/library/grafana:1.2.3-pr.4.gabc" in result.stdout
+    assert "preview" in result.stdout
+    assert "dry run" not in result.stdout
+    assert "dry run" in result.stderr
+    assert "emitted no lifecycle event" in result.stderr
+
+
+def test_publish_defaults_to_a_real_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting the flag must not silently plan instead of publishing."""
+    calls: list[dict[str, object]] = []
+    _plan_service(monkeypatch, calls)
+
+    CliRunner().invoke(
+        _app(), ["publish", "grafana", "--repository", "oci://harbor/library"]
+    )
+
+    assert calls[0]["dry_run"] is False

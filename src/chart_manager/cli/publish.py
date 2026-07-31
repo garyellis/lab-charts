@@ -8,15 +8,20 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from chart_manager.cli.streams import narration_console
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
-from chart_manager.services.publish import PublishKind
+from chart_manager.services.publish import PublishKind, PublishResult
 
-#: `publish` has no `--output` projection: every line it prints is a
-#: per-chart mutation status, so all of it narrates on stderr. When
-#: `--dry-run`/`-o json` lands this module gains a `data_console()` for the
-#: payload and these lines stay exactly where they are.
+#: Every line a real publish prints is a per-chart mutation status -- a report
+#: of something that already happened -- so all of it narrates on stderr.
 narration = narration_console()
+
+#: A `--dry-run` plan is the opposite: it *is* the thing the caller asked for,
+#: so it is the selected projection and goes to stdout. `publish` has no
+#: `--output` flag yet, so the selected projection is text; when the global
+#: `-o` lands (P1.4) the json form renders from `PublishResult` on this same
+#: console and the stream assignment does not move.
+data = data_console()
 
 
 def _container() -> Container:
@@ -74,6 +79,13 @@ def publish(
         bool,
         typer.Option(help="Exit nonzero when a publication event cannot be persisted."),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Package the charts and print the push plan; push nothing, emit no event.",
+        ),
+    ] = False,
 ) -> None:
     """Package all requested charts before pushing any of them."""
     result = _container().publish_service(root).publish(
@@ -87,7 +99,11 @@ def publish(
         pr_url=pr_url,
         git_sha=git_sha,
         operation_id=operation_id,
+        dry_run=dry_run,
     )
+    if dry_run:
+        _render_plan(result)
+        return
     for chart in result.charts:
         if chart.ok:
             digest = f" ({chart.digest})" if chart.digest else ""
@@ -107,6 +123,25 @@ def publish(
         )
     if not result.ok or (strict_events and not result.telemetry_ok):
         raise typer.Exit(1)
+
+
+def _render_plan(result: PublishResult) -> None:
+    """Print the dry-run plan to stdout and say on stderr what did not happen.
+
+    Exits 0 by falling off the end: a plan that was produced is a success,
+    and there is no push outcome to fail on.
+    """
+    kind = result.publish_kind.value if result.publish_kind is not None else "unknown"
+    for chart in result.charts:
+        data.print(
+            f"would publish [bold]{escape(chart.chart)}[/bold] "
+            f"{escape(chart.version)} -> {escape(chart.reference or '')} "
+            f"({escape(kind)})"
+        )
+    narration.print(
+        f"[yellow]dry run[/yellow]: packaged {len(result.charts)} chart(s); "
+        "pushed nothing and emitted no lifecycle event"
+    )
 
 
 def register(app: typer.Typer) -> None:
