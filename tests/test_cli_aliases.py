@@ -68,8 +68,18 @@ from chart_manager.cli.main import app as real_app
 #: duration, a timestamp or an unordered set rendered into stdout will
 #: flake. A command with no such argv needs its own test, not an entry here.
 #:
-#: EMPTY BY DESIGN -- P1 has not landed a rename yet. One line per alias.
-_CASES: dict[tuple[str, ...], tuple[str, ...]] = {}
+#: One line per alias.
+_CASES: dict[tuple[str, ...], tuple[str, ...]] = {
+    # `--all` reaches a selector that needs no git history, so this runs
+    # against an empty `{root}` and prints `{"include":[]}` either way.
+    ("ci", "cluster-test-matrix"): ("--all", "--root", "{root}"),
+    # A path under no chart selects nothing and warns, which is deterministic
+    # and needs neither a chart tree nor a cluster.
+    ("ci", "impact"): ("--changed-file", "kind-config.yaml", "--root", "{root}"),
+    # `directly_changed_charts` reads the file itself, so the file must exist;
+    # `/dev/null` is an empty change set and selects no charts.
+    ("ci", "publish-charts"): ("--changed-files", "/dev/null", "--root", "{root}"),
+}
 
 
 # --------------------------------------------------------------------------

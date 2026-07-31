@@ -94,7 +94,7 @@ def _impact_result(
 
 
 def test_root_help_no_longer_exposes_the_lifecycle_group() -> None:
-    """The lifecycle group is gone and its one surviving command moved to ci.
+    """The lifecycle group is gone and its one surviving command is now `plan`.
 
     Mirrors the `deps` removal guard in test_cluster_tests.py: a removed
     group that silently comes back is the regression this pins.
@@ -102,13 +102,19 @@ def test_root_help_no_longer_exposes_the_lifecycle_group() -> None:
     Asserted by invoking the group rather than string-matching the root
     help -- "lifecycle" legitimately appears in the `events` and `charts`
     descriptions, so a substring check would pass for the wrong reason.
+
+    P1.6 moved the impact explainer from `ci impact` to `plan -o table`, so
+    the surviving capability is now looked for under `plan`. `ci impact`
+    still runs as a hidden alias, which is exactly why it is no longer
+    listed in `ci --help` and cannot be asserted for here --
+    `tests/test_cli_aliases.py` owns that spelling now.
     """
     removed = cli("lifecycle", "--help")
-    ci_help = cli("ci", "--help")
+    root_help = cli("--help")
 
     assert removed.exit_code == 2
-    assert ci_help.exit_code == 0
-    assert "impact" in ci_help.stdout
+    assert root_help.exit_code == 0
+    assert "plan" in root_help.stdout
 
 
 def test_impact_combines_changed_file_sources_and_emits_json(
@@ -137,7 +143,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
         str(changed_files),
         "--changed-file",
         "kind-config.yaml",
-        "--format",
+        "-o",
         "json",
         "--root",
         str(tmp_path),
@@ -168,17 +174,24 @@ def test_impact_changed_files_read_error_is_bad_parameter(tmp_path: Path) -> Non
 def test_impact_rejects_an_unknown_format_before_analysis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """An unusable projection must fail at parse time, not after the work.
+
+    P1.6 renamed this command's `--format text|json|yaml` to `plan`'s local
+    `--output/-o table|json|yaml|github`; `text` became `table`. The
+    property under test is unchanged: the value is validated by an option
+    callback, so it fires before the service is ever constructed.
+    """
     monkeypatch.setattr(
         main_cli,
         "_impact_service",
         lambda root: pytest.fail("service should not be constructed"),
     )
 
-    result = cli("ci", "impact", "--changed-file", "kind-config.yaml", "--format", "toml")
+    result = cli("ci", "impact", "--changed-file", "kind-config.yaml", "-o", "toml")
 
     assert result.exit_code == 2
-    assert "--format" in result.stderr
-    assert "text, json, yaml" in result.stderr
+    assert "--output" in result.stderr
+    assert "table, json, yaml, github" in result.stderr
 
 
 def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
@@ -223,7 +236,7 @@ def test_impact_yaml_preserves_machine_envelope(
         "impact",
         "--changed-file",
         "charts/grafana/values-dev.yaml",
-        "--format",
+        "-o",
         "yaml",
     )
 
