@@ -21,8 +21,8 @@ separators, YAML, an HTTP response body -- and performing the write is the
 surface's job.
 
 The *selection* of which entries belong in the matrix is a separate concern
-and lives in `services/ci.py` (`MatrixSelection`, `select_cluster_tests`).
-This module only shapes what selection returned.
+and lives in `services/ci.py` (`MatrixSelection`, `CiService.matrix`). This
+module only shapes what selection returned.
 """
 
 from __future__ import annotations

@@ -25,7 +25,7 @@ from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogService
-from chart_manager.services.ci import MatrixSelection, select_cluster_tests
+from chart_manager.services.ci import MatrixSelection
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
@@ -874,7 +874,7 @@ def ci_cluster_test_matrix(
         all_charts=all_charts,
         charts=tuple(charts or ()),
     )
-    entries = select_cluster_tests(_container().ci_service(root), selection)
+    entries = _container().ci_service(root).matrix(selection)
     payload = cluster_test_matrix_to_dict(entries)
     # Compact separators and sorted keys because this lands in a shell
     # variable in `.github/workflows/ci.yaml`, not in a human's terminal.

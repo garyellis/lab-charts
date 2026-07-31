@@ -36,11 +36,14 @@ class MatrixSelection:
 
 
 class ClusterTestMatrixSource(Protocol):
-    """The three selectors `select_cluster_tests` dispatches between.
+    """The three selectors `_select_cluster_tests` dispatches between.
 
-    Structural rather than nominal so the dispatch is testable against a
-    stand-in, and so a future non-Git source (a stored plan, a webhook
-    payload) can satisfy it without subclassing `CiService`.
+    Public even though its only caller is private: it is the contract a
+    non-`CiService` matrix source (a stored plan, a webhook payload) would
+    have to satisfy, and it is what lets the dispatch be exercised against a
+    stand-in without constructing a repo-backed `CiService`. A `Protocol` is
+    a type, not a second entry point -- `CiService.matrix` remains the only
+    way to *run* the dispatch.
     """
 
     def cluster_test_matrix(self, base: str) -> tuple[ClusterTestImpact, ...]:
@@ -59,11 +62,19 @@ class ClusterTestMatrixSource(Protocol):
         ...
 
 
-def select_cluster_tests(
+def _select_cluster_tests(
     source: ClusterTestMatrixSource,
     selection: MatrixSelection,
 ) -> tuple[ClusterTestImpact, ...]:
     """Resolve a `MatrixSelection` against a matrix source.
+
+    Private: the implementation of `CiService.matrix`, which is the one
+    entry point surfaces call. It stays a free function rather than being
+    inlined into the method for one reason -- taking `source` as a parameter
+    is what lets the precedence rules be tested against a stand-in, and lets
+    a CLI test double reuse the real dispatch instead of reimplementing it.
+    A double that reimplements the thing under test passes while the real
+    code is broken.
 
     Precedence is `all_charts` > explicit `charts` > diff against `base`.
     Whether `all_charts` and `charts` together is an *error* is a usage
@@ -137,11 +148,16 @@ class CiService:
     def matrix(self, selection: MatrixSelection) -> tuple[ClusterTestImpact, ...]:
         """Resolve any `MatrixSelection` -- the one entry point for a matrix.
 
+        Every surface calls this. Previously `cli/main.py` ran the three-way
+        precedence itself, which meant a second surface (REST, Slack, a
+        workflow step) had to reproduce `all` > `--chart` > diff exactly, and
+        getting it subtly wrong would silently test the wrong charts.
+
         The three selectors below stay public because they are meaningfully
         different questions; this is the door a caller uses when the answer
         depends on flags it was handed rather than on a question it asked.
         """
-        return select_cluster_tests(self, selection)
+        return _select_cluster_tests(self, selection)
 
     def cluster_test_matrix(
         self,

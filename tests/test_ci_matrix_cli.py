@@ -10,12 +10,31 @@ import pytest
 from typer.testing import CliRunner
 
 from chart_manager.cli import main
+from chart_manager.services.ci import MatrixSelection, _select_cluster_tests
 from chart_manager.services.lifecycle import ClusterTestImpact
 
 
 class _CiService:
+    """Stands in for `CiService` at `main._container()`.
+
+    `matrix` delegates to the real `_select_cluster_tests` rather than
+    re-running the `--all` > `--chart` > `--base` precedence here. A double
+    that reimplements the dispatch under test would keep passing after the
+    real one regressed, which is the whole failure mode these tests exist to
+    catch -- the CLI used to own that if/elif chain.
+
+    The recorded `calls` are what prove the delegation reached the right
+    selector: this class only implements `ClusterTestMatrixSource`, so
+    `matrix` cannot produce an answer without going through one of the three.
+    """
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
+        self.selections: list[MatrixSelection] = []
+
+    def matrix(self, selection: MatrixSelection) -> tuple[ClusterTestImpact, ...]:
+        self.selections.append(selection)
+        return _select_cluster_tests(self, selection)
 
     def cluster_test_matrix(self, base: str) -> tuple[ClusterTestImpact, ...]:
         self.calls.append(("diff", base))
@@ -99,6 +118,31 @@ def test_all_and_explicit_matrix_modes(
     assert service.calls == [
         ("all", None),
         ("list", ["beta", "alpha"]),
+    ]
+
+
+def test_cli_delegates_the_whole_selection_to_the_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The surface hands over intent, not a chosen selector.
+
+    Without this, moving the `--all` > `--chart` > `--base` precedence back
+    into `cli/main.py` would leave every other test in this file green -- the
+    double implements all three selectors, so a CLI calling them directly
+    still gets the right answer. This is the assertion that makes
+    `CiService.matrix` the contract rather than a convenience.
+    """
+    service = _CiService()
+    _wire(monkeypatch, service)
+
+    result = CliRunner().invoke(
+        main.app,
+        ["ci", "cluster-test-matrix", "--base", "merge-base"],
+    )
+
+    assert result.exit_code == 0
+    assert service.selections == [
+        MatrixSelection(base="merge-base", all_charts=False, charts=())
     ]
 
 

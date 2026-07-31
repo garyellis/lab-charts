@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from chart_manager.services.ci import MatrixSelection, select_cluster_tests
+from chart_manager.services.ci import MatrixSelection, _select_cluster_tests
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.lifecycle import ClusterTestImpact
 from chart_manager.services.lifecycle.impact import ImpactReason, ImpactReasonCode
@@ -98,12 +98,19 @@ def test_entry_order_is_preserved() -> None:
 
 
 # --- the selection dispatch ----------------------------------------------
+#
+# Exercised through the private `_select_cluster_tests` rather than
+# `CiService.matrix`, its only caller: `CiService.__init__` wires a chart
+# repository, a cluster-test catalog, an impact service and Git against a
+# real root, none of which the precedence rules depend on. The method is a
+# one-line delegation, and `tests/test_ci_matrix_cli.py` covers the path a
+# surface actually takes.
 
 
 def test_default_selection_diffs_against_base() -> None:
     source = _Source()
 
-    entries = select_cluster_tests(source, MatrixSelection(base="merge-base"))
+    entries = _select_cluster_tests(source, MatrixSelection(base="merge-base"))
 
     assert source.calls == [("diff", "merge-base")]
     assert [e.chart for e in entries] == ["consumer"]
@@ -112,7 +119,7 @@ def test_default_selection_diffs_against_base() -> None:
 def test_all_charts_selects_every_enabled_chart() -> None:
     source = _Source()
 
-    select_cluster_tests(source, MatrixSelection(all_charts=True))
+    _select_cluster_tests(source, MatrixSelection(all_charts=True))
 
     assert source.calls == [("all", None)]
 
@@ -120,7 +127,7 @@ def test_all_charts_selects_every_enabled_chart() -> None:
 def test_explicit_charts_are_passed_through_as_a_list_in_request_order() -> None:
     source = _Source()
 
-    select_cluster_tests(source, MatrixSelection(charts=("beta", "alpha")))
+    _select_cluster_tests(source, MatrixSelection(charts=("beta", "alpha")))
 
     assert source.calls == [("explicit", ["beta", "alpha"])]
 
@@ -129,7 +136,7 @@ def test_all_charts_wins_over_explicit_charts() -> None:
     """Documented precedence. Rejecting the combination is a surface concern."""
     source = _Source()
 
-    select_cluster_tests(
+    _select_cluster_tests(
         source,
         MatrixSelection(all_charts=True, charts=("beta",)),
     )
