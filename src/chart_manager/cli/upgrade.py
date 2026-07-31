@@ -1,15 +1,15 @@
 """CLI surface for Renovate-driven wrapper-chart upgrades.
 
 The service owns discovery, preflight, isolated worktree mutation, and PR
-idempotency. This module owns only Typer's flag shape and stable rendering.
+idempotency. `services/upgrader/wire.py` owns the versioned machine-readable
+contract. This module owns only Typer's flag shape, the encoder settings, and
+the human-readable rendering.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Protocol
 
@@ -19,26 +19,25 @@ from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.upgrader import (
     FinalizeRequest,
+    FinalizeResult,
     UpgradeRequest,
+    UpgradeResult,
     load_update_data,
 )
+from chart_manager.services.upgrader.wire import finalize_to_dict, upgrade_to_dict
 
 _FORMATS = ("text", "json")
 _CALLBACK_DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
 
 
-class _WireResult(Protocol):
-    """Marker protocol for an upgrade result."""
-
-
 class _UpgradeService(Protocol):
-    def upgrade(self, request: UpgradeRequest) -> _WireResult:
+    def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
         """Plan and execute one chart upgrade."""
         ...
 
 
 class _FinalizeService(Protocol):
-    def finalize(self, request: FinalizeRequest) -> _WireResult:
+    def finalize(self, request: FinalizeRequest) -> FinalizeResult:
         """Finalize a Renovate callback."""
         ...
 
@@ -90,7 +89,7 @@ def upgrade(
     result = _make_upgrade_service(root).upgrade(
         UpgradeRequest(root=root, chart_path=path, dry_run=dry_run)
     )
-    _emit(result, format=format, chart_path=path)
+    _emit(upgrade_to_dict(result), format=format)
 
 
 def upgrade_finalize(
@@ -113,72 +112,15 @@ def upgrade_finalize(
     result = _make_finalize_service(root).finalize(
         FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)
     )
-    _emit(result, format=format, chart_path=path)
+    _emit(finalize_to_dict(result, chart_path=path), format=format)
 
 
-def _emit(result: _WireResult, *, format: str, chart_path: Path | None = None) -> None:
-    """Write stable machine or human output from the service wire projection."""
-    payload = _wire_payload(result, chart_path=chart_path)
+def _emit(payload: Mapping[str, Any], *, format: str) -> None:
+    """Encode one wire payload as machine or human output."""
     if format == "json":
         typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         return
     typer.echo(_render_text(payload))
-
-
-def _wire_payload(result: _WireResult, *, chart_path: Path | None) -> dict[str, Any]:
-    """Project either public result dataclass onto the common CLI contract."""
-    to_dict = getattr(result, "to_dict", None)
-    if callable(to_dict):
-        raw = dict(to_dict())
-    elif is_dataclass(result) and not isinstance(result, type):
-        raw = asdict(result)
-    else:
-        raise TypeError("upgrade result must be a dataclass or define to_dict()")
-
-    current = _first(raw, "current_wrapper_version", "current_version", "previous_version")
-    proposed = _first(raw, "proposed_wrapper_version", "proposed_version", "version")
-    changed = raw.get("changed")
-    outcome = raw.get("outcome")
-    if outcome is None and isinstance(changed, bool):
-        outcome = "updated" if changed else "unchanged"
-    path = _first(raw, "path", "chart_path")
-    if path is None:
-        path = chart_path
-    pull_request = raw.get("pull_request")
-    if pull_request is None and (
-        raw.get("pr_url") is not None or raw.get("pr_number") is not None
-    ):
-        pull_request = {
-            "url": raw.get("pr_url"),
-            "number": raw.get("pr_number"),
-        }
-    payload = {
-        "schema_version": 1,
-        "repository": raw.get("repository"),
-        "base": raw.get("base"),
-        "chart": raw.get("chart"),
-        "path": path,
-        "current_wrapper_version": current,
-        "proposed_wrapper_version": proposed,
-        "branch": raw.get("branch"),
-        "outcome": outcome,
-        "pull_request": pull_request,
-        "diagnostics": raw.get("diagnostics", ()),
-    }
-    return _json_value(payload)
-
-
-def _json_value(value: Any) -> Any:
-    """Normalize paths, enums, mappings, and tuples for deterministic JSON."""
-    if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    return value
 
 
 def _render_text(payload: Mapping[str, Any]) -> str:
@@ -192,7 +134,7 @@ def _render_text(payload: Mapping[str, Any]) -> str:
         else:
             pr = str(pr_url or pr_number or "-")
     else:
-        pr = str(pull_request or payload.get("pr_url") or "-")
+        pr = "-"
 
     diagnostics = payload.get("diagnostics")
     lines = [
@@ -200,40 +142,22 @@ def _render_text(payload: Mapping[str, Any]) -> str:
         f"base: {_shown(payload.get('base'))}",
         f"chart: {_shown(payload.get('chart'))}",
         f"path: {_shown(payload.get('path'))}",
-        f"current wrapper version: {_shown(_first(payload, 'current_wrapper_version', 'current_version'))}",
-        f"proposed wrapper version: {_shown(_first(payload, 'proposed_wrapper_version', 'proposed_version'))}",
+        f"current wrapper version: {_shown(payload.get('current_wrapper_version'))}",
+        f"proposed wrapper version: {_shown(payload.get('proposed_wrapper_version'))}",
         f"branch: {_shown(payload.get('branch'))}",
         f"outcome: {_shown(payload.get('outcome'))}",
         f"pull request: {pr}",
         "diagnostics:",
     ]
     if isinstance(diagnostics, (list, tuple)) and diagnostics:
-        lines.extend(f"- {_diagnostic(item)}" for item in diagnostics)
-    elif diagnostics:
-        lines.append(f"- {_diagnostic(diagnostics)}")
+        lines.extend(f"- {item}" for item in diagnostics)
     else:
         lines.append("- none")
     return "\n".join(lines)
 
 
-def _first(payload: Mapping[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in payload:
-            return payload[key]
-    return None
-
-
 def _shown(value: Any) -> str:
     return "-" if value is None or value == "" else str(value)
-
-
-def _diagnostic(value: Any) -> str:
-    if isinstance(value, Mapping):
-        message = value.get("message")
-        if message is not None:
-            return str(message)
-        return json.dumps(dict(value), separators=(",", ":"), sort_keys=True)
-    return str(value)
 
 
 def register(app: typer.Typer) -> None:
