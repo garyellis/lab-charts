@@ -47,7 +47,8 @@ This module is deleted in P3 along with every alias it registered.
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Iterator
+import inspect
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -177,6 +178,7 @@ class AliasRegistry:
         old: str,
         new: str,
         removed_in: str = REMOVED_IN,
+        bind: Mapping[str, Any] | None = None,
     ) -> Alias:
         """Register `target` a second time under its old name, hidden.
 
@@ -186,13 +188,64 @@ class AliasRegistry:
         and help text without restating any of them. The wrapper narrates
         and then calls the same function, so exit codes and stdout are the
         target's own.
+
+        `bind` freezes named parameters of `target` to fixed values. It
+        exists because several P1 renames do not map an old name onto a new
+        name but onto **a new command plus flags** -- `ci cluster-test-matrix`
+        became `plan -o github`, one projection of a general command. Without
+        it those three renames would each have to re-implement the command
+        body under the old name, which is precisely the "alias built by
+        re-implementing" that clause (3) and `tests/test_cli_aliases.py`
+        exist to prevent.
+
+        A bound parameter is *removed from the alias's signature*, not merely
+        overridden. Two reasons, both correctness rather than taste:
+
+          * Leaving `-o` on `ci cluster-test-matrix` while ignoring whatever
+            the user passed is a silent wrong answer -- `-o json` would
+            still emit the GitHub matrix. Removing it makes that argv the
+            same hard parse error it is today.
+          * The old command genuinely had no such flag. "Byte-identical to
+            the command it replaces" is the property this module sells;
+            advertising a flag the old spelling never had breaks it in the
+            other direction.
+
+        Typer reads `inspect.signature`, which honours an explicit
+        `__signature__` over the `__wrapped__` chain, so one assignment is
+        enough to make Click build the narrower parameter list.
+
+        `eval_str=True` is not optional. Every CLI module runs under
+        `from __future__ import annotations`, so an unevaluated signature
+        carries annotations as *strings*: Typer then cannot see the
+        `typer.Option("--all", ...)` inside `Annotated[...]` and falls back to
+        deriving a flag name from the parameter name, silently turning
+        `--all` into `--all-charts` and `--chart` into `--charts`. That is a
+        broken alias that still parses, which is the worst failure mode this
+        module has.
         """
         alias = Alias(old=_path(old), new=_path(new), removed_in=removed_in)
+        bound = dict(bind or {})
 
         @functools.wraps(target)
         def aliased(*args: Any, **kwargs: Any) -> Any:
             narrate(alias)
-            return target(*args, **kwargs)
+            return target(*args, **{**kwargs, **bound})
+
+        if bound:
+            signature = inspect.signature(target, eval_str=True)
+            unknown = sorted(set(bound) - set(signature.parameters))
+            if unknown:
+                raise ValueError(
+                    f"cannot alias '{new}' as '{old}': bind names parameters that "
+                    f"{getattr(target, '__name__', target)!r} does not declare: {unknown}"
+                )
+            aliased.__signature__ = signature.replace(  # type: ignore[attr-defined]
+                parameters=[
+                    parameter
+                    for name, parameter in signature.parameters.items()
+                    if name not in bound
+                ]
+            )
 
         parent.command(alias.old[-1], hidden=True)(aliased)
         self._aliases.append(alias)
