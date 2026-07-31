@@ -15,13 +15,13 @@ entry fails as a wall of unrelated red rather than as one clear message:
       as a value. This is the direction that keeps the seam from decaying:
       a new group added to `cli/main.py` with no entry here can be invoked
       by literal name from a test, and that literal is invisible until the
-      day someone renames it. Keys count as coverage because a renamed
-      command's old spelling stays a key forever while its new spelling
-      becomes a value -- both are the table doing its job.
+      day someone renames it. Keys count as coverage as well as values,
+      because mid-migration the key is the old spelling and the value is the
+      new one -- both are the table doing its job.
 
-Only top-level names are covered. Subcommand entries (`("validate", "run")`)
-appear when a command moves between groups; requiring one per command up
-front would be a second, hand-maintained copy of the command tree.
+Only top-level names are covered. Subcommand entries appear only while a
+command is mid-move between groups; requiring one per command up front would
+be a second, hand-maintained copy of the command tree.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def test_the_app_has_a_command_tree_to_check() -> None:
     """Guard the guard: an empty walk makes both tests below vacuous."""
     paths = _registered_paths()
     assert len(paths) > 15, f"suspiciously small command tree: {sorted(paths)}"
-    assert ("validate", "run") in paths
+    assert ("chart", "validate") in paths
     assert ("upgrade-finalize",) in paths
 
 
@@ -120,7 +120,7 @@ def test_global_options_before_the_command_path_are_preserved(leading: list[str]
     would on its own" rather than against a literal expected argv, so this
     test does not have to be edited every time an entry in the table moves.
     """
-    command = ["charts", "list"]
+    command = ["chart", "list"]
 
     resolved = resolve_argv([*leading, *command])
 

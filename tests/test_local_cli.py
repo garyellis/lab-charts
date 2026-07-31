@@ -279,7 +279,7 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
 
     monkeypatch.setattr(main, "_container", Container)
     result = cli(
-        "charts",
+        "chart",
         "test",
         "--chart",
         "alloy",

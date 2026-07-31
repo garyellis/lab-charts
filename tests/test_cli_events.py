@@ -27,7 +27,7 @@ from chart_manager.cli import events as events_cli
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.ref import SEPARATOR
 
-from .conftest import cli, resolve_argv
+from .conftest import cli
 
 
 class RecordingWriter:
@@ -320,19 +320,19 @@ def test_the_group_is_singular_and_nests_emit() -> None:
     assert "emit" in result.stdout
 
 
-def test_the_old_spelling_translates_through_the_argv_table() -> None:
-    """The rename is a `_COMMAND_PATHS` diff, not 20 call-site edits.
+def test_the_pre_emit_spelling_is_gone() -> None:
+    """`events build` was an alias of `event emit build`. Aliases are deleted.
 
-    `events` gains a level rather than just a name, so its rewrite target is
-    a two-token prefix. Pinned here because that is the shape a future
-    reader is most likely to "simplify" back to a single token.
+    Absent, not hidden and not an empty group: a `events` that still parsed
+    would keep CI green on a spelling the docs no longer mention, which is
+    exactly the silent-drift the alias removal was for. Asserted by running
+    the CLI rather than by inspecting the command tree, because what matters
+    is what a caller's argv does.
     """
-    assert resolve_argv(["events", "build", "grafana@1.2.3"]) == [
-        "event",
-        "emit",
-        "build",
-        "grafana@1.2.3",
-    ]
+    result = cli("events", "build", "grafana@1.2.3")
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_the_read_side_is_not_built_yet() -> None:

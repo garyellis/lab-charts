@@ -174,7 +174,7 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
     chart = make_chart("broken")
     (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
-    result = cli("charts", "list", "--root", str(chart_root))
+    result = cli("chart", "list", "--root", str(chart_root))
 
     assert result.exit_code == 1
     assert "broken" in result.stdout
@@ -187,7 +187,7 @@ def test_charts_lifecycle_prints_the_normalized_envelope(
 ) -> None:
     make_chart("alloy")
 
-    result = cli("charts", "lifecycle", "alloy", "--root", str(chart_root))
+    result = cli("chart", "show", "alloy", "--root", str(chart_root))
 
     assert result.exit_code == 0
     assert '"apiVersion": "lifecycle.cmg.io/v1alpha1"' in result.stdout

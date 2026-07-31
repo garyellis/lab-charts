@@ -1,4 +1,9 @@
-"""Machine-facing CI cluster-test matrix command."""
+"""Machine-facing `plan` projections: `-o github` and `--for publish`.
+
+`.github/workflows/ci.yaml` captures both into shell variables, so their
+stdout is a wire contract: `-o github` is the GitHub Actions matrix JSON and
+`--for publish` is a newline-delimited chart list, not JSON.
+"""
 
 from __future__ import annotations
 
@@ -74,7 +79,7 @@ def test_diff_matrix_emits_exact_chart_profiles(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = cli("ci", "cluster-test-matrix", "--base", "merge-base")
+    result = cli("plan", "-o", "github", "--base", "merge-base")
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {
@@ -92,10 +97,11 @@ def test_all_and_explicit_matrix_modes(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    all_result = cli("ci", "cluster-test-matrix", "--all")
+    all_result = cli("plan", "-o", "github", "--all")
     explicit_result = cli(
-        "ci",
-        "cluster-test-matrix",
+        "plan",
+        "-o",
+        "github",
         "--chart",
         "beta",
         "--chart",
@@ -129,7 +135,7 @@ def test_cli_delegates_the_whole_selection_to_the_service(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = cli("ci", "cluster-test-matrix", "--base", "merge-base")
+    result = cli("plan", "-o", "github", "--base", "merge-base")
 
     assert result.exit_code == 0
     assert service.selections == [
@@ -143,7 +149,7 @@ def test_matrix_rejects_conflicting_modes(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = cli("ci", "cluster-test-matrix", "--all", "--chart", "alpha")
+    result = cli("plan", "-o", "github", "--all", "--chart", "alpha")
 
     assert result.exit_code == 1
     assert isinstance(result.exception, main.ChartManagerError)
@@ -156,7 +162,7 @@ def test_publish_charts_emits_newline_list_from_explicit_file(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = cli("ci", "publish-charts", "--changed-files", "changed.txt")
+    result = cli("plan", "--for", "publish", "--changed-files", "changed.txt")
 
     assert result.exit_code == 0
     assert result.stdout == "alpha\nzeta\n"

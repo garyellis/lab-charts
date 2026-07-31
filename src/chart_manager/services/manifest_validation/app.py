@@ -1,7 +1,7 @@
 """Transport-neutral entry point for the manifest-validation pipeline.
 
-`ManifestValidationService` is the capability behind `chart-manager validate
-chart|run`. It owns the *sequencing* of a run:
+`ManifestValidationService` is the capability behind `chart-manager chart
+validate`. It owns the *sequencing* of a run:
 
   * where the changed-files list comes from (--all > explicit list > git),
   * which helm binding each row runs under (specs may pin a version),

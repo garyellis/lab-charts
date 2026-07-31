@@ -77,7 +77,7 @@ def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
 
 def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
     root_help = cli("--help")
-    chart_test_help = cli("charts", "test", "--help")
+    chart_test_help = cli("chart", "test", "--help")
 
     assert root_help.exit_code == 0
     assert "deps" not in root_help.stdout

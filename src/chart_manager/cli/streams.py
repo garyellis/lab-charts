@@ -7,7 +7,7 @@ The rule this module exists to enforce:
 
 Note this is more precise than "stdout is data, stderr is narration". A
 human-readable table *is* the selected projection when `--output` resolves
-to text, so it belongs on stdout -- otherwise `chart-manager charts list |
+to text, so it belongs on stdout -- otherwise `chart-manager chart list |
 less` shows an empty page. What goes to stderr is everything the user did
 not ask for as output: progress, warnings, hints, deprecation notices, and
 error detail.

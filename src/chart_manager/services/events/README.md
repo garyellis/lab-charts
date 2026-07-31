@@ -2,7 +2,7 @@
 
 ## expose as CLI commands to invoke from CI server itself.
 
-`chart-manager publish` emits these build transitions automatically after
+`chart-manager chart publish` emits these build transitions automatically after
 successful OCI pushes. A publish using `--version-suffix` is a PR/preview
 artifact and emits `preview_published`; an unsuffixed publish emits
 `published`. Use `--publish-kind` to state the intent explicitly. Push

@@ -20,7 +20,6 @@ from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.deprecation import ALIASES
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
@@ -133,17 +132,10 @@ chart_cache_app = typer.Typer(
     no_args_is_help=True,
     help="Manage chart-manager's on-disk render artifacts.",
 )
-#: Deprecated spelling of `chart`. Holds nothing but hidden aliases; see the
-#: registration block at the bottom of this module.
-charts_app = typer.Typer(
-    no_args_is_help=True,
-    help="Deprecated. Use `chart`.",
-)
 local_app = typer.Typer(
     no_args_is_help=True,
     help="Create, stop, and reset local Kubernetes chart development environments.",
 )
-ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
 helmrelease_app = typer.Typer(
     no_args_is_help=True,
     help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
@@ -151,15 +143,9 @@ helmrelease_app = typer.Typer(
 # Grafana-specific subcommands. Anything that knows about Grafana JSON / API
 # conventions lives here, not under the generic `chart` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
-#: Deprecated spelling of the validation commands, which now live under
-#: `chart`. Holds nothing but hidden aliases.
-validate_app = typer.Typer(
-    no_args_is_help=True,
-    help="Deprecated. Use `chart validate` and `chart cache clean`.",
-)
 
-# The `event` group owns its own tree (group, `emit` subgroup, and the hidden
-# pre-P1 `events` spelling), so it mounts onto the root like upgrade/publish.
+# The `event` group owns its own tree (group plus the `emit` subgroup), so it
+# mounts onto the root like upgrade/publish.
 events_cli.register(app)
 helmrelease_cli.register(helmrelease_app)
 validate_cli.register_validate(chart_app)
@@ -173,10 +159,6 @@ chart_app.add_typer(chart_cache_app, name="cache")
 
 app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
-# Hidden: every command `ci` still holds is a deprecated alias of `plan`, so
-# an advertised `ci` would be an empty group in `--help` recruiting callers to
-# a spelling P3 deletes. Same treatment as `charts`/`validate`/`events`.
-app.add_typer(ci_app, name="ci", hidden=True)
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(helmrelease_app, name="helmrelease")
 
@@ -1103,63 +1085,6 @@ def plan(
         )
     if result.spec_errors:
         raise typer.Exit(1)
-
-
-# --- deprecated spellings, hidden ------------------------------------------
-#
-# Every command the `chart` group absorbed keeps working under the name it
-# had, until P3 deletes this block and `cli/deprecation.py` with it. Each
-# registration below re-registers *the same function object*, so an alias
-# cannot drift from its replacement -- see `cli/deprecation.py` for why that
-# is the whole design, and `tests/test_cli_aliases.py` for the gate that
-# proves it, one case per line here.
-#
-# `ALIASES.group` is deliberately not used for `charts` or `validate`. It
-# mounts one Typer instance under a second name, which is right only when a
-# group moved wholesale; here every member moved *and* two were renamed
-# (`charts lifecycle` -> `chart show`, `validate clean` -> `chart cache
-# clean`), so a group alias would leave the old spellings dead while
-# advertising `charts publish` and `charts cache`, which never existed.
-# Per-command aliases also keep the stderr notice naming the real target.
-ALIASES.command(charts_app, list_charts, old="charts list", new="chart list")
-ALIASES.command(charts_app, show_lifecycle, old="charts lifecycle", new="chart show")
-ALIASES.command(charts_app, chart_test, old="charts test", new="chart test")
-ALIASES.command(validate_app, validate_cli.validate, old="validate chart", new="chart validate")
-ALIASES.command(validate_app, validate_cli.validate, old="validate run", new="chart validate")
-ALIASES.command(validate_app, validate_cli.clean, old="validate clean", new="chart cache clean")
-ALIASES.command(app, publish_cli.publish, old="publish", new="chart publish")
-ALIASES.command(app, upgrade_cli.upgrade, old="upgrade", new="chart upgrade")
-
-# The three surviving `ci` commands are projections of `plan`, so they are
-# registered as `plan` itself with the flags their old names meant frozen in.
-# See `cli/deprecation.py` for why `bind` removes the frozen flag from the
-# alias rather than overriding it. `.github/workflows/ci.yaml` still calls the
-# first and third by their old names; updating those callers is a later phase,
-# which is exactly what these aliases exist to make possible.
-ALIASES.command(
-    ci_app,
-    plan,
-    old="ci cluster-test-matrix",
-    new="plan -o github",
-    bind={"output": "github"},
-)
-ALIASES.command(
-    ci_app,
-    plan,
-    old="ci impact",
-    new="plan -o table",
-    bind={"output": "table"},
-)
-ALIASES.command(
-    ci_app,
-    plan,
-    old="ci publish-charts",
-    new="plan --for publish",
-    bind={"for_": "publish"},
-)
-
-app.add_typer(charts_app, name="charts", hidden=True)
-app.add_typer(validate_app, name="validate", hidden=True)
 
 
 def main() -> None:

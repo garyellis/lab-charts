@@ -1,10 +1,13 @@
-"""CLI contract tests for ``chart-manager ci impact``.
+"""CLI contract tests for ``chart-manager plan``'s explain projection.
 
 Ported from the removed ``chart-manager lifecycle`` group. The lifecycle
 group exposed compiler and evidence internals as a product surface; only the
 impact explainer carried capability that exists nowhere else, since
-``ci cluster-test-matrix`` computes the same selection and projects the
-reasons away (see ``ci_cluster_test_matrix``).
+``plan -o github`` computes the same selection and projects the reasons away
+(see ``tests/test_ci_matrix_cli.py``).
+
+``plan`` defaults to ``-o table``, which is this projection, so the bare
+``plan`` invocations below are the explain view.
 """
 
 from __future__ import annotations
@@ -137,8 +140,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
     )
 
     result = cli(
-        "ci",
-        "impact",
+        "plan",
         "--changed-files",
         str(changed_files),
         "--changed-file",
@@ -155,7 +157,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
 
 
 def test_impact_requires_an_explicit_change_source() -> None:
-    result = cli("ci", "impact")
+    result = cli("plan")
 
     assert result.exit_code == 2
     assert "--changed-files / --changed-file" in result.stderr
@@ -164,7 +166,7 @@ def test_impact_requires_an_explicit_change_source() -> None:
 def test_impact_changed_files_read_error_is_bad_parameter(tmp_path: Path) -> None:
     missing = tmp_path / "missing.txt"
 
-    result = cli("ci", "impact", "--changed-files", str(missing))
+    result = cli("plan", "--changed-files", str(missing))
 
     assert result.exit_code == 2
     assert "--changed-files" in result.stderr
@@ -187,7 +189,7 @@ def test_impact_rejects_an_unknown_format_before_analysis(
         lambda root: pytest.fail("service should not be constructed"),
     )
 
-    result = cli("ci", "impact", "--changed-file", "kind-config.yaml", "-o", "toml")
+    result = cli("plan", "--changed-file", "kind-config.yaml", "-o", "toml")
 
     assert result.exit_code == 2
     assert "--output" in result.stderr
@@ -207,7 +209,7 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
 
-    result = cli("ci", "impact", "--changed-file", "charts/grafana/values-dev.yaml")
+    result = cli("plan", "--changed-file", "charts/grafana/values-dev.yaml")
 
     assert result.exit_code == 1
     assert "Validation:" in result.stdout
@@ -232,8 +234,7 @@ def test_impact_yaml_preserves_machine_envelope(
     )
 
     result = cli(
-        "ci",
-        "impact",
+        "plan",
         "--changed-file",
         "charts/grafana/values-dev.yaml",
         "-o",
