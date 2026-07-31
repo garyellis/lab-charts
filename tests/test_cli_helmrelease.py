@@ -283,7 +283,7 @@ def test_pretty_ok_exit_0_summary_in_stdout(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
     assert res.exit_code == 0
     # diagnostics never written for ready outcomes
     assert "InstallFailed" not in res.stdout
@@ -294,7 +294,7 @@ def test_pretty_failure_exit_1_diagnostics_in_stdout(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_monitor(monkeypatch, result=_bad_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
     assert res.exit_code == 1
     assert "InstallFailed" in res.stdout
 
@@ -333,7 +333,7 @@ def test_pretty_wires_progress_callback(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
     assert res.exit_code == 0
     assert fake.captured_progress[0] is not None
 
@@ -366,7 +366,7 @@ def test_pretty_explicit_under_non_tty_still_pretty(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
     # CliRunner is non-tty; explicit pretty must not be coerced to json.
     assert res.exit_code == 0
     # No JSON schema marker in stdout.
@@ -546,7 +546,7 @@ def test_no_match_outcome_pretty_message(
         outcomes=(no_match,), total_duration_seconds=0.1, total_timed_out=False
     )
     _install_fake_monitor(monkeypatch, result=result)
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
     assert res.exit_code == 1
     assert "no helmreleases matched" in res.stdout
 
@@ -756,8 +756,8 @@ _PROMOTE_BASE = [
     "promote",
     "--flux-repo", "git@github.com:org/lab-fluxcd.git",
     "--path", "prod",
-    "--environment", "prod",
-    "--chart-name", "loki",
+    "--env", "prod",
+    "--chart", "loki",
     "--version", "0.2.0",
 ]
 
@@ -901,7 +901,7 @@ def test_promote_aborted_exits_nonzero(
 ) -> None:
     """The headline regression: a declined downgrade is a failure, not success."""
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "table"])
     assert res.exit_code == 1
     assert "aborted" in res.stderr
 
@@ -1018,7 +1018,20 @@ def test_promote_interactive_decline_exits_1(
 def test_promote_json_parses_cleanly_off_stdout(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """stdout carries the projection and nothing else; narration is on stderr."""
+    """stdout carries the projection and nothing else.
+
+    An *explicit* `--output json` also silences narration (design doc 6.2:
+    "json implies --quiet"), so stderr is empty here. That is the one leg of
+    this assertion that changed in P1.4; the stdout purity it exists to
+    protect is unchanged and is still checked by `json.loads` below.
+
+    The companion property -- that the narration still exists and is merely
+    suppressed -- is held by
+    `test_promote_auto_json_keeps_narration_on_stderr`, which reaches the same
+    json projection through `auto` rather than by asking for it. Without that
+    sibling this test would pass just as well against a promote that had
+    stopped narrating entirely.
+    """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
     res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "json"])
 
@@ -1031,6 +1044,26 @@ def test_promote_json_parses_cleanly_off_stdout(
     assert payload["environment"] == "prod"
     assert payload["chart"] == "loki"
     assert payload["pull_request"]["url"] == "https://gh/org/r/pull/8"
+    assert "pr opened" not in res.stdout
+    assert res.stderr == ""
+
+
+def test_promote_auto_json_keeps_narration_on_stderr(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`auto` resolving to json is a format decision, not a request for silence.
+
+    CliRunner's stdout is not a terminal, so no `--output` flag resolves to
+    json here -- the same thing that happens for every command in CI. The
+    projection must still be clean, and the operator commentary must still be
+    on stderr: `helmrelease promote` reports a *mutation*, and a CI log that
+    shows the PR was opened is the reason that narration exists.
+    """
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE])
+
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.stdout)["status"] == "pr-opened"
     assert "pr opened" in res.stderr
     assert "pr opened" not in res.stdout
 
@@ -1064,12 +1097,12 @@ def test_promote_pretty_writes_nothing_to_stdout(
 ) -> None:
     """Promote narrates a mutation; it has no human *document*.
 
-    So `helmrelease promote --output pretty >/dev/null` still shows the
+    So `helmrelease promote --output table >/dev/null` still shows the
     operator what happened, and no status line is ever piped to a consumer
     that asked for data.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "pretty"])
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "table"])
 
     assert res.exit_code == 0, res.output
     assert res.stdout == ""
@@ -1079,9 +1112,18 @@ def test_promote_pretty_writes_nothing_to_stdout(
 def test_promote_rejects_an_unknown_output_mode(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--output yaml` must fail, not silently fall back to pretty."""
+    """`--output yaml` must fail, not silently fall back to table.
+
+    Exit 2, not 1: naming a projection a command does not have is a *usage*
+    error, and P1.4 made every `--output` speak one vocabulary with one
+    rejection path (`typer.BadParameter`, via `cli/output.py`). This command
+    used to raise `ChartManagerError` and exit 1 while `chart validate`
+    rejected its equivalent with exit 2 -- unifying the vocabularies
+    necessarily unified that too. This is not the P2.1 exit-code work.
+    """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
     res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "yaml"])
 
-    assert res.exit_code == 1
-    assert "--output must be one of" in res.stderr
+    assert res.exit_code == 2
+    assert "yaml" in res.output
+    assert "table" in res.output

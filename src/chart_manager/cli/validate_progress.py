@@ -5,12 +5,12 @@ a live repainting table for interactive use and a one-line-per-event
 narrator for logs. They change how a run *looks*, never what it produces —
 which is why they sit here and not in `services/`.
 
-Both write to stderr only, so `--format json` stays pipeline-safe on
+Both write to stderr only, so `-o json` stays pipeline-safe on
 stdout. Worker threads call `on_event` concurrently; `LiveTableDisplay`
 holds an explicit lock, `PlainNarrationDisplay` guards its counters.
 
 `cli/validate.py:_resolve_display` picks between these and `NullDisplay`
-from --progress + --format + TTY status.
+from --progress + --output + TTY status.
 """
 
 from __future__ import annotations

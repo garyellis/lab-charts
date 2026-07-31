@@ -79,11 +79,18 @@ def _argv(name: str, root: Path) -> list[str]:
     """Commands that reach a real projection without a cluster or network."""
     return {
         "validate-json": [
-            "validate", "run", "--all", "--format", "json",
+            "validate", "run", "--all", "--output", "json",
             "--progress", "none", "--root", str(root),
         ],
+        # Deliberately does NOT name `--output json`: it lets `auto` resolve
+        # to json, which is what happens off a terminal and therefore what
+        # happens in CI. An *explicit* `-o json` implies `--quiet` (design doc
+        # 6.2), which would suppress the very warning this case exists to
+        # produce -- and the regression being guarded is a warning landing in
+        # the JSON document, which only has teeth while the warning is emitted.
+        # See `cli/output.resolve` for why auto-resolved json is not quiet.
         "validate-json-with-warning": [
-            "validate", "run", "--all", "--format", "json",
+            "validate", "run", "--all",
             "--progress", "none", "--github-step-summary", "--root", str(root),
         ],
         "cluster-test-matrix": [

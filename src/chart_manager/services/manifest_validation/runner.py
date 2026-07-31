@@ -187,7 +187,7 @@ class ManifestValidationRunner:
         # front pass that can itself parallelize across DISTINCT charts.
         # NOTE: `_run_row` renders unconditionally (schema and policy need
         # the tree), so this gate is narrower than the work it guards: a
-        # `--phases schema` run renders WITHOUT the prefetch and each row
+        # `--phase schema` run renders WITHOUT the prefetch and each row
         # pays its own first-time dep fetch serially. Left as-is because
         # widening it adds `helm dependency update` subprocesses to a run
         # that does not ask for them today; fix it deliberately, with a
@@ -320,7 +320,7 @@ class ManifestValidationRunner:
 
         Render is unconditional. Per `run`'s contract, disabling a phase
         does not short-circuit later ones — schema and policy both read the
-        rendered tree, so `--phases schema` still has to render first. There
+        rendered tree, so `--phase schema` still has to render first. There
         used to be an `if any phase is active` guard here plus a matching
         "downgrade later phases to SKIP because render was NOT_RUN" block at
         the end; `active` is non-empty on every reachable path (`run`

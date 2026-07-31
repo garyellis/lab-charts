@@ -333,7 +333,7 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
-          mise run validate -- "${args[@]}" --format all --keep --github-step-summary
+          mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
@@ -545,12 +545,12 @@ jobs:
             short_sha="${SOURCE_SHA:0:8}"
             publish_args+=(
               --version-suffix "pr.${PR_NUMBER}.g${short_sha}"
-              --publish-kind preview
+              --kind preview
               --build-correlation-id "${GITHUB_REPOSITORY}#${PR_NUMBER}"
               --pr-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
             )
           else
-            publish_args+=(--publish-kind release)
+            publish_args+=(--kind release)
           fi
 
           uv run chart-manager publish "${charts[@]}" "${publish_args[@]}"

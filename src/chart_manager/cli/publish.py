@@ -61,7 +61,7 @@ def publish(
     publish_kind: Annotated[
         PublishKind | None,
         typer.Option(
-            "--publish-kind",
+            "--kind",
             help="Artifact lifecycle meaning; inferred as preview with --version-suffix, release otherwise.",
         ),
     ] = None,

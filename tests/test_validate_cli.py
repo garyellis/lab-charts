@@ -4,7 +4,7 @@ We don't shell out to helm/kubeconform/kyverno here — that's integration
 territory. These tests exercise the CLI's emission, format routing,
 side-file writing, and GITHUB_STEP_SUMMARY behavior by driving the
 internal `_emit_result` helper with a fabricated RunResult and by
-invoking `--help` / `--format unknown` through Typer's CliRunner.
+invoking `--help` / `--output unknown` through Typer's CliRunner.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
-import typer
 
 from chart_manager.cli import validate as validate_cli
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
@@ -56,7 +55,7 @@ class _Captured(NamedTuple):
 def _capture(fn) -> _Captured:
     """Capture the data projection and the narration separately.
 
-    `validate_cli.console` is the `--format` projection and shares a buffer
+    `validate_cli.console` is the `--output` projection and shares a buffer
     with raw `sys.stdout.write` (json/md go out that way); `validate_cli.
     narration` is everything else. Keeping them in two buffers is what lets
     a test assert that a warning did *not* land in the JSON document.
@@ -88,7 +87,7 @@ def _capture_stdout(fn) -> str:
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="json", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=out_dir)
     )
     payload = json.loads(output)
     assert payload["schema_version"] == 1
@@ -100,7 +99,7 @@ def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None
 
 def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="md", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(_result(), mode="md", out_dir=tmp_path / "out")
     )
     assert output.startswith("## validate")
     assert "| Chart |" in output
@@ -108,10 +107,10 @@ def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     assert "PASS" not in output  # md uses ✅ not PASS
 
 
-def test_emit_text_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
+def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="table", out_dir=out_dir)
     )
     assert "PASS" in output  # text-table cell text
     assert "Chart" in output
@@ -119,10 +118,10 @@ def test_emit_text_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> 
     assert not (out_dir / "summary.json").exists()
 
 
-def test_emit_all_prints_text_and_writes_summary_md_and_json(tmp_path: Path) -> None:
+def test_emit_all_prints_table_and_writes_summary_md_and_json(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="all", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="all", out_dir=out_dir)
     )
     # Text table on stdout.
     assert "PASS" in output
@@ -149,7 +148,7 @@ def test_github_step_summary_written_when_flag_passed_and_env_set(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -174,7 +173,7 @@ def test_github_step_summary_not_written_when_flag_not_passed(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             # github_step_summary defaults to False
         )
@@ -191,7 +190,7 @@ def test_github_step_summary_warns_when_flag_passed_but_env_unset(
     narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -210,7 +209,7 @@ def test_github_step_summary_appends_across_calls(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -219,7 +218,7 @@ def test_github_step_summary_appends_across_calls(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -241,7 +240,7 @@ def test_github_step_summary_unwritable_does_not_crash(
     narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -256,24 +255,26 @@ def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) ->
     assert "--github-step-summary" in result.output
 
 
-def test_validate_format_rejects_unknown_value() -> None:
-    with pytest.raises(typer.BadParameter) as exc:
-        validate_cli._validate_format("yaml")
-    assert "yaml" in str(exc.value)
-    assert "text" in str(exc.value)  # lists allowed values
+def test_output_option_rejects_unknown_value() -> None:
+    # Validation moved to the `-o/--output` parse-time callback in
+    # cli/output.py -- `_validate_format` no longer exists.
+    result = cli("validate", "run", "--output", "yaml")
+    assert result.exit_code == 2
+    assert "yaml" in result.output
+    assert "table" in result.output  # lists allowed values
 
 
-def test_run_help_lists_format_option() -> None:
+def test_run_help_lists_output_option() -> None:
     result = cli("validate", "run", "--help")
     assert result.exit_code == 0
-    assert "--format" in result.output
+    assert "--output" in result.output
 
 
 @pytest.mark.parametrize("subcommand", ["chart", "run"])
-def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
+def test_each_subcommand_help_lists_output_option(subcommand: str) -> None:
     result = cli("validate", subcommand, "--help")
     assert result.exit_code == 0
-    assert "--format" in result.output
+    assert "--output" in result.output
 
 
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
@@ -299,7 +300,7 @@ def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> 
     )
     out = _capture_stdout(
         lambda: validate_cli._emit_result(
-            result, fmt="json", out_dir=tmp_path / "out", timings=True
+            result, mode="json", out_dir=tmp_path / "out", timings=True
         )
     )
     payload = json.loads(out)
@@ -312,7 +313,7 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     # can rely on the key. null when --timings is off or the phase didn't
     # record one.
     out = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="json", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=tmp_path / "out")
     )
     payload = json.loads(out)
     render = payload["rows"][0]["phases"]["render"]
@@ -334,7 +335,7 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
     out = _capture_stdout(
         lambda: validate_cli._emit_result(
             outcome,
-            fmt="json",
+            mode="json",
             out_dir=outcome.out_dir,
             requested_charts=("app",),
             requested_environments=("dev",),
@@ -352,14 +353,14 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
         lambda: validate_cli._emit_result(
-            _result(), fmt="text", out_dir=tmp_path / "out", timings=True
+            _result(), mode="table", out_dir=tmp_path / "out", timings=True
         )
     )
     assert "Elapsed" in output
 
 
 def test_resolve_display_none_returns_null() -> None:
-    d = validate_cli._resolve_display("none", fmt="text")
+    d = validate_cli._resolve_display("none", mode="table")
     from chart_manager.services.manifest_validation.progress import NullDisplay
 
     assert isinstance(d, NullDisplay)
@@ -368,14 +369,14 @@ def test_resolve_display_none_returns_null() -> None:
 def test_resolve_display_plain_returns_plain() -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
 
-    d = validate_cli._resolve_display("plain", fmt="text")
+    d = validate_cli._resolve_display("plain", mode="table")
     assert isinstance(d, PlainNarrationDisplay)
 
 
 def test_resolve_display_auto_with_json_picks_null() -> None:
     from chart_manager.services.manifest_validation.progress import NullDisplay
 
-    d = validate_cli._resolve_display("auto", fmt="json")
+    d = validate_cli._resolve_display("auto", mode="json")
     # JSON output piped through jq must not see progress chatter.
     assert isinstance(d, NullDisplay)
 
@@ -386,7 +387,7 @@ def test_resolve_display_live_without_tty_falls_back(
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
 
     monkeypatch.setattr("sys.stderr.isatty", lambda: False)
-    d = validate_cli._resolve_display("live", fmt="text")
+    d = validate_cli._resolve_display("live", mode="table")
     assert isinstance(d, PlainNarrationDisplay)
 
 
@@ -528,7 +529,7 @@ def test_chart_delegates_to_shared_execution_boundary(
         "--progress",
         "plain",
         "--timings",
-        "--format",
+        "--output",
         "md",
         "--github-step-summary",
         "--root",
@@ -548,7 +549,7 @@ def test_chart_delegates_to_shared_execution_boundary(
     assert options == {
         "progress": "plain",
         "timings": True,
-        "fmt": "md",
+        "mode": "md",
         "github_step_summary": True,
         "charts_dir": None,
     }
@@ -614,8 +615,10 @@ def test_run_delegates_to_shared_execution_boundary(
         "--changed-files",
         str(changed),
         "--all",
-        "--phases",
-        "render,policy",
+        "--phase",
+        "render",
+        "--phase",
+        "policy",
         "--out",
         str(tmp_path / "rendered"),
         "--keep",
@@ -630,7 +633,7 @@ def test_run_delegates_to_shared_execution_boundary(
         "--dep-update-timeout",
         "42",
         "--fail-fast",
-        "--format",
+        "--output",
         "all",
         "--github-step-summary",
         "--root",
@@ -657,7 +660,7 @@ def test_run_delegates_to_shared_execution_boundary(
     assert options == {
         "progress": "none",
         "timings": True,
-        "fmt": "all",
+        "mode": "all",
         "github_step_summary": True,
         # The merged command always reports what it resolved, even when that
         # is "nothing": `alpha` is not on disk under this root, so the
@@ -681,8 +684,10 @@ def test_run_builds_a_request_from_its_flags(
         "alpha",
         "--env",
         "dev",
-        "--phases",
-        "render,schema",
+        "--phase",
+        "render",
+        "--phase",
+        "schema",
         "--workers",
         "3",
         "--row-timeout",
@@ -768,11 +773,11 @@ def test_an_explicit_changed_file_list_still_narrows_a_named_chart(
 def test_no_policy_subtracts_from_the_selected_phases(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`--no-kubeconform`/`--no-policy` narrow `--phases` rather than replacing it.
+    """`--no-kubeconform`/`--no-policy` narrow `--phase` rather than replacing it.
 
     `validate chart` built its phase set from these two flags alone. Making
-    them subtractive means that at the `--phases` default they reproduce that
-    set exactly, and that combining them with an explicit `--phases` -- newly
+    them subtractive means that at the `--phase` default they reproduce that
+    set exactly, and that combining them with an explicit `--phase` -- newly
     possible, since the two commands are one -- narrows instead of surprising.
     """
     fake = _FakeApp(_outcome(tmp_path / "out"))
@@ -781,7 +786,8 @@ def test_no_policy_subtracts_from_the_selected_phases(
     result = cli(
         "validate", "run",
         "--all",
-        "--phases", "render,policy",
+        "--phase", "render",
+        "--phase", "policy",
         "--no-policy",
         "--progress", "none",
         "--root", str(tmp_path),
@@ -816,7 +822,7 @@ def test_run_exits_with_the_outcome_exit_code(
 def test_run_applies_retention_only_after_the_summary_is_written(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """--format all writes sidecars into the render dir; cleanup comes last."""
+    """--output all writes sidecars into the render dir; cleanup comes last."""
     out_dir = tmp_path / "out"
     fake = _FakeApp(_outcome(out_dir))
     _install(monkeypatch, fake)
@@ -827,7 +833,7 @@ def test_run_applies_retention_only_after_the_summary_is_written(
         "--all",
         "--progress",
         "none",
-        "--format",
+        "--output",
         "all",
         "--root",
         str(tmp_path),
@@ -858,8 +864,22 @@ def test_run_emits_extra_warnings_from_the_outcome(
     fake = _FakeApp(_outcome(tmp_path / "out", warnings=("chart x has no spec",)))
     _install(monkeypatch, fake)
 
+    # Explicit --output table: extra_warnings are only narrated on the
+    # table/all path (see _emit_result), and the default `-o auto` would
+    # resolve to json in this non-TTY test environment, silently dropping
+    # the assertion below without an unrelated-looking failure.
     narration = _capture(
-        lambda: cli("validate", "run", "--all", "--progress", "none", "--root", str(tmp_path))
+        lambda: cli(
+            "validate",
+            "run",
+            "--all",
+            "--progress",
+            "none",
+            "--output",
+            "table",
+            "--root",
+            str(tmp_path),
+        )
     ).stderr
 
     assert "chart x has no spec" in narration
@@ -917,7 +937,7 @@ def _outcome_with_not_run(
 
 
 def test_summary_ignores_phases_the_caller_disabled(tmp_path: Path) -> None:
-    """`--phases render` must not report schema/policy as an anomaly."""
+    """`--phase render` must not report schema/policy as an anomaly."""
     outcome = _outcome_with_not_run(
         tmp_path,
         enabled=frozenset({"render"}),
@@ -957,9 +977,22 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
 
     monkeypatch.setattr(validate_cli, "_make_app", _make)
 
+    # Explicit --output table: `_resolve_display` picks NullDisplay whenever
+    # mode is json/md (see its docstring), which would mask the plain-display
+    # assertion below under the default `-o auto` in this non-TTY test
+    # environment.
     narration = _capture(
         lambda: cli(
-            "validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)
+            "validate",
+            "run",
+            "--all",
+            "--verbose",
+            "--workers",
+            "4",
+            "--output",
+            "table",
+            "--root",
+            str(tmp_path),
         )
     ).stderr
 
@@ -1083,14 +1116,16 @@ def test_legacy_validate_commands_are_removed(command: str) -> None:
 
 
 def test_run_rejects_an_unknown_phase() -> None:
-    result = cli("validate", "run", "--all", "--phases", "lint")
+    result = cli("validate", "run", "--all", "--phase", "lint")
 
     assert result.exit_code == 2
     assert "unknown phase" in result.output
 
 
 def test_run_rejects_an_empty_phase_list() -> None:
-    result = cli("validate", "run", "--all", "--phases", " ,")
+    # `--phase ""` -- given, but blank -- is the new spelling of "empty";
+    # an omitted `--phase` means "all three phases" instead.
+    result = cli("validate", "run", "--all", "--phase", "")
 
     assert result.exit_code == 2
-    assert "at least one phase" in result.output
+    assert "--phase needs a phase name" in result.output

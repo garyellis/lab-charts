@@ -15,6 +15,7 @@ from typing import Annotated, Any, Protocol
 
 import typer
 
+from chart_manager.cli import output as output_mod
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.local_resources import resolve_chart_target
@@ -27,8 +28,26 @@ from chart_manager.services.upgrader import (
 )
 from chart_manager.services.upgrader.wire import finalize_to_dict, upgrade_to_dict
 
-_FORMATS = ("text", "json")
+#: `upgrade-finalize`'s vocabulary, and ONLY its vocabulary.
+#:
+#: This is the one place in `cli/` that still says `--format`, and it is
+#: deliberate. `upgrade-finalize` is frozen (design doc 9.5): Renovate invokes
+#: it from `renovate-global.json`'s `allowedCommands` allowlist, so its
+#: spelling is part of a security contract that lives outside this repo.
+#: Renaming the flag here would not break the allowlist match -- the regex is
+#: anchored right after `--path <dir>`, so Renovate only ever passes `--path`
+#: and lets `--data-file` arrive via the callback env var -- but "the regex
+#: does not currently cover it" is a thin reason to move a frozen command's
+#: surface, and the flag is exercised by `tests/test_cli_upgrade.py`.
+#:
+#: The public `chart upgrade` moved to the unified `-o/--output`; these two
+#: commands share a service and a wire contract but no longer share a flag.
+_FINALIZE_FORMATS = ("text", "json")
 _CALLBACK_DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
+
+#: The public command's vocabulary, from the shared table in `cli/output.py`.
+#: `table` is what `text` was called.
+_UPGRADE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
 class _UpgradeService(Protocol):
@@ -59,14 +78,15 @@ def _make_finalize_service(root: Path) -> _FinalizeService:
 
 
 def _format_choice(value: str) -> str:
-    if value not in _FORMATS:
+    if value not in _FINALIZE_FORMATS:
         raise typer.BadParameter(
-            f"unknown format: {value} (allowed: {', '.join(_FORMATS)})",
+            f"unknown format: {value} (allowed: {', '.join(_FINALIZE_FORMATS)})",
             param_hint="--format",
         )
     return value
 
 
+#: Frozen. See `_FINALIZE_FORMATS`. Used by `upgrade_finalize` only.
 FormatOption = Annotated[
     str,
     typer.Option(
@@ -76,8 +96,12 @@ FormatOption = Annotated[
     ),
 ]
 
+#: The public `chart upgrade`'s output flag.
+OutputOption = Annotated[str | None, output_mod.output_option(*_UPGRADE_OUTPUTS)]
+
 
 def upgrade(
+    ctx: typer.Context,
     chart: Annotated[
         str | None,
         typer.Argument(metavar="[CHART]", help="Chart name or repository-relative chart path."),
@@ -93,14 +117,15 @@ def upgrade(
         bool,
         typer.Option("--dry-run", help="Discover and plan without pushing or opening a PR."),
     ] = False,
-    format: FormatOption = "text",
+    output: OutputOption = None,
 ) -> None:
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
+    mode = output_mod.resolve(output, ctx, allowed=_UPGRADE_OUTPUTS)
     root = Path(".").resolve()
     result = _make_upgrade_service(root).upgrade(
         UpgradeRequest(root=root, chart_path=_chart_path(chart, path, root=root), dry_run=dry_run)
     )
-    _emit(upgrade_to_dict(result), format=format)
+    _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
 
 
 def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
@@ -148,12 +173,19 @@ def upgrade_finalize(
     result = _make_finalize_service(root).finalize(
         FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)
     )
-    _emit(finalize_to_dict(result, chart_path=path), format=format)
+    _emit(finalize_to_dict(result, chart_path=path), as_json=format == "json")
 
 
-def _emit(payload: Mapping[str, Any], *, format: str) -> None:
-    """Encode one wire payload as machine or human output."""
-    if format == "json":
+def _emit(payload: Mapping[str, Any], *, as_json: bool) -> None:
+    """Encode one wire payload as machine or human output.
+
+    Takes a bool rather than a mode word because its two callers no longer
+    share a vocabulary: `upgrade` resolves `table`/`json` through
+    `cli/output.py` while the frozen `upgrade-finalize` still speaks
+    `text`/`json`. Passing either word down here would leak one command's
+    flag spelling into the other's rendering path.
+    """
+    if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         return
     typer.echo(_render_text(payload))

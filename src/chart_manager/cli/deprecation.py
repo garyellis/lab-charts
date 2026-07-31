@@ -11,7 +11,7 @@ holding and a reader needs to know *why* each clause is there:
       Exactly one, because zero means a silent break at removal time and
       two means the noise gets filtered wholesale. On stderr, because the
       alias's *stdout is a data channel* -- `.github/workflows/ci.yaml`
-      captures it into shell variables and `--format json` writes documents
+      captures it into shell variables and `-o json` writes documents
       to it, so a deprecation notice on stdout would corrupt every aliased
       command's output in band. See `cli/streams.py`.
 

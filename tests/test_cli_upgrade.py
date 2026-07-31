@@ -71,11 +71,11 @@ def test_upgrade_json_is_stable_and_request_preserves_flags(tmp_path: Path, monk
 
     result = CliRunner().invoke(
         _app(),
-        ["upgrade", "--path", "charts/loki", "--dry-run", "--format", "json"],
+        ["upgrade", "--path", "charts/loki", "--dry-run", "--output", "json"],
     )
 
     assert result.exit_code == 0
-    # Byte-identical, not just structurally equal: `--format json` is a
+    # Byte-identical, not just structurally equal: `--output json` is a
     # versioned contract consumed by CI steps and jq, so key order, separator
     # spacing, and the trailing newline are all part of it. A refactor that
     # moves where the payload is built must not move a single byte of it.
@@ -97,7 +97,7 @@ def test_upgrade_text_has_fixed_fields_and_diagnostics(monkeypatch) -> None:  # 
     service = _Upgrade(_upgrade_result(Path("charts/loki")))
     monkeypatch.setattr(upgrade_cli, "_make_upgrade_service", lambda _root: service)
 
-    result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki"])
+    result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki", "--output", "table"])
 
     assert result.exit_code == 0
     assert result.stdout == (
@@ -207,7 +207,7 @@ def test_finalize_text_renders_the_keys_the_finalizer_cannot_populate(
     )
 
 
-def test_unknown_format_is_rejected_before_service_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_unknown_output_is_rejected_before_service_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     called = False
 
     def make(_root):  # type: ignore[no-untyped-def]
@@ -217,8 +217,8 @@ def test_unknown_format_is_rejected_before_service_call(monkeypatch) -> None:  #
 
     monkeypatch.setattr(upgrade_cli, "_make_upgrade_service", make)
 
-    result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki", "--format", "yaml"])
+    result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki", "--output", "yaml"])
 
     assert result.exit_code == 2
-    assert "unknown format: yaml" in result.output
+    assert "unknown output: yaml" in result.output
     assert called is False

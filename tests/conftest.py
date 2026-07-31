@@ -185,7 +185,11 @@ _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     # values are the projection of `plan` each old name meant.
     ("ci", "cluster-test-matrix"): ("plan", "-o", "github"),
     ("ci", "impact"): ("plan", "-o", "table"),
-    ("ci", "publish-charts"): ("plan", "--for", "publish"),
+    # `-o table` is part of the translation, not decoration: `plan`'s output
+    # default became `auto` in P1.4 and resolves to json off a terminal, which
+    # is what CliRunner is. The old `ci publish-charts` emitted a newline list,
+    # so that is what its replacement has to be asked for.
+    ("ci", "publish-charts"): ("plan", "--for", "publish", "-o", "table"),
     # P1.5: `events build|promote` -> `event emit build|promote`. The value
     # is a two-token prefix, so a test written as `cli("events", "build", ...)`
     # reaches the command at its new depth with its arguments untouched.

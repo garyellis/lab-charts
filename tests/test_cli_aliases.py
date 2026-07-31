@@ -88,13 +88,20 @@ _CASES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("charts", "test"): ("--chart", "ghost", "--root", "{root}"),
     # `--chart` rather than a positional: this is how a `validate chart`
     # caller spells it, and the point is that their command line still works.
+    # `--output table`: clause (d) compares stdout as BYTES, and the json
+    # projection embeds a per-run `rendered_root` path, so the default
+    # (`auto` -> json off a terminal) is not byte-stable between the two
+    # invocations this gate makes.
     ("validate", "chart"): (
-        "--chart", "ghost", "--all", "--progress", "none", "--root", "{root}",
+        "--chart", "ghost", "--all", "--progress", "none",
+        "--output", "table", "--root", "{root}",
     ),
     # No chart named -- the other half of the merge, which is `validate run`.
     # This one runs the real validation service over an empty repository, so
     # it is the case that exercises a full successful projection.
-    ("validate", "run"): ("--all", "--progress", "none", "--root", "{root}"),
+    ("validate", "run"): (
+        "--all", "--progress", "none", "--output", "table", "--root", "{root}",
+    ),
     ("validate", "clean"): ("--root", "{root}"),
     ("publish",): ("ghost", "--repository", "oci://registry.invalid/x", "--root", "{root}"),
     # `upgrade` takes no `--root`; it resolves against the process cwd. The
@@ -117,10 +124,9 @@ _CASES: dict[tuple[str, ...], tuple[str, ...]] = {
     # output, and the `emitted ...` confirmation is narration on stderr, leaving
     # stdout empty on both sides of the byte comparison.
     ("events", "build"): ("grafana@1.2.3", "--phase", "published"),
-    # `--environment`, not `--env`: P1.3 owns that rename.
     ("events", "promote"): (
         "grafana@1.2.3",
-        "--environment",
+        "--env",
         "dev",
         "--phase",
         "promoted",
@@ -229,6 +235,35 @@ def test_registered_aliases_are_hidden() -> None:
         if (command := _command_at(real_app, alias.old)) is None or not command.hidden
     )
     assert not listed, f"aliases must not appear in --help: {listed}"
+
+
+def test_alias_group_containers_are_hidden_too() -> None:
+    """Clause (a) applies to the *container*, not only to what is inside it.
+
+    `test_registered_aliases_are_hidden` walks to the leaf and checks that,
+    which leaves the group holding the leaves unchecked. That is not
+    hypothetical: `ci` was mounted visibly while every command it contained
+    was a hidden alias, so `--help` advertised an apparently empty `ci` group
+    and nothing failed. A group whose entire contents are deprecated is
+    itself deprecated, and `--help` is the documented surface.
+
+    Derived from `ALIASES` rather than from a hand-written list of group
+    names, so a future rename that introduces a new alias group is covered on
+    the day it is registered.
+    """
+    root = typer.main.get_command(real_app)
+    containers = sorted({alias.old[0] for alias in ALIASES if len(alias.old) > 1})
+    assert containers, "guard the guard: no grouped aliases left to check"
+
+    visible = sorted(
+        name
+        for name in containers
+        if (group := root.commands.get(name)) is not None and not group.hidden
+    )
+    assert not visible, (
+        "these groups hold nothing but deprecated spellings but are still "
+        f"listed in --help, recruiting callers to a name P3 deletes: {visible}"
+    )
 
 
 def test_upgrade_finalize_is_hidden_but_is_not_an_alias() -> None:

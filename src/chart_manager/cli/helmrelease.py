@@ -11,11 +11,12 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import typer
 from rich.console import Console
 
+from chart_manager.cli import output as output_mod
 from chart_manager.cli.helmrelease_render import (
     _PrettyProgressDriver,
     render_monitor_json,
@@ -26,7 +27,6 @@ from chart_manager.cli.helmrelease_render import (
 )
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
-from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.helmrelease import (
     PROMOTE_OUTCOME,
@@ -44,8 +44,6 @@ from chart_manager.services.helmrelease import (
     TestService,
     Transition,
 )
-
-_OUTPUT_CHOICES = ("pretty", "json", "auto")
 
 ProgressCb = Callable[[HelmReleaseRef, Transition], None]
 
@@ -82,19 +80,16 @@ def _make_promote_service(
 # --- helpers --------------------------------------------------------------
 
 
-def _resolve_output_mode(output: str, console: Console) -> Literal["pretty", "json"]:
-    """Resolve --output: auto picks json when CI=true or stdout is not a terminal."""
-    if output == "pretty":
-        return "pretty"
-    if output == "json":
-        return "json"
-    if output != "auto":
-        raise ChartManagerError(
-            f"--output must be one of {_OUTPUT_CHOICES} (got '{output}')"
-        )
-    if os.environ.get("CI") == "true":
-        return "json"
-    return "pretty" if console.is_terminal else "json"
+#: `pretty` is now spelled `table` -- one word for "the human projection"
+#: across the whole surface. The resolver that used to live here is
+#: `cli/output.resolve`; this command group was the only one that got `auto`
+#: right, which is why P1.4 lifted it rather than writing a second one.
+OutputOption = Annotated[
+    str | None,
+    output_mod.output_option(output_mod.TABLE, output_mod.JSON),
+]
+
+_HR_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
 def _setup_logging_for_mode(mode: str) -> None:
@@ -113,8 +108,8 @@ def _is_interactive() -> bool:
     `cron` job or a `docker run` without `-i`, where stdin is closed and
     `typer.confirm` raises `Abort` on EOF instead of asking anything.
 
-    The `CI` test is spelled exactly as `_resolve_output_mode` spells it, so
-    "am I in CI" cannot mean two different things inside one command.
+    The `CI` test is spelled exactly as `cli/output.py` spells it, so "am I
+    in CI" cannot mean two different things inside one command.
     """
     if os.environ.get("CI") == "true":
         return False
@@ -163,6 +158,7 @@ def _pr_url(result: PromoteResult) -> str:
 
 
 def monitor(
+    ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
     namespace: Annotated[
@@ -172,13 +168,13 @@ def monitor(
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
-    output: Annotated[str, typer.Option("--output", help="pretty | json | auto")] = "auto",
+    output: OutputOption = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
     fail_fast: Annotated[bool, typer.Option("--fail-fast")] = False,
     environment: Annotated[
         str | None,
         typer.Option(
-            "--environment",
+            "--env",
             help=(
                 "promotion target this run belongs to; enables lifecycle "
                 "events (omit for an ad-hoc run, which emits nothing)"
@@ -189,7 +185,7 @@ def monitor(
     """Wait for matched HelmReleases to converge on chart@version."""
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = _resolve_output_mode(output, console)
+    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     request = MonitorRequest(
@@ -206,7 +202,7 @@ def monitor(
 
     result = _run_monitor(mode, narration, request)
 
-    if mode == "pretty":
+    if mode == output_mod.TABLE:
         render_monitor_pretty(result, console, chart=chart, version=version)
     else:
         render_monitor_json(result, sys.stdout, chart=chart, version=version)
@@ -225,13 +221,14 @@ def _run_monitor(
     The driver renders onto the narration console: progress is never the
     selected projection.
     """
-    if mode == "pretty":
+    if mode == output_mod.TABLE:
         with _PrettyProgressDriver(narration) as driver:
             return _make_monitor_service(progress=driver).monitor(request)
     return _make_monitor_service(progress=None).monitor(request)
 
 
 def test(
+    ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
     namespace: Annotated[
@@ -241,13 +238,13 @@ def test(
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
-    output: Annotated[str, typer.Option("--output", help="pretty | json | auto")] = "auto",
+    output: OutputOption = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
     pod_log_tail: Annotated[int, typer.Option("--pod-log-tail", min=1)] = 200,
     environment: Annotated[
         str | None,
         typer.Option(
-            "--environment",
+            "--env",
             help=(
                 "promotion target this run belongs to; enables lifecycle "
                 "events (omit for an ad-hoc run, which emits nothing)"
@@ -258,7 +255,7 @@ def test(
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = _resolve_output_mode(output, console)
+    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     request = TestRequest(
@@ -275,7 +272,7 @@ def test(
 
     result = _run_test(mode, narration, request)
 
-    if mode == "pretty":
+    if mode == output_mod.TABLE:
         render_test_pretty(result, console, chart=chart, version=version)
     else:
         render_test_json(result, sys.stdout, chart=chart, version=version)
@@ -294,13 +291,14 @@ def _run_test(
     The driver renders onto the narration console: progress is never the
     selected projection.
     """
-    if mode == "pretty":
+    if mode == output_mod.TABLE:
         with _PrettyProgressDriver(narration) as driver:
             return _make_test_service(progress=driver).test(request)
     return _make_test_service(progress=None).test(request)
 
 
 def promote(
+    ctx: typer.Context,
     flux_repo: Annotated[
         str,
         typer.Option(
@@ -317,11 +315,11 @@ def promote(
     ],
     environment: Annotated[
         str,
-        typer.Option("--environment", help="Environment label used in branch / PR text."),
+        typer.Option("--env", help="Environment label used in branch / PR text."),
     ],
     chart_name: Annotated[
         str,
-        typer.Option("--chart-name", help="HelmRelease .spec.chart.spec.chart value to match."),
+        typer.Option("--chart", help="HelmRelease .spec.chart.spec.chart value to match."),
     ],
     version: Annotated[
         str,
@@ -342,7 +340,7 @@ def promote(
             help="Proceed without prompting when target version is older than what's currently in the file.",
         ),
     ] = False,
-    output: Annotated[str, typer.Option("--output", help="pretty | json | auto")] = "auto",
+    output: OutputOption = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
@@ -352,7 +350,7 @@ def promote(
     # The one thing on stdout is the json projection, written at the end.
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = _resolve_output_mode(output, console)
+    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
@@ -424,7 +422,7 @@ def promote(
         case PromoteStatus.PUSHED:
             narration.print(f"[green]pushed[/green] branch={result.branch}")
 
-    if mode == "json":
+    if mode == output_mod.JSON:
         render_promote_json(
             result,
             sys.stdout,
