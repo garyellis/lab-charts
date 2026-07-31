@@ -374,6 +374,13 @@ def grafana_lint_dashboards(
             help="Specific dashboard JSON file (repeatable). Default: all under the configured chart directory's grafana-dashboards/dashboards/.",
         ),
     ] = [],
+    allow_empty: Annotated[
+        bool,
+        typer.Option(
+            "--allow-empty",
+            help="Treat 'no dashboards found' as success. For repos or paths that legitimately have no dashboards yet.",
+        ),
+    ] = False,
 ) -> None:
     """Lint Grafana dashboards for repo-wide quality rules."""
     from chart_manager.services.grafana.dashboard_lint import discover_dashboards, lint_paths
@@ -384,8 +391,14 @@ def grafana_lint_dashboards(
         else discover_dashboards(root, charts_dir=Settings().charts_dir)
     )
     if not targets:
+        # Linting nothing is not the same as linting clean. A wrong --root, a
+        # renamed charts directory, or a --path that matches no file all land
+        # here, and exiting 0 made every one of them a silent CI pass. Exit 1
+        # per the exit-code table: the thing you asked about did not succeed.
+        # `--allow-empty` is the explicit opt-out for a repo that genuinely
+        # has no dashboards yet.
         narration.print("[yellow]no dashboards found[/yellow]")
-        raise typer.Exit(0)
+        raise typer.Exit(0 if allow_empty else 1)
 
     result = lint_paths(targets)
     # The findings are this command's report -- its data projection.
