@@ -399,7 +399,7 @@ def test_compile_rejects_a_requires_cycle(
     This and the two tests below are what remains of the deleted `lifecycle
     doctor` command. Doctor checked the whole repository up front; the
     compiler checks the chart:profile actually being compiled. Since every
-    execution path (`charts test`, `local up`, `ci install`) compiles before
+    execution path (`charts test`, `local up`) compiles before
     it mutates anything, a broken reference on a chart anyone exercises still
     fails loudly -- see `DependencyResolver.install_plan`.
     """

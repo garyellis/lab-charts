@@ -22,17 +22,24 @@ from .scanner import HelmReleaseMatch, scan
 from .state import (
     NO_MATCH_REF,
     PASSING_VERDICTS,
+    PROMOTE_OUTCOME,
     PromoteStatus,
     Reason,
     Transition,
     Verdict,
 )
 from .test import TestOutcome, TestPodSnapshot, TestRequest, TestResult, TestService
-from .wire import SCHEMA_VERSION, monitor_to_dict, test_to_dict
+from .wire import (
+    SCHEMA_VERSION,
+    monitor_to_dict,
+    promote_to_dict,
+    test_to_dict,
+)
 
 __all__ = [
     "NO_MATCH_REF",
     "PASSING_VERDICTS",
+    "PROMOTE_OUTCOME",
     "SCHEMA_VERSION",
     "EditResult",
     "HelmReleaseMatch",
@@ -54,6 +61,7 @@ __all__ = [
     "Transition",
     "Verdict",
     "monitor_to_dict",
+    "promote_to_dict",
     "scan",
     "set_version",
     "test_to_dict",

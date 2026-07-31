@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from pathlib import Path
 from typing import IO, Any
 
 from rich.console import Console
@@ -27,9 +28,11 @@ from chart_manager.services.helmrelease import (
     PASSING_VERDICTS,
     HelmReleaseRef,
     MonitorResult,
+    PromoteResult,
     TestResult,
     Transition,
     monitor_to_dict,
+    promote_to_dict,
     test_to_dict,
 )
 
@@ -201,6 +204,30 @@ def render_test_json(
     Transport only: the payload comes from `services.helmrelease.wire`.
     """
     json.dump(test_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
+    file.write("\n")
+    file.flush()
+
+
+def render_promote_json(
+    result: PromoteResult,
+    file: IO[str],
+    *,
+    chart: str,
+    version: str,
+    environment: str,
+    path: Path,
+) -> None:
+    """Write the promote result as a single JSON line to `file`.
+
+    Transport only: the payload comes from `services.helmrelease.wire`.
+    """
+    json.dump(
+        promote_to_dict(
+            result, chart=chart, version=version, environment=environment, path=path
+        ),
+        file,
+        **_JSON_DUMP_KWARGS,
+    )
     file.write("\n")
     file.flush()
 

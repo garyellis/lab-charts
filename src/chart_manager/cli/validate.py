@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.console import Console
 
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
     PlainNarrationDisplay,
@@ -34,6 +34,7 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
@@ -114,7 +115,12 @@ GithubStepSummaryOption = Annotated[
 ]
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 
-console = Console()
+#: The selected `--format` projection. Goes to stdout.
+console = data_console()
+#: Warnings, spec errors, summaries. Goes to stderr -- these used to share
+#: the stdout console with the `--format json` payload written at
+#: `_emit_result`, which corrupted the JSON document in band.
+narration = narration_console()
 
 
 def register(app: typer.Typer) -> None:
@@ -144,7 +150,7 @@ def _make_app(
 
 def _warn(message: str) -> None:
     """Print a service-emitted operator warning."""
-    console.print(f"[yellow]{message}[/yellow]")
+    narration.print(f"[yellow]{message}[/yellow]")
 
 
 def chart(
@@ -212,22 +218,29 @@ def chart(
         phases.add("policy")
     root = root.resolve()
     settings = Settings()
-    candidate = Path(chart)
     charts_dir: Path | None = None
-    if candidate.is_absolute() or len(candidate.parts) > 1 or (root / candidate).exists():
+    try:
         target = resolve_chart_target(
             root,
             chart,
             charts_dir=settings.charts_dir,
             local_config=settings.local_config,
         )
+    except SpecError:
+        # The resolver owns name/path resolution; the surface must not
+        # second-guess it with a path heuristic. When it cannot place the
+        # token on disk we pass what the user typed straight through, so the
+        # validation service — which owns the chart namespace — raises the
+        # precise "unknown chart" error listing the available names.
+        pass
+    else:
         chart = target.name
         charts_dir = target.path.parent.relative_to(root)
     request = RunRequest(
         root=root,
         charts=(chart,),
         envs=() if all_envs else tuple(env),
-        all_charts=True,
+        skip_change_detection=True,
         phases=frozenset(phases),
         out=out,
         keep=keep,
@@ -373,7 +386,7 @@ def run(
         envs=tuple(env),
         base=base,
         changed_files=changed_files,
-        all_charts=all_charts,
+        skip_change_detection=all_charts,
         phases=enabled_phases,
         out=out,
         keep=keep,
@@ -420,7 +433,7 @@ def _execute(
     if request.verbose and progress in ("auto", "live"):
         progress = "plain"
     if request.verbose and resolve_workers(request.workers) > 1:
-        console.print(
+        narration.print(
             "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
             "streamed subprocess output readable"
         )
@@ -488,7 +501,7 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
         return PlainNarrationDisplay()
     if progress == "live":
         if not is_tty:
-            console.print(
+            narration.print(
                 "[yellow]warn:[/yellow] --progress live requested but stderr is not a TTY; "
                 "falling back to plain narration"
             )
@@ -561,13 +574,15 @@ def _emit_result(
     elif fmt == "md":
         sys.stdout.write(markdown_text())
     else:  # text or all
+        # The table and its detail blocks are the text projection.
         console.print(to_text_table(result, include_timings=timings))
         for block in failure_details(result):
             console.print(block)
         for block in advisory_details(result):
             console.print(block)
+        # Operator warnings are not part of the projection.
         for warn in extra_warnings:
-            console.print(f"[yellow]warn:[/yellow] {warn}")
+            narration.print(f"[yellow]warn:[/yellow] {warn}")
 
     if fmt == "all":
         # Best-effort: don't fail the run if the rendered tree was deleted.
@@ -580,7 +595,7 @@ def _emit_result(
                 sidecar.parent.mkdir(parents=True, exist_ok=True)
                 sidecar.write_text(payload)
             except OSError as exc:
-                console.print(f"[yellow]warning: could not write {sidecar}: {exc}[/yellow]")
+                narration.print(f"[yellow]warning: could not write {sidecar}: {exc}[/yellow]")
 
     if github_step_summary:
         step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -588,7 +603,7 @@ def _emit_result(
             # Warn rather than error: the flag is meant to assert intent,
             # but failing here makes local-with-flag debugging awkward and
             # would turn a side-channel emission into a fatal CLI error.
-            console.print(
+            narration.print(
                 "[yellow]warning: --github-step-summary was passed but "
                 "$GITHUB_STEP_SUMMARY is not set; skipping step summary write"
                 "[/yellow]"
@@ -599,7 +614,7 @@ def _emit_result(
                 with open(step_summary_path, "a", encoding="utf-8") as fh:
                     fh.write(markdown_text())
             except OSError as exc:
-                console.print(
+                narration.print(
                     f"[yellow]warning: could not write GITHUB_STEP_SUMMARY ({exc})[/yellow]"
                 )
 
@@ -628,7 +643,7 @@ def _print_summary(outcome: RunOutcome) -> None:
     if result.spec_errors:
         bits.append(f"{len(result.spec_errors)} spec error(s)")
         for err in result.spec_errors:
-            console.print(f"[red]spec error:[/red] {err}")
+            narration.print(f"[red]spec error:[/red] {err}")
     if outcome.charts_unvalidated:
         bits.append(f"{outcome.charts_unvalidated} chart(s) unvalidated")
     # Only a phase the caller *asked for* can be an anomaly worth reporting.
@@ -647,7 +662,7 @@ def _print_summary(outcome: RunOutcome) -> None:
     if not result.rows:
         bits.append("0 rows")
     if bits:
-        console.print(f"[bold]summary:[/bold] {'; '.join(bits)}")
+        narration.print(f"[bold]summary:[/bold] {'; '.join(bits)}")
 
 
 def clean(
@@ -656,11 +671,11 @@ def clean(
     """Remove the entire .chart-manager/rendered/ tree."""
     target = root.resolve() / ".chart-manager" / "rendered"
     if not target.exists():
-        console.print("nothing to clean")
+        narration.print("nothing to clean")
         return
     try:
         shutil.rmtree(target)
     except OSError as exc:
-        console.print(f"[red]error:[/red] cleanup failed: {exc}")
+        narration.print(f"[red]error:[/red] cleanup failed: {exc}")
         raise typer.Exit(1) from exc
-    console.print(f"cleaned: {target}")
+    narration.print(f"cleaned: {target}")

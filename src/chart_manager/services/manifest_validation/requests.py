@@ -59,7 +59,7 @@ class RunRequest:
 
     `charts`/`envs` narrow the built worklist. `changed_files` (a file of
     newline-delimited paths) and `base` (a git ref) feed the changed-files
-    resolution; `all_charts` short-circuits both. Timeouts use the
+    resolution; `skip_change_detection` short-circuits both. Timeouts use the
     pipeline's 0-means-unbounded convention. ``fail_fast`` stops before
     preparing later independent rows after the first failure.
     """
@@ -69,7 +69,7 @@ class RunRequest:
     envs: tuple[str, ...] = ()
     base: str = "origin/main"
     changed_files: Path | None = None
-    all_charts: bool = False
+    skip_change_detection: bool = False
     phases: frozenset[str] = ALL_PHASES
     out: Path | None = None
     keep: bool = False

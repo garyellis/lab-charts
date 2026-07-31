@@ -35,7 +35,13 @@ class PublishKind(StrEnum):
 
 @dataclass(frozen=True)
 class PublishedChart:
-    """Result for one chart after the push phase."""
+    """Result for one chart after the push phase.
+
+    On a dry run this is the *planned* outcome: `reference` is the target
+    computed by `target_reference`, `digest` is `None` because a digest only
+    exists once the registry has accepted the layer, and `error` is `None`
+    because no push was attempted.
+    """
 
     chart: str
     version: str
@@ -54,6 +60,11 @@ class PublishResult:
 
     charts: tuple[PublishedChart, ...]
     telemetry_failures: tuple[PublishTelemetryFailure, ...] = ()
+    #: The kind actually used, after inference from `--version-suffix`. A dry
+    #: run exists partly to reveal this, so it is reported on both paths.
+    publish_kind: PublishKind | None = None
+    #: True when nothing was pushed and no lifecycle event was emitted.
+    dry_run: bool = False
 
     @property
     def ok(self) -> bool:
@@ -101,12 +112,29 @@ class PublishService:
         pr_url: str | None = None,
         git_sha: str | None = None,
         operation_id: str | None = None,
+        dry_run: bool = False,
     ) -> PublishResult:
         """Package the whole batch, then push each prepared archive.
 
         Preparation failures raise and therefore push nothing. Pushes cannot
         be rolled back, so remote failures are consolidated after attempting
         every prepared chart.
+
+        `dry_run=True` runs this same method, unchanged, up to the push
+        boundary: the same argument validation, the same kind inference, the
+        same version resolution, the same `helm dependency update` and `helm
+        package`, and the same `target_reference` call. Only two things
+        differ, and both are a single branch below: `helm push` is not
+        called, and `_emit_publish_events` is not reached. There is no
+        parallel "planning" implementation to drift out of sync -- what a dry
+        run cannot know is exactly what the push itself produces (the digest,
+        and any reference the registry echoes back in place of the expected
+        one).
+
+        A dry run is not side-effect free *locally*: `helm dependency update`
+        writes `Chart.lock` and `charts/` in the source tree, and packaging
+        writes into a temporary directory. It performs no remote mutation and
+        emits no lifecycle event, which is what makes `publish` reversible.
         """
         selected = tuple(dict.fromkeys(charts))
         if not selected:
@@ -148,14 +176,22 @@ class PublishService:
 
             outcomes: list[PublishedChart] = []
             for name, target_version, package in prepared:
+                reference = target_reference(repository, name, target_version)
+                if dry_run:
+                    outcomes.append(
+                        PublishedChart(
+                            chart=name,
+                            version=target_version,
+                            reference=reference,
+                        )
+                    )
+                    continue
                 try:
                     pushed = self.helm.push(
                         package.path,
                         repository,
                         ca_file=ca_file,
-                        expected_reference=(
-                            f"{repository.rstrip('/')}/{name}:{target_version}"
-                        ),
+                        expected_reference=reference,
                     )
                 except ChartManagerError as exc:
                     outcomes.append(
@@ -174,6 +210,17 @@ class PublishService:
                             digest=pushed.digest,
                         )
                     )
+            if dry_run:
+                # Return before the event write. A dry run that emitted a
+                # build event would burn the `idempotency_key` derived below
+                # in `_emit_publish_events`, making the real publish that
+                # follows look like a retry of an artifact that was never
+                # pushed.
+                return PublishResult(
+                    tuple(outcomes),
+                    publish_kind=resolved_kind,
+                    dry_run=True,
+                )
             telemetry_failures = self._emit_publish_events(
                 outcomes,
                 repository=repository,
@@ -183,7 +230,9 @@ class PublishService:
                 git_sha=git_sha,
                 operation_id=operation_id,
             )
-            return PublishResult(tuple(outcomes), telemetry_failures)
+            return PublishResult(
+                tuple(outcomes), telemetry_failures, publish_kind=resolved_kind
+            )
 
     def _emit_publish_events(
         self,
@@ -257,6 +306,17 @@ class PublishService:
         return tuple(failures)
 
 
+def target_reference(repository: str, chart: str, version: str) -> str:
+    """The OCI reference a push of `chart@version` is expected to produce.
+
+    The single definition of the target, shared by the push path (where it is
+    `helm push`'s retry-safe `expected_reference`) and the dry-run path (where
+    it is the plan). Two copies of this expression is exactly how a dry run
+    starts lying about where an artifact will land.
+    """
+    return f"{repository.rstrip('/')}/{chart}:{version}"
+
+
 def validate_semver(version: str, *, label: str = "version") -> str:
     """Validate strict SemVer 2.0, including numeric identifier rules."""
     match = _SEMVER.fullmatch(version)
@@ -294,6 +354,7 @@ __all__ = [
     "PublishService",
     "PublishTelemetryFailure",
     "PublishedChart",
+    "target_reference",
     "validate_semver",
     "with_version_suffix",
 ]

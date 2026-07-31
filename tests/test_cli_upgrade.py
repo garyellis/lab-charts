@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -67,22 +66,18 @@ def test_upgrade_json_is_stable_and_request_preserves_flags(tmp_path: Path, monk
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {
-        "base": "main",
-        "branch": "renovate/loki",
-        "chart": "loki",
-        "current_wrapper_version": "1.2.3",
-        "diagnostics": ["registry lookup retried"],
-        "outcome": "pr_open",
-        "path": "charts/loki",
-        "proposed_wrapper_version": "1.2.4",
-        "pull_request": {
-            "number": 7,
-            "url": "https://example.test/pull/7",
-        },
-        "repository": "owner/repository",
-        "schema_version": 1,
-    }
+    # Byte-identical, not just structurally equal: `--format json` is a
+    # versioned contract consumed by CI steps and jq, so key order, separator
+    # spacing, and the trailing newline are all part of it. A refactor that
+    # moves where the payload is built must not move a single byte of it.
+    assert result.stdout == (
+        '{"base":"main","branch":"renovate/loki","chart":"loki",'
+        '"current_wrapper_version":"1.2.3",'
+        '"diagnostics":["registry lookup retried"],"outcome":"pr_open",'
+        '"path":"charts/loki","proposed_wrapper_version":"1.2.4",'
+        '"pull_request":{"number":7,"url":"https://example.test/pull/7"},'
+        '"repository":"owner/repository","schema_version":1}\n'
+    )
     request = service.requests[0]
     assert request.root == tmp_path.resolve()
     assert request.chart_path == Path("charts/loki")
@@ -142,14 +137,65 @@ def test_finalize_is_hidden_and_reads_callback_data_from_environment(
 
     assert "upgrade-finalize" not in help_result.stdout
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["current_wrapper_version"] == "1.2.3"
-    assert payload["proposed_wrapper_version"] == "2.0.0"
-    assert payload["outcome"] == "updated"
+    # `upgrade-finalize` is frozen (design doc §9.5) and its payload is read by
+    # the Renovate callback, so pin the whole line byte-for-byte -- including
+    # the keys the finalizer cannot populate. The finalizer names the same two
+    # wrapper versions `previous_version`/`version`, and they must still land
+    # on `current_wrapper_version`/`proposed_wrapper_version` here.
+    assert result.stdout == (
+        '{"base":null,"branch":null,"chart":"loki",'
+        '"current_wrapper_version":"1.2.3","diagnostics":[],'
+        '"outcome":"updated","path":"charts/loki",'
+        '"proposed_wrapper_version":"2.0.0","pull_request":null,'
+        '"repository":null,"schema_version":1}\n'
+    )
     request = service.requests[0]
     assert request.repo_root == tmp_path.resolve()
     assert request.update_data is not None
     assert request.update_data["updates"][0]["depName"] == "grafana"
+
+
+def test_finalize_text_renders_the_keys_the_finalizer_cannot_populate(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The finalizer's null repository/branch/PR must still render as `-`.
+
+    Byte-identical companion to the JSON gate: this is the only path that
+    exercises every placeholder branch of the text renderer at once.
+    """
+    monkeypatch.chdir(tmp_path)
+    data_file = tmp_path / "renovate-data.json"
+    data_file.write_text('{"updates":[]}', encoding="utf-8")
+    service = _Finalize(
+        FinalizeResult(
+            chart="loki",
+            previous_version="1.2.3",
+            version="1.2.3",
+            bump=None,
+            changed=False,
+        )
+    )
+    monkeypatch.setattr(upgrade_cli, "_make_finalize_service", lambda _root: service)
+
+    result = CliRunner().invoke(
+        _app(),
+        ["upgrade-finalize", "--path", "charts/loki", "--data-file", str(data_file)],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "repository: -\n"
+        "base: -\n"
+        "chart: loki\n"
+        "path: charts/loki\n"
+        "current wrapper version: 1.2.3\n"
+        "proposed wrapper version: 1.2.3\n"
+        "branch: -\n"
+        "outcome: unchanged\n"
+        "pull request: -\n"
+        "diagnostics:\n"
+        "- none\n"
+    )
 
 
 def test_unknown_format_is_rejected_before_service_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]

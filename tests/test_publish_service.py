@@ -9,7 +9,12 @@ import pytest
 from chart_manager.integrations.helm import PackageResult, PushResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.events.lifecycle import BuildPhase
-from chart_manager.services.publish import PublishKind, PublishService, with_version_suffix
+from chart_manager.services.publish import (
+    PublishKind,
+    PublishService,
+    target_reference,
+    with_version_suffix,
+)
 
 from .conftest import MakeChart
 
@@ -235,6 +240,148 @@ def test_event_failure_is_reported_without_changing_artifact_success(
     assert len(events.calls) == 2
     assert result.telemetry_failures[0].chart == "alpha"
     assert result.telemetry_failures[0].error == "events backend unavailable"
+
+
+def test_dry_run_packages_everything_and_pushes_nothing(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """The plan is computed for real; only the remote mutation is skipped."""
+    make_chart("alpha", version="1.0.0")
+    make_chart("beta", version="2.0.0")
+    helm = _Helm()
+    events = _Events()
+
+    result = PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
+        ["alpha", "beta"],
+        repository="oci://registry.local/library/",
+        version_suffix="pr.8.gabc",
+        dry_run=True,
+    )
+
+    assert result.ok and result.dry_run
+    assert helm.calls == [
+        ("deps", "alpha"),
+        ("package", "alpha"),
+        ("deps", "beta"),
+        ("package", "beta"),
+    ]
+    assert [(item.chart, item.version, item.reference) for item in result.charts] == [
+        ("alpha", "1.0.0-pr.8.gabc", "oci://registry.local/library/alpha:1.0.0-pr.8.gabc"),
+        ("beta", "2.0.0-pr.8.gabc", "oci://registry.local/library/beta:2.0.0-pr.8.gabc"),
+    ]
+    assert all(item.digest is None for item in result.charts)
+
+
+def test_dry_run_emits_no_lifecycle_event(chart_root: Path, make_chart: MakeChart) -> None:
+    """A dry-run event would burn the idempotency key of the real publish.
+
+    `_emit_publish_events` derives that key from the chart identity, so an
+    event written here would make the subsequent real publish look like a
+    retry of an artifact that was never pushed.
+    """
+    make_chart("alpha", version="1.2.3")
+    events = _Events()
+    service = PublishService(chart_root, helm=_Helm(), events=events)  # type: ignore[arg-type]
+
+    service.publish(
+        ["alpha"],
+        repository="oci://registry.local/library",
+        build_correlation_id="owner/repository#8",
+        dry_run=True,
+    )
+    assert events.calls == []
+
+    service.publish(["alpha"], repository="oci://registry.local/library")
+    assert [call["phase"] for call in events.calls] == [BuildPhase.PUBLISHED]
+
+
+def test_dry_run_plan_matches_what_the_real_publish_pushes(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """The property that matters: the plan does not diverge from reality.
+
+    Both runs take the identical argument set through the identical method;
+    the only difference is the branch at the push boundary. Comparing the
+    planned references against `helm.expected_references` -- the value the
+    real run actually handed to `helm push` -- rather than against the fake's
+    echoed `PushResult.reference` keeps this assertion independent of what
+    the fake chooses to return.
+
+    Residual gap: a real registry may echo a reference that differs from the
+    expected one, and no digest is knowable before the push. Neither is
+    reachable without a live OCI registry.
+    """
+    make_chart("alpha", version="1.0.0")
+    make_chart("beta", version="2.0.0")
+    arguments: dict[str, object] = {
+        "repository": "oci://registry.local/library",
+        "version_suffix": "pr.8.gabc",
+        "build_correlation_id": "owner/repository#8",
+    }
+
+    planning_helm = _Helm()
+    planned = PublishService(chart_root, helm=planning_helm).publish(  # type: ignore[arg-type]
+        ["alpha", "beta"], dry_run=True, **arguments  # type: ignore[arg-type]
+    )
+    real_helm = _Helm()
+    real = PublishService(chart_root, helm=real_helm).publish(  # type: ignore[arg-type]
+        ["alpha", "beta"], **arguments  # type: ignore[arg-type]
+    )
+
+    assert [(item.chart, item.version) for item in planned.charts] == [
+        (item.chart, item.version) for item in real.charts
+    ]
+    assert [item.reference for item in planned.charts] == real_helm.expected_references
+    assert planned.publish_kind is real.publish_kind is PublishKind.PREVIEW
+    # The preparation phase is identical; the real run only adds pushes.
+    assert real_helm.calls[: len(planning_helm.calls)] == planning_helm.calls
+
+
+def test_dry_run_rejects_what_a_real_publish_rejects(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """Validation runs before the branch, so a dry run cannot bless bad input."""
+    make_chart("alpha")
+    make_chart("beta")
+    helm = _Helm()
+
+    with pytest.raises(SpecError, match="exactly one"):
+        PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+            ["alpha", "beta"],
+            repository="oci://registry.local/library",
+            version="2.0.0",
+            dry_run=True,
+        )
+    with pytest.raises(SpecError, match="release publishing"):
+        PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+            ["alpha"],
+            repository="oci://registry.local/library",
+            version_suffix="pr.8.gabc",
+            publish_kind=PublishKind.RELEASE,
+            dry_run=True,
+        )
+    assert helm.calls == []
+
+
+def test_dry_run_reports_the_inferred_release_kind(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """Kind inference is silent today; the plan is where it becomes visible."""
+    make_chart("alpha", version="1.2.3")
+
+    result = PublishService(chart_root, helm=_Helm()).publish(  # type: ignore[arg-type]
+        ["alpha"], repository="oci://registry.local/library", dry_run=True
+    )
+
+    assert result.publish_kind is PublishKind.RELEASE
+    assert result.charts[0].version == "1.2.3"
+
+
+def test_target_reference_is_the_one_definition_of_the_push_target() -> None:
+    assert (
+        target_reference("oci://registry.local/library/", "alpha", "1.0.0")
+        == "oci://registry.local/library/alpha:1.0.0"
+    )
 
 
 def test_exact_version_requires_one_chart(chart_root: Path, make_chart: MakeChart) -> None:

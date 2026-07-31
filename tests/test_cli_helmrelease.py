@@ -19,6 +19,7 @@ from chart_manager.cli.helmrelease_render import (
     render_monitor_json,
     render_test_json,
 )
+from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
@@ -26,14 +27,20 @@ from chart_manager.integrations.helmrelease import (
     OwnedWorkload,
     WorkloadRollout,
 )
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     NO_MATCH_REF,
+    PROMOTE_OUTCOME,
+    HelmReleaseMatch,
     MonitorOutcome,
     MonitorResult,
+    PromoteResult,
+    PromoteStatus,
     TestOutcome,
     TestPodSnapshot,
     TestResult,
     Transition,
+    promote_to_dict,
 )
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "golden"
@@ -733,3 +740,348 @@ def test_monitor_json_is_single_line_compact_and_flushed() -> None:
     body = raw[:-1]
     keys = list(json.loads(body).keys())
     assert keys == sorted(keys)  # sort_keys=True
+
+
+# ----- promote: exit codes, non-interactive guard, json projection --------
+#
+# The defect these lock down (design doc 8.1): `promote` decoded its six
+# terminal states into six `console.print` calls and raised `typer.Exit` on
+# none of them. A declined downgrade printed "aborted ... no PR opened" and
+# exited 0, so a promotion that did nothing was indistinguishable from one
+# that opened a PR -- and the decline itself was usually not a human choice
+# but `typer.confirm` reading EOF on a non-TTY runner.
+
+
+_PROMOTE_BASE = [
+    "promote",
+    "--flux-repo", "git@github.com:org/lab-fluxcd.git",
+    "--path", "prod",
+    "--environment", "prod",
+    "--chart-name", "loki",
+    "--version", "0.2.0",
+]
+
+
+def _match(current: str = "0.1.0") -> HelmReleaseMatch:
+    return HelmReleaseMatch(
+        path=Path("/tmp/flux/prod/loki.yaml"),
+        doc_index=0,
+        name="loki",
+        namespace="loki",
+        current_version=current,
+    )
+
+
+def _promote_result(status: PromoteStatus) -> PromoteResult:
+    """A plausible PromoteResult for each terminal state.
+
+    Shaped like what `PromoteService._promote_in_workdir` actually returns
+    for that state, so an exit-code assertion is not passing against a
+    result the service could never produce.
+    """
+    match status:
+        case PromoteStatus.NO_CHANGES:
+            return PromoteResult(status=status, matches=[_match("0.2.0")])
+        case PromoteStatus.DRY_RUN:
+            return PromoteResult(
+                status=status,
+                matches=[_match()],
+                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
+                branch="promote/prod/loki-0.2.0",
+            )
+        case PromoteStatus.ABORTED:
+            return PromoteResult(
+                status=status,
+                matches=[_match("0.9.0")],
+                branch="promote/prod/loki-0.2.0",
+                downgrades=[_match("0.9.0")],
+            )
+        case PromoteStatus.ALREADY_OPEN:
+            return PromoteResult(
+                status=status,
+                matches=[_match()],
+                branch="promote/prod/loki-0.2.0",
+                pull_request=PullRequest(url="https://gh/org/r/pull/7", number=7),
+            )
+        case PromoteStatus.PR_OPENED:
+            return PromoteResult(
+                status=status,
+                matches=[_match()],
+                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
+                branch="promote/prod/loki-0.2.0",
+                pull_request=PullRequest(url="https://gh/org/r/pull/8", number=8),
+            )
+        case PromoteStatus.PUSHED:
+            return PromoteResult(
+                status=status,
+                matches=[_match()],
+                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
+                branch="promote/prod/loki-0.2.0",
+                pull_request=PullRequest(url="", number=None),
+            )
+
+
+@dataclass
+class _FakePromoteService:
+    """Stands in for PromoteService: replays a result, optionally via confirm."""
+
+    result: PromoteResult | None = None
+    downgrades: list[HelmReleaseMatch] = field(default_factory=list)
+    confirm: Any = None
+    requests: list[Any] = field(default_factory=list)
+
+    def promote(self, request: Any) -> PromoteResult:
+        self.requests.append(request)
+        # Mirrors PromoteService: consult the callback when a downgrade is
+        # detected, and treat a decline as ABORTED.
+        if self.downgrades and not self.confirm(self.downgrades, request.version):
+            return _promote_result(PromoteStatus.ABORTED)
+        assert self.result is not None
+        return self.result
+
+
+def _install_fake_promote(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    result: PromoteResult | None = None,
+    downgrades: list[HelmReleaseMatch] | None = None,
+) -> _FakePromoteService:
+    fake = _FakePromoteService(result=result, downgrades=downgrades or [])
+
+    def _factory(*, confirm_downgrade: Any) -> _FakePromoteService:
+        fake.confirm = confirm_downgrade
+        return fake
+
+    monkeypatch.setattr(helmrelease_cli, "_make_promote_service", _factory)
+    return fake
+
+
+def test_promote_outcome_table_covers_every_status() -> None:
+    """Guard the guard: a seventh PromoteStatus must not silently exit 0.
+
+    Without this, adding a state and forgetting the table would raise
+    KeyError at runtime -- or, if someone "fixed" that with
+    `.get(status, Outcome.SUCCESS)`, reintroduce the exact defect this
+    guards. `PROMOTE_OUTCOME` is now the sole input to both the wire `ok`
+    field and the process exit code, so one missing arm breaks both.
+    """
+    assert set(PROMOTE_OUTCOME) == set(PromoteStatus)
+    # The headline regression, pinned at the layer that decides it.
+    assert PROMOTE_OUTCOME[PromoteStatus.ABORTED] is Outcome.FAILED
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        # Literal integers on purpose: this is the behavioural pin. It must
+        # fail if the tables it exercises change what a status is worth,
+        # which a table-derived expectation could not do.
+        (PromoteStatus.NO_CHANGES, 0),
+        (PromoteStatus.DRY_RUN, 0),
+        (PromoteStatus.ALREADY_OPEN, 0),
+        (PromoteStatus.PR_OPENED, 0),
+        (PromoteStatus.PUSHED, 0),
+        (PromoteStatus.ABORTED, 1),
+    ],
+)
+def test_promote_exit_code_per_status(
+    status: PromoteStatus,
+    expected: int,
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every terminal state maps to the code 6.1 assigns it, and only that."""
+    _install_fake_promote(monkeypatch, result=_promote_result(status))
+    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+    assert res.exit_code == expected, res.output
+
+
+def test_promote_aborted_exits_nonzero(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The headline regression: a declined downgrade is a failure, not success."""
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "pretty"])
+    assert res.exit_code == 1
+    assert "aborted" in res.stderr
+
+
+def test_promote_json_ok_agrees_with_the_exit_code() -> None:
+    """`.ok` and `$?` are one judgement; a consumer may branch on either.
+
+    The two live in different layers now -- `ok` is
+    `PROMOTE_OUTCOME[status] is Outcome.SUCCESS` in `services/`, the exit
+    code is `exit_code_for(...)` in `plumbing/` -- so this is the test that
+    ties them together. It fails if `EXIT_CODE[Outcome.SUCCESS]` ever stops
+    being 0, or if `ok` is re-derived from anything but the outcome table.
+    """
+    for status in PromoteStatus:
+        payload = promote_to_dict(
+            _promote_result(status),
+            chart="loki",
+            version="0.2.0",
+            environment="prod",
+            path=Path("prod"),
+        )
+        assert payload["ok"] is (exit_code_for(PROMOTE_OUTCOME[status]) == 0), status
+
+
+# ----- promote: the non-interactive downgrade guard ------------------------
+
+
+def test_promote_downgrade_without_flag_is_a_usage_error_when_non_interactive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No prompt, exit 2, and the message names the flag that unblocks it.
+
+    CliRunner's stdin is not a terminal, which is the condition a CI runner
+    presents. Previously this reached `typer.confirm`, EOF'd into a decline,
+    and exited 0.
+    """
+    prompted: list[str] = []
+
+    def _boom(*_a: Any, **_k: Any) -> bool:
+        prompted.append("prompted")
+        return False
+
+    monkeypatch.setattr(typer, "confirm", _boom)
+    _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
+
+    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+
+    assert res.exit_code == 2, res.output
+    assert prompted == [], "must never prompt when stdin is not a terminal"
+    assert "--allow-downgrade" in res.stderr
+
+
+def test_promote_downgrade_guard_also_trips_on_ci_true(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CI=true is non-interactive even where a pty exists (6.6, both legs)."""
+    monkeypatch.setenv("CI", "true")
+    _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
+
+    # `input=` makes stdin readable, so a "y" is waiting. The guard must
+    # still refuse: CI=true means nobody typed it.
+    res = runner.invoke(_build_app(), _PROMOTE_BASE, input="y\n")
+
+    assert res.exit_code == 2, res.output
+    assert "--allow-downgrade" in res.stderr
+
+
+def test_promote_allow_downgrade_skips_the_guard(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--allow-downgrade is the documented escape, so it must not hit the guard."""
+    _install_fake_promote(
+        monkeypatch,
+        result=_promote_result(PromoteStatus.PR_OPENED),
+        downgrades=[_match("0.9.0")],
+    )
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--allow-downgrade"])
+
+    assert res.exit_code == 0, res.output
+    assert "--allow-downgrade set; proceeding." in res.stderr
+
+
+def test_promote_still_prompts_when_interactive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guard the guard: the interactive path is gated, not deleted."""
+    monkeypatch.setattr(helmrelease_cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(typer, "confirm", lambda *a, **k: True)
+    _install_fake_promote(
+        monkeypatch,
+        result=_promote_result(PromoteStatus.PR_OPENED),
+        downgrades=[_match("0.9.0")],
+    )
+    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+
+    assert res.exit_code == 0, res.output
+
+
+def test_promote_interactive_decline_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A human who says no gets exit 1 -- the state that used to exit 0."""
+    monkeypatch.setattr(helmrelease_cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(typer, "confirm", lambda *a, **k: False)
+    _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
+    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+
+    assert res.exit_code == 1, res.output
+
+
+# ----- promote: the json projection ---------------------------------------
+
+
+def test_promote_json_parses_cleanly_off_stdout(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stdout carries the projection and nothing else; narration is on stderr."""
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "json"])
+
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.stdout)
+    assert payload["command"] == "promote"
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "pr-opened"
+    assert payload["ok"] is True
+    assert payload["environment"] == "prod"
+    assert payload["chart"] == "loki"
+    assert payload["pull_request"]["url"] == "https://gh/org/r/pull/8"
+    assert "pr opened" in res.stderr
+    assert "pr opened" not in res.stdout
+
+
+def test_promote_json_carries_a_failure_verbatim(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonzero exit still emits a parseable document -- CI needs both."""
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "json"])
+
+    assert res.exit_code == 1
+    payload = json.loads(res.stdout)
+    assert payload["ok"] is False
+    assert payload["status"] == "aborted"
+    assert payload["downgrades"][0]["current_version"] == "0.9.0"
+
+
+def test_promote_auto_resolves_to_json_off_a_terminal(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`auto` is the default; a CI step gets a document without asking for one."""
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
+    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+
+    assert json.loads(res.stdout)["status"] == "pr-opened"
+
+
+def test_promote_pretty_writes_nothing_to_stdout(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Promote narrates a mutation; it has no human *document*.
+
+    So `helmrelease promote --output pretty >/dev/null` still shows the
+    operator what happened, and no status line is ever piped to a consumer
+    that asked for data.
+    """
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "pretty"])
+
+    assert res.exit_code == 0, res.output
+    assert res.stdout == ""
+    assert "pr opened" in res.stderr
+
+
+def test_promote_rejects_an_unknown_output_mode(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--output yaml` must fail, not silently fall back to pretty."""
+    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
+    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "yaml"])
+
+    assert res.exit_code == 1
+    assert "--output must be one of" in res.stderr

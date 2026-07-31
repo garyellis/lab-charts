@@ -20,12 +20,16 @@ from chart_manager.cli.helmrelease_render import (
     _PrettyProgressDriver,
     render_monitor_json,
     render_monitor_pretty,
+    render_promote_json,
     render_test_json,
     render_test_pretty,
 )
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.helmrelease import (
+    PROMOTE_OUTCOME,
     HelmReleaseMatch,
     HelmReleaseRef,
     MonitorRequest,
@@ -99,6 +103,29 @@ def _setup_logging_for_mode(mode: str) -> None:
         logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
 
+def _is_interactive() -> bool:
+    """True when it is legitimate to block the run on a prompt.
+
+    Design §6.6: never prompt when stdin is not a TTY or `CI=true`. Both
+    legs matter. `isatty()` alone misses a runner that sets `CI=true` while
+    still allocating a pty -- there the prompt would not EOF, it would sit
+    there until the job's wall-clock timeout. `CI=true` alone misses a
+    `cron` job or a `docker run` without `-i`, where stdin is closed and
+    `typer.confirm` raises `Abort` on EOF instead of asking anything.
+
+    The `CI` test is spelled exactly as `_resolve_output_mode` spells it, so
+    "am I in CI" cannot mean two different things inside one command.
+    """
+    if os.environ.get("CI") == "true":
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        # stdin replaced with a non-stream object, or closed. Either way
+        # there is nobody to answer.
+        return False
+
+
 def _coerce_namespace(ns: str | None) -> str | None:
     """Treat an empty --namespace string as None (meaning all namespaces)."""
     if ns is None or ns == "":
@@ -107,8 +134,24 @@ def _coerce_namespace(ns: str | None) -> str | None:
 
 
 def _make_console(no_color: bool) -> Console:
-    """Create the output console, honoring --no-color."""
-    return Console(no_color=no_color)
+    """Console for the selected `--output` projection (stdout), honoring --no-color.
+
+    Also the console `_resolve_output_mode` probes for `is_terminal`: the
+    `auto` decision is "is the *data* going to a terminal", so it must ask
+    about stdout, not about wherever narration happens to go.
+    """
+    return data_console(no_color=no_color)
+
+
+def _make_narration_console(no_color: bool) -> Console:
+    """Console for progress and status (stderr), honoring --no-color.
+
+    Progress tables and promote's status lines are not the projection, so
+    they belong on stderr regardless of `--output`. Previously they shared
+    the stdout console and were safe only because json mode bypassed them;
+    this makes the separation structural instead of mode-dependent.
+    """
+    return narration_console(no_color=no_color)
 
 
 def _pr_url(result: PromoteResult) -> str:
@@ -145,6 +188,7 @@ def monitor(
 ) -> None:
     """Wait for matched HelmReleases to converge on chart@version."""
     console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
     mode = _resolve_output_mode(output, console)
     _setup_logging_for_mode(mode)
 
@@ -160,7 +204,7 @@ def monitor(
         environment=environment,
     )
 
-    result = _run_monitor(mode, console, request)
+    result = _run_monitor(mode, narration, request)
 
     if mode == "pretty":
         render_monitor_pretty(result, console, chart=chart, version=version)
@@ -173,12 +217,16 @@ def monitor(
 
 def _run_monitor(
     mode: str,
-    console: Console,
+    narration: Console,
     request: MonitorRequest,
 ) -> MonitorResult:
-    """Run the monitor service, wiring a live progress table only in pretty mode."""
+    """Run the monitor service, wiring a live progress table only in pretty mode.
+
+    The driver renders onto the narration console: progress is never the
+    selected projection.
+    """
     if mode == "pretty":
-        with _PrettyProgressDriver(console) as driver:
+        with _PrettyProgressDriver(narration) as driver:
             return _make_monitor_service(progress=driver).monitor(request)
     return _make_monitor_service(progress=None).monitor(request)
 
@@ -209,6 +257,7 @@ def test(
 ) -> None:
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
     console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
     mode = _resolve_output_mode(output, console)
     _setup_logging_for_mode(mode)
 
@@ -224,7 +273,7 @@ def test(
         environment=environment,
     )
 
-    result = _run_test(mode, console, request)
+    result = _run_test(mode, narration, request)
 
     if mode == "pretty":
         render_test_pretty(result, console, chart=chart, version=version)
@@ -237,12 +286,16 @@ def test(
 
 def _run_test(
     mode: str,
-    console: Console,
+    narration: Console,
     request: TestRequest,
 ) -> TestResult:
-    """Run the test service, wiring a live progress table only in pretty mode."""
+    """Run the test service, wiring a live progress table only in pretty mode.
+
+    The driver renders onto the narration console: progress is never the
+    selected projection.
+    """
     if mode == "pretty":
-        with _PrettyProgressDriver(console) as driver:
+        with _PrettyProgressDriver(narration) as driver:
             return _make_test_service(progress=driver).test(request)
     return _make_test_service(progress=None).test(request)
 
@@ -289,21 +342,43 @@ def promote(
             help="Proceed without prompting when target version is older than what's currently in the file.",
         ),
     ] = False,
+    output: Annotated[str, typer.Option("--output", help="pretty | json | auto")] = "auto",
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
-    console = _make_console(no_color=False)
+    # Every status line below is narration and goes to stderr, in `pretty`
+    # mode too: promote's human output is a running commentary on a mutation,
+    # not a document, so `promote >/dev/null` must still show what happened.
+    # The one thing on stdout is the json projection, written at the end.
+    console = _make_console(no_color)
+    narration = _make_narration_console(no_color)
+    mode = _resolve_output_mode(output, console)
+    _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
         """Prompt to proceed on a detected downgrade; auto-yes when --allow-downgrade is set."""
-        console.print(
+        narration.print(
             f"[yellow]downgrade detected[/yellow]: target {target} is older than:"
         )
         for m in downgrades:
             ns = f"{m.namespace}/" if m.namespace else ""
-            console.print(f"  - {ns}{m.name} ({m.path.name}): {m.current_version}")
+            narration.print(f"  - {ns}{m.name} ({m.path.name}): {m.current_version}")
         if allow_downgrade:
-            console.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
+            narration.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
             return True
+        if not _is_interactive():
+            # §6.6. Prompting here used to hand a non-TTY runner an EOF,
+            # which `typer.confirm` turned into a declined downgrade -- and
+            # a declined downgrade then exited 0. Two silent failures in a
+            # row. Refuse up front, as a usage error (exit 2), and name the
+            # flag that resolves it.
+            raise typer.BadParameter(
+                f"refusing to downgrade {chart_name} to {target}: "
+                f"{len(downgrades)} HelmRelease(s) are at a newer version and "
+                "stdin is not a terminal (or CI=true), so the confirmation "
+                "prompt cannot be answered. Re-run with --allow-downgrade to "
+                "promote anyway."
+            )
         return typer.confirm("Proceed with the downgrade?", default=False)
 
     service = _make_promote_service(confirm_downgrade=_confirm_downgrade)
@@ -323,17 +398,17 @@ def promote(
     # `changed_files` empty by construction, so hoisting it is print-identical
     # and lets the status be decoded exactly once, in one exhaustive match.
     for changed in result.changed_files:
-        console.print(f"updated [bold]{changed}[/bold]")
+        narration.print(f"updated [bold]{changed}[/bold]")
 
     match result.status:
         case PromoteStatus.NO_CHANGES:
             count = len(result.matches)
             noun = "release" if count == 1 else "releases"
-            console.print(
+            narration.print(
                 f"[green]no changes[/green]: {count} {noun} already at {version} under {path}"
             )
         case PromoteStatus.ABORTED:
-            console.print(
+            narration.print(
                 "[yellow]aborted[/yellow]: declined downgrade prompt; no PR opened"
             )
         case PromoteStatus.ALREADY_OPEN:
@@ -341,13 +416,34 @@ def promote(
             # `already_open and result.pull_request is not None` guard let the
             # impossible pair fall through to the "pushed branch=..." line,
             # which tells the operator the opposite of what happened.
-            console.print(f"[yellow]pr already open[/yellow]: {_pr_url(result)}")
+            narration.print(f"[yellow]pr already open[/yellow]: {_pr_url(result)}")
         case PromoteStatus.DRY_RUN:
-            console.print(f"[yellow]dry-run[/yellow] branch={result.branch}")
+            narration.print(f"[yellow]dry-run[/yellow] branch={result.branch}")
         case PromoteStatus.PR_OPENED:
-            console.print(f"[green]pr opened[/green]: {_pr_url(result)}")
+            narration.print(f"[green]pr opened[/green]: {_pr_url(result)}")
         case PromoteStatus.PUSHED:
-            console.print(f"[green]pushed[/green] branch={result.branch}")
+            narration.print(f"[green]pushed[/green] branch={result.branch}")
+
+    if mode == "json":
+        render_promote_json(
+            result,
+            sys.stdout,
+            chart=chart_name,
+            version=version,
+            environment=environment,
+            path=path,
+        )
+
+    # Two lookups, one judgement. `PROMOTE_OUTCOME` is the service's answer to
+    # "did this promote succeed" -- the same lookup `wire.promote_to_dict`
+    # publishes as the payload's `ok` -- and `exit_code_for` is plumbing's
+    # answer to "what number is that worth" (design §6.1). Neither layer
+    # re-derives the other's half, so the exit status and the json a CI step
+    # reads cannot disagree. Before this, *no* branch raised Exit: a declined
+    # downgrade printed "aborted" and exited 0, which reads as success.
+    exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 def register(app: typer.Typer) -> None:

@@ -63,7 +63,9 @@ def _emit(
 
     emit_non_fatal(run, strict=strict, what=summary)
     if emitted:
-        typer.echo(f"emitted {summary}")
+        # Narration: `events build|promote` has no `--output` projection, so
+        # this confirmation is not data and must not land on stdout.
+        typer.echo(f"emitted {summary}", err=True)
 
 def build(
     chart: Annotated[str, typer.Option(help="Chart name.")],

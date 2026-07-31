@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 import yaml
-from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
@@ -18,10 +20,13 @@ from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
+from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.services.ci import MatrixSelection
+from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
     LAB_CA_SECRET_NAMESPACE,
@@ -44,8 +49,19 @@ from chart_manager.services.local_resources import (
     resolve_chart_target,
 )
 from chart_manager.services.progress import ProgressEvent
+from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
 
-console = Console()
+#: The selected `--output` projection -- tables, listings, JSON documents.
+#: Goes to stdout, because that is what a caller pipes or captures.
+console = data_console()
+#: Everything the caller did not ask for as output -- progress, hints,
+#: warnings. Goes to stderr so it can never corrupt `console`.
+#: See `cli/streams.py` for the rule.
+narration = narration_console()
+#: Terminal error reporting. Same stream as `narration`, separate console
+#: because `-q` silences narration and must not silence the reason a command
+#: failed -- a quiet run that dies with no output is unsupportable.
+errors = narration_console()
 
 
 def _container() -> Container:
@@ -93,7 +109,7 @@ def _print_progress(event: ProgressEvent) -> None:
         text = f"[{style}]{label}[/{style}] {message}".rstrip()
     else:
         text = f"{label} {message}".rstrip()
-    console.print(text)
+    narration.print(text)
 
 
 def _exit_if_failed(ok: bool) -> None:
@@ -145,6 +161,150 @@ app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
+
+@dataclass(frozen=True)
+class GlobalOptions:
+    """The resolved global options for one invocation.
+
+    Stashed on `ctx.obj` so a command can read what the caller asked for
+    globally without re-deriving it. `root` is deliberately *not* read from
+    here by commands -- it reaches them through Click's `default_map` as the
+    fallback for their own `--root`, so an explicit per-command `--root`
+    still wins.
+    """
+
+    root: Path
+    config: Path
+    quiet: bool
+    verbosity: int
+    no_color: bool
+
+
+def _package_version() -> str:
+    """Return the installed distribution version.
+
+    `PackageNotFoundError` means chart_manager is on `sys.path` without being
+    installed -- a source tree run directly. Say so rather than inventing a
+    number a bug report would then quote.
+    """
+    try:
+        return metadata.version("chart-manager")
+    except metadata.PackageNotFoundError:
+        return "unknown (not installed as a distribution)"
+
+
+def _root_default_map(command: Any, root: Path) -> dict[str, Any] | None:
+    """Nested Click `default_map` handing `root` to every command that takes it.
+
+    Click looks a parameter up in this order: command line, environment,
+    `default_map`, declared default. Seeding `default_map` therefore makes the
+    global `--root` a *fallback* -- the 18 per-command `--root` flags keep
+    overriding it, which is the whole point of landing this without touching
+    them.
+
+    Nested rather than flat because Click hands each subcommand
+    `parent.default_map[subcommand_name]`, so `grafana lint-dashboards` needs
+    `{"grafana": {"lint-dashboards": {"root": ...}}}`. Returns None for a
+    branch with nothing to configure, so empty groups are pruned rather than
+    contributing `{}`.
+
+    Typed against `Any`: typer 0.26 vendors Click as `typer._click`, so there
+    is no importable `click.Command` to annotate against, and reaching into a
+    vendored module from the surface would be worse than this.
+    """
+    subcommands: dict[str, Any] | None = getattr(command, "commands", None)
+    if subcommands is None:
+        has_root = any(param.name == "root" for param in command.params)
+        return {"root": root} if has_root else None
+    nested = {
+        name: mapping
+        for name, sub in subcommands.items()
+        if (mapping := _root_default_map(sub, root)) is not None
+    }
+    return nested or None
+
+
+@app.callback()
+def global_options(
+    ctx: typer.Context,
+    root: Annotated[
+        Path | None,
+        typer.Option(
+            "--root",
+            help="Repository root for every command. Also CHART_MANAGER_ROOT, or `root:` in the config file. A command's own --root still wins.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            help="YAML config file. Absent is fine; every setting has a default.",
+        ),
+    ] = DEFAULT_CONFIG_FILE,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress narration. Data and errors still print."),
+    ] = False,
+    verbose: Annotated[
+        int,
+        typer.Option("--verbose", "-v", count=True, help="Repeatable. -v enables debug logging."),
+    ] = 0,
+    no_color: Annotated[
+        bool,
+        typer.Option("--no-color", help="Disable color. The NO_COLOR environment variable does the same."),
+    ] = False,
+) -> None:
+    """Local and CI workflows for lab Helm charts.
+
+    Deliberately absent, and not oversights:
+
+    * **No global `-o/--output`.** `grafana export-dashboard -o PATH` and
+      `helmrelease --output pretty|json` still exist, so a root `-o` would
+      ship a release in which one flag means three things. It arrives with
+      the format unification (design doc 6.2).
+    * **No global `--version` flag.** `--version` already means the *chart*
+      version on `events build/promote`, `publish`, and all three
+      `helmrelease` commands. One flag, two meanings by position, is a bad
+      flag -- so the CLI's own version is the `version` command (8.6).
+    """
+    # Order matters: the config file must be located before anything reads
+    # Settings, because Settings is where the config file's values enter.
+    set_config_file(config)
+    settings = Settings()
+
+    # `flag > CHART_MANAGER_ROOT > config.yaml > default`. The first step is
+    # here because Settings never sees argv; the rest is Settings' source
+    # ordering. Settings is frozen and is not written back to.
+    resolved_root = root if root is not None else settings.root
+
+    # NO_COLOR is a convention, not a value: the spec says any non-empty
+    # value disables color.
+    disable_color = no_color or bool(os.environ.get("NO_COLOR"))
+    for sink in (console, narration, errors):
+        sink.no_color = disable_color
+    # Only narration is silenced. `console` carries the projection the caller
+    # asked for and `errors` carries why it failed; `-q` must not swallow
+    # either, or `-q` becomes indistinguishable from `2>/dev/null`.
+    narration.quiet = quiet
+
+    if verbose:
+        setup_logging("DEBUG", fmt=settings.log_format)
+
+    ctx.obj = GlobalOptions(
+        root=resolved_root,
+        config=config,
+        quiet=quiet,
+        verbosity=verbose,
+        no_color=disable_color,
+    )
+    ctx.default_map = _root_default_map(ctx.command, resolved_root)
+
+
+@app.command("version")
+def version_command() -> None:
+    """Print the chart-manager version."""
+    console.print(_package_version())
+
 
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
@@ -355,7 +515,7 @@ def grafana_export_dashboard(
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(payload)
-        console.print(f"[green]wrote[/green] {output}")
+        narration.print(f"[green]wrote[/green] {output}")
 
 
 @grafana_app.command("lint-dashboards")
@@ -368,6 +528,13 @@ def grafana_lint_dashboards(
             help="Specific dashboard JSON file (repeatable). Default: all under the configured chart directory's grafana-dashboards/dashboards/.",
         ),
     ] = [],
+    allow_empty: Annotated[
+        bool,
+        typer.Option(
+            "--allow-empty",
+            help="Treat 'no dashboards found' as success. For repos or paths that legitimately have no dashboards yet.",
+        ),
+    ] = False,
 ) -> None:
     """Lint Grafana dashboards for repo-wide quality rules."""
     from chart_manager.services.grafana.dashboard_lint import discover_dashboards, lint_paths
@@ -378,20 +545,28 @@ def grafana_lint_dashboards(
         else discover_dashboards(root, charts_dir=Settings().charts_dir)
     )
     if not targets:
-        console.print("[yellow]no dashboards found[/yellow]")
-        raise typer.Exit(0)
+        # Linting nothing is not the same as linting clean. A wrong --root, a
+        # renamed charts directory, or a --path that matches no file all land
+        # here, and exiting 0 made every one of them a silent CI pass. Exit 1
+        # per the exit-code table: the thing you asked about did not succeed.
+        # `--allow-empty` is the explicit opt-out for a repo that genuinely
+        # has no dashboards yet.
+        narration.print("[yellow]no dashboards found[/yellow]")
+        raise typer.Exit(0 if allow_empty else 1)
 
     result = lint_paths(targets)
+    # The findings are this command's report -- its data projection.
     for finding in result.findings:
         console.print(finding.render())
 
+    # The pass/fail tally narrates the run rather than reporting a finding.
     if not result.ok:
-        console.print(
+        narration.print(
             f"\n[red]{len(result.findings)} findings across "
             f"{result.files_with_findings}/{result.files_scanned} dashboards[/red]"
         )
         raise typer.Exit(1)
-    console.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
+    narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
 
 
 def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
@@ -560,33 +735,42 @@ def _render_development_cluster_result(result: DevelopmentClusterResult) -> None
         table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
     for failed in result.failed:
         table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
+    # The summary table is the result projection; the rest narrates.
     console.print(table)
     if not result.ok:
-        console.print(f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above")
+        narration.print(
+            f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above"
+        )
     _render_access_hints(result.hints)
 
 
 def _render_access_hints(hints: DevelopmentClusterAccessHints) -> None:
-    """Print the CA-trust block and the URL block for a finished converge."""
+    """Print the CA-trust block and the URL block for a finished converge.
+
+    All of this is narration: it is advice for the operator about how to
+    reach what was just installed, not the result of the command. It goes
+    to stderr so `local up` can grow an `--output json` projection later
+    without these blocks landing in the payload.
+    """
     if hints.ca_trust_hint:
         _print_ca_import_hint()
     if hints.urls_error is not None:
-        console.print(f"[yellow]warn:[/yellow] {hints.urls_error}")
+        narration.print(f"[yellow]warn:[/yellow] {hints.urls_error}")
         return
     if not hints.urls:
         return
-    console.print("\n[bold]URLs:[/bold]")
+    narration.print("\n[bold]URLs:[/bold]")
     for url in hints.urls:
-        console.print(f"  {url}")
+        narration.print(f"  {url}")
         if url != hints.grafana_url:
             continue
         if hints.grafana_error is not None:
-            console.print(
+            narration.print(
                 f"    [yellow]could not read admin password:[/yellow] {hints.grafana_error}"
             )
         elif hints.grafana_credentials is not None:
             user, password = hints.grafana_credentials
-            console.print(f"    user: {user}\n    pass: {password}")
+            narration.print(f"    user: {user}\n    pass: {password}")
 
 
 def _print_ca_import_hint() -> None:
@@ -609,24 +793,24 @@ def _print_ca_import_hint() -> None:
         f"-n {LAB_CA_SECRET_NAMESPACE} "
         "-o jsonpath='{.data.tls\\.crt}' | base64 -d > ~/lab-ca.crt"
     )
-    console.print("\n[bold]Trust the lab CA[/bold] (one-time, per workstation):")
-    console.print(f"  [dim]{cmd}[/dim]")
-    console.print("  Then import ~/lab-ca.crt into your OS keychain and mark it trusted.")
+    narration.print("\n[bold]Trust the lab CA[/bold] (one-time, per workstation):")
+    narration.print(f"  [dim]{cmd}[/dim]")
+    narration.print("  Then import ~/lab-ca.crt into your OS keychain and mark it trusted.")
     if sys.platform == "darwin":
         macos_trust = (
             "security add-trusted-cert -d -r trustRoot "
             "-k ~/Library/Keychains/login.keychain-db ~/lab-ca.crt"
         )
-        console.print(f"  [dim]macOS one-liner: {macos_trust}[/dim]")
-    console.print(
+        narration.print(f"  [dim]macOS one-liner: {macos_trust}[/dim]")
+    narration.print(
         "  [dim]Re-import after every 'local reset' -- the lab CA is "
         "regenerated each fresh install.[/dim]"
     )
-    console.print(
+    narration.print(
         "  [dim]Firefox users: also set network.dns.localDomains = "
         '"localhost" in about:config[/dim]'
     )
-    console.print(
+    narration.print(
         "  [dim]Optional for curl/k6: "
         'echo "127.0.0.1 grafana.localhost" | sudo tee -a /etc/hosts[/dim]'
     )
@@ -635,21 +819,15 @@ def _print_ca_import_hint() -> None:
 def _render_cluster_action(
     result: DevelopmentClusterActionResult, *, verb: str, absent: str
 ) -> None:
-    """Print the outcome of ``down`` plus any port-forward we reaped."""
+    """Print the outcome of ``down`` plus any port-forward we reaped.
+
+    A mutation status line, not a projection: `local down` produces no
+    document to pipe, so this narrates.
+    """
     state = verb if result.changed else absent
-    console.print(f"local cluster {state}: {result.cluster_name}")
+    narration.print(f"local cluster {state}: {result.cluster_name}")
     if result.port_forward_pid is not None:
-        console.print(f"stopped port-forward (pid {result.port_forward_pid})")
-
-
-@ci_app.command("changed")
-def ci_changed(
-    root: RootOption = Path("."),
-    base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
-) -> None:
-    service = _container().ci_service(root)
-    for chart in service.changed_charts(base):
-        console.print(chart)
+        narration.print(f"stopped port-forward (pid {result.port_forward_pid})")
 
 
 @ci_app.command("publish-charts")
@@ -666,13 +844,6 @@ def ci_publish_charts(
     """List every chart directly owned by an explicit changed file."""
     service = _container().ci_service(root)
     for chart in service.directly_changed_charts(changed_files):
-        console.print(chart)
-
-
-@ci_app.command("cluster-test-charts")
-def ci_cluster_test_charts(root: RootOption = Path(".")) -> None:
-    """List every chart enabled for live-cluster tests."""
-    for chart in _container().ci_service(root).cluster_test_charts():
         console.print(chart)
 
 
@@ -693,21 +864,20 @@ def ci_cluster_test_matrix(
     ] = None,
 ) -> None:
     """Emit a GitHub-ready chart/profile cluster-test matrix as JSON."""
+    # Flag exclusivity is the one part of this that is genuinely the
+    # surface's: it classifies how the caller was *invoked*. Which selector
+    # runs, and what shape the answer takes, belong to services/.
     if all_charts and charts:
         raise ChartManagerError("--all and --chart are mutually exclusive")
-    service = _container().ci_service(root)
-    if all_charts:
-        entries = service.all_cluster_test_matrix()
-    elif charts:
-        entries = service.explicit_cluster_test_matrix(charts)
-    else:
-        entries = service.cluster_test_matrix(base)
-    payload = {
-        "include": [
-            {"chart": entry.chart, "profile": entry.profile}
-            for entry in entries
-        ]
-    }
+    selection = MatrixSelection(
+        base=base,
+        all_charts=all_charts,
+        charts=tuple(charts or ()),
+    )
+    entries = _container().ci_service(root).matrix(selection)
+    payload = cluster_test_matrix_to_dict(entries)
+    # Compact separators and sorted keys because this lands in a shell
+    # variable in `.github/workflows/ci.yaml`, not in a human's terminal.
     typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 
@@ -812,29 +982,6 @@ def ci_impact(
         raise typer.Exit(1)
 
 
-@ci_app.command("install")
-def ci_install(
-    chart: str,
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
-) -> None:
-    _container().ci_service(root).install_source_chart(chart, profile, namespace)
-
-
-@ci_app.command("upgrade")
-def ci_upgrade(
-    chart: str,
-    oci_ref: Annotated[
-        str, typer.Option("--from-oci", help="OCI chart ref for the main-branch artifact.")
-    ],
-    root: RootOption = Path("."),
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
-) -> None:
-    _container().ci_service(root).upgrade_from_oci(chart, profile, namespace, oci_ref)
-
-
 def main() -> None:
     """Entry point: map domain errors to exit 1 and an absent tool to 127.
 
@@ -849,11 +996,11 @@ def main() -> None:
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
     except MissingToolError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
+        errors.print(f"[red]error:[/red] {escape(str(exc))}")
         sys.exit(127)
     except ChartManagerError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
+        errors.print(f"[red]error:[/red] {escape(str(exc))}")
         sys.exit(1)
     except FileNotFoundError as exc:
-        console.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
+        errors.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
         sys.exit(1)

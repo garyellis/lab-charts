@@ -29,12 +29,14 @@ from datetime import datetime
 from enum import StrEnum
 
 from chart_manager.integrations.helmrelease import HelmReleaseRef
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.events.lifecycle import PromotionPhase
 
 __all__ = [
     "DETAIL_MAX",
     "NO_MATCH_REF",
     "PASSING_VERDICTS",
+    "PROMOTE_OUTCOME",
     "PROMOTE_PHASE",
     "START_PHASE",
     "TERMINAL_PHASES",
@@ -305,4 +307,44 @@ PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
     PromoteStatus.ALREADY_OPEN: PromotionPhase.AWAITING_MERGE,
     PromoteStatus.PR_OPENED: PromotionPhase.FLUX_PR_OPEN,
     PromoteStatus.PUSHED: PromotionPhase.FLUX_PR_OPEN,
+}
+
+
+#: promote status -> did the caller get what they asked for. The third table
+#: classifying the same six states, and the same kind of thing as
+#: `PROMOTE_PHASE` above: data, not an if-chain re-derived per consumer.
+#:
+#: This is the *only* place that answers "was this promote a success", and
+#: both consumers read it: `wire.promote_to_dict` publishes
+#: `ok = outcome is Outcome.SUCCESS`, and `cli/helmrelease.py` exits with
+#: `exit_code_for(outcome)`. Splitting that judgement in two is how promote
+#: shipped a state (`ABORTED`) that printed a failure and exited 0.
+#:
+#: Note there are no exit codes here. `Outcome` is a semantic vocabulary from
+#: `plumbing/exit_codes.py`; what number `FAILED` is worth is that module's
+#: business, not this vertical's -- see its docstring for why the table is
+#: keyed on `Outcome` rather than on `PromoteStatus` directly.
+#:
+#: Why each arm:
+#:   PR_OPENED / PUSHED  -- the PR exists; that is the whole request.
+#:   ALREADY_OPEN        -- idempotent re-run; the requested PR is open, and
+#:                          `PROMOTE_PHASE` records it as a real forward
+#:                          transition (AWAITING_MERGE), not a failure.
+#:   NO_CHANGES          -- every match is already at the target version, so
+#:                          the desired state holds. A promote must be safe
+#:                          to re-run in CI.
+#:   DRY_RUN             -- design §6.3: a dry run prints the plan and exits 0.
+#:   ABORTED             -- design §6.1 names this verbatim: "promote
+#:                          aborted/declined" is a FAILED case. Nothing was
+#:                          promoted.
+#:
+#: Deliberately no `Outcome.USAGE` arm: a usage error is raised by the
+#: surface during argument handling and never reaches a `PromoteResult`.
+PROMOTE_OUTCOME: Mapping[PromoteStatus, Outcome] = {
+    PromoteStatus.NO_CHANGES: Outcome.SUCCESS,
+    PromoteStatus.DRY_RUN: Outcome.SUCCESS,
+    PromoteStatus.ABORTED: Outcome.FAILED,
+    PromoteStatus.ALREADY_OPEN: Outcome.SUCCESS,
+    PromoteStatus.PR_OPENED: Outcome.SUCCESS,
+    PromoteStatus.PUSHED: Outcome.SUCCESS,
 }

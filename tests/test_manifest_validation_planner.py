@@ -70,16 +70,46 @@ triggers:
 """
 
 
-def test_all_charts_cross_product(tmp_path: Path) -> None:
+def test_skip_change_detection_cross_product(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("alpha", "dev"), ("alpha", "prod"), ("beta", "dev"), ("beta", "prod")}
     assert result.warnings == ()
     assert result.spec_errors == ()
+
+
+def test_skip_change_detection_overrides_a_non_empty_changed_files_list(
+    tmp_path: Path,
+) -> None:
+    """The flag suppresses change-impact analysis; it does not widen scope.
+
+    Selection scope is `selected_charts`, not this flag: with both set the
+    worklist is the selected chart's full env cross-product, and the
+    changed-files list — which alone would have selected only `prod` — is
+    ignored entirely.
+    """
+    _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
+    _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
+    changed = ["charts/alpha/values-prod.yaml"]
+
+    impacted = build_worklist(root=tmp_path, changed_files=changed)
+    assert {(row.chart, row.env) for row in impacted.rows} == {("alpha", "prod")}
+
+    result = build_worklist(
+        root=tmp_path,
+        changed_files=changed,
+        skip_change_detection=True,
+        selected_charts=("alpha",),
+    )
+
+    assert {(row.chart, row.env) for row in result.rows} == {
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+    }
 
 
 def test_selected_charts_do_not_enumerate_or_parse_unrelated_charts(
@@ -100,7 +130,7 @@ def test_selected_charts_do_not_enumerate_or_parse_unrelated_charts(
 
     result = build_worklist(
         root=tmp_path,
-        all_charts=True,
+        skip_change_detection=True,
         selected_charts=("alpha",),
     )
 
@@ -202,7 +232,7 @@ def test_missing_spec_emits_warning(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=None)
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("beta", "dev"), ("beta", "prod")}
@@ -214,7 +244,7 @@ def test_missing_spec_emits_warning(tmp_path: Path) -> None:
 def test_spec_parse_error_records_spec_error(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec="releaseName: x\nmystery: true\n")
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     assert result.rows == ()
     assert any("alpha" in e for e in result.spec_errors)
@@ -225,7 +255,7 @@ def test_disabled_capability_is_silently_skipped(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=skipped_spec)
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("beta", "dev"), ("beta", "prod")}
@@ -529,7 +559,7 @@ def test_catalog_composes_validate_spec_over_authoritative_helm_chart(
 ) -> None:
     chart_dir = _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     target = result.targets["alpha"]
     assert target.name == "alpha"
@@ -545,7 +575,7 @@ def test_repository_scan_records_malformed_chart_metadata_without_aborting(
     (malformed / "Chart.yaml").write_text("name: [not-a-string]\n")
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
-    result = build_worklist(root=tmp_path, all_charts=True)
+    result = build_worklist(root=tmp_path, skip_change_detection=True)
 
     assert {(row.chart, row.env) for row in result.rows} == {
         ("alpha", "dev"),
@@ -587,7 +617,7 @@ policies:
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
-    build = build_worklist(root=tmp_path, all_charts=True)
+    build = build_worklist(root=tmp_path, skip_change_detection=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
     dev = next(row for row in build.rows if row.env == "dev")
     config = row_config_for(compiled, dev)
@@ -620,7 +650,7 @@ policies:
     repository_policy = tmp_path / "legacy-policies"
     repository_policy.mkdir()
 
-    build = build_worklist(root=tmp_path, all_charts=True)
+    build = build_worklist(root=tmp_path, skip_change_detection=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
 
     assert len(compiled.warnings) == 1
