@@ -44,7 +44,7 @@ def build_worklist(
     *,
     root: Path,
     changed_files: list[str] | None = None,
-    all_charts: bool = False,
+    skip_change_detection: bool = False,
     selected_charts: tuple[str, ...] = (),
     charts_dir: Path = DEFAULT_CHARTS_DIR,
 ) -> WorklistBuildResult:
@@ -64,7 +64,7 @@ def build_worklist(
     targets = catalog.by_name()
     specs = {name: target.spec for name, target in targets.items()}
 
-    if all_charts or changed_files is None:
+    if skip_change_detection or changed_files is None:
         rows = _cross_product(specs)
         return WorklistBuildResult(
             rows=rows,

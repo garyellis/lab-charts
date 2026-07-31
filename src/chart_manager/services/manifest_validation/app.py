@@ -200,7 +200,7 @@ class ManifestValidationService:
         build = build_worklist(
             root=repo_root,
             changed_files=changed,
-            all_charts=request.all_charts,
+            skip_change_detection=request.skip_change_detection,
             selected_charts=(
                 request.charts if request.charts and changed is None else ()
             ),
@@ -415,14 +415,14 @@ class ManifestValidationService:
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".
 
-        Precedence: all_charts > an explicit changed-files file > explicit
+        Precedence: skip_change_detection > an explicit changed-files file > explicit
         chart selection > `git diff` against `base`. A plain ``--chart`` is
         an intentional request to validate that chart, not a filter over an
         unrelated Git diff. A failed git diff is a warning, not an error: a
         shallow CI checkout or a missing base ref must widen the run rather
         than fail it.
         """
-        if request.all_charts:
+        if request.skip_change_detection:
             return None
         if request.changed_files is not None:
             try:

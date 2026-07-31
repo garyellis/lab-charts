@@ -34,6 +34,7 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
@@ -217,22 +218,29 @@ def chart(
         phases.add("policy")
     root = root.resolve()
     settings = Settings()
-    candidate = Path(chart)
     charts_dir: Path | None = None
-    if candidate.is_absolute() or len(candidate.parts) > 1 or (root / candidate).exists():
+    try:
         target = resolve_chart_target(
             root,
             chart,
             charts_dir=settings.charts_dir,
             local_config=settings.local_config,
         )
+    except SpecError:
+        # The resolver owns name/path resolution; the surface must not
+        # second-guess it with a path heuristic. When it cannot place the
+        # token on disk we pass what the user typed straight through, so the
+        # validation service — which owns the chart namespace — raises the
+        # precise "unknown chart" error listing the available names.
+        pass
+    else:
         chart = target.name
         charts_dir = target.path.parent.relative_to(root)
     request = RunRequest(
         root=root,
         charts=(chart,),
         envs=() if all_envs else tuple(env),
-        all_charts=True,
+        skip_change_detection=True,
         phases=frozenset(phases),
         out=out,
         keep=keep,
@@ -378,7 +386,7 @@ def run(
         envs=tuple(env),
         base=base,
         changed_files=changed_files,
-        all_charts=all_charts,
+        skip_change_detection=all_charts,
         phases=enabled_phases,
         out=out,
         keep=keep,

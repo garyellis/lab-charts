@@ -456,6 +456,65 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
     monkeypatch.setattr(validate_cli, "_make_app", lambda progress=None: fake)
 
 
+def test_chart_resolves_a_bare_configured_name_through_the_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A bare name under the configured charts dir is resolved, not guessed.
+
+    The surface passes the raw token to `resolve_chart_target` in every case;
+    there is no path heuristic in `cli/` deciding whether to call it.
+    """
+    chart_path = tmp_path / "charts" / "alpha"
+    chart_path.mkdir(parents=True)
+    (chart_path / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: alpha\nversion: 1.0.0\n", encoding="utf-8"
+    )
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def execute(request, **options):  # type: ignore[no-untyped-def]
+        calls.append((request, options))
+
+    monkeypatch.setattr(validate_cli, "_execute", execute)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", "chart", "--chart", "alpha", "--all", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    request, options = calls[0]
+    assert request.charts == ("alpha",)
+    assert options["charts_dir"] == Path("charts")
+
+
+def test_chart_leaves_an_unresolvable_name_to_the_validation_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unknown bare name must not surface a LocalStack-flavored error.
+
+    `resolve_chart_target` falls through to LocalStack-name resolution for a
+    single-part token it cannot place on disk. The surface swallows that and
+    forwards what the user typed, so the validation service raises the
+    precise "unknown chart" error instead.
+    """
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def execute(request, **options):  # type: ignore[no-untyped-def]
+        calls.append((request, options))
+
+    monkeypatch.setattr(validate_cli, "_execute", execute)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", "chart", "--chart", "ghost", "--all", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    request, options = calls[0]
+    assert request.charts == ("ghost",)
+    assert options["charts_dir"] is None
+
+
 def test_chart_delegates_to_shared_execution_boundary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -495,7 +554,7 @@ def test_chart_delegates_to_shared_execution_boundary(
     request, options = calls[0]
     assert request.charts == ("alpha",)
     assert request.envs == ("dev",)
-    assert request.all_charts is True
+    assert request.skip_change_detection is True
     assert request.phases == frozenset({"render", "schema"})
     assert request.keep is True
     assert request.out == tmp_path / "rendered"
@@ -605,7 +664,7 @@ def test_run_delegates_to_shared_execution_boundary(
     assert request.envs == ("dev",)
     assert request.base == "main"
     assert request.changed_files == changed
-    assert request.all_charts is True
+    assert request.skip_change_detection is True
     assert request.phases == frozenset({"render", "policy"})
     assert request.out == tmp_path / "rendered"
     assert request.keep is True
@@ -655,7 +714,7 @@ def test_run_builds_a_request_from_its_flags(
 
     assert result.exit_code == 0
     request = fake.requests[0]
-    assert request.all_charts is True
+    assert request.skip_change_detection is True
     assert request.charts == ("alpha",)
     assert request.envs == ("dev",)
     assert request.phases == frozenset({"render", "schema"})
@@ -900,7 +959,7 @@ def test_chart_builds_a_spec_driven_all_environments_request(
     request = fake.requests[0]
     assert request.charts == ("alpha",)
     assert request.envs == ()
-    assert request.all_charts is True
+    assert request.skip_change_detection is True
     assert request.phases == frozenset({"render", "schema", "policy"})
     assert fake.cleanups == [fake.outcome]
 
