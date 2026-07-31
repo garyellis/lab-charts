@@ -173,15 +173,26 @@ def make_chart(chart_root: Path) -> MakeChart:
 #: app registers must appear here, so a new group cannot quietly bypass the
 #: seam.
 _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
-    ("charts",): ("charts",),
+    # P1.2 folded `charts`, `validate`, root `publish` and root `upgrade`
+    # into one `chart` group. Every entry below is that rename and nothing
+    # else: not one assertion in the suite moved, which is the property the
+    # table exists to buy.
+    ("charts",): ("chart",),
+    ("charts", "lifecycle"): ("chart", "show"),
     ("ci",): ("ci",),
     ("events",): ("events",),
     ("grafana",): ("grafana",),
     ("helmrelease",): ("helmrelease",),
     ("local",): ("local",),
-    ("publish",): ("publish",),
-    ("upgrade",): ("upgrade",),
+    ("publish",): ("chart", "publish"),
+    ("upgrade",): ("chart", "upgrade"),
+    # `validate chart` and `validate run` merged into one command; which one
+    # you got is now argv shape (a CHART argument) rather than a name, so
+    # both old spellings resolve to the same place.
     ("validate",): ("validate",),
+    ("validate", "chart"): ("chart", "validate"),
+    ("validate", "run"): ("chart", "validate"),
+    ("validate", "clean"): ("chart", "cache", "clean"),
     ("version",): ("version",),
     # FROZEN. `renovate-global.json` pins the literal string
     # `chart-manager upgrade-finalize --path <dir>` in a security allowlist

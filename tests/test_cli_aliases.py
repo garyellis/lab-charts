@@ -68,8 +68,40 @@ from chart_manager.cli.main import app as real_app
 #: duration, a timestamp or an unordered set rendered into stdout will
 #: flake. A command with no such argv needs its own test, not an entry here.
 #:
-#: EMPTY BY DESIGN -- P1 has not landed a rename yet. One line per alias.
-_CASES: dict[tuple[str, ...], tuple[str, ...]] = {}
+#: Note what the argv below has in common: every one of these commands
+#: either produces its whole answer from an empty directory (`chart list`,
+#: `chart validate`, `chart cache clean`) or refuses a chart that cannot
+#: exist there (`ghost`). That is not laziness about coverage -- it is the
+#: only way to satisfy (d). A command that reaches a kind cluster, a git
+#: remote or an OCI registry has no byte-stable stdout to compare, and one
+#: that reached them *twice per case* would make this file the slowest and
+#: least trustworthy module in the suite. What the gate is asserting is that
+#: the alias and its replacement are the same code; the depth of the run
+#: behind them is the replacement's own tests' job.
+#:
+#: The narration is on stderr, so an empty stdout still discriminates: a
+#: notice that leaked onto the data channel fails (d) loudly.
+_CASES: dict[tuple[str, ...], tuple[str, ...]] = {
+    # P1.2 -- the `chart` group.
+    ("charts", "list"): ("--root", "{root}"),
+    ("charts", "lifecycle"): ("ghost", "--root", "{root}"),
+    ("charts", "test"): ("--chart", "ghost", "--root", "{root}"),
+    # `--chart` rather than a positional: this is how a `validate chart`
+    # caller spells it, and the point is that their command line still works.
+    ("validate", "chart"): (
+        "--chart", "ghost", "--all", "--progress", "none", "--root", "{root}",
+    ),
+    # No chart named -- the other half of the merge, which is `validate run`.
+    # This one runs the real validation service over an empty repository, so
+    # it is the case that exercises a full successful projection.
+    ("validate", "run"): ("--all", "--progress", "none", "--root", "{root}"),
+    ("validate", "clean"): ("--root", "{root}"),
+    ("publish",): ("ghost", "--repository", "oci://registry.invalid/x", "--root", "{root}"),
+    # `upgrade` takes no `--root`; it resolves against the process cwd. The
+    # path below fails the service's repository-containment check before any
+    # git or network work, so this stays hermetic wherever pytest runs it.
+    ("upgrade",): ("--path", "charts/does-not-exist"),
+}
 
 
 # --------------------------------------------------------------------------

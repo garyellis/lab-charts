@@ -1,4 +1,4 @@
-"""`chart-manager validate` sub-app.
+"""`chart-manager chart validate` and `chart cache clean`.
 
 Thin CLI shell over `services/manifest_validation/app.ManifestValidationService`: flag shape and
 help text, progress-display choice, output-format dispatch, and the
@@ -7,8 +7,26 @@ changes the *answer* — worklist construction, row assembly, helm binding,
 workers, run identity, artifact retention — lives in the service.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
-This `register(app)` pattern keeps cli/main.py free of validate-specific
-imports and lets the sub-app grow without touching main.py.
+The `register_*(app)` pattern keeps cli/main.py free of validate-specific
+imports and lets these commands grow without touching main.py.
+
+**`validate` is one command where there used to be two.** `validate chart
+--chart X --env E` and `validate run` were separate Typer commands that
+already shared `_execute`; they differed only in how they selected work.
+The merged form expresses that difference as *argv shape* rather than as
+two command names:
+
+    chart validate X --env dev     # name the chart -> validate exactly it
+    chart validate                 # name nothing   -> git-derived worklist
+
+`--chart` survives as a second spelling of that argument, because
+`validate run --chart X` already meant the same thing — the service says so
+itself (`ManifestValidationService._resolve_changed_files`: "A plain
+``--chart`` is an intentional request to validate that chart, not a filter
+over an unrelated Git diff"). So the merge costs no behaviour: for every
+argv either old command accepted, this one builds a request the service
+resolves to the same worklist. Both old spellings are hidden aliases of
+this one function, so neither can drift from it.
 """
 
 from __future__ import annotations
@@ -35,7 +53,7 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.local_resources import resolve_chart_target
+from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
@@ -70,13 +88,6 @@ def _validate_format(value: str) -> str:
 # --- Shared option declarations -------------------------------------------
 #
 # Shared options for the spec-driven chart and repository commands.
-ChartOption = Annotated[
-    str,
-    typer.Option(
-        "--chart",
-        help="Chart name or chart directory.",
-    ),
-]
 OutOption = Annotated[
     Path | None,
     typer.Option(
@@ -123,10 +134,13 @@ console = data_console()
 narration = narration_console()
 
 
-def register(app: typer.Typer) -> None:
-    """Attach the validate subcommands to the given Typer app."""
-    app.command("chart")(chart)
-    app.command("run")(run)
+def register_validate(app: typer.Typer) -> None:
+    """Attach the merged `validate` command to the given Typer app."""
+    app.command("validate")(validate)
+
+
+def register_cache(app: typer.Typer) -> None:
+    """Attach the render-cache commands to the given `chart cache` Typer app."""
     app.command("clean")(clean)
 
 
@@ -153,109 +167,18 @@ def _warn(message: str) -> None:
     narration.print(f"[yellow]{message}[/yellow]")
 
 
-def chart(
-    chart: ChartOption,
-    env: Annotated[
-        list[str],
-        typer.Option(
-            "--env",
-            help="Environment declared in chart-lifecycle.yaml (repeatable).",
+def validate(
+    charts: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[CHART]...",
+            help=(
+                "Charts to validate, by name or chart directory. Naming a chart "
+                "validates it unconditionally; naming none derives the worklist "
+                "from changed files."
+            ),
         ),
-    ] = [],
-    all_envs: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Validate every environment declared for this chart.",
-        ),
-    ] = False,
-    kubeconform: Annotated[
-        bool,
-        typer.Option(
-            "--kubeconform/--no-kubeconform",
-            help="Enable or disable kubeconform schema validation for this invocation.",
-        ),
-    ] = True,
-    policy: Annotated[
-        bool,
-        typer.Option(
-            "--policy/--no-policy",
-            help="Enable or disable policy validation for this invocation.",
-        ),
-    ] = True,
-    out: OutOption = None,
-    keep: KeepOption = False,
-    progress: Annotated[
-        str,
-        typer.Option(
-            "--progress",
-            help="Progress UI: auto (default), live, plain, or none.",
-        ),
-    ] = "auto",
-    timings: Annotated[
-        bool,
-        typer.Option("--timings/--no-timings", help="Include per-phase elapsed times."),
-    ] = False,
-    fmt: FormatOption = "text",
-    github_step_summary: GithubStepSummaryOption = False,
-    root: RootOption = Path("."),
-) -> None:
-    """Validate one chart using its authored lifecycle environments and inputs."""
-    if all_envs and env:
-        raise typer.BadParameter(
-            "--all and --env are mutually exclusive",
-            param_hint="--all / --env",
-        )
-    if not all_envs and not env:
-        raise typer.BadParameter(
-            "select at least one --env or use --all",
-            param_hint="--env / --all",
-        )
-    phases = {"render"}
-    if kubeconform:
-        phases.add("schema")
-    if policy:
-        phases.add("policy")
-    root = root.resolve()
-    settings = Settings()
-    charts_dir: Path | None = None
-    try:
-        target = resolve_chart_target(
-            root,
-            chart,
-            charts_dir=settings.charts_dir,
-            local_config=settings.local_config,
-        )
-    except SpecError:
-        # The resolver owns name/path resolution; the surface must not
-        # second-guess it with a path heuristic. When it cannot place the
-        # token on disk we pass what the user typed straight through, so the
-        # validation service — which owns the chart namespace — raises the
-        # precise "unknown chart" error listing the available names.
-        pass
-    else:
-        chart = target.name
-        charts_dir = target.path.parent.relative_to(root)
-    request = RunRequest(
-        root=root,
-        charts=(chart,),
-        envs=() if all_envs else tuple(env),
-        skip_change_detection=True,
-        phases=frozenset(phases),
-        out=out,
-        keep=keep,
-    )
-    _execute(
-        request,
-        progress=progress,
-        timings=timings,
-        fmt=fmt,
-        github_step_summary=github_step_summary,
-        charts_dir=charts_dir,
-    )
-
-
-def run(
+    ] = None,
     chart: Annotated[
         list[str],
         typer.Option("--chart", help="Restrict worklist to this chart (repeatable)."),
@@ -289,6 +212,20 @@ def run(
             help="Comma-separated subset of render,schema,policy. Default: all three.",
         ),
     ] = "render,schema,policy",
+    kubeconform: Annotated[
+        bool,
+        typer.Option(
+            "--kubeconform/--no-kubeconform",
+            help="Enable or disable kubeconform schema validation for this invocation.",
+        ),
+    ] = True,
+    policy: Annotated[
+        bool,
+        typer.Option(
+            "--policy/--no-policy",
+            help="Enable or disable policy validation for this invocation.",
+        ),
+    ] = True,
     out: OutOption = None,
     keep: KeepOption = False,
     workers: Annotated[
@@ -374,19 +311,44 @@ def run(
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build a lifecycle worklist, then render and run selected validators.
+    """Render each selected chart/environment and run the selected validators.
 
-    Worklist selection precedence:
-      --all > --changed-files > explicit --chart > git diff against --base.
+    Worklist selection, first that applies:
+      --all              every chart x env in every spec
+      --changed-files F  the environments the paths in F touch
+      a named chart      every environment that chart declares
+      otherwise          git diff against --base
+
+    A named chart (positional or `--chart`) narrows all four.
     """
+    selected = tuple(charts or ()) + tuple(chart)
     enabled_phases = _parse_phases(phases)
+    # `--no-kubeconform` / `--no-policy` subtract from the phase set rather
+    # than replacing it, so at the `--phases` default they reproduce the old
+    # `validate chart` semantics exactly ({render} + schema? + policy?) while
+    # still composing with an explicit `--phases`.
+    if not kubeconform:
+        enabled_phases -= {"schema"}
+    if not policy:
+        enabled_phases -= {"policy"}
+    root = root.resolve()
+    target = _chart_target(selected, root=root)
     request = RunRequest(
         root=root,
-        charts=tuple(chart),
+        charts=selected if target is None else (target.name,),
         envs=tuple(env),
         base=base,
         changed_files=changed_files,
-        skip_change_detection=all_charts,
+        # Naming a chart is an unconditional request to validate it -- what
+        # `validate chart` meant, and what the service already says about a
+        # bare `--chart`. An explicit `--changed-files` still outranks it,
+        # because there the caller asked for a *narrowed* run and
+        # `validate run --chart X --changed-files F` meant exactly that.
+        # Those two clauses are what make the merge behaviour-free: on every
+        # argv either old command accepted, the request built here resolves
+        # to the worklist that command produced -- not only on the argv the
+        # alias gate happens to exercise.
+        skip_change_detection=all_charts or (bool(selected) and changed_files is None),
         phases=enabled_phases,
         out=out,
         keep=keep,
@@ -402,7 +364,37 @@ def run(
         timings=timings,
         fmt=fmt,
         github_step_summary=github_step_summary,
+        charts_dir=None if target is None else target.path.parent.relative_to(root),
     )
+
+
+def _chart_target(selected: tuple[str, ...], *, root: Path) -> ResolvedChartTarget | None:
+    """Place a single selected chart on disk, or return None.
+
+    Only a *single* selection is resolved, because `charts_dir` is one
+    directory: two charts under two different parents have no single answer,
+    and inventing one here would be exactly the surface-side heuristic design
+    commitment 6 forbids. Multi-chart selections therefore keep the
+    repository-wide `charts_dir`, which is what every such caller had before.
+
+    `SpecError` is swallowed on purpose. The resolver owns name/path
+    resolution and the surface must not second-guess it with a path
+    heuristic; when it cannot place the token we forward what the user typed
+    so the validation service — which owns the chart namespace — raises the
+    precise "unknown chart" error listing the available names.
+    """
+    if len(selected) != 1:
+        return None
+    settings = Settings()
+    try:
+        return resolve_chart_target(
+            root,
+            selected[0],
+            charts_dir=settings.charts_dir,
+            local_config=settings.local_config,
+        )
+    except SpecError:
+        return None
 
 
 def _execute(

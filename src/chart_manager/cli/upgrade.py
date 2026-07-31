@@ -15,8 +15,9 @@ from typing import Annotated, Any, Protocol
 
 import typer
 
-from chart_manager.composition import Container
+from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.upgrader import (
     FinalizeRequest,
     FinalizeResult,
@@ -77,7 +78,17 @@ FormatOption = Annotated[
 
 
 def upgrade(
-    path: Annotated[Path, typer.Option("--path", help="Repository-relative wrapper chart path.")],
+    chart: Annotated[
+        str | None,
+        typer.Argument(metavar="[CHART]", help="Chart name or repository-relative chart path."),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Repository-relative wrapper chart path. Retained alias for the CHART argument.",
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Discover and plan without pushing or opening a PR."),
@@ -87,9 +98,34 @@ def upgrade(
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
     root = Path(".").resolve()
     result = _make_upgrade_service(root).upgrade(
-        UpgradeRequest(root=root, chart_path=path, dry_run=dry_run)
+        UpgradeRequest(root=root, chart_path=_chart_path(chart, path, root=root), dry_run=dry_run)
     )
     _emit(upgrade_to_dict(result), format=format)
+
+
+def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
+    """Resolve the one chart this invocation names, however it was spelled.
+
+    `--path` is the frozen-in-muscle-memory spelling and stays verbatim: it
+    is a repository-relative path and the service has always taken it as
+    one. The CHART argument goes through `resolve_chart_target`, the same
+    resolver `chart test` and `chart validate` use, so a bare chart name
+    means the same thing in all three — and so this module contains no path
+    heuristic of its own (design commitment 6).
+    """
+    if (chart is None) == (path is None):
+        raise ChartManagerError("name exactly one chart, as the CHART argument or --path")
+    if path is not None:
+        return path
+    assert chart is not None
+    settings = Settings()
+    target = resolve_chart_target(
+        root,
+        chart,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
+    return target.path.relative_to(root)
 
 
 def upgrade_finalize(
@@ -160,16 +196,29 @@ def _shown(value: Any) -> str:
     return "-" if value is None or value == "" else str(value)
 
 
-def register(app: typer.Typer) -> None:
-    """Attach the public command and Renovate-only hidden callback."""
+def register_upgrade(app: typer.Typer) -> None:
+    """Attach the public upgrade command to the given Typer app (`chart`)."""
     app.command("upgrade")(upgrade)
+
+
+def register_finalize(app: typer.Typer) -> None:
+    """Attach the Renovate-only hidden callback to the *root* Typer app.
+
+    Separate from `register_upgrade` because these two go to different
+    places and one of them may never move: `renovate-global.json` pins the
+    literal string `chart-manager upgrade-finalize --path <dir>` in an
+    allowlist regex, so this command is root-level and frozen. Registering
+    both from one function is what would make relocating `upgrade` quietly
+    relocate `upgrade-finalize` with it.
+    """
     app.command("upgrade-finalize", hidden=True)(upgrade_finalize)
 
 
 __all__ = [
     "_make_finalize_service",
     "_make_upgrade_service",
-    "register",
+    "register_finalize",
+    "register_upgrade",
     "upgrade",
     "upgrade_finalize",
 ]
