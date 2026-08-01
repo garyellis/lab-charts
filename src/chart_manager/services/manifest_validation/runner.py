@@ -588,7 +588,7 @@ class ManifestValidationRunner:
     ) -> RowResult:
         """Convert a worker-level crash into a visible row failure.
 
-        error_type="tool" routes to exit code 2 (a tool/runtime fault, not
+        error_type="tool" routes to `Outcome.TOOL` (a tool/runtime fault, not
         a chart-author validation issue). Schema/policy SKIP downstream so
         the row reads consistently with an in-phase render FAIL.
         """

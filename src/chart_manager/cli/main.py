@@ -30,7 +30,13 @@ from chart_manager.cli.streams import (
     set_narration_quiet,
 )
 from chart_manager.composition import Container, Settings
-from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ExternalCommandError,
+    MissingToolError,
+    SpecError,
+)
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.chart_catalog import ChartCatalogEntry, ChartCatalogService
 from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
@@ -132,14 +138,20 @@ def _print_progress(event: ProgressEvent) -> None:
 
 
 def _exit_if_failed(ok: bool) -> None:
-    """The surface's single exit-code rule: a not-ok result is exit 1.
+    """The surface's single rule for a result that reports its own failure.
 
     Services report partial failure on the result object rather than by
     raising, so a surface that only renders it reports success for a run in
     which charts failed.
+
+    A boolean `ok` is all these results carry, so `Outcome.FAILED` is the
+    only outcome derivable from it -- "the thing you asked about failed",
+    design §6.1's row 1. A command whose result can distinguish *why* it
+    failed should map its own outcome instead of funnelling through here,
+    the way `cli/helmrelease.py::promote` maps `PROMOTE_OUTCOME`.
     """
     if not ok:
-        raise typer.Exit(1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
@@ -447,9 +459,12 @@ def list_charts(
     _emit_document(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
     # A chart whose lifecycle document does not load is reported *in* the
     # projection (as `error`, in every format) and again as the exit code, so
-    # neither a reader nor a pipeline has to learn the other's channel.
+    # neither a reader nor a pipeline has to learn the other's channel. What
+    # failed is the *authoring* of a `Chart.yaml` or `chart-lifecycle.yaml`,
+    # which is 6.1's spec error -- exit 3, not the generic 1 this used to
+    # return.
     if any(entry.error is not None for entry in entries):
-        raise typer.Exit(1)
+        raise typer.Exit(code=exit_code_for(Outcome.SPEC))
 
 
 def _catalog_table(entries: Sequence[ChartCatalogEntry]) -> Table:
@@ -771,8 +786,18 @@ def grafana_dashboard_export(
         )
     )
     if to is not None:
-        to.parent.mkdir(parents=True, exist_ok=True)
-        to.write_text(canonical_json(dashboard))
+        try:
+            to.parent.mkdir(parents=True, exist_ok=True)
+            to.write_text(canonical_json(dashboard))
+        except OSError as exc:
+            # Same shape as `_changed_paths`: an OSError from a path the
+            # caller typed into a flag is a usage error naming that flag, not
+            # a traceback. A directory handed to `--to` was the traceback
+            # case -- the write-side twin of the `--path DIR` lint defect.
+            raise typer.BadParameter(
+                f"cannot write dashboard to {to}: {exc}",
+                param_hint="--to",
+            ) from exc
         narration.print(f"[green]wrote[/green] {to}")
 
     if mode == output_mod.TABLE:
@@ -818,30 +843,36 @@ def grafana_dashboard_lint(
 ) -> None:
     """Lint Grafana dashboards for repo-wide quality rules.
 
+    `--path` accepts a file or a directory; a directory is linted
+    recursively, which is what the default discovery already does.
+
     `-o table` is one greppable `path: [rule] message` line per finding --
     the shape a human scans and a CI log grep matches. `-o json`/`-o yaml`
     are the same report as the wire document owned by
     `services/grafana/wire.py`, which carries the tally as well as the
     findings so a consumer does not have to count lines.
     """
-    from chart_manager.services.grafana.dashboard_lint import discover_dashboards, lint_paths
+    from chart_manager.services.grafana.dashboard_lint import (
+        discover_dashboards,
+        expand_targets,
+        lint_paths,
+    )
     from chart_manager.services.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
     targets = (
-        list(path)
+        expand_targets(path)
         if path
         else discover_dashboards(root, charts_dir=Settings().charts_dir)
     )
     if not targets:
         # Linting nothing is not the same as linting clean. A wrong --root, a
-        # renamed charts directory, or a --path that matches no file all land
-        # here, and exiting 0 made every one of them a silent CI pass. Exit 1
-        # per the exit-code table: the thing you asked about did not succeed.
+        # renamed charts directory, and a --path directory holding no JSON all
+        # land here, and exiting 0 made every one of them a silent CI pass.
         # `--allow-empty` is the explicit opt-out for a repo that genuinely
         # has no dashboards yet.
         narration.print("[yellow]no dashboards found[/yellow]")
-        raise typer.Exit(0 if allow_empty else 1)
+        raise typer.Exit(code=exit_code_for(Outcome.SUCCESS if allow_empty else Outcome.FAILED))
 
     result = lint_paths(targets)
     # The findings are this command's report -- its data projection.
@@ -863,7 +894,7 @@ def grafana_dashboard_lint(
             f"\n[red]{len(result.findings)} findings across "
             f"{result.files_with_findings}/{result.files_scanned} dashboards[/red]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
     narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
 
 
@@ -1585,28 +1616,79 @@ def plan(
             cluster_tests=for_ in {"test", "all"},
         )
     if result.spec_errors:
-        raise typer.Exit(1)
+        # `spec_errors` is by construction a list of unparseable authored
+        # lifecycle files, so this is design §6.1's spec error -- exit 3, not
+        # the generic 1 it used to be. The impact document is still printed;
+        # what failed is the input to it.
+        raise typer.Exit(code=exit_code_for(Outcome.SPEC))
+
+
+#: Which raised error means which outcome. Ordered most specific first --
+#: `_outcome_for` returns on the first `isinstance` match -- so
+#: `MissingToolError` has to precede the `ExternalCommandError` it subclasses,
+#: and both have to precede the `ChartManagerError` catch-all that closes the
+#: table and makes the lookup total.
+#:
+#: This is where design §6.1's rows 3, 4 and 127 come from: an unparseable
+#: `chart-lifecycle.yaml` is not the same event as a helm that ran and
+#: failed, which is not the same event as a helm that is not installed, and
+#: before this every one of them exited 1 (except the absent binary, which
+#: already had its own clause). A `CapabilityUnavailableError` deliberately
+#: falls through to `FAILED`: asking a chart for a capability it has switched
+#: off is not invalid configuration, so it is not a spec error.
+_ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
+    (MissingToolError, Outcome.MISSING_BINARY),
+    (ExternalCommandError, Outcome.TOOL),
+    (SpecError, Outcome.SPEC),
+    (ChartManagerError, Outcome.FAILED),
+)
+
+
+def _outcome_for(exc: ChartManagerError) -> Outcome:
+    """Classify a domain error against `_ERROR_OUTCOMES`."""
+    for error_type, outcome in _ERROR_OUTCOMES:
+        if isinstance(exc, error_type):
+            return outcome
+    return Outcome.FAILED  # unreachable: the last row matches every subclass
+
+
+def _os_error_text(exc: OSError) -> str:
+    """A one-line reason for an OSError, naming the file when there is one.
+
+    `str(OSError)` reads "[Errno 21] Is a directory: 'charts/'", which is a
+    Python artifact; the operator wants the sentence without the errno.
+    """
+    if exc.strerror is None:
+        return str(exc)
+    return f"{exc.strerror.lower()}: {exc.filename}" if exc.filename else exc.strerror.lower()
 
 
 def main() -> None:
-    """Entry point: map domain errors to exit 1 and an absent tool to 127.
+    """Entry point: turn an escaped exception into a mapped exit code.
 
-    MissingToolError is caught first because it subclasses ChartManagerError.
-    127 is the shell's "command not found", so it is reserved for a genuinely
-    absent binary -- a wrapper keying on it to say "install helm" must not
-    fire because a *data* file was missing, which is what catching bare
-    FileNotFoundError here used to do.
+    Everything below writes one `error:` line and exits with a number from
+    `plumbing/exit_codes.py`. Nothing may reach the operator as a traceback:
+    a traceback is not a diagnostic to anyone who did not write this code,
+    and it carries no exit code a pipeline can branch on.
+
+    The two non-domain arms are ordered, and the order is the point.
+    `FileNotFoundError` -- a data file the caller named is not there -- stays
+    a plain failure (1), so a wrapper keying on 127 to say "install helm"
+    does not fire for a missing values file. Every *other* `OSError` is the
+    machine refusing rather than the run failing (a directory where a file
+    was expected, a permission denial, a refused connection -- `socket`
+    errors are `OSError` too), which is design §6.1's environment error, 5.
     """
     try:
         settings = Settings()
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
-    except MissingToolError as exc:
-        errors.print(f"[red]error:[/red] {escape(str(exc))}")
-        sys.exit(127)
     except ChartManagerError as exc:
         errors.print(f"[red]error:[/red] {escape(str(exc))}")
-        sys.exit(1)
+        sys.exit(exit_code_for(_outcome_for(exc)))
     except FileNotFoundError as exc:
         errors.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
-        sys.exit(1)
+        sys.exit(exit_code_for(Outcome.FAILED))
+    except OSError as exc:
+        errors.print(f"[red]error:[/red] {escape(_os_error_text(exc))}")
+        sys.exit(exit_code_for(Outcome.ENVIRONMENT))

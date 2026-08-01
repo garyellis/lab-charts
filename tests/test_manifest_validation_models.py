@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
@@ -23,7 +24,7 @@ def _run(*rows: RowResult, spec_errors: tuple[str, ...] = ()) -> RunResult:
     return RunResult(rows=tuple(rows), rendered_root=Path("/tmp/x"), spec_errors=spec_errors)
 
 
-def test_exit_code_zero_when_all_pass_or_skip() -> None:
+def test_outcome_is_success_when_all_pass_or_skip() -> None:
     result = _run(
         _row(
             render=PhaseResult(phase="render", status="PASS"),
@@ -31,20 +32,20 @@ def test_exit_code_zero_when_all_pass_or_skip() -> None:
             policy=PhaseResult(phase="policy", status="NOT_RUN"),
         )
     )
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
-def test_exit_code_one_on_validation_failure() -> None:
+def test_outcome_is_failed_on_validation_failure() -> None:
     result = _run(
         _row(
             render=PhaseResult(phase="render", status="PASS"),
             schema=PhaseResult(phase="schema", status="FAIL", detail="bad replicas"),
         )
     )
-    assert result.exit_code() == 1
+    assert result.outcome() is Outcome.FAILED
 
 
-def test_exit_code_two_on_tool_error() -> None:
+def test_outcome_is_tool_on_tool_error() -> None:
     result = _run(
         _row(
             render=PhaseResult(
@@ -55,15 +56,15 @@ def test_exit_code_two_on_tool_error() -> None:
             ),
         )
     )
-    assert result.exit_code() == 2
+    assert result.outcome() is Outcome.TOOL
 
 
-def test_exit_code_three_on_spec_errors_list() -> None:
+def test_outcome_is_spec_on_spec_errors_list() -> None:
     result = _run(spec_errors=("corrupt chart-lifecycle.yaml",))
-    assert result.exit_code() == 3
+    assert result.outcome() is Outcome.SPEC
 
 
-def test_exit_code_three_on_spec_error_in_phase() -> None:
+def test_outcome_is_spec_on_spec_error_in_phase() -> None:
     result = _run(
         _row(
             render=PhaseResult(
@@ -74,7 +75,7 @@ def test_exit_code_three_on_spec_error_in_phase() -> None:
             ),
         )
     )
-    assert result.exit_code() == 3
+    assert result.outcome() is Outcome.SPEC
 
 
 def test_tool_error_takes_precedence_over_plain_fail() -> None:
@@ -91,9 +92,9 @@ def test_tool_error_takes_precedence_over_plain_fail() -> None:
             schema=PhaseResult(phase="schema", status="FAIL", detail="bad replicas"),
         ),
     )
-    assert result.exit_code() == 2
+    assert result.outcome() is Outcome.TOOL
 
 
-def test_empty_run_exits_zero() -> None:
+def test_empty_run_is_success() -> None:
     result = _run()
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS

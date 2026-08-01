@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from chart_manager.cli import validate as validate_cli
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
@@ -440,13 +441,24 @@ class _FakeApp:
         self.cleanup_saw_summary = (outcome.out_dir / "summary.md").is_file()
 
 
-def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
+def _outcome(out_dir: Path, *, outcome: Outcome = Outcome.SUCCESS, **kwargs) -> RunOutcome:
+    """A RunOutcome whose fold produces `outcome`.
+
+    Built from real rows rather than a stubbed property, so the exit code
+    these tests observe is the one the production fold produces.
+    """
     rows = ()
-    if exit_code:
+    if outcome is not Outcome.SUCCESS:
         rows = (
             RowResult(
                 row=WorklistRow(chart="c", env="dev", release="c", namespace="lab-dev"),
-                phases={"render": PhaseResult(phase="render", status="FAIL")},
+                phases={
+                    "render": PhaseResult(
+                        phase="render",
+                        status="FAIL",
+                        error_type="tool" if outcome is Outcome.TOOL else None,
+                    )
+                },
             ),
         )
     return RunOutcome(result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs)
@@ -813,14 +825,25 @@ def test_run_defaults_to_continuing_after_failures(
     assert fake.requests[0].fail_fast is False
 
 
-def test_run_exits_with_the_outcome_exit_code(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [(Outcome.FAILED, 1), (Outcome.TOOL, 4)],
+)
+def test_run_exits_with_the_code_the_outcome_maps_to(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: Outcome, expected: int
 ) -> None:
-    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
+    """A validation failure is 1; a crashed validator is 4, no longer 2.
+
+    The literals are deliberate. Deriving them from `exit_code_for` would
+    pass whatever the table said, and 2 -> 4 is precisely the renumbering
+    this asserts happened -- 2 belongs to Click's usage errors, so a CI
+    wrapper can now tell a bad flag from a kubeconform that would not run.
+    """
+    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", outcome=outcome)))
 
     result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
-    assert result.exit_code == 1
+    assert result.exit_code == expected
 
 
 def test_run_applies_retention_only_after_the_summary_is_written(

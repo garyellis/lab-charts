@@ -10,6 +10,7 @@ from rich.markup import escape
 
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.publish import PublishKind, PublishResult
 
 #: Every line a real publish prints is a per-chart mutation status -- a report
@@ -122,7 +123,7 @@ def publish(
             f"{escape(failure.version)}: {escape(failure.error)}"
         )
     if not result.ok or (strict_events and not result.telemetry_ok):
-        raise typer.Exit(1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 def _render_plan(result: PublishResult) -> None:

@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
+from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.domain.charts import ChartRepository
@@ -177,7 +178,10 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
 
     result = cli("chart", "list", "--root", str(chart_root))
 
-    assert result.exit_code == 1
+    # 3, not 1: an unparseable `chart-lifecycle.yaml` is a spec error in the
+    # exit-code table, and `chart list` is the command most likely to be the
+    # first to notice one.
+    assert result.exit_code == EXIT_SPEC
     assert "broken" in result.stdout
     assert "invalid" in result.stdout
 
@@ -296,13 +300,18 @@ def test_chart_list_off_a_terminal_resolves_auto_to_json(
 def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    """A pipeline reads the exit code; a jq filter reads `error`. Both work."""
+    """A pipeline reads the exit code; a jq filter reads `error`. Both work.
+
+    The code is 3, not 1: what failed is the *authoring* of a
+    `chart-lifecycle.yaml`, which is design 6.1's spec error. `chart list`
+    itself did its job and printed every row that parsed.
+    """
     chart = make_chart("broken")
     (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
     result = cli("chart", "list", "-o", "json", "--root", str(chart_root))
 
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_SPEC
     entry = json.loads(result.stdout)["charts"][0]
     assert entry["lifecycle"] == "invalid"
     assert entry["error"] is not None

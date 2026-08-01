@@ -384,12 +384,12 @@ class ManifestValidationService:
     def cleanup(self, outcome: RunOutcome) -> None:
         """Delete the render dir unless it is being kept; never raises.
 
-        Retained on an explicit keep, on any non-zero exit code (the
+        Retained on an explicit keep, on anything but a clean run (the
         artifacts are the evidence), or when DEBUG=true. Callers invoke
         this once they are done reading the artifacts — emitting a summary
         into the render dir has to happen first.
         """
-        if outcome.keep or outcome.exit_code != 0:
+        if outcome.keep or not outcome.ok:
             return
         if os.environ.get("DEBUG", "").lower() == "true":
             return

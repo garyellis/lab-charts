@@ -4,7 +4,11 @@ from pathlib import Path
 import yaml
 from typer.testing import Result
 
-from chart_manager.services.grafana.dashboard_lint import lint_dashboard, lint_paths
+from chart_manager.services.grafana.dashboard_lint import (
+    expand_targets,
+    lint_dashboard,
+    lint_paths,
+)
 from chart_manager.services.grafana.wire import SCHEMA_VERSION, lint_result_to_dict
 
 from .conftest import cli
@@ -118,6 +122,17 @@ def test_lint_result_on_empty_target_list_is_ok(tmp_path: Path) -> None:
     assert result.files_scanned == 0
     assert result.files_with_findings == 0
 
+
+def test_expand_targets_passes_a_missing_file_through_untouched(tmp_path: Path) -> None:
+    """"You named a file that is not there" must stay its own diagnostic.
+
+    Swallowing it here would turn `--path typo.json` into "no dashboards
+    found", which names neither the typo nor the file.
+    """
+    missing = tmp_path / "gone.json"
+
+    assert expand_targets([missing]) == [missing]
+
 # --- surface: what an empty target set means to a caller ------------------
 #
 # `lint_paths([])` is `ok` above -- that is the service reporting "zero
@@ -226,3 +241,60 @@ def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:
     result = _lint("--path", str(good), "-o", "md")
 
     assert result.exit_code == 2
+
+# --- surface: --path DIR is a linted tree, not a traceback -----------------
+#
+# Design doc 8.9. `--path some/dir/` reached `Path.read_text` and killed the
+# process with a raw `IsADirectoryError`. A directory is the natural thing to
+# hand this flag, so it now means what the default discovery means: lint the
+# JSON under it, recursively.
+
+
+def test_lint_dashboards_recurses_into_a_directory_path(tmp_path: Path) -> None:
+    tree = tmp_path / "dashboards"
+    (tree / "nested").mkdir(parents=True)
+    (tree / "a.json").write_text(_PASSING_DASHBOARD)
+    (tree / "nested" / "b.json").write_text(_PASSING_DASHBOARD)
+    (tree / "notes.txt").write_text("not a dashboard")
+
+    result = _lint("--path", str(tree))
+
+    assert result.exit_code == 0, result.output
+    assert "2 dashboards passed" in result.stderr
+
+
+def test_lint_dashboards_reports_findings_from_a_directory_path(tmp_path: Path) -> None:
+    """Guard the guard: the directory really is linted, not merely counted."""
+    tree = tmp_path / "dashboards"
+    tree.mkdir()
+    (tree / "bad.json").write_text('{"panels": [], "templating": {"list": []}}')
+
+    result = _lint("--path", str(tree))
+
+    assert result.exit_code == 1
+    assert "R001-title" in result.stdout
+
+
+def test_lint_dashboards_directory_with_no_json_is_the_empty_case(tmp_path: Path) -> None:
+    """An empty directory folds into "no dashboards found", not a new rule."""
+    tree = tmp_path / "dashboards"
+    tree.mkdir()
+
+    result = _lint("--path", str(tree))
+
+    assert result.exit_code == 1
+    assert "no dashboards found" in result.stderr
+
+    allowed = _lint("--path", str(tree), "--allow-empty")
+
+    assert allowed.exit_code == 0
+
+
+def test_a_binary_file_is_a_finding_and_not_a_decode_traceback(tmp_path: Path) -> None:
+    """`UnicodeDecodeError` is the same event as malformed JSON: R000."""
+    blob = tmp_path / "blob.json"
+    blob.write_bytes(b"\xff\xfe\x00binary")
+
+    findings = lint_dashboard(blob)
+
+    assert [f.rule for f in findings] == ["R000-json"]

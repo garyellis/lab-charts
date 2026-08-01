@@ -55,6 +55,7 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
@@ -481,7 +482,11 @@ def _execute(
             _print_summary(outcome)
     finally:
         app.cleanup(outcome)
-    sys.exit(outcome.exit_code)
+    # The service folded the run into an `Outcome`; this line is the only
+    # place that turns it into a number. A crashed kubeconform now exits 4,
+    # not 2 -- 2 is Click's usage code and is reserved for it, so a CI
+    # wrapper can tell "you typed a bad flag" from "the validator broke".
+    sys.exit(exit_code_for(outcome.outcome))
 
 
 def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:
@@ -724,7 +729,7 @@ def clean(
         state = service.clean()
     except OSError as exc:
         narration.print(f"[red]error:[/red] cleanup failed: {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED)) from exc
     if not state.exists:
         narration.print("nothing to clean")
         return
