@@ -79,7 +79,6 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
     expected = {
         "chart_deps.py",
         "charts.py",
-        "cluster_tests.py",
         "install_plan.py",
     }
     actual = {

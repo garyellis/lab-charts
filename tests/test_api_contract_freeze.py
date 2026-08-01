@@ -37,19 +37,22 @@ import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from chart_manager.services.chart_config import (
+from chart_manager.api.lifecycle.v1alpha1 import (
     LIFECYCLE_API_VERSION,
-    LIFECYCLE_FILENAME,
     LIFECYCLE_KIND,
+    MATCH_BY_BASENAME,
     ChartLifecycle,
     ChartLifecycleMetadata,
     ChartLifecycleSpec,
-)
-from chart_manager.services.domain.cluster_tests import (
     ClusterTestProfile,
     ClusterTestRef,
     ClusterTestSpec,
+    ManifestValidationEnvironmentSpec,
+    ManifestValidationPolicySpec,
+    ManifestValidationSpec,
+    ManifestValidationValidatorsSpec,
 )
+from chart_manager.services.chart_config import LIFECYCLE_FILENAME
 from chart_manager.services.local_resources import (
     DEFAULT_LOCAL_CONFIG,
     DEFAULT_STACKS_DIR,
@@ -66,13 +69,6 @@ from chart_manager.services.local_resources import (
     LocalStack,
     OciChartRelease,
     ResourceMetadata,
-)
-from chart_manager.services.manifest_validation.spec import (
-    MATCH_BY_BASENAME,
-    ManifestValidationEnvironmentSpec,
-    ManifestValidationPolicySpec,
-    ManifestValidationSpec,
-    ManifestValidationValidatorsSpec,
 )
 
 from .conftest import REPO_ROOT

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.domain.install_plan import DependencyResolver
 from chart_manager.services.lifecycle.models import (
     ActionKind,
@@ -164,7 +165,7 @@ class LifecycleCompiler:
 
         for entry in install_plan:
             cluster_chart = self.cluster_tests.get(entry.chart)
-            profile_spec = cluster_chart.spec.profile(entry.profile)
+            profile_spec = require_cluster_test_profile(cluster_chart.spec, entry.profile)
             values = tuple(
                 path.resolve()
                 for path in self.cluster_tests.value_paths(cluster_chart, entry.profile)
@@ -346,6 +347,10 @@ def _validation_execution_inputs(root: Path) -> tuple[Path, ...]:
         root / ".mise.toml",
         root / "pyproject.toml",
         root / "uv.lock",
+        # The authored lifecycle contract moved to `chart_manager/api`; without
+        # this entry an edit to `spec.validation`'s accepted shape would no
+        # longer invalidate cached validation actions.
+        root / "src" / "chart_manager" / "api",
         root / "src" / "chart_manager" / "services" / "chart_config.py",
         root / "src" / "chart_manager" / "services" / "manifest_validation",
         root / "src" / "chart_manager" / "services" / "lifecycle",

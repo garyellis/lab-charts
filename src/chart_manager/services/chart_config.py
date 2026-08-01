@@ -1,27 +1,29 @@
-"""Strict authored ``ChartLifecycle`` intent.
+"""Loading and capability policy for authored ``ChartLifecycle`` intent.
 
-``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
-module owns its schema and loading boundary; catalogs compose the document
-with Helm metadata and enforce identity agreement.
+``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  Its
+accepted shape is owned by ``chart_manager.api.lifecycle.v1alpha1``; this
+module owns the boundary around it -- where the file lives, how a decode
+failure becomes a ``SpecError``, and whether an authored capability is
+usable.  Catalogs compose the document with Helm metadata and enforce
+identity agreement.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from chart_manager.api.lifecycle.v1alpha1 import (
+    ChartLifecycle,
+    ClusterTestSpec,
+    ManifestValidationSpec,
+)
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.domain.cluster_tests import ClusterTestSpec
-from chart_manager.services.manifest_validation.spec import ManifestValidationSpec
 
 LIFECYCLE_FILENAME = "chart-lifecycle.yaml"
-LIFECYCLE_API_VERSION = "lifecycle.cmg.io/v1alpha1"
-LIFECYCLE_KIND = "ChartLifecycle"
 
 
 class CapabilityStatus(StrEnum):
@@ -30,43 +32,6 @@ class CapabilityStatus(StrEnum):
     ABSENT = "absent"
     DISABLED = "disabled"
     ENABLED = "enabled"
-
-
-class ChartLifecycleMetadata(BaseModel):
-    """Identity of the chart governed by a lifecycle document."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    name: str = Field(min_length=1)
-
-    @field_validator("name")
-    @classmethod
-    def name_must_be_exact(cls, name: str) -> str:
-        """Reject whitespace-only and silently normalized chart names."""
-        if name != name.strip():
-            raise ValueError("metadata.name must not have leading or trailing whitespace")
-        return name
-
-
-class ChartLifecycleSpec(BaseModel):
-    """Capabilities authored for one chart."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    enabled: bool = True
-    validation: ManifestValidationSpec | None = None
-    cluster_test: ClusterTestSpec | None = Field(default=None, alias="clusterTest")
-
-
-class ChartLifecycle(BaseModel):
-    """Kubernetes-style lifecycle intent envelope for one Helm chart."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    api_version: Literal["lifecycle.cmg.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["ChartLifecycle"]
-    metadata: ChartLifecycleMetadata
-    spec: ChartLifecycleSpec
 
 
 def load_chart_lifecycle(path: Path) -> ChartLifecycle:

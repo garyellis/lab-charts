@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.chart_config import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    ChartLifecycle,
     cluster_test_status,
     load_optional_chart_lifecycle,
     validate_chart_lifecycle_identity,

@@ -18,6 +18,7 @@ from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.clusters.environment import EnvironmentHandle
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.local_resources import (
@@ -105,7 +106,7 @@ class LocalBootstrapExecutor:
             catalog, plan = self._lifecycle_plan(release)
             for entry in plan:
                 chart = catalog.get(entry.chart)
-                profile = chart.spec.profile(entry.profile)
+                profile = require_cluster_test_profile(chart.spec, entry.profile)
                 values = catalog.value_paths(chart, entry.profile)
                 namespace = profile.namespace or DEFAULT_NAMESPACE
                 identities.add(
@@ -134,7 +135,7 @@ class LocalBootstrapExecutor:
         outcomes: list[BootstrapOutcome] = []
         for entry in plan:
             entry_chart = catalog.get(entry.chart)
-            profile = entry_chart.spec.profile(entry.profile)
+            profile = require_cluster_test_profile(entry_chart.spec, entry.profile)
             namespace = profile.namespace or DEFAULT_NAMESPACE
             is_bootstrap_root = (
                 entry.chart == chart_name and entry.profile == release.profile

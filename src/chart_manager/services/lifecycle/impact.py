@@ -10,6 +10,7 @@ from typing import Any
 
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.lifecycle.models import LIFECYCLE_API_VERSION
 from chart_manager.services.local_resources import (
     LifecycleRelease,
@@ -294,7 +295,7 @@ class LifecycleImpactService:
             for reference in spec.dependent_tests:
                 try:
                     target = self.cluster_catalog.get(reference.chart)
-                    target.spec.profile(reference.profile)
+                    require_cluster_test_profile(target.spec, reference.profile)
                 except ChartManagerError as exc:
                     errors.append(
                         f"{changed_chart} dependentTests "

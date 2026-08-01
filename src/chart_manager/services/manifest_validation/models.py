@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
+from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.domain.charts import HelmChart
-from chart_manager.services.manifest_validation.spec import ManifestValidationSpec
 
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]

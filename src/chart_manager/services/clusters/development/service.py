@@ -45,6 +45,7 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
@@ -327,7 +328,10 @@ class DevelopmentClusterService:
                     DevelopmentClusterPlanEntry(
                         chart=entry.chart,
                         profile=entry.profile,
-                        namespace=chart.spec.profile(entry.profile).namespace or "default",
+                        namespace=require_cluster_test_profile(
+                            chart.spec, entry.profile
+                        ).namespace
+                        or "default",
                         source="target",
                     )
                 )
@@ -502,7 +506,7 @@ class DevelopmentClusterService:
             for entry in plan:
                 chart = catalog.get(entry.chart)
                 chart_path = chart.path.resolve()
-                entry_profile = chart.spec.profile(entry.profile)
+                entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
                 effective_namespace = entry_profile.namespace or "default"
                 external_identity = ExternallySatisfiedLifecycle(
                     chart_path=chart_path,
@@ -582,14 +586,15 @@ class DevelopmentClusterService:
                 )
                 continue
 
-            # Profile lookup is inside the guard too. `spec.profile()` raises
+            # Profile lookup is inside the guard too.
+            # `require_cluster_test_profile()` raises
             # SpecError for an unknown name, and sitting outside every try it
             # aborted the entire plan -- so one chart whose `requires:` named
             # a renamed profile took down an 18-chart converge instead of
             # being recorded as a single failed row, contradicting the
             # continue-on-error contract this method documents.
             try:
-                profile = chart.spec.profile(entry.profile)
+                profile = require_cluster_test_profile(chart.spec, entry.profile)
             except ChartManagerError as exc:
                 self._progress(failure("profile resolution failed:", f"{entry.chart}: {exc}"))
                 summary.failed.append(

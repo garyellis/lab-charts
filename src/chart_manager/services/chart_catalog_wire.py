@@ -28,8 +28,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
 from chart_manager.services.chart_catalog import ChartCatalogEntry
-from chart_manager.services.chart_config import ChartLifecycle
 
 #: Bump only on a breaking change to the `chart list` payload.
 SCHEMA_VERSION = 1

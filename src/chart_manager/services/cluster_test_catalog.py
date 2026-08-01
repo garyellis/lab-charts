@@ -17,6 +17,7 @@ from chart_manager.services.domain.charts import (
     ChartRepository,
     ClusterTestChart,
 )
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
@@ -64,7 +65,7 @@ class ClusterTestCatalog:
 
     def value_paths(self, chart: ClusterTestChart, profile: str) -> list[Path]:
         """Resolve a profile's values files; every path must exist."""
-        profile_spec = chart.spec.profile(profile)
+        profile_spec = require_cluster_test_profile(chart.spec, profile)
         paths = [chart.path / value for value in profile_spec.values]
         missing = [path for path in paths if not path.exists()]
         if missing:

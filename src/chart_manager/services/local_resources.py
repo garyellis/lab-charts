@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.chart_config import load_chart_lifecycle
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 LOCAL_API_VERSION = "local.cmg.io/v1alpha1"
@@ -410,7 +411,7 @@ class LocalResourceLoader:
                     raise SpecError(
                         f"lifecycle release chart {release.chart} has no enabled clusterTest"
                     )
-                cluster_test.profile(release.profile)
+                require_cluster_test_profile(cluster_test, release.profile)
         if isinstance(release, (LocalChartRelease, OciChartRelease)):
             for path in release.values:
                 self._require_file(path, field="release.values[]")

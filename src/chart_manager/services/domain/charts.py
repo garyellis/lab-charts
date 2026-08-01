@@ -7,9 +7,9 @@ from typing import Any
 
 import yaml
 
+from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.domain.cluster_tests import ClusterTestSpec
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 

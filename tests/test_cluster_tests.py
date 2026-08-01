@@ -5,7 +5,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.chart_config import (
     load_chart_lifecycle,
     require_cluster_test,
@@ -15,11 +16,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
 )
-from chart_manager.services.domain.cluster_tests import (
-    ClusterTestProfile,
-    ClusterTestSpec,
-    SpecError,
-)
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
@@ -40,7 +37,7 @@ def _alloy_spec() -> ClusterTestSpec:
 def test_load_test_spec_accepts_chart_refs() -> None:
     spec = _alloy_spec()
 
-    minimal = spec.profile("minimal")
+    minimal = require_cluster_test_profile(spec, "minimal")
 
     assert minimal.requires[0].chart == "prometheus-operator"
     assert minimal.requires[0].profile == "minimal"
@@ -51,7 +48,7 @@ def test_unknown_profile_raises_spec_error() -> None:
     spec = _alloy_spec()
 
     with pytest.raises(SpecError):
-        spec.profile("missing")
+        require_cluster_test_profile(spec, "missing")
 
 
 def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:

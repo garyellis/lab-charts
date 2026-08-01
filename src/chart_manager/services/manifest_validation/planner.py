@@ -6,6 +6,10 @@ import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from chart_manager.api.lifecycle.v1alpha1 import (
+    MATCH_BY_BASENAME,
+    ManifestValidationSpec,
+)
 from chart_manager.services.chart_config import LIFECYCLE_FILENAME
 from chart_manager.services.domain.chart_deps import build_helm_dependency_index
 from chart_manager.services.manifest_validation.catalog import build_catalog
@@ -14,11 +18,7 @@ from chart_manager.services.manifest_validation.models import (
     SelectionResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.spec import (
-    MATCH_BY_BASENAME,
-    ManifestValidationSpec,
-    resolve_namespace,
-)
+from chart_manager.services.manifest_validation.spec import resolve_namespace
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
