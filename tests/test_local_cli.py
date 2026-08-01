@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from chart_manager.cli import main
 from chart_manager.services.clusters.development import (
     DevelopmentClusterActionResult,
     DevelopmentClusterResult,
+)
+from chart_manager.services.lifecycle.models import (
+    ActionKind,
+    ActionTarget,
+    LifecycleAction,
+    LifecyclePlan,
+    Workflow,
 )
 from chart_manager.services.local_resources import ResolvedStackTarget
 
@@ -345,3 +354,146 @@ def test_chart_test_requires_exactly_one_chart(tmp_path: Path, argv: list[str]) 
 
     assert result.exit_code != 0
     assert "exactly one chart" in str(result.exception)
+
+
+# --- `chart test --dry-run` --------------------------------------------------
+
+
+def _dry_run_plan() -> LifecyclePlan:
+    """The plan a stubbed service hands back: two charts, install then test."""
+    return LifecyclePlan(
+        workflow=Workflow.CLUSTER_TEST,
+        chart="alloy",
+        profile="minimal",
+        actions=tuple(
+            LifecycleAction(
+                action_id=f"cluster-test.alloy.minimal.{kind.value}",
+                kind=kind,
+                target=ActionTarget(
+                    workflow=Workflow.CLUSTER_TEST,
+                    chart="alloy",
+                    profile="minimal",
+                    release="alloy",
+                    namespace="observability",
+                ),
+                input_digest=f"sha256:{kind.value}",
+                chart_path=Path("charts/alloy"),
+            )
+            for kind in (ActionKind.HELM_UPGRADE_INSTALL, ActionKind.HELM_TEST)
+        ),
+        warnings=("istio-base is owned by bootstrap",),
+    )
+
+
+class _PlanningService:
+    """An ephemeral-test service that records which entry point was called."""
+
+    def __init__(self, called: list[str]) -> None:
+        self.called = called
+
+    def plan(self, _request: object) -> LifecyclePlan:
+        self.called.append("plan")
+        return _dry_run_plan()
+
+    def run(self, _request: object) -> None:
+        self.called.append("run")
+
+
+@pytest.fixture
+def planning_container(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Replace the container so `chart test` reaches a stubbed service."""
+    called: list[str] = []
+
+    class Container:
+        def ephemeral_test_cluster_service(
+            self, _root: Path, *, progress: object, charts_dir: Path
+        ) -> _PlanningService:
+            return _PlanningService(called)
+
+    monkeypatch.setattr(main, "_container", Container)
+    return called
+
+
+def test_chart_test_dry_run_prints_the_plan_and_runs_nothing(
+    tmp_path: Path, planning_container: list[str]
+) -> None:
+    """6.3: print the plan in `--output` form, exit 0, mutate nothing.
+
+    `run` is never reached, which is the property that matters -- it is the
+    call that creates a kind cluster and helm-installs into it.
+    """
+    _chart(tmp_path)
+
+    result = cli("chart", "test", "alloy", "--dry-run", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert planning_container == ["plan"]
+    payload = json.loads(result.stdout)
+    assert payload["kind"] == "LifecyclePlan"
+    assert [action["kind"] for action in payload["actions"]] == [
+        "helm-upgrade-install",
+        "helm-test",
+    ]
+
+
+def test_chart_test_dry_run_says_on_stderr_that_nothing_happened(
+    tmp_path: Path, planning_container: list[str]
+) -> None:
+    """The plan is the projection; that it was only a plan is narration.
+
+    Asserted on both streams because a `-o json | jq` consumer reads the one
+    and an operator reads the other, and the two must not be the same stream.
+    """
+    _chart(tmp_path)
+
+    result = cli("chart", "test", "alloy", "--dry-run", "--root", str(tmp_path))
+
+    assert "dry run" in result.stderr
+    assert "owned by bootstrap" in result.stderr
+    assert "dry run" not in result.stdout
+
+
+@pytest.mark.parametrize("projection", ["table", "json", "yaml"])
+def test_chart_test_dry_run_honours_every_projection(
+    tmp_path: Path, planning_container: list[str], projection: str
+) -> None:
+    _chart(tmp_path)
+
+    result = cli(
+        "chart", "test", "alloy", "--dry-run", "-o", projection, "--root", str(tmp_path)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "helm-test" in result.stdout
+
+
+def test_chart_test_dry_run_takes_the_invocation_wide_output(
+    tmp_path: Path, planning_container: list[str]
+) -> None:
+    """The global `-o` reaches the plan, so `-o` need not be typed twice."""
+    _chart(tmp_path)
+
+    result = cli(
+        "-o", "yaml", "chart", "test", "alloy", "--dry-run", "--root", str(tmp_path)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(result.stdout)["kind"] == "LifecyclePlan"
+
+
+def test_chart_test_output_without_dry_run_is_a_usage_error(
+    tmp_path: Path, planning_container: list[str]
+) -> None:
+    """A real run emits no document, so `-o` must not be accepted and ignored.
+
+    Design doc 6.3 says a command that cannot honor a flag rejects it as
+    exit 2 rather than running as if it had never been typed -- which here
+    would have installed a chart while the caller waited for JSON.
+    """
+    _chart(tmp_path)
+
+    result = cli("chart", "test", "alloy", "-o", "json", "--root", str(tmp_path))
+
+    assert result.exit_code == 2
+    assert "--dry-run" in result.output
+    assert planning_container == []

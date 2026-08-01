@@ -34,12 +34,12 @@ from __future__ import annotations
 import functools
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli.streams import data_console, narration_console
@@ -50,6 +50,7 @@ from chart_manager.cli.validate_progress import (
 from chart_manager.cli.validate_render import (
     advisory_details,
     failure_details,
+    render_cache_table,
     to_text_table,
 )
 from chart_manager.composition import Container, Settings
@@ -65,6 +66,10 @@ from chart_manager.services.manifest_validation.app import (
 )
 from chart_manager.services.manifest_validation.models import PHASE_ORDER, RunResult
 from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
+from chart_manager.services.manifest_validation.render_cache import (
+    RenderCacheService,
+    RenderCacheState,
+)
 from chart_manager.services.manifest_validation.wire import to_json, to_markdown
 
 #: This command's output vocabulary. `all` is local to `validate` and is not
@@ -75,6 +80,11 @@ from chart_manager.services.manifest_validation.wire import to_json, to_markdown
 #: `yaml` is deliberately absent -- there is no yaml projection to offer, and
 #: advertising one would be a lie the resolver would then have to invent.
 _OUTPUTS = (output_mod.TABLE, output_mod.MD, output_mod.JSON, output_mod.ALL)
+#: `chart cache clean --dry-run`'s vocabulary. It shares nothing with
+#: `_OUTPUTS` above: a cache listing has no markdown form and no sidecars to
+#: write, and `yaml` is offered here because the document is three fields a
+#: human reads as often as a script does.
+_CLEAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
 _PROGRESS_MODES = ("auto", "live", "plain", "none")
 # Maps a domain error's `hint` (an input name) onto the flag that carries it.
 _PARAM_HINTS = {
@@ -107,6 +117,12 @@ OutputOption = Annotated[
         *_OUTPUTS,
         extra_help=" all = table plus summary.md/summary.json sidecars in the render dir.",
     ),
+]
+#: `chart cache clean --dry-run`'s output. Distinct from `OutputOption`
+#: above: the cache listing has no markdown form and no sidecars to write.
+CleanOutputOption = Annotated[
+    str | None,
+    output_mod.output_option(*_CLEAN_OUTPUTS, extra_help=" Requires --dry-run."),
 ]
 GithubStepSummaryOption = Annotated[
     bool,
@@ -676,16 +692,55 @@ def _print_summary(outcome: RunOutcome) -> None:
 
 
 def clean(
+    ctx: typer.Context,
     root: RootOption = Path("."),
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print what would be removed and exit; delete nothing.",
+        ),
+    ] = False,
+    output: CleanOutputOption = None,
 ) -> None:
-    """Remove the entire .chart-manager/rendered/ tree."""
-    target = root.resolve() / ".chart-manager" / "rendered"
-    if not target.exists():
-        narration.print("nothing to clean")
+    """Remove the entire .chart-manager/rendered/ tree.
+
+    `--dry-run` reports the cache -- where it is, whether it exists, how
+    many validate runs it holds -- and removes nothing.
+
+    `-o` selects the form of that report and is only meaningful with
+    `--dry-run`: a real clean emits no document, only the status line
+    below. Naming it without `--dry-run` is therefore a usage error rather
+    than a flag that is quietly ignored. The invocation-wide `-o` still
+    applies, since that one is documented as a default for whichever
+    command runs.
+    """
+    output_mod.require_dry_run(output, dry_run=dry_run)
+    service = RenderCacheService(root)
+    if dry_run:
+        _render_cache_plan(service.state(), ctx=ctx, output=output)
         return
     try:
-        shutil.rmtree(target)
+        state = service.clean()
     except OSError as exc:
         narration.print(f"[red]error:[/red] cleanup failed: {exc}")
         raise typer.Exit(1) from exc
-    narration.print(f"cleaned: {target}")
+    if not state.exists:
+        narration.print("nothing to clean")
+        return
+    narration.print(f"cleaned: {state.path}")
+
+
+def _render_cache_plan(
+    state: RenderCacheState, *, ctx: typer.Context, output: str | None
+) -> None:
+    """Print the cache state as the selected projection; narrate the no-op."""
+    mode = output_mod.resolve(output, ctx, allowed=_CLEAN_OUTPUTS, console=console)
+    document = state.to_dict()
+    if mode == output_mod.JSON:
+        typer.echo(json.dumps(document, indent=2, sort_keys=True))
+    elif mode == output_mod.YAML:
+        typer.echo(yaml.safe_dump(document, sort_keys=False), nl=False)
+    else:
+        console.print(render_cache_table(state))
+    narration.print("[yellow]dry run[/yellow]: nothing was removed")

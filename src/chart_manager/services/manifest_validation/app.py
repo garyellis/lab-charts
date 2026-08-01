@@ -57,6 +57,7 @@ from chart_manager.services.manifest_validation.progress import (
     ProgressDisplay,
     ProgressFinalizer,
 )
+from chart_manager.services.manifest_validation.render_cache import RENDER_CACHE_DIR
 from chart_manager.services.manifest_validation.requests import (
     RunOutcome,
     RunRequest,
@@ -410,7 +411,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / ".chart-manager" / "rendered" / run_id).resolve(), keep
+        return (repo_root / RENDER_CACHE_DIR / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".
