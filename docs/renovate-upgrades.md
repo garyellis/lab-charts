@@ -21,9 +21,16 @@ The GitHub CLI is used only to report whether the stable chart branch already
 has an open pull request. Authenticate both before running:
 
 ```bash
+uv run chart-manager doctor --for 'chart upgrade'
 git ls-remote origin HEAD
 gh auth status
 ```
+
+`doctor --for 'chart upgrade'` checks exactly this command's prerequisites —
+`git`, the repository, `gh` and its authentication, the Renovate runtime and
+its config validator, the Renovate token, and the events backend — and prints
+the fix beside each failure. It exits `127` for a binary that is not on `PATH`
+and `5` for an environment that is unreachable.
 
 Renovate also needs credentials for GitHub and for every private package or
 container registry referenced by the chart. Supply those through Renovate's
@@ -105,7 +112,9 @@ check.
 
 `--output json` keeps stdout stable for automation and includes the chart, path,
 current and proposed wrapper versions, branch, outcome, pull-request data, and
-diagnostics.
+diagnostics. `-o`/`--output` names a format, `table` or `json`, and defaults to
+`auto` — the table at a terminal, `json` in a pipe or a CI log — so an
+automated caller that already redirects stdout does not have to pass it.
 
 ## Renovate callback
 
@@ -126,3 +135,5 @@ Preflight diagnostics are actionable and do not modify the caller's checkout.
 The common failures are unauthenticated Renovate/`gh`, a relevant dirty file,
 an unsafe chart path, an uncovered image convention, and invalid chart-local
 configuration. Correct the named condition and rerun the same command.
+`uv run chart-manager doctor --for 'chart upgrade'` reports the tooling and
+credential half of that list without starting an upgrade at all.

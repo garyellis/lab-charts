@@ -143,7 +143,7 @@ def _narration_case(name: str, root: Path) -> tuple[list[str], str]:
         (root / ".chart-manager" / "rendered").mkdir(parents=True)
         return ["chart", "cache", "clean", "--root", str(root)], "cleaned:"
     if name == "no-dashboards":
-        return ["grafana", "lint-dashboards", "--root", str(root)], "no dashboards found"
+        return ["grafana", "dashboard", "lint", "--root", str(root)], "no dashboards found"
     raise AssertionError(f"unknown narration case: {name}")
 
 

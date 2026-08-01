@@ -21,7 +21,12 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterActionResult,
     DevelopmentClusterEntryFailure,
     DevelopmentClusterEntryOutcome,
+    DevelopmentClusterPlan,
+    DevelopmentClusterPlanEntry,
+    DevelopmentClusterRelease,
     DevelopmentClusterResult,
+    DevelopmentClusterStatus,
+    PortMappingDrift,
     _DevelopmentClusterRunSummary,
 )
 from chart_manager.services.clusters.development.service import (
@@ -30,6 +35,12 @@ from chart_manager.services.clusters.development.service import (
     CERT_MANAGER_WEBHOOK_NAMESPACE,
     CERT_MANAGER_WEBHOOK_TIMEOUT,
     DevelopmentClusterService,
+)
+from chart_manager.services.clusters.development.wire import (
+    action_to_dict,
+    converge_to_dict,
+    plan_to_dict,
+    status_to_dict,
 )
 
 __all__ = [
@@ -50,7 +61,16 @@ __all__ = [
     "DevelopmentClusterActionResult",
     "DevelopmentClusterEntryFailure",
     "DevelopmentClusterEntryOutcome",
+    "DevelopmentClusterPlan",
+    "DevelopmentClusterPlanEntry",
+    "DevelopmentClusterRelease",
     "DevelopmentClusterResult",
     "DevelopmentClusterService",
+    "DevelopmentClusterStatus",
+    "PortMappingDrift",
     "_DevelopmentClusterRunSummary",
+    "action_to_dict",
+    "converge_to_dict",
+    "plan_to_dict",
+    "status_to_dict",
 ]

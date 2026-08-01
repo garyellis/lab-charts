@@ -24,6 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from chart_manager.services.manifest_validation.models import PhaseResult, RunResult
+from chart_manager.services.manifest_validation.render_cache import RenderCacheState
 from chart_manager.services.manifest_validation.wire import row_elapsed_text
 
 #: Rich style per terminal phase status. Shared with `cli/validate_progress.py`
@@ -55,6 +56,13 @@ def to_text_table(result: RunResult, *, include_timings: bool = False) -> Table:
         if include_timings:
             cells.append(Text(row_elapsed_text(row_result), style="dim"))
         table.add_row(*cells)
+    return table
+
+
+def render_cache_table(state: RenderCacheState) -> Table:
+    """Render the cache `chart cache clean --dry-run` would remove."""
+    table = Table("Path", "Exists", "Runs", title="render cache")
+    table.add_row(str(state.path), "yes" if state.exists else "no", str(state.runs))
     return table
 
 

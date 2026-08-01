@@ -29,6 +29,7 @@ from typing import Literal
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.preflight import Check, probe_binary
 
 _log = logging.getLogger(__name__)
 
@@ -93,6 +94,21 @@ class Kyverno:
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --row-timeout so a hung kyverno doesn't pin a worker.
         self.timeout = timeout
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report whether the configured kyverno CLI is usable."""
+        return (
+            probe_binary(
+                self.runner,
+                self._bin,
+                name="kyverno",
+                version_args=("version",),
+                remediation=(
+                    "install the kyverno CLI -- "
+                    "https://kyverno.io/docs/kyverno-cli/install/"
+                ),
+            ),
+        )
 
     def apply(
         self,

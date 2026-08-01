@@ -46,10 +46,16 @@ def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
 
 def lint_dashboard(path: Path) -> list[Finding]:
-    """Lint one dashboard JSON file against rules R001-R007; invalid JSON is R000."""
+    """Lint one dashboard JSON file against rules R001-R007; invalid JSON is R000.
+
+    `UnicodeDecodeError` joins `JSONDecodeError` on the R000 arm: a binary
+    file handed to `--path` is the same event as a malformed one -- "this is
+    not dashboard JSON" -- and it reached the operator as a traceback until
+    it was named here.
+    """
     try:
         dash = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         return [Finding(path, "R000-json", f"invalid JSON: {exc}")]
 
     findings: list[Finding] = []
@@ -121,6 +127,29 @@ class LintResult:
     def files_with_findings(self) -> int:
         """How many distinct files contributed at least one finding."""
         return len({f.path for f in self.findings})
+
+
+def expand_targets(paths: Iterable[Path]) -> list[Path]:
+    """Resolve requested paths to dashboard files, descending into directories.
+
+    A directory is the natural thing to hand `--path`, and until this existed
+    it reached `Path.read_text` and killed the process with a raw
+    `IsADirectoryError` traceback (design doc 8.9). Recursing is the reading
+    that matches what the caller meant -- `--path charts/x/dashboards/` lints
+    that tree -- and it makes `--path` and the default discovery agree, since
+    `discover_dashboards` already rglobs.
+
+    A directory containing no JSON contributes nothing rather than erroring,
+    so it lands on the caller's existing "no dashboards found" decision (and
+    its `--allow-empty` opt-out) instead of inventing a second rule for the
+    same situation. Non-directories are passed through untouched, including
+    ones that do not exist: "you named a file that is not there" is a
+    distinct diagnostic and stays the caller's to report.
+    """
+    targets: list[Path] = []
+    for p in paths:
+        targets.extend(sorted(p.rglob("*.json")) if p.is_dir() else [p])
+    return targets
 
 
 def lint_paths(paths: Iterable[Path]) -> LintResult:

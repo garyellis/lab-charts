@@ -131,7 +131,7 @@ dashboardProviders:
           foldersFromFilesStructure: true
       # Escape hatch: dashboards copied into /var/lib/grafana/dashboards/scratch
       # are live-editable. Use for iteration only; promote a board by exporting
-      # via `chart-manager grafana export-dashboard <uid> -o
+      # via `chart-manager grafana dashboard export <uid> --to
       # charts/grafana-dashboards/dashboards/<folder>/<name>.json` and committing.
       - name: 'scratch'
         orgId: 1

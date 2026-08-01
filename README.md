@@ -21,28 +21,34 @@ cd lab-charts
 mise trust
 mise install
 mise run setup
+uv run chart-manager doctor --for 'chart validate'
 uv run chart-manager chart validate --chart grafana --env dev
 ```
 
-`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `spec.validation` in its `chart-lifecycle.yaml`.
+`mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. `doctor` is the preflight: it checks that the binaries, kubecontext, container runtime, and backends a command needs are actually usable, and `--for` narrows it to the prerequisites of one command instead of the whole surface. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `spec.validation` in its `chart-lifecycle.yaml`.
 
 ## Daily commands
 
 | Command | What it does |
 | --- | --- |
+| `uv run chart-manager doctor` | Check every integration's prerequisites — binaries and their versions, kubecontext, container runtime, events backend. `--for '<command>'` checks only what that one command needs. |
 | `uv run chart-manager chart validate --chart <name> --env <env>` | Render one chart for one authored env, then run its enabled validators. |
 | `uv run chart-manager chart validate --chart <name> --all` | Validate every environment authored for one chart. |
 | `mise run validate -- --all` | Same as above, fanned out across every chart and every env declared in the repo. |
-| `uv run chart-manager chart test --chart <name-or-path> --profile minimal` | Spin up a local Kubernetes test cluster, install the chart, and run its Helm test hooks when enabled. `--namespace` explicitly overrides the profile namespace. |
+| `uv run chart-manager chart test <name-or-path> --profile minimal` | Spin up a local Kubernetes test cluster, install the chart, and run its Helm test hooks when enabled. `--namespace` explicitly overrides the profile namespace. |
 | `uv run chart-manager local up --chart <name-or-path> --profile minimal` | Create or start the chart's local cluster, run configured bootstrap releases, and converge the chart. |
 | `uv run chart-manager local up --stack <name-or-path>` | Converge a `LocalStack` from `.chart-manager/stacks/<name>.yaml` or an explicit YAML path. |
+| `uv run chart-manager local status` | Report whether the local cluster exists, which releases it holds, the URLs it serves, and any host-port drift from `kind-config.yaml`. |
 | `uv run chart-manager local down` | Stop the configured local cluster while preserving releases, data, and image caches. |
 | `uv run chart-manager local reset --chart <name-or-path>` | Destroy and recreate that chart's cluster, then converge it. Use `--stack` for a stack. |
-| `mise run charts` | List every chart wrapper the CLI knows about. |
+| `uv run chart-manager chart list` | List every chart wrapper the CLI knows about, with its lifecycle capability status. `mise run charts` is the same command. |
+| `uv run chart-manager chart show <name>` | Print one chart's normalized `ChartLifecycle` intent, in a form that diffs against the authored `chart-lifecycle.yaml`. |
 | `mise run test` | Run the Python unit tests for the CLI. |
 | `uv run chart-manager plan --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
 | `uv run chart-manager chart publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
 | `uv run chart-manager chart upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
+| `uv run chart-manager grafana dashboard export <uid> --to charts/grafana-dashboards/dashboards/<folder>/<name>.json` | Pull one dashboard from the kind-deployed Grafana and write canonical JSON for git. |
+| `uv run chart-manager grafana dashboard lint` | Lint every committed dashboard against the repository's quality rules. |
 
 Local operation has three authored concepts:
 
@@ -56,11 +62,18 @@ Local operation has three authored concepts:
   It is intentionally narrower than Helmfile: composition only, with no
   templating or orchestration language.
 
-All `local up`, `local down`, and `local reset` targets use the single
-`chart-manager` cluster by default. This avoids duplicate Kind clusters and
-host-port conflicts from the shared `kind-config.yaml`. Select another
+All `local up`, `local status`, `local down`, and `local reset` targets use the
+single `chart-manager` cluster by default. This avoids duplicate Kind clusters
+and host-port conflicts from the shared `kind-config.yaml`. Select another
 Pydantic-configured `.chart-manager` directory when a different
 `LocalCluster` and Kind configuration are needed.
+
+`local status` is a read, not a grade: an absent cluster, an unreachable one,
+or a pile of failed releases is the answer and still exits 0, which leaves the
+caller to decide what counts as bad —
+`chart-manager local status -o json | jq '.releases[] | select(.status!="deployed")'`
+is the idiom. Its lookups are the ones the converge path already makes, so the
+releases it lists and the URLs it prints are what `local up` saw.
 
 The repository's `kind-config.yaml` controls its Kubernetes version, topology,
 container runtime integration, and whether Kind's default CNI is disabled.
@@ -117,10 +130,36 @@ Use `uv run chart-manager chart validate --help`. One command covers all three
 selections: a single chart, a changed worklist, and a repository-wide run —
 which one you get is argv shape, not a separate subcommand.
 
+## Output projections and dry runs
+
+Every command that emits a document takes `-o`/`--output`, and `-o` always
+names a **format** — `table`, `json`, `yaml`, plus `md`, `github`, or `all`
+where a command has them. The default is `auto`: the table a human reads at a
+terminal, and `json` whenever stdout is a pipe, a file, or a CI log. That is
+why `chart-manager plan` needs no flag in a workflow and
+`chart-manager chart list | jq` works without one. `-o` is also accepted
+before the subcommand, where it sets the default for whichever command runs;
+the command's own `-o` still wins.
+
+`grafana dashboard export` is the one place where that reading is easy to get
+wrong. `-o` there used to name the destination file and now names the format
+like everywhere else; the destination is `--to`. There is no alias, so a path
+handed to `-o` is a usage error that names `--to` rather than a dashboard
+written somewhere surprising. The file `--to` writes is always canonical JSON
+whatever `-o` says, because it is the git artifact.
+
+`--dry-run` resolves the same plan the real run would execute and prints it
+in `--output` form without touching anything. `local up`, `local down`,
+`local reset`, `chart test`, `chart cache clean`, `chart publish`,
+`chart upgrade`, and `helmrelease promote` all take it. On `chart test` and
+`chart cache clean` that plan is the only document either command produces,
+so `-o` is meaningful only alongside `--dry-run`; naming it on its own is a
+usage error rather than a flag that is quietly ignored.
+
 ## CI
 
-CI uses the same **`chart-manager chart test`** execution path as
-`mise run kind-test`. A `prep` job inspects the PR diff and decides which charts
+CI uses the same **`chart-manager chart test`** execution path you run
+locally. A `prep` job inspects the PR diff and decides which charts
 changed; `validate` runs against the full set; `sandbox-test` fans out as a
 matrix with one kind job per changed chart so unrelated charts never gate your
 PR.
@@ -147,7 +186,8 @@ heuristic in YAML.
 
 - Open the failed run and download `rendered-manifests-<run_id>` (validate) or `sandbox-logs-<chart>-<run_id>` (sandbox-test) from the Artifacts panel.
 - Reproduce a validate failure locally with `uv run chart-manager chart validate --chart <name> --env <env>`.
-- Reproduce a sandbox-test failure locally with `mise run kind-test -- --chart <name> --profile minimal`.
+- Reproduce a sandbox-test failure locally with `uv run chart-manager chart test <name> --profile minimal`.
+- If the failure looks environmental rather than chart-shaped, run `uv run chart-manager doctor --for 'chart test'` first — it names the missing binary or unreachable backend instead of leaving you to infer it from a subprocess error.
 
 ## Adding or editing a chart
 
@@ -192,9 +232,20 @@ files out to every declared environment.
 
 ## Troubleshooting
 
+Start with `uv run chart-manager doctor`. It is read-only and cluster-free —
+every probe either reads local state or asks one short, capped, non-mutating
+question of a remote — so it reports a stopped cluster or a dead docker daemon
+instead of hanging on it. Each row carries the fix beside the failure, and
+`--for '<command>'` narrows the run to one command's prerequisites. The exit
+code says which kind of problem it is: `127` when a required binary is not on
+`PATH`, `5` when the environment is at fault (no kubecontext, an unreachable
+backend), `4` when a tool is installed but broken, and `3` when configuration
+is invalid. The most fundamental failure wins.
+
 - kind nodes report `NotReady` — expected until cilium installs as the CNI.
 - `kind: command not found` or cluster creation hangs — Docker Desktop, Colima, or OrbStack must be running before you invoke any kind task.
 - `mise: command not found` — install [`mise`](https://mise.jdx.dev), then run `mise trust` in the repo root.
+- A local URL stopped resolving after editing `kind-config.yaml` — `uv run chart-manager local status` reports the host ports the cluster is missing. Creation-time Kind settings need `local reset`, not `local up`.
 
 ## Going deeper
 

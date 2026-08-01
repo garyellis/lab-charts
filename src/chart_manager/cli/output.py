@@ -44,34 +44,44 @@ chatter interleaved on stderr is at best noise in their logs. Resolving to
 `json` therefore silences narration process-wide via `cli/streams.py`.
 Errors are *not* silenced -- see `streams.error_console`.
 
+`--output` is a format; a file is `--to`
+----------------------------------------
+Design commitment 4, and the reason `grafana dashboard export` was renamed:
+as `grafana export-dashboard`, its `-o` named the *destination file*, so
+`chart-manager -o json grafana export-dashboard UID` wrote the dashboard
+into a file called `json` -- silently, exiting 0. The command now takes
+`--to PATH` and reads `-o` the way everything else does, and `_check` says
+so by name when a rejected token looks like a path, because the old spelling
+lives on in muscle memory and in scripts.
+
 Why the global `-o` is not propagated through `default_map`
 -----------------------------------------------------------
 `cli/main.py` hands the global `--root` down with a nested Click
 `default_map` keyed by parameter *name*. Doing the same for `output` would
-be a live grenade: `grafana export-dashboard` has a parameter also named
-`output`, but it is a `Path` -- the file to write the dashboard to. Seeding
-it turns `chart-manager -o json grafana export-dashboard UID` into "write
-the dashboard to a file called `json`", silently, with a zero exit code.
-(Verified against typer 0.26.7: the parameter arrives as
-`PosixPath('json')`.)
+seed every parameter that happens to be called `output`, whatever it means
+there, and would defeat this module's precedence rule: `default_map` sits
+below the command line but *above* the declared default, so a command's own
+`-o` would arrive as the global value rather than as `None`, and "not given"
+would become indistinguishable from "given globally".
 
 So the global travels on `ctx.obj` instead, and only commands that opt in by
-calling `resolve()` ever see it. A command whose `-o` means something else
-is unaffected by construction rather than by an exclusion list someone has
-to remember to update. `grafana export-dashboard -o PATH` keeps its meaning
-until P2.2 flips it deliberately.
+calling `resolve()` ever see it -- by construction rather than by an
+exclusion list someone has to remember to update.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from typing import Annotated, Any
 
 import typer
+import yaml
 from rich.console import Console
+from rich.table import Table
 
-from chart_manager.cli.streams import data_console, set_narration_quiet
+from chart_manager.cli import streams
 
 #: Resolved from the environment rather than named by the caller.
 AUTO = "auto"
@@ -96,16 +106,63 @@ ALL = "all"
 KNOWN_MODES: tuple[str, ...] = (*CORE_MODES, GITHUB, ALL)
 
 
+#: Appended when the rejected token is a path rather than a typo'd format.
+#: `grafana dashboard export` is the reason: its `-o` used to *be* the output
+#: file, so the first thing an old script or an old habit produces here is a
+#: path, and "unknown output: charts/x.json" on its own does not say where
+#: the path was supposed to go.
+_TO_HINT = " -- --output names a format; write to a file with --to"
+
+
+def _looks_like_a_path(value: str) -> bool:
+    """True for a token that was meant as a filename, not as a format.
+
+    No format token contains a separator or an extension, so the three
+    characters are sufficient and cannot misfire on a real projection name.
+    """
+    return bool(set(value) & {"/", "\\", "."})
+
+
+def choice(
+    value: str,
+    allowed: Sequence[str],
+    *,
+    param_hint: str,
+    noun: str = "value",
+    accepted: Sequence[str] = (),
+    hint: str = "",
+) -> str:
+    """Reject a token outside `allowed` as a usage error naming the flag.
+
+    The one enumerated-flag validator on this surface. `--output` and `--for`
+    each carried their own copy, differing only in the noun they used, which
+    is how `--for` ended up with a message that listed the allowed values in
+    a different sentence than `--output` did.
+
+    `accepted` is for a token that is legal but not advertised (`auto`, which
+    every `--output` takes and no help text should enumerate as a projection).
+    `hint` is appended verbatim -- see `_TO_HINT`.
+    """
+    if value in allowed or value in accepted:
+        return value
+    raise typer.BadParameter(
+        f"unknown {noun}: {value} (allowed: {', '.join(allowed)}){hint}",
+        param_hint=param_hint,
+    )
+
+
 def _check(value: str | None, allowed: Sequence[str], *, param_hint: str) -> str | None:
-    """Reject an unknown token at parse time; `None` means "not given"."""
+    """Reject an unknown `--output` token at parse time; `None` is "not given"."""
     if value is None:
         return None
-    if value not in (*allowed, AUTO):
-        raise typer.BadParameter(
-            f"unknown output: {value} (allowed: {', '.join(allowed)})",
-            param_hint=param_hint,
-        )
-    return value
+    return choice(
+        value,
+        allowed,
+        param_hint=param_hint,
+        noun="output",
+        accepted=(AUTO,),
+        hint=_TO_HINT if _looks_like_a_path(value) else "",
+    )
 
 
 def output_option(*allowed: str, extra_help: str = "") -> Any:
@@ -215,15 +272,72 @@ def resolve(
             f"this command has no '{selected}' projection (allowed: {', '.join(allowed)})",
             param_hint="--output",
         )
-    set_narration_quiet(getattr(ctx.obj, "quiet", False) or requested == JSON)
+    streams.set_narration_quiet(getattr(ctx.obj, "quiet", False) or requested == JSON)
     return selected
+
+
+def require_dry_run(value: str | None, *, dry_run: bool) -> None:
+    """Reject `-o` on a command whose only document is its `--dry-run` plan.
+
+    `chart test` and `chart cache clean` emit no projection when they run
+    for real -- one narrates progress, the other prints a status line. Their
+    `-o` therefore names the form of the *plan*, and accepting it on a real
+    run would be the accepted-and-ignored flag design doc 6.3 forbids: the
+    caller asked for json, got a cluster install, and nothing said
+    otherwise. Exit 2 naming the missing flag instead.
+
+    Only an *explicit* per-command `-o` is rejected. The invocation-wide one
+    is documented as a default that commands without a projection ignore, so
+    `chart-manager -o json chart test x` must keep working rather than fail
+    for having mentioned output at all.
+    """
+    if value is not None and not dry_run:
+        raise typer.BadParameter(
+            "this command's only document is its --dry-run plan; add --dry-run",
+            param_hint="--output",
+        )
+
+
+def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
+    """Write one wire document in the resolved `--output` form.
+
+    The single emitter for the surface. It replaced four near-identical
+    helpers in `cli/main.py` alone (`_emit_json`, `_emit_yaml`,
+    `_emit_document`, `_emit_machine_document` -- the last being the third
+    minus its table arm) plus open-coded `json.dumps`/`yaml.safe_dump` pairs
+    in `cli/validate.py` and `cli/main.py::plan`. Every one of them had to
+    agree on `indent=2, sort_keys=True` and on `nl=False` for yaml, and
+    nothing made them.
+
+    The caller builds the terminal projection because only it knows what the
+    columns mean; the machine projections are the same two encoders every
+    command uses. Splitting it this way is what keeps `-o json` and `-o yaml`
+    from being re-decided per command.
+
+    `table=None` is the machine-only door, for commands whose terminal form
+    is a bespoke renderer rather than a single `Table` (`local status`,
+    `local up --dry-run`). Those callers branch on `mode` themselves and only
+    reach here for `json`/`yaml`, so arriving with `table` mode and no table
+    is a wiring bug in `cli/`, not a caller error.
+
+    `typer.echo` rather than `console.print` for both machine forms: Rich
+    would wrap and highlight a document that is about to be piped into `jq`.
+    """
+    if mode == JSON:
+        typer.echo(json.dumps(data, indent=2, sort_keys=True))
+    elif mode == YAML:
+        typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
+    elif table is None:
+        raise ValueError(f"no table projection was supplied for --output {mode}")
+    else:
+        streams.console.print(table)
 
 
 def _auto(console: Console | None) -> str:
     """`table` for a human at a terminal, `json` for everything else."""
     if os.environ.get("CI") == "true":
         return JSON
-    probe = console if console is not None else data_console()
+    probe = console if console is not None else streams.data_console()
     return TABLE if probe.is_terminal else JSON
 
 
@@ -238,7 +352,10 @@ __all__ = [
     "TABLE",
     "YAML",
     "GlobalOutputOption",
+    "choice",
+    "emit",
     "global_output",
     "output_option",
+    "require_dry_run",
     "resolve",
 ]

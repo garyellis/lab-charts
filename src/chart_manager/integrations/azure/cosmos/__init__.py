@@ -1,1 +1,0 @@
-"""Cosmos DB client integration."""

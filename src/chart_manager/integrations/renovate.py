@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ from typing import Literal
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import Check, probe_binary
 
 DryRunMode = Literal["extract", "lookup", "full"]
 
@@ -82,6 +85,36 @@ class Renovate:
             str(validator_binary) if validator_binary is not None else "renovate-config-validator"
         )
         self.timeout = timeout
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report both Renovate binaries and whether a token is configured.
+
+        The validator is checked for *presence only*: it is a node bin stub
+        with no version flag, so asking for one would report a working
+        install as broken.
+
+        The token check is here rather than in the composition root that
+        reads the variable, because "what does Renovate need to be able to
+        run" is this adapter's knowledge. It is the case MY_COMMENTS.md
+        names explicitly -- required environment is a per-integration
+        preflight matter, not a surface one.
+        """
+        return (
+            probe_binary(
+                self.runner,
+                self._binary,
+                name="renovate",
+                remediation="install Renovate -- `npm install -g renovate`",
+            ),
+            probe_binary(
+                self.runner,
+                self._validator_binary,
+                name="renovate-config-validator",
+                version_args=(),
+                remediation="ships with Renovate -- `npm install -g renovate`",
+            ),
+            _token_check(),
+        )
 
     def run(self, request: RenovateRequest) -> RenovateResult:
         """Run Renovate for exactly one repository.
@@ -238,3 +271,23 @@ def _log_subprocess_output(value: str, *, error: bool) -> None:
             _LOG.debug("renovate> %s", line)
         else:
             _LOG.info("renovate> %s", line)
+
+
+def _token_check() -> Check:
+    """Whether a credential Renovate can authenticate with is in the environment.
+
+    The same two names, in the same order, that `composition.Container`
+    hands to `RenovateRequest.token`: Renovate spells its own setting
+    RENOVATE_TOKEN, while GitHub Actions exposes its repository token as
+    GITHUB_TOKEN. Reported as ENVIRONMENT rather than SPEC -- nothing the
+    author wrote is wrong, the process just was not given a credential.
+    """
+    for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
+        if os.environ.get(variable):
+            return Check.ok("renovate-token", f"{variable} is set")
+    return Check.failed(
+        "renovate-token",
+        "neither RENOVATE_TOKEN nor GITHUB_TOKEN is set",
+        remediation="export RENOVATE_TOKEN with a token that can read and open PRs",
+        outcome=Outcome.ENVIRONMENT,
+    )

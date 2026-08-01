@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -442,7 +443,7 @@ def test_run_builds_the_run_result_itself(tmp_path: Path) -> None:
     assert isinstance(outcome.result, RunResult)
     assert outcome.result.rendered_root == outcome.out_dir
     assert outcome.result.spec_errors  # surfaced from the worklist build
-    assert outcome.exit_code == 3
+    assert outcome.outcome is Outcome.SPEC
     assert outcome.ok is False
 
 
@@ -493,7 +494,7 @@ def test_explicit_chart_with_disabled_capability_fails_precisely(tmp_path: Path)
         )
 
 
-def test_explicit_chart_with_malformed_config_returns_spec_exit(tmp_path: Path) -> None:
+def test_explicit_chart_with_malformed_config_returns_a_spec_outcome(tmp_path: Path) -> None:
     _chart(tmp_path, "broken", spec="releaseName: broken\nmystery: true\n")
 
     outcome = _app(Recorder()).run(
@@ -501,7 +502,7 @@ def test_explicit_chart_with_malformed_config_returns_spec_exit(tmp_path: Path) 
     )
 
     assert outcome.result.spec_errors
-    assert outcome.exit_code == 3
+    assert outcome.outcome is Outcome.SPEC
 
 
 def test_explicit_chart_is_isolated_from_unrelated_repository_errors(
@@ -523,7 +524,7 @@ def test_explicit_chart_is_isolated_from_unrelated_repository_errors(
     assert outcome.result.spec_errors == ()
     assert outcome.warnings == ()
     assert outcome.charts_unvalidated == 0
-    assert outcome.exit_code == 0
+    assert outcome.outcome is Outcome.SUCCESS
 
 
 def test_enabled_phases_reach_the_runner_and_the_outcome(tmp_path: Path) -> None:
@@ -637,7 +638,7 @@ def test_cleanup_keeps_the_render_dir_on_failure(tmp_path: Path) -> None:
     outcome = app.run(RunRequest(root=tmp_path, skip_change_detection=True))
     outcome.out_dir.mkdir(parents=True, exist_ok=True)
 
-    assert outcome.exit_code == 1
+    assert outcome.outcome is Outcome.FAILED
     app.cleanup(outcome)
 
     assert outcome.out_dir.exists()
@@ -725,7 +726,7 @@ def test_runner_construction_failure_becomes_outcomes_and_progress(
 
     assert sink.stops == 1
     assert len(outcome.result.rows) == 2
-    assert outcome.exit_code == 2
+    assert outcome.outcome is Outcome.TOOL
     assert {(event[0], event[1], event[2]) for event in sink.events} == {
         ("alpha", "render", "FAIL"),
         ("alpha", "schema", "SKIP"),
@@ -757,4 +758,4 @@ def test_runner_construction_failure_preserves_disabled_validator_semantics(
     assert phases["schema"].skip_cause == "validator_disabled"
     assert phases["policy"].status == "SKIP"
     assert phases["policy"].skip_cause == "validator_disabled"
-    assert outcome.exit_code == 2
+    assert outcome.outcome is Outcome.TOOL

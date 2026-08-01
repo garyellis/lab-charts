@@ -144,16 +144,31 @@ class EphemeralTestClusterService:
             self.helm, self.kubectl = self._client_factory(handle)
         return cluster_name
 
-    def run(self, options: EphemeralTestRequest) -> EphemeralTestResult:
-        """Ensure the cluster, run configured bootstrap, install, and test.
+    def plan(self, options: EphemeralTestRequest) -> LifecyclePlan:
+        """Compile what ``run`` would execute, without touching a cluster.
 
-        Fail-fast: the first chart error propagates (contrast
-        ``DevelopmentClusterService.up``,
-        which continues on error). `include_dependent_tests` re-runs the plans
-        of charts declared as dependent-test targets. Returns the
-        accounting of what was installed and tested; narration goes to the
-        injected progress callback.
+        The plan is the whole answer a `--dry-run` needs, and it is the same
+        object `run` executes -- compiled by the same call, from the same
+        authored intent -- so a printed plan cannot describe work the real
+        run would not do.
+
+        Linting is skipped whatever the request says. `preflight(lint=True)`
+        shells out to `helm dependency update` and `helm lint`, which writes
+        into `charts/*/charts/` and is exactly the kind of side effect a dry
+        run promises not to have. Nothing about the compiled plan depends on
+        it: `lint` only adds a HELM_LINT action, which the compiler derives
+        from the request, not from the preflight.
         """
+        _cluster, plan = self._load_and_compile(options, lint=False)
+        return plan
+
+    def _load_and_compile(
+        self,
+        options: EphemeralTestRequest,
+        *,
+        lint: bool,
+    ) -> tuple[LocalCluster, LifecyclePlan]:
+        """Load authored cluster config and compile the plan to execute."""
         # Bootstrap ownership is authored configuration, not process state.
         # Reload it for every run so a long-lived service cannot carry an
         # earlier run's externally-satisfied identities forward.
@@ -168,12 +183,24 @@ class EphemeralTestClusterService:
         )
         bootstrap_lifecycles = bootstrap_preflight.preflight(
             local_cluster,
-            lint=options.lint,
+            lint=lint,
         )
-        plan = self._compile_lifecycle_plan(
+        return local_cluster, self._compile_lifecycle_plan(
             options,
             bootstrap_lifecycles=bootstrap_lifecycles,
         )
+
+    def run(self, options: EphemeralTestRequest) -> EphemeralTestResult:
+        """Ensure the cluster, run configured bootstrap, install, and test.
+
+        Fail-fast: the first chart error propagates (contrast
+        ``DevelopmentClusterService.up``,
+        which continues on error). `include_dependent_tests` re-runs the plans
+        of charts declared as dependent-test targets. Returns the
+        accounting of what was installed and tested; narration goes to the
+        injected progress callback.
+        """
+        local_cluster, plan = self._load_and_compile(options, lint=options.lint)
         if options.ensure_cluster:
             self.ensure_cluster(options.cluster_name)
             # ensure_cluster may have started stopped node containers

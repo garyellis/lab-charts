@@ -1,1 +1,0 @@
-"""DynamoDB client integration."""

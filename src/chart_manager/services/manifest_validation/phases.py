@@ -40,7 +40,7 @@ def render(
             values=values,
         )
     except ExternalCommandError as exc:
-        # error_type="tool" promotes the row to exit code 2 — the underlying
+        # error_type="tool" promotes the row to `Outcome.TOOL` — the underlying
         # issue is a helm crash, not a chart-author validation problem.
         return PhaseResult(
             phase="render",
@@ -69,7 +69,7 @@ def schema(
     """Run kubeconform over rendered manifests for one row.
 
     Empty rendered_dir -> SKIP. Tool crash -> FAIL with error_type="tool"
-    (exit code 2). Schema violations -> FAIL with a human-scannable
+    (`Outcome.TOOL`). Schema violations -> FAIL with a human-scannable
     one-line-per-finding detail block.
     """
     if not rendered_dir.exists() or not _has_manifests(rendered_dir):
@@ -111,7 +111,7 @@ def policy(
     Empty policy_paths -> SKIP("no policies discovered") so charts without
     any policy coverage surface visibly (run summary later tallies these).
     Empty rendered_dir -> SKIP("no manifests"). Tool crash -> FAIL with
-    error_type="tool" (exit code 2). Policy violations -> FAIL with one
+    error_type="tool" (`Outcome.TOOL`). Policy violations -> FAIL with one
     line per finding.
     """
     if not policy_paths:

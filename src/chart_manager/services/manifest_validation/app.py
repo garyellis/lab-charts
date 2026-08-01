@@ -57,6 +57,7 @@ from chart_manager.services.manifest_validation.progress import (
     ProgressDisplay,
     ProgressFinalizer,
 )
+from chart_manager.services.manifest_validation.render_cache import RENDER_CACHE_DIR
 from chart_manager.services.manifest_validation.requests import (
     RunOutcome,
     RunRequest,
@@ -383,12 +384,12 @@ class ManifestValidationService:
     def cleanup(self, outcome: RunOutcome) -> None:
         """Delete the render dir unless it is being kept; never raises.
 
-        Retained on an explicit keep, on any non-zero exit code (the
+        Retained on an explicit keep, on anything but a clean run (the
         artifacts are the evidence), or when DEBUG=true. Callers invoke
         this once they are done reading the artifacts — emitting a summary
         into the render dir has to happen first.
         """
-        if outcome.keep or outcome.exit_code != 0:
+        if outcome.keep or not outcome.ok:
             return
         if os.environ.get("DEBUG", "").lower() == "true":
             return
@@ -410,7 +411,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / ".chart-manager" / "rendered" / run_id).resolve(), keep
+        return (repo_root / RENDER_CACHE_DIR / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".

@@ -5,7 +5,7 @@ frozen (what crosses the service boundary) or an explicitly-named mutable
 accumulator (`_DevelopmentClusterRunSummary`, which never leaves the converge
 engine).
 
-Kept in its own module because `cli/main.py` renders these and the drift /
+Kept in its own module because `cli/local.py` renders these and the drift /
 access helpers read them — three importers, none of which need the
 converge engine.
 """
@@ -72,6 +72,102 @@ class DevelopmentClusterResult:
     def ok(self) -> bool:
         """True when no plan entry failed. Continue-on-error means partial runs are common."""
         return not self.failed
+
+
+@dataclass(frozen=True)
+class PortMappingDrift:
+    """Host ports the kind config declares that the live node container lacks.
+
+    Kind bakes `extraPortMappings` into the node container at create time, so
+    editing the config and running `down`/`up` does not re-apply them. The
+    *decision* is here as data; whether it is narrated as a warning
+    (`local up`) or reported as a field (`local status`) is the surface's.
+
+    `error` carries a failed inspection, which is not the same answer as "no
+    drift": both leave `missing` empty, and only one of them means the check
+    ran.
+    """
+
+    missing: tuple[int, ...] = ()
+    error: str | None = None
+
+    @property
+    def drifted(self) -> bool:
+        """True when the check ran and found ports the container is missing."""
+        return bool(self.missing)
+
+
+@dataclass(frozen=True)
+class DevelopmentClusterRelease:
+    """One Helm release installed on the development cluster.
+
+    A projection of `integrations.helm.ReleaseInfo` so the status result
+    crosses the service boundary without an adapter type on it.
+    """
+
+    name: str
+    namespace: str
+    revision: int
+    status: str
+
+
+@dataclass(frozen=True)
+class DevelopmentClusterStatus:
+    """What exists right now: the cluster, its releases, and how to reach it.
+
+    Every field is a lookup that already had a home in the converge path --
+    `helm list -A` from the install-skip snapshot, the VirtualService hosts
+    from `access.py`, the port-mapping diff from `drift.py`. Nothing here is
+    a second way of asking.
+
+    Best-effort throughout: a cluster that is stopped, or a kubeconfig that
+    points nowhere, answers most of these with an error string rather than an
+    exception. `status` reports state, so failing to reach the cluster is
+    part of the report, not a failure of the command.
+    """
+
+    cluster_name: str
+    exists: bool
+    context: str | None = None
+    provider: str | None = None
+    releases: tuple[DevelopmentClusterRelease, ...] = ()
+    releases_error: str | None = None
+    urls: tuple[str, ...] = ()
+    urls_error: str | None = None
+    port_forward_pid: int | None = None
+    drift: PortMappingDrift = field(default_factory=PortMappingDrift)
+
+
+@dataclass(frozen=True)
+class DevelopmentClusterPlanEntry:
+    """One release a converge would install, and where it came from.
+
+    `source` is `bootstrap` for a release the LocalCluster owns and
+    `target` for one the caller's `--chart`/`--stack` selected.
+    """
+
+    chart: str
+    profile: str
+    namespace: str
+    source: str
+
+
+@dataclass(frozen=True)
+class DevelopmentClusterPlan:
+    """What a mutating `local` command would do, resolved but not executed.
+
+    Produced by the same preflight the mutating path runs first, so a
+    `--dry-run` that prints a plan and a real run that fails during preflight
+    fail identically -- a plan that could not be resolved is an error, not an
+    empty plan.
+    """
+
+    command: str
+    cluster_name: str
+    target: str | None = None
+    target_kind: str | None = None
+    destroys: bool = False
+    entries: tuple[DevelopmentClusterPlanEntry, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -17,6 +17,14 @@ from typing import IO, Any
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.duration import parse_duration as _parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import (
+    PROBE_TIMEOUT,
+    Check,
+    CheckStatus,
+    first_line,
+    probe_binary,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -87,6 +95,82 @@ class Kubectl:
         rather than forcing a fresh adapter per poll. None = use the pin.
         """
         return override if override is not None else self.timeout
+
+    # --- preflight ---------------------------------------------------------
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report the kubectl binary and the kubecontext this instance addresses.
+
+        Both belong here rather than in `doctor`: the context pin is this
+        adapter's own state (`--context` is appended by `_with_context`), so
+        nothing else can say whether the cluster the next kubectl call will
+        talk to is even named in the kubeconfig.
+
+        The context check reads the *kubeconfig*, never the apiserver. A
+        preflight must be answerable with no cluster running -- an
+        unreachable cluster is something to report, not something to hang
+        on -- so "is there a context" and "is the cluster up" stay separate
+        questions and only the first is asked here.
+        """
+        binary = probe_binary(
+            self.runner,
+            "kubectl",
+            name="kubectl",
+            version_args=("version", "--client", "-o", "json"),
+            version_of=_client_version,
+            remediation="install kubectl -- https://kubernetes.io/docs/tasks/tools/",
+        )
+        if binary.status is not CheckStatus.OK:
+            return (binary, Check.skipped("kube-context", "kubectl unavailable"))
+        return (binary, self._context_check())
+
+    def _context_check(self) -> Check:
+        """Resolve the pinned context, or the ambient one, against the kubeconfig."""
+        if self._context is None:
+            return self._current_context_check()
+        try:
+            result = self.runner.run(
+                ["kubectl", "config", "get-contexts", "-o", "name"],
+                check=False,
+                timeout=PROBE_TIMEOUT,
+            )
+        except ExternalCommandError as exc:
+            return _kubeconfig_unreadable(first_line(str(exc)))
+        known = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        if result.returncode != 0 or self._context not in known:
+            return Check.failed(
+                "kube-context",
+                f"configured context {self._context!r} is not in the kubeconfig",
+                remediation=(
+                    "set CHART_MANAGER_KUBE_CONTEXT (or `kube_context:` in the config "
+                    "file) to one of: " + (", ".join(sorted(known)) or "<none>")
+                ),
+                outcome=Outcome.ENVIRONMENT,
+            )
+        return Check.ok("kube-context", f"{self._context} (pinned by configuration)")
+
+    def _current_context_check(self) -> Check:
+        """The ambient `kubectl config current-context`, when nothing is pinned."""
+        try:
+            result = self.runner.run(
+                ["kubectl", "config", "current-context"],
+                check=False,
+                timeout=PROBE_TIMEOUT,
+            )
+        except ExternalCommandError as exc:
+            return _kubeconfig_unreadable(first_line(str(exc)))
+        current = result.stdout.strip()
+        if result.returncode != 0 or not current:
+            return Check.failed(
+                "kube-context",
+                "no current kubecontext",
+                remediation=(
+                    "`kubectl config use-context <name>`, or pin one with "
+                    "CHART_MANAGER_KUBE_CONTEXT"
+                ),
+                outcome=Outcome.ENVIRONMENT,
+            )
+        return Check.ok("kube-context", f"{current} (ambient)")
 
     def get_secret_value(self, name: str, key: str, *, namespace: str) -> str:
         """Return a base64-decoded value from a Secret's `data` field."""
@@ -623,4 +707,30 @@ def _wait_for_local_port(
             time.sleep(poll_interval)
     raise ChartManagerError(
         f"kubectl port-forward did not bind 127.0.0.1:{port} within {timeout:.0f}s"
+    )
+
+
+def _client_version(stdout: str) -> str:
+    """Pull the client gitVersion out of `kubectl version --client -o json`.
+
+    JSON rather than `--short`, which kubectl removed in 1.28; falling back
+    to the first line keeps the probe useful against a client whose output
+    shape we did not anticipate rather than reporting a healthy binary as
+    broken.
+    """
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return first_line(stdout)
+    version = payload.get("clientVersion", {}).get("gitVersion", "")
+    return str(version) if version else first_line(stdout)
+
+
+def _kubeconfig_unreadable(detail: str) -> Check:
+    """The kubecontext check when kubectl itself could not answer."""
+    return Check.failed(
+        "kube-context",
+        f"could not read the kubeconfig: {detail}",
+        remediation="check KUBECONFIG and that ~/.kube/config is readable",
+        outcome=Outcome.ENVIRONMENT,
     )

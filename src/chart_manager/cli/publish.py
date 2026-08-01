@@ -8,24 +8,17 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from chart_manager.cli.streams import data_console, narration_console
-from chart_manager.composition import Container
+from chart_manager.cli._wiring import container as _container
+from chart_manager.cli.streams import console as data
+from chart_manager.cli.streams import narration
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.publish import PublishKind, PublishResult
 
-#: Every line a real publish prints is a per-chart mutation status -- a report
-#: of something that already happened -- so all of it narrates on stderr.
-narration = narration_console()
-
-#: A `--dry-run` plan is the opposite: it *is* the thing the caller asked for,
-#: so it is the selected projection and goes to stdout. `publish` has no
-#: `--output` flag yet, so the selected projection is text; when the global
-#: `-o` lands (P1.4) the json form renders from `PublishResult` on this same
-#: console and the stream assignment does not move.
-data = data_console()
-
-
-def _container() -> Container:
-    return Container()
+# `narration` (stderr) carries every line a real publish prints: a per-chart
+# mutation status is a report of something that already happened. `data`
+# (stdout) carries the `--dry-run` plan, which *is* the thing the caller asked
+# for. Both come from `cli/streams.py`; the alias keeps this module's older
+# spelling of the stdout console at its call site.
 
 
 def publish(
@@ -122,7 +115,7 @@ def publish(
             f"{escape(failure.version)}: {escape(failure.error)}"
         )
     if not result.ok or (strict_events and not result.telemetry_ok):
-        raise typer.Exit(1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 def _render_plan(result: PublishResult) -> None:

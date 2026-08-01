@@ -14,6 +14,7 @@ from chart_manager.integrations.kubeconform import (
 )
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.models import WorklistRow
 from chart_manager.services.manifest_validation.runner import (
     ManifestValidationRunner as _ManifestValidationRunner,
@@ -205,7 +206,7 @@ def test_render_pass_triggers_schema_phase(tmp_path: Path) -> None:
     assert row_result.phases["schema"].status == "PASS"
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "no policies discovered"
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 @pytest.mark.parametrize(
@@ -348,8 +349,8 @@ def test_render_fail_skips_schema_and_policy_with_upstream_detail(tmp_path: Path
     assert row_result.phases["schema"].detail == "upstream render FAIL"
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "upstream render FAIL"
-    # Render tool crash promotes the run to exit code 2.
-    assert result.exit_code() == 2
+    # Render tool crash promotes the run to a tool outcome (exit 4).
+    assert result.outcome() is Outcome.TOOL
 
 
 def test_render_fail_preserves_disabled_validator_semantics(tmp_path: Path) -> None:
@@ -376,7 +377,7 @@ def test_render_fail_preserves_disabled_validator_semantics(tmp_path: Path) -> N
     assert phases["schema"].skip_cause == "validator_disabled"
     assert phases["policy"].status == "SKIP"
     assert phases["policy"].skip_cause == "validator_disabled"
-    assert result.exit_code() == 2
+    assert result.outcome() is Outcome.TOOL
 
 
 def test_schema_fail_skips_policy_with_upstream_detail(tmp_path: Path) -> None:
@@ -407,7 +408,7 @@ def test_schema_fail_skips_policy_with_upstream_detail(tmp_path: Path) -> None:
     assert row_result.phases["schema"].status == "FAIL"
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "upstream schema FAIL"
-    assert result.exit_code() == 1
+    assert result.outcome() is Outcome.FAILED
 
 
 def test_schema_fail_preserves_disabled_policy_semantics(tmp_path: Path) -> None:
@@ -450,7 +451,7 @@ def test_schema_fail_preserves_disabled_policy_semantics(tmp_path: Path) -> None
     assert policy.detail == "disabled by chart-lifecycle"
     assert policy.skip_cause == "validator_disabled"
     assert kyverno.calls == []
-    assert result.exit_code() == 1
+    assert result.outcome() is Outcome.FAILED
 
 
 def test_policy_runs_after_passing_schema(tmp_path: Path) -> None:
@@ -469,7 +470,7 @@ def test_policy_runs_after_passing_schema(tmp_path: Path) -> None:
     assert ky.calls[0]["policy_paths"] == policy_paths
     row_result = result.rows[0]
     assert row_result.phases["policy"].status == "PASS"
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 def test_policy_failure_yields_exit_one(tmp_path: Path) -> None:
@@ -502,7 +503,7 @@ def test_policy_failure_yields_exit_one(tmp_path: Path) -> None:
     assert policy_phase.error_type is None
     assert "require-non-root/containers-must-run-as-non-root" in (policy_phase.detail or "")
     assert "Deployment/bad" in (policy_phase.detail or "")
-    assert result.exit_code() == 1
+    assert result.outcome() is Outcome.FAILED
 
 
 def test_runner_does_not_fail_fast_across_rows(tmp_path: Path) -> None:
@@ -677,7 +678,7 @@ def test_phases_subset_marks_disabled_as_not_run(tmp_path: Path) -> None:
     assert row_result.phases["schema"].status == "PASS"
     assert row_result.phases["policy"].status == "NOT_RUN"
     assert ky.calls == []
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
@@ -709,7 +710,7 @@ def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
     assert kc.calls != []
     assert row_result.phases["policy"].status == "NOT_RUN"
     assert ky.calls == []
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 def test_chart_disabled_kubeconform_skips_it_without_blocking_policy(
@@ -789,7 +790,7 @@ def test_phases_subset_multi_row_batch(tmp_path: Path) -> None:
     assert len(result.rows) == 3
     assert all(rr.phases["render"].status == "PASS" for rr in result.rows)
     assert all(rr.phases["schema"].status == "PASS" for rr in result.rows)
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 def test_parallel_run_returns_all_rows_with_events(tmp_path: Path) -> None:

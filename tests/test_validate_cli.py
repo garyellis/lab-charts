@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from chart_manager.cli import validate as validate_cli
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
@@ -440,13 +441,24 @@ class _FakeApp:
         self.cleanup_saw_summary = (outcome.out_dir / "summary.md").is_file()
 
 
-def _outcome(out_dir: Path, *, exit_code: int = 0, **kwargs) -> RunOutcome:
+def _outcome(out_dir: Path, *, outcome: Outcome = Outcome.SUCCESS, **kwargs) -> RunOutcome:
+    """A RunOutcome whose fold produces `outcome`.
+
+    Built from real rows rather than a stubbed property, so the exit code
+    these tests observe is the one the production fold produces.
+    """
     rows = ()
-    if exit_code:
+    if outcome is not Outcome.SUCCESS:
         rows = (
             RowResult(
                 row=WorklistRow(chart="c", env="dev", release="c", namespace="lab-dev"),
-                phases={"render": PhaseResult(phase="render", status="FAIL")},
+                phases={
+                    "render": PhaseResult(
+                        phase="render",
+                        status="FAIL",
+                        error_type="tool" if outcome is Outcome.TOOL else None,
+                    )
+                },
             ),
         )
     return RunOutcome(result=RunResult(rows=rows, rendered_root=out_dir), out_dir=out_dir, **kwargs)
@@ -813,14 +825,25 @@ def test_run_defaults_to_continuing_after_failures(
     assert fake.requests[0].fail_fast is False
 
 
-def test_run_exits_with_the_outcome_exit_code(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [(Outcome.FAILED, 1), (Outcome.TOOL, 4)],
+)
+def test_run_exits_with_the_code_the_outcome_maps_to(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: Outcome, expected: int
 ) -> None:
-    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
+    """A validation failure is 1; a crashed validator is 4, no longer 2.
+
+    The literals are deliberate. Deriving them from `exit_code_for` would
+    pass whatever the table said, and 2 -> 4 is precisely the renumbering
+    this asserts happened -- 2 belongs to Click's usage errors, so a CI
+    wrapper can now tell a bad flag from a kubeconform that would not run.
+    """
+    _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", outcome=outcome)))
 
     result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
-    assert result.exit_code == 1
+    assert result.exit_code == expected
 
 
 def test_run_applies_retention_only_after_the_summary_is_written(
@@ -1141,3 +1164,75 @@ def test_run_rejects_an_empty_phase_list() -> None:
 
     assert result.exit_code == 2
     assert "--phase needs a phase name" in result.output
+
+
+# --- `chart cache clean --dry-run` -------------------------------------------
+
+
+def _render_cache(root: Path, runs: int = 2) -> Path:
+    """A render cache holding `runs` validate-run directories."""
+    cache = root / ".chart-manager" / "rendered"
+    for index in range(runs):
+        (cache / f"run-{index}").mkdir(parents=True)
+    return cache
+
+
+def test_cache_clean_dry_run_removes_nothing(tmp_path: Path) -> None:
+    """6.3: print the plan, exit 0, mutate nothing. The tree must survive."""
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "--dry-run", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert cache.is_dir()
+    payload = json.loads(result.stdout)
+    assert payload == {"path": str(cache.resolve()), "exists": True, "runs": 2}
+    assert "dry run" in result.stderr
+
+
+def test_cache_clean_dry_run_describes_a_cache_that_is_not_there(
+    tmp_path: Path,
+) -> None:
+    """"Nothing to remove" is an answer, not an error: still exit 0, still a plan."""
+    result = cli("chart", "cache", "clean", "--dry-run", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["exists"] is False
+
+
+def test_cache_clean_dry_run_renders_a_table(tmp_path: Path) -> None:
+    _render_cache(tmp_path, runs=3)
+
+    result = cli(
+        "chart", "cache", "clean", "--dry-run", "-o", "table", "--root", str(tmp_path)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "render cache" in result.stdout
+    assert "yes" in result.stdout
+
+
+def test_cache_clean_output_without_dry_run_is_a_usage_error(tmp_path: Path) -> None:
+    """A real clean emits no document, so `-o` must not be quietly ignored.
+
+    The tree is still there afterwards, which is the half that matters: the
+    rejection has to happen *before* the rmtree, not after it.
+    """
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "-o", "json", "--root", str(tmp_path))
+
+    assert result.exit_code == 2
+    assert "--dry-run" in result.output
+    assert cache.is_dir()
+
+
+def test_cache_clean_still_removes_the_tree_without_dry_run(tmp_path: Path) -> None:
+    """Guard the guard: the dry-run tests only mean something if this works."""
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert not cache.exists()
+    assert "cleaned:" in result.stderr

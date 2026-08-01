@@ -20,7 +20,8 @@ from typing import Any
 import pytest
 import yaml
 
-from chart_manager.cli import main as main_cli
+from chart_manager.cli import plan as plan_cli
+from chart_manager.plumbing.exit_codes import EXIT_SPEC
 
 from .conftest import cli
 
@@ -132,7 +133,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
     captured: list[list[str]] = []
     result_object = _impact_result()
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: SimpleNamespace(
             analyze=lambda changes: captured.append(changes) or result_object
@@ -184,7 +185,7 @@ def test_impact_rejects_an_unknown_format_before_analysis(
     callback, so it fires before the service is ever constructed.
     """
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: pytest.fail("service should not be constructed"),
     )
@@ -204,7 +205,7 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
         warnings=("unmatched chart change README.md",),
     )
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
@@ -214,7 +215,9 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
     # off a terminal.
     result = cli("plan", "-o", "table", "--changed-file", "charts/grafana/values-dev.yaml")
 
-    assert result.exit_code == 1
+    # A spec error exits 3 -- the document still printed, but the authored
+    # lifecycle files it was built from did not parse.
+    assert result.exit_code == EXIT_SPEC
     assert "Validation:" in result.stdout
     assert "grafana/dev" in result.stdout
     assert "validation-trigger: charts/grafana/values-dev.yaml" in result.stdout
@@ -231,7 +234,7 @@ def test_impact_yaml_preserves_machine_envelope(
 ) -> None:
     result_object = _impact_result()
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: SimpleNamespace(analyze=lambda changes: result_object),
     )
