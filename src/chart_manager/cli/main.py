@@ -15,6 +15,7 @@ import yaml
 from rich.markup import escape
 from rich.table import Table
 
+from chart_manager.cli import doctor as doctor_cli
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import output as output_mod
@@ -156,6 +157,8 @@ grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling."
 # The `event` group owns its own tree (group plus the `emit` subgroup), so it
 # mounts onto the root like upgrade/publish.
 events_cli.register(app)
+# Root-level: a preflight is about the process, not about one group.
+doctor_cli.register(app)
 helmrelease_cli.register(helmrelease_app)
 validate_cli.register_validate(chart_app)
 validate_cli.register_cache(chart_cache_app)

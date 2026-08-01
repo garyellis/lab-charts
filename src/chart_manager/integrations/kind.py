@@ -10,7 +10,15 @@ from chart_manager.plumbing.commands import (
     CommandRunner,
     SubprocessRunner,
 )
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import (
+    PROBE_TIMEOUT,
+    Check,
+    CheckStatus,
+    first_line,
+    probe_binary,
+)
 
 # kind labels every node container it creates with this label whose value
 # is the cluster name. Discovering containers by label (rather than by the
@@ -59,6 +67,53 @@ class Kind:
         # Per-subprocess wall-clock cap. None = unbounded (today's behavior);
         # nothing else bounds `docker ps` or a `kind create cluster`.
         self.timeout = timeout
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report kind, the docker client, and whether its daemon answers.
+
+        Three checks rather than one because they fail independently and
+        want different advice: no `kind` means "install kind", no `docker`
+        means "install Docker", and a docker client with no daemon behind it
+        means "start Docker Desktop" -- the most common of the three and the
+        one a binary-only check would call healthy.
+
+        The daemon probe is `docker version`, which is read-only, and it
+        carries `PROBE_TIMEOUT` because an unreachable daemon is exactly the
+        condition being tested: without a cap this is where `doctor` would
+        hang instead of reporting.
+        """
+        kind = probe_binary(
+            self.runner,
+            "kind",
+            name="kind",
+            version_args=("version",),
+            remediation="install kind -- https://kind.sigs.k8s.io/docs/user/quick-start/",
+        )
+        docker = probe_binary(
+            self.runner,
+            "docker",
+            name="docker",
+            remediation="install Docker -- https://docs.docker.com/get-started/get-docker/",
+        )
+        if docker.status is not CheckStatus.OK:
+            return (kind, docker, Check.skipped("docker-daemon", "docker client unavailable"))
+        return (kind, docker, self._daemon_check())
+
+    def _daemon_check(self) -> Check:
+        """Ask the configured daemon for its server version."""
+        where = "the ambient daemon" if self._env is None else self._env["DOCKER_HOST"]
+        try:
+            result = self._run(
+                ["docker", "version", "--format", "{{.Server.Version}}"],
+                check=False,
+                timeout=PROBE_TIMEOUT,
+            )
+        except ExternalCommandError as exc:
+            return _daemon_unreachable(where, first_line(str(exc)))
+        server = first_line(result.stdout)
+        if result.returncode != 0 or not server:
+            return _daemon_unreachable(where, first_line(result.stderr) or "no server version")
+        return Check.ok("docker-daemon", f"{server} ({where})")
 
     def clusters(self) -> list[str]:
         """Return known cluster names; [] if `kind` fails (e.g. not installed)."""
@@ -223,15 +278,25 @@ class Kind:
         *,
         check: bool = True,
         capture: bool = True,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Every kind/docker invocation, scoped to this adapter's daemon and cap.
 
         One funnel rather than `env=`/`timeout=` repeated at nine call sites:
         an invocation added later that forgets them silently escapes back to
         the ambient docker daemon, which is the bug this class was fixed for.
+
+        `timeout` overrides the instance cap for the one caller that owns a
+        tighter budget than the deployment knob -- the preflight, whose whole
+        job is to answer quickly when the daemon is *not* there and which
+        must not inherit `Settings.command_timeout`'s unbounded default.
         """
         return self.runner.run(
-            args, check=check, capture=capture, timeout=self.timeout, env=self._env
+            args,
+            check=check,
+            capture=capture,
+            timeout=timeout if timeout is not None else self.timeout,
+            env=self._env,
         )
 
     def _node_container_names(self, name: str, *, include_stopped: bool) -> list[str]:
@@ -257,3 +322,13 @@ class Kind:
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _daemon_unreachable(where: str, detail: str) -> Check:
+    """The docker-daemon check when the client could not reach a server."""
+    return Check.failed(
+        "docker-daemon",
+        f"no docker daemon at {where}: {detail}",
+        remediation="start Docker (or point DOCKER_HOST at a running daemon)",
+        outcome=Outcome.ENVIRONMENT,
+    )

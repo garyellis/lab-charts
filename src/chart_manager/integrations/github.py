@@ -8,6 +8,14 @@ from pathlib import Path
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import (
+    PROBE_TIMEOUT,
+    Check,
+    CheckStatus,
+    first_line,
+    probe_binary,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +41,47 @@ class Github:
         self.repo_root = repo_root
         self.runner = runner or SubprocessRunner()
         self.binary = binary
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report the gh binary and whether it holds a usable credential.
+
+        Auth is checked because every method on this adapter runs with
+        `check=True` and treats an auth failure as fatal, so "gh is
+        installed" on its own predicts nothing about whether a promote will
+        get as far as opening a PR.
+
+        `gh auth status` is read-only and honors GH_TOKEN/GITHUB_TOKEN as
+        well as a stored login, so it answers the question for CI and for a
+        workstation with one call. It reaches the network, hence the
+        explicit `PROBE_TIMEOUT`.
+        """
+        binary = probe_binary(
+            self.runner,
+            self.binary,
+            name="gh",
+            remediation="install the GitHub CLI -- https://cli.github.com/",
+        )
+        if binary.status is not CheckStatus.OK:
+            return (binary, Check.skipped("gh-auth", "gh unavailable"))
+        return (binary, self._auth_check())
+
+    def _auth_check(self) -> Check:
+        """Ask gh whether it is authenticated, without printing the token."""
+        try:
+            result = self.runner.run(
+                [self.binary, "auth", "status"],
+                cwd=self.repo_root,
+                check=False,
+                timeout=PROBE_TIMEOUT,
+            )
+        except ExternalCommandError as exc:
+            return _not_authenticated(first_line(str(exc)))
+        # gh has moved this report between stdout and stderr across releases,
+        # so read both rather than betting on one.
+        report = f"{result.stdout}\n{result.stderr}"
+        if result.returncode != 0:
+            return _not_authenticated(_status_line(report, _FAILED_MARKER) or "not logged in")
+        return Check.ok("gh-auth", _status_line(report, _OK_MARKER) or "authenticated")
 
     def find_open_pr_for_branch(
         self, branch: str, *, base: str | None = None
@@ -188,3 +237,31 @@ class Github:
             if candidate.startswith("https://") or candidate.startswith("http://"):
                 url = candidate
         return PullRequest(url=url, number=None)
+
+
+#: `gh auth status` prints a bare hostname header ("github.com") and then one
+#: indented, glyph-marked line per account. The header alone is not a
+#: diagnostic -- it is what a naive "first line" read returns, and it tells
+#: an operator nothing about *why* they are not logged in -- so both details
+#: reach past it for the marked line that says what actually happened.
+_FAILED_MARKER = "X "
+_OK_MARKER = "\N{CHECK MARK} "
+
+
+def _status_line(text: str, marker: str) -> str:
+    """The first `gh auth status` line starting with `marker`, else the first line."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(marker):
+            return stripped
+    return first_line(text)
+
+
+def _not_authenticated(detail: str) -> Check:
+    """The gh-auth check when gh has no credential it can use."""
+    return Check.failed(
+        "gh-auth",
+        detail,
+        remediation="`gh auth login`, or export GH_TOKEN / GITHUB_TOKEN",
+        outcome=Outcome.ENVIRONMENT,
+    )

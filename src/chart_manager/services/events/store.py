@@ -20,8 +20,12 @@ of the queries operators actually run is not.
 import os
 from typing import Protocol
 
+from chart_manager.integrations.aws.dynamodb import client as dynamodb_client
 from chart_manager.integrations.aws.dynamodb.client import get_table
+from chart_manager.integrations.azure.cosmos import client as cosmos_client
 from chart_manager.integrations.azure.cosmos.client import get_container
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import Check
 from chart_manager.services.events.adapters.cosmos import CosmosEventStore
 from chart_manager.services.events.adapters.dynamodb import DynamoDBEventStore
 from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
@@ -29,6 +33,14 @@ from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
 # The attribute both backends partition on. Named once so the writer, the
 # adapters, and scripts/query-events cannot drift apart.
 PARTITION_KEY = "chart_name"
+
+# Where the events live, named once so `preflight_event_store` probes exactly
+# what `get_event_store` would write to.
+COSMOS_DATABASE = "platform"
+EVENTS_RESOURCE = "lifecycle-events"
+
+#: The backend when EVENTS_BACKEND is unset.
+DEFAULT_BACKEND = "cosmos"
 
 
 class EventStore(Protocol):
@@ -56,8 +68,8 @@ class NullEventStore:
 def _build_cosmos_store() -> CosmosEventStore:
     """Wire a CosmosEventStore against the platform/lifecycle-events container."""
     container = get_container(
-        database="platform",
-        container="lifecycle-events",
+        database=COSMOS_DATABASE,
+        container=EVENTS_RESOURCE,
         partition_key=f"/{PARTITION_KEY}",
     )
     return CosmosEventStore(container)
@@ -65,7 +77,7 @@ def _build_cosmos_store() -> CosmosEventStore:
 def _build_dynamodb_store() -> DynamoDBEventStore:
     """Wire a DynamoDBEventStore against the lifecycle-events table."""
     table = get_table(
-        table_name="lifecycle-events",
+        table_name=EVENTS_RESOURCE,
         partition_key=PARTITION_KEY,
         sort_key="event_id",
     )
@@ -73,7 +85,7 @@ def _build_dynamodb_store() -> DynamoDBEventStore:
 
 def get_event_store() -> EventStore:
     """Select and build the event store from EVENTS_BACKEND (default cosmos)."""
-    backend = os.environ.get("EVENTS_BACKEND", "cosmos")
+    backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
     if backend == "cosmos":
         return _build_cosmos_store()
     if backend == "dynamodb":
@@ -81,3 +93,35 @@ def get_event_store() -> EventStore:
     if backend == "none":
         return NullEventStore()
     raise ValueError(f"unsupported EVENTS_BACKEND: {backend!r}")
+
+
+def preflight_event_store() -> tuple[Check, ...]:
+    """Report whether the configured events backend is usable.
+
+    Lives beside `get_event_store` rather than in `doctor` because this is
+    the module that owns the EVENTS_BACKEND switch: a new backend adds a
+    branch here and is reported by `doctor` with no edit to the surface, and
+    the two branch tables cannot drift.
+
+    The reachability probe itself belongs to each backend's client, which is
+    the integration that knows what "reachable" means for it. This function
+    only dispatches -- and answers for the two cases where there is nothing
+    to reach: `none`, which is a supported configuration and not a failure,
+    and an unrecognised value, which is `Outcome.SPEC` because the operator
+    wrote something wrong rather than the environment being down.
+    """
+    backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
+    if backend == "none":
+        return (Check.skipped("events-backend", "EVENTS_BACKEND=none (telemetry disabled)"),)
+    if backend == "cosmos":
+        return (cosmos_client.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
+    if backend == "dynamodb":
+        return (dynamodb_client.preflight(EVENTS_RESOURCE),)
+    return (
+        Check.failed(
+            "events-backend",
+            f"unsupported EVENTS_BACKEND: {backend!r}",
+            remediation="set EVENTS_BACKEND to one of: cosmos, dynamodb, none",
+            outcome=Outcome.SPEC,
+        ),
+    )
