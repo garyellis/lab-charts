@@ -40,6 +40,7 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 _PKG = _SRC / "chart_manager"
 _SERVICES = _PKG / "services"
 _PLUMBING = _PKG / "plumbing"
+_INTEGRATIONS = _PKG / "integrations"
 
 #: Only the surface layer may terminate the process.
 _EXIT_ALLOWED_DIRS = (_PKG / "cli",)
@@ -127,6 +128,51 @@ def test_plumbing_does_not_import_service_domains() -> None:
 
     assert not offenders, (
         "generic plumbing must not import service-domain modules:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_integration_modules_are_discoverable() -> None:
+    """Guard the guard: an empty sweep would make the next test vacuously pass."""
+    paths = sorted(_INTEGRATIONS.rglob("*.py"))
+    assert len(paths) > 8, f"suspiciously few integration modules found: {paths}"
+    assert _INTEGRATIONS / "helm.py" in paths
+    assert _INTEGRATIONS / "kubectl.py" in paths
+
+
+def test_integrations_do_not_import_services() -> None:
+    """Adapters are the bottom of the stack: services depend on them, not back.
+
+    TID251 cannot catch this direction. The banned-api entry names
+    `chart_manager.integrations` -- the module that may not be *imported* --
+    and is lifted inside `integrations/` itself, so an adapter reaching up
+    into `services/` is invisible to it.
+
+    Whatever an adapter needs from a service is passed in by the caller:
+    `Helm` takes its dependency-freshness predicates as constructor
+    arguments, wired from `services/domain/chart_deps` in
+    `chart_manager.composition`, so the helm wrapper never has to know how a
+    Chart.lock is parsed.
+    """
+    forbidden_prefixes = ("chart_manager.services",)
+    offenders: list[str] = []
+
+    for path in sorted(_INTEGRATIONS.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            imported: tuple[str, ...] = ()
+            if isinstance(node, ast.Import):
+                imported = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = (node.module,)
+            for module in imported:
+                if module.startswith(forbidden_prefixes):
+                    rel = path.relative_to(_SRC)
+                    offenders.append(f"{rel}:{node.lineno}: {module}")
+
+    assert not offenders, (
+        "integrations/ is the adapter layer and must not import services/:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nPass what the adapter needs in from the composition root instead."
     )
 
 

@@ -20,10 +20,10 @@ of the queries operators actually run is not.
 import os
 from typing import Protocol
 
-from chart_manager.integrations.aws.dynamodb import client as dynamodb_client
-from chart_manager.integrations.aws.dynamodb.client import get_table
-from chart_manager.integrations.azure.cosmos import client as cosmos_client
-from chart_manager.integrations.azure.cosmos.client import get_container
+from chart_manager.integrations import cosmos as cosmos_client
+from chart_manager.integrations import dynamodb as dynamodb_client
+from chart_manager.integrations.cosmos import get_container
+from chart_manager.integrations.dynamodb import get_table
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.services.events.adapters.cosmos import CosmosEventStore
