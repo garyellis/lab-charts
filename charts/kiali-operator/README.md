@@ -67,7 +67,7 @@ are disabled there — the `minimal` test profile verifies only that the
 operator becomes Available and registers the `kialis.kiali.io` CRD.
 
 ```sh
-chart-manager validate run --chart kiali-operator --all
+chart-manager chart validate --chart kiali-operator --all
 chart-manager sandbox test kiali-operator --profile minimal --namespace kiali-operator
 ```
 

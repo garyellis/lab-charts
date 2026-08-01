@@ -4,7 +4,7 @@ We don't shell out to helm/kubeconform/kyverno here — that's integration
 territory. These tests exercise the CLI's emission, format routing,
 side-file writing, and GITHUB_STEP_SUMMARY behavior by driving the
 internal `_emit_result` helper with a fabricated RunResult and by
-invoking `--help` / `--format unknown` through Typer's CliRunner.
+invoking `--help` / `--output unknown` through Typer's CliRunner.
 """
 
 from __future__ import annotations
@@ -16,11 +16,8 @@ from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
-import typer
-from typer.testing import CliRunner
 
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.main import app
 from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
@@ -28,6 +25,8 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
+
+from .conftest import cli
 
 
 def _result() -> RunResult:
@@ -56,7 +55,7 @@ class _Captured(NamedTuple):
 def _capture(fn) -> _Captured:
     """Capture the data projection and the narration separately.
 
-    `validate_cli.console` is the `--format` projection and shares a buffer
+    `validate_cli.console` is the `--output` projection and shares a buffer
     with raw `sys.stdout.write` (json/md go out that way); `validate_cli.
     narration` is everything else. Keeping them in two buffers is what lets
     a test assert that a warning did *not* land in the JSON document.
@@ -88,7 +87,7 @@ def _capture_stdout(fn) -> str:
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="json", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=out_dir)
     )
     payload = json.loads(output)
     assert payload["schema_version"] == 1
@@ -100,7 +99,7 @@ def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None
 
 def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="md", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(_result(), mode="md", out_dir=tmp_path / "out")
     )
     assert output.startswith("## validate")
     assert "| Chart |" in output
@@ -108,10 +107,10 @@ def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     assert "PASS" not in output  # md uses ✅ not PASS
 
 
-def test_emit_text_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
+def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="text", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="table", out_dir=out_dir)
     )
     assert "PASS" in output  # text-table cell text
     assert "Chart" in output
@@ -119,10 +118,10 @@ def test_emit_text_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> 
     assert not (out_dir / "summary.json").exists()
 
 
-def test_emit_all_prints_text_and_writes_summary_md_and_json(tmp_path: Path) -> None:
+def test_emit_all_prints_table_and_writes_summary_md_and_json(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="all", out_dir=out_dir)
+        lambda: validate_cli._emit_result(_result(), mode="all", out_dir=out_dir)
     )
     # Text table on stdout.
     assert "PASS" in output
@@ -149,7 +148,7 @@ def test_github_step_summary_written_when_flag_passed_and_env_set(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -174,7 +173,7 @@ def test_github_step_summary_not_written_when_flag_not_passed(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             # github_step_summary defaults to False
         )
@@ -191,7 +190,7 @@ def test_github_step_summary_warns_when_flag_passed_but_env_unset(
     narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -210,7 +209,7 @@ def test_github_step_summary_appends_across_calls(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -219,7 +218,7 @@ def test_github_step_summary_appends_across_calls(
     _capture_stdout(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -241,7 +240,7 @@ def test_github_step_summary_unwritable_does_not_crash(
     narration = _capture(
         lambda: validate_cli._emit_result(
             _result(),
-            fmt="text",
+            mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
         )
@@ -249,34 +248,37 @@ def test_github_step_summary_unwritable_does_not_crash(
     assert "could not write GITHUB_STEP_SUMMARY" in narration
 
 
-@pytest.mark.parametrize("subcommand", ["chart", "run"])
-def test_each_subcommand_help_lists_github_step_summary_flag(subcommand: str) -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", subcommand, "--help"])
+def test_validate_help_lists_github_step_summary_flag() -> None:
+    """One command, one help page.
+
+    Was parametrized over `validate chart` and `validate run`, which were two
+    names for one function. Both are now spelled `chart validate`, so the
+    parameter distinguished nothing and the second case asserted twice about
+    the same help text.
+    """
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
     assert "--github-step-summary" in result.output
 
 
-def test_validate_format_rejects_unknown_value() -> None:
-    with pytest.raises(typer.BadParameter) as exc:
-        validate_cli._validate_format("yaml")
-    assert "yaml" in str(exc.value)
-    assert "text" in str(exc.value)  # lists allowed values
+def test_output_option_rejects_unknown_value() -> None:
+    # Validation moved to the `-o/--output` parse-time callback in
+    # cli/output.py -- `_validate_format` no longer exists.
+    result = cli("chart", "validate", "--output", "yaml")
+    assert result.exit_code == 2
+    assert "yaml" in result.output
+    assert "table" in result.output  # lists allowed values
 
 
-def test_run_help_lists_format_option() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--help"])
+def test_validate_help_lists_output_option() -> None:
+    """See `test_validate_help_lists_github_step_summary_flag`.
+
+    This absorbed `test_each_subcommand_help_lists_output_option`, which was
+    the same assertion parametrized over the two old spellings.
+    """
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
-    assert "--format" in result.output
-
-
-@pytest.mark.parametrize("subcommand", ["chart", "run"])
-def test_each_subcommand_help_lists_format_option(subcommand: str) -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", subcommand, "--help"])
-    assert result.exit_code == 0
-    assert "--format" in result.output
+    assert "--output" in result.output
 
 
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
@@ -302,7 +304,7 @@ def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> 
     )
     out = _capture_stdout(
         lambda: validate_cli._emit_result(
-            result, fmt="json", out_dir=tmp_path / "out", timings=True
+            result, mode="json", out_dir=tmp_path / "out", timings=True
         )
     )
     payload = json.loads(out)
@@ -315,7 +317,7 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     # can rely on the key. null when --timings is off or the phase didn't
     # record one.
     out = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), fmt="json", out_dir=tmp_path / "out")
+        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=tmp_path / "out")
     )
     payload = json.loads(out)
     render = payload["rows"][0]["phases"]["render"]
@@ -337,7 +339,7 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
     out = _capture_stdout(
         lambda: validate_cli._emit_result(
             outcome,
-            fmt="json",
+            mode="json",
             out_dir=outcome.out_dir,
             requested_charts=("app",),
             requested_environments=("dev",),
@@ -355,14 +357,14 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
         lambda: validate_cli._emit_result(
-            _result(), fmt="text", out_dir=tmp_path / "out", timings=True
+            _result(), mode="table", out_dir=tmp_path / "out", timings=True
         )
     )
     assert "Elapsed" in output
 
 
 def test_resolve_display_none_returns_null() -> None:
-    d = validate_cli._resolve_display("none", fmt="text")
+    d = validate_cli._resolve_display("none", mode="table")
     from chart_manager.services.manifest_validation.progress import NullDisplay
 
     assert isinstance(d, NullDisplay)
@@ -371,14 +373,14 @@ def test_resolve_display_none_returns_null() -> None:
 def test_resolve_display_plain_returns_plain() -> None:
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
 
-    d = validate_cli._resolve_display("plain", fmt="text")
+    d = validate_cli._resolve_display("plain", mode="table")
     assert isinstance(d, PlainNarrationDisplay)
 
 
 def test_resolve_display_auto_with_json_picks_null() -> None:
     from chart_manager.services.manifest_validation.progress import NullDisplay
 
-    d = validate_cli._resolve_display("auto", fmt="json")
+    d = validate_cli._resolve_display("auto", mode="json")
     # JSON output piped through jq must not see progress chatter.
     assert isinstance(d, NullDisplay)
 
@@ -389,21 +391,19 @@ def test_resolve_display_live_without_tty_falls_back(
     from chart_manager.cli.validate_progress import PlainNarrationDisplay
 
     monkeypatch.setattr("sys.stderr.isatty", lambda: False)
-    d = validate_cli._resolve_display("live", fmt="text")
+    d = validate_cli._resolve_display("live", mode="table")
     assert isinstance(d, PlainNarrationDisplay)
 
 
 def test_run_help_lists_new_flags() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--help"])
+    result = cli("chart", "validate", "--help")
     assert result.exit_code == 0
     for flag in ("--workers", "--progress", "--timings", "--verbose"):
         assert flag in result.output
 
 
 def test_run_rejects_unknown_progress_mode() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["validate", "run", "--progress", "fancy", "--all"])
+    result = cli("chart", "validate", "--progress", "fancy", "--all")
     assert result.exit_code != 0
     assert "progress" in result.output.lower()
 
@@ -476,10 +476,7 @@ def test_chart_resolves_a_bare_configured_name_through_the_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", "--chart", "alpha", "--all", "--root", str(tmp_path)],
-    )
+    result = cli("chart", "validate", "--chart", "alpha", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -504,10 +501,7 @@ def test_chart_leaves_an_unresolvable_name_to_the_validation_service(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", "--chart", "ghost", "--all", "--root", str(tmp_path)],
-    )
+    result = cli("chart", "validate", "--chart", "ghost", "--all", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     request, options = calls[0]
@@ -525,28 +519,25 @@ def test_chart_delegates_to_shared_execution_boundary(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--no-policy",
-            "--keep",
-            "--out",
-            str(tmp_path / "rendered"),
-            "--progress",
-            "plain",
-            "--timings",
-            "--format",
-            "md",
-            "--github-step-summary",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--no-policy",
+        "--keep",
+        "--out",
+        str(tmp_path / "rendered"),
+        "--progress",
+        "plain",
+        "--timings",
+        "--output",
+        "md",
+        "--github-step-summary",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -562,7 +553,7 @@ def test_chart_delegates_to_shared_execution_boundary(
     assert options == {
         "progress": "plain",
         "timings": True,
-        "fmt": "md",
+        "mode": "md",
         "github_step_summary": True,
         "charts_dir": None,
     }
@@ -588,17 +579,14 @@ def test_chart_accepts_a_chart_directory_like_charts_test(
     monkeypatch.setattr(validate_cli, "_execute", execute)
     chart_arg = str(chart_path if absolute else Path("fixtures/cert-manager"))
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            chart_arg,
-            "--all",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--chart",
+        chart_arg,
+        "--all",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -619,42 +607,41 @@ def test_run_delegates_to_shared_execution_boundary(
 
     monkeypatch.setattr(validate_cli, "_execute", execute)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--base",
-            "main",
-            "--changed-files",
-            str(changed),
-            "--all",
-            "--phases",
-            "render,policy",
-            "--out",
-            str(tmp_path / "rendered"),
-            "--keep",
-            "--workers",
-            "3",
-            "--progress",
-            "none",
-            "--timings",
-            "--verbose",
-            "--row-timeout",
-            "12",
-            "--dep-update-timeout",
-            "42",
-            "--fail-fast",
-            "--format",
-            "all",
-            "--github-step-summary",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--base",
+        "main",
+        "--changed-files",
+        str(changed),
+        "--all",
+        "--phase",
+        "render",
+        "--phase",
+        "policy",
+        "--out",
+        str(tmp_path / "rendered"),
+        "--keep",
+        "--workers",
+        "3",
+        "--progress",
+        "none",
+        "--timings",
+        "--verbose",
+        "--row-timeout",
+        "12",
+        "--dep-update-timeout",
+        "42",
+        "--fail-fast",
+        "--output",
+        "all",
+        "--github-step-summary",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -677,8 +664,13 @@ def test_run_delegates_to_shared_execution_boundary(
     assert options == {
         "progress": "none",
         "timings": True,
-        "fmt": "all",
+        "mode": "all",
         "github_step_summary": True,
+        # The merged command always reports what it resolved, even when that
+        # is "nothing": `alpha` is not on disk under this root, so the
+        # repository-wide charts dir stands. `_execute` treats None and
+        # omitted identically.
+        "charts_dir": None,
     }
 
 
@@ -688,28 +680,27 @@ def test_run_builds_a_request_from_its_flags(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--all",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--phases",
-            "render,schema",
-            "--workers",
-            "3",
-            "--row-timeout",
-            "12",
-            "--fail-fast",
-            "--root",
-            str(tmp_path),
-            "--progress",
-            "none",
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--all",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--phase",
+        "render",
+        "--phase",
+        "schema",
+        "--workers",
+        "3",
+        "--row-timeout",
+        "12",
+        "--fail-fast",
+        "--root",
+        str(tmp_path),
+        "--progress",
+        "none",
     )
 
     assert result.exit_code == 0
@@ -724,16 +715,99 @@ def test_run_builds_a_request_from_its_flags(
     assert request.root == tmp_path
 
 
+# --- the `validate chart` + `validate run` merge ---------------------------
+#
+# One command now serves two, so the three clauses that make that lossless
+# each get a test. Without them the merge is asserted only by
+# `tests/test_cli_aliases.py`, which proves the aliases reach this function
+# but says nothing about whether this function still means what they meant.
+
+
+def test_a_chart_is_selected_the_same_way_however_it_is_spelled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`chart validate X` and `chart validate --chart X` are one request.
+
+    `--chart` is `validate run`'s spelling and is kept so its callers -- the
+    `validate chart` alias among them -- keep working. If the two spellings
+    built different requests, the alias would be a rename in name only.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+    tail = ("--progress", "none", "--root", str(tmp_path))
+
+    positional = cli("chart", "validate", "alpha", *tail)
+    flag = cli("chart", "validate", "--chart", "alpha", *tail)
+
+    assert positional.exit_code == flag.exit_code == 0
+    assert fake.requests[0] == fake.requests[1]
+    assert fake.requests[0].charts == ("alpha",)
+    assert fake.requests[0].skip_change_detection is True
+
+
+def test_an_explicit_changed_file_list_still_narrows_a_named_chart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--changed-files` outranks a named chart, as it did for `validate run`.
+
+    This is the one combination where "named chart means validate it" would
+    have changed `validate run --chart X --changed-files F` from "the
+    environments F touches, within X" to "every environment of X" -- silently
+    widening a CI run that exists to be narrow. Change detection stays on, so
+    the service reads the file.
+    """
+    changed = tmp_path / "changed.txt"
+    changed.write_text("charts/alpha/values.yaml\n", encoding="utf-8")
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli(
+        "chart", "validate",
+        "--chart", "alpha",
+        "--changed-files", str(changed),
+        "--progress", "none",
+        "--root", str(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].skip_change_detection is False
+    assert fake.requests[0].changed_files == changed
+
+
+def test_no_policy_subtracts_from_the_selected_phases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--no-kubeconform`/`--no-policy` narrow `--phase` rather than replacing it.
+
+    `validate chart` built its phase set from these two flags alone. Making
+    them subtractive means that at the `--phase` default they reproduce that
+    set exactly, and that combining them with an explicit `--phase` -- newly
+    possible, since the two commands are one -- narrows instead of surprising.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli(
+        "chart", "validate",
+        "--all",
+        "--phase", "render",
+        "--phase", "policy",
+        "--no-policy",
+        "--progress", "none",
+        "--root", str(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].phases == frozenset({"render"})
+
+
 def test_run_defaults_to_continuing_after_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
-    )
+    result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 0
     assert fake.requests[0].fail_fast is False
@@ -744,9 +818,7 @@ def test_run_exits_with_the_outcome_exit_code(
 ) -> None:
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out", exit_code=1)))
 
-    result = CliRunner().invoke(
-        app, ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)]
-    )
+    result = cli("chart", "validate", "--all", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 1
 
@@ -754,24 +826,21 @@ def test_run_exits_with_the_outcome_exit_code(
 def test_run_applies_retention_only_after_the_summary_is_written(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """--format all writes sidecars into the render dir; cleanup comes last."""
+    """--output all writes sidecars into the render dir; cleanup comes last."""
     out_dir = tmp_path / "out"
     fake = _FakeApp(_outcome(out_dir))
     _install(monkeypatch, fake)
 
-    CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "run",
-            "--all",
-            "--progress",
-            "none",
-            "--format",
-            "all",
-            "--root",
-            str(tmp_path),
-        ],
+    cli(
+        "chart",
+        "validate",
+        "--all",
+        "--progress",
+        "none",
+        "--output",
+        "all",
+        "--root",
+        str(tmp_path),
     )
 
     assert fake.cleanups == [fake.outcome]
@@ -786,9 +855,7 @@ def test_run_maps_a_rejected_input_onto_its_flag(
         _FakeApp(error=ValidateInputError("cannot read it", hint="changed_files")),
     )
 
-    result = CliRunner().invoke(
-        app, ["validate", "run", "--progress", "none", "--root", str(tmp_path)]
-    )
+    result = cli("chart", "validate", "--progress", "none", "--root", str(tmp_path))
 
     assert result.exit_code == 2
     assert "--changed-files" in result.output
@@ -801,10 +868,21 @@ def test_run_emits_extra_warnings_from_the_outcome(
     fake = _FakeApp(_outcome(tmp_path / "out", warnings=("chart x has no spec",)))
     _install(monkeypatch, fake)
 
+    # Explicit --output table: extra_warnings are only narrated on the
+    # table/all path (see _emit_result), and the default `-o auto` would
+    # resolve to json in this non-TTY test environment, silently dropping
+    # the assertion below without an unrelated-looking failure.
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--progress", "none", "--root", str(tmp_path)],
+        lambda: cli(
+            "chart",
+            "validate",
+            "--all",
+            "--progress",
+            "none",
+            "--output",
+            "table",
+            "--root",
+            str(tmp_path),
         )
     ).stderr
 
@@ -863,7 +941,7 @@ def _outcome_with_not_run(
 
 
 def test_summary_ignores_phases_the_caller_disabled(tmp_path: Path) -> None:
-    """`--phases render` must not report schema/policy as an anomaly."""
+    """`--phase render` must not report schema/policy as an anomaly."""
     outcome = _outcome_with_not_run(
         tmp_path,
         enabled=frozenset({"render"}),
@@ -903,10 +981,22 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
 
     monkeypatch.setattr(validate_cli, "_make_app", _make)
 
+    # Explicit --output table: `_resolve_display` picks NullDisplay whenever
+    # mode is json/md (see its docstring), which would mask the plain-display
+    # assertion below under the default `-o auto` in this non-TTY test
+    # environment.
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--verbose", "--workers", "4", "--root", str(tmp_path)],
+        lambda: cli(
+            "chart",
+            "validate",
+            "--all",
+            "--verbose",
+            "--workers",
+            "4",
+            "--output",
+            "table",
+            "--root",
+            str(tmp_path),
         )
     ).stderr
 
@@ -925,9 +1015,8 @@ def test_verbose_with_one_worker_does_not_warn(
     _install(monkeypatch, _FakeApp(_outcome(tmp_path / "out")))
 
     narration = _capture(
-        lambda: CliRunner().invoke(
-            app,
-            ["validate", "run", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)],
+        lambda: cli(
+            "chart", "validate", "--all", "--verbose", "--workers", "1", "--root", str(tmp_path)
         )
     ).stderr
 
@@ -940,19 +1029,16 @@ def test_chart_builds_a_spec_driven_all_environments_request(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--all",
-            "--progress",
-            "none",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--chart",
+        "alpha",
+        "--all",
+        "--progress",
+        "none",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -969,22 +1055,19 @@ def test_chart_honors_environment_and_validator_toggles(
 ) -> None:
     fake = _FakeApp(_outcome(tmp_path / "out"))
     _install(monkeypatch, fake)
-    result = CliRunner().invoke(
-        app,
-        [
-            "validate",
-            "chart",
-            "--chart",
-            "alpha",
-            "--env",
-            "dev",
-            "--no-kubeconform",
-            "--policy",
-            "--progress",
-            "none",
-            "--root",
-            str(tmp_path),
-        ],
+    result = cli(
+        "chart",
+        "validate",
+        "--chart",
+        "alpha",
+        "--env",
+        "dev",
+        "--no-kubeconform",
+        "--policy",
+        "--progress",
+        "none",
+        "--root",
+        str(tmp_path),
     )
 
     assert result.exit_code == 0
@@ -996,37 +1079,65 @@ def test_chart_honors_environment_and_validator_toggles(
 @pytest.mark.parametrize(
     "args",
     [
-        ["--chart", "alpha"],
-        ["--chart", "alpha", "--env", "dev", "--all"],
+        pytest.param(["--chart", "alpha"], id="no-environment-selection"),
+        pytest.param(["--chart", "alpha", "--env", "dev", "--all"], id="--all-with---env"),
     ],
 )
-def test_chart_requires_exactly_one_environment_selection(args: list[str]) -> None:
-    result = CliRunner().invoke(
-        app,
-        ["validate", "chart", *args],
-    )
+def test_naming_a_chart_no_longer_requires_an_environment_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, args: list[str]
+) -> None:
+    """The merged command drops `validate chart`'s `--env` xor `--all` rule.
 
-    assert result.exit_code == 2
-    assert "--env" in result.output
+    That rule existed because `validate chart` had no other way to say "this
+    chart, every environment" -- it never consulted git, so an empty `envs`
+    would have been ambiguous. The merged command resolves that ambiguity
+    from argv instead: a named chart already means "validate it", so no
+    `--env` means every declared environment, exactly as `--all` did. Keeping
+    the rule would have made `chart validate grafana` -- the design doc's own
+    example -- an error.
+
+    `--all` alongside `--env` is likewise now legal, because that is what
+    `validate run` always did (see
+    `test_run_builds_a_request_from_its_flags`), and one merged command
+    cannot enforce both halves of a contradiction.
+    """
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli("chart", "validate", *args, "--progress", "none", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert fake.requests[0].charts == ("alpha",)
+    assert fake.requests[0].skip_change_detection is True
 
 
 @pytest.mark.parametrize("command", ["render", "schema", "policy"])
-def test_legacy_validate_commands_are_removed(command: str) -> None:
-    result = CliRunner().invoke(app, ["validate", command, "--help"])
+def test_phase_named_commands_are_not_a_surface(command: str) -> None:
+    """A validation *phase* is a `--phases` value, never a command.
+
+    Retargeted from `validate <phase>` to `chart <phase>`: the whole
+    `validate` group is gone, so asserting against it would have passed for
+    the wrong reason -- "no such group" rather than "no such command". The
+    property under test is that the phases did not reappear as commands in
+    the group that now owns validation.
+    """
+    result = cli("chart", command, "--help")
 
     assert result.exit_code == 2
     assert "No such command" in result.output
 
 
 def test_run_rejects_an_unknown_phase() -> None:
-    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", "lint"])
+    result = cli("chart", "validate", "--all", "--phase", "lint")
 
     assert result.exit_code == 2
     assert "unknown phase" in result.output
 
 
 def test_run_rejects_an_empty_phase_list() -> None:
-    result = CliRunner().invoke(app, ["validate", "run", "--all", "--phases", " ,"])
+    # `--phase ""` -- given, but blank -- is the new spelling of "empty";
+    # an omitted `--phase` means "all three phases" instead.
+    result = cli("chart", "validate", "--all", "--phase", "")
 
     assert result.exit_code == 2
-    assert "at least one phase" in result.output
+    assert "--phase needs a phase name" in result.output

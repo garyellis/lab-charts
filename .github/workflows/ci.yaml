@@ -209,8 +209,13 @@ jobs:
           # changed path is selected, independent of lifecycle/test fanout.
           # Compute this on the hosted prep runner so a no-chart PR never
           # reserves the private kind runner or contacts Harbor.
+          # `-o table` is required, not decorative. `plan`'s output default is
+          # `auto`, which resolves to json whenever stdout is not a TTY or
+          # CI=true -- i.e. always, here. This capture is read back with
+          # `while IFS= read -r chart`, so it must be the newline-delimited
+          # chart list that `table` projects, not a JSON array.
           publish_charts="$(
-            uv run chart-manager ci publish-charts --changed-files "$tmp"
+            uv run chart-manager plan --for publish -o table --changed-files "$tmp"
           )"
 
           # Multi-line outputs via random delimiter (avoids any chance of a
@@ -263,12 +268,12 @@ jobs:
           # Chart Manager owns safety fanout, dependentTests expansion, default
           # profile selection, and explicit-list validation. Fail loud if
           # matrix compilation errors; an empty success is a legitimate no-op.
-          if ! matrix="$(uv run chart-manager ci cluster-test-matrix \
+          if ! matrix="$(uv run chart-manager plan -o github \
             "${args[@]}" 2>prep-stderr.txt)"; then
             {
               echo "### sandbox matrix prep failed"
               echo ""
-              echo "\`chart-manager ci cluster-test-matrix\` exited non-zero. stderr:"
+              echo "\`chart-manager plan -o github\` exited non-zero. stderr:"
               echo ""
               echo "\`\`\`"
               cat prep-stderr.txt
@@ -333,7 +338,7 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
-          mise run validate -- "${args[@]}" --format all --keep --github-step-summary
+          mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
@@ -391,7 +396,7 @@ jobs:
       - name: Chart test
         id: sandbox
         run: |
-          uv run chart-manager charts test --chart "$CHART" \
+          uv run chart-manager chart test --chart "$CHART" \
             --profile "$PROFILE" \
             --cluster-name "$CLUSTER_NAME"
 
@@ -545,12 +550,12 @@ jobs:
             short_sha="${SOURCE_SHA:0:8}"
             publish_args+=(
               --version-suffix "pr.${PR_NUMBER}.g${short_sha}"
-              --publish-kind preview
+              --kind preview
               --build-correlation-id "${GITHUB_REPOSITORY}#${PR_NUMBER}"
               --pr-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
             )
           else
-            publish_args+=(--publish-kind release)
+            publish_args+=(--kind release)
           fi
 
-          uv run chart-manager publish "${charts[@]}" "${publish_args[@]}"
+          uv run chart-manager chart publish "${charts[@]}" "${publish_args[@]}"

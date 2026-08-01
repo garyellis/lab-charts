@@ -39,7 +39,7 @@ run = [
 
 [tasks.charts]
 description = "List known chart wrappers."
-run = "uv run chart-manager charts list"
+run = "uv run chart-manager chart list"
 
 [tasks.deps]
 description = "Show the install plan for a chart. Usage: mise run deps -- alloy --profile minimal"
@@ -63,11 +63,11 @@ run = "uv run chart-manager sandbox delete \"$@\""
 
 [tasks.validate]
 description = "Run the spec-driven repository validator. Usage: mise run validate -- --chart grafana --env dev"
-run = "uv run chart-manager validate run \"$@\""
+run = "uv run chart-manager chart validate \"$@\""
 
 [tasks."validate:clean"]
 description = "Remove .chart-manager/rendered/ tree."
-run = "uv run chart-manager validate clean"
+run = "uv run chart-manager chart cache clean"
 
 [tasks.vuln-scan]
 description = "Scan installed Python deps against PyPI's vulnerability database (pip-audit)."

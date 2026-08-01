@@ -1,4 +1,9 @@
-"""Machine-facing CI cluster-test matrix command."""
+"""Machine-facing `plan` projections: `-o github` and `--for publish`.
+
+`.github/workflows/ci.yaml` captures both into shell variables, so their
+stdout is a wire contract: `-o github` is the GitHub Actions matrix JSON and
+`--for publish` is a newline-delimited chart list, not JSON.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +12,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from typer.testing import CliRunner
 
 from chart_manager.cli import main
 from chart_manager.services.ci import MatrixSelection, _select_cluster_tests
 from chart_manager.services.lifecycle import ClusterTestImpact
+
+from .conftest import cli
 
 
 class _CiService:
@@ -73,10 +79,7 @@ def test_diff_matrix_emits_exact_chart_profiles(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["ci", "cluster-test-matrix", "--base", "merge-base"],
-    )
+    result = cli("plan", "-o", "github", "--base", "merge-base")
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {
@@ -93,19 +96,16 @@ def test_all_and_explicit_matrix_modes(
 ) -> None:
     service = _CiService()
     _wire(monkeypatch, service)
-    runner = CliRunner()
 
-    all_result = runner.invoke(main.app, ["ci", "cluster-test-matrix", "--all"])
-    explicit_result = runner.invoke(
-        main.app,
-        [
-            "ci",
-            "cluster-test-matrix",
-            "--chart",
-            "beta",
-            "--chart",
-            "alpha",
-        ],
+    all_result = cli("plan", "-o", "github", "--all")
+    explicit_result = cli(
+        "plan",
+        "-o",
+        "github",
+        "--chart",
+        "beta",
+        "--chart",
+        "alpha",
     )
 
     assert json.loads(all_result.stdout)["include"] == [
@@ -135,10 +135,7 @@ def test_cli_delegates_the_whole_selection_to_the_service(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["ci", "cluster-test-matrix", "--base", "merge-base"],
-    )
+    result = cli("plan", "-o", "github", "--base", "merge-base")
 
     assert result.exit_code == 0
     assert service.selections == [
@@ -152,10 +149,7 @@ def test_matrix_rejects_conflicting_modes(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["ci", "cluster-test-matrix", "--all", "--chart", "alpha"],
-    )
+    result = cli("plan", "-o", "github", "--all", "--chart", "alpha")
 
     assert result.exit_code == 1
     assert isinstance(result.exception, main.ChartManagerError)
@@ -168,10 +162,12 @@ def test_publish_charts_emits_newline_list_from_explicit_file(
     service = _CiService()
     _wire(monkeypatch, service)
 
-    result = CliRunner().invoke(
-        main.app,
-        ["ci", "publish-charts", "--changed-files", "changed.txt"],
-    )
+    # `-o table` names the projection under test. The output default is
+    # `auto`, which resolves to json off a terminal -- which is what
+    # CliRunner is, and what CI is. This is the exact contract
+    # `.github/workflows/ci.yaml` depends on: it captures this stdout and
+    # reads it with `while IFS= read -r chart`, so it passes `-o table` too.
+    result = cli("plan", "--for", "publish", "-o", "table", "--changed-files", "changed.txt")
 
     assert result.exit_code == 0
     assert result.stdout == "alpha\nzeta\n"

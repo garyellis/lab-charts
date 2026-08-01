@@ -8,7 +8,7 @@ The rule, stated once so it is never re-derived:
 This is deliberately more precise than "stdout is data, stderr is
 narration". A human-readable table *is* the selected projection when the
 format resolves to text, so it belongs on stdout. Get that backwards and
-`chart-manager charts list | less` shows an empty page. What belongs on
+`chart-manager chart list | less` shows an empty page. What belongs on
 stderr is everything the caller did not ask for as output: progress,
 warnings, access hints, deprecation notices, and error detail.
 
@@ -54,9 +54,8 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from chart_manager.cli.main import app
+from .conftest import cli
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _CLI = _SRC / "chart_manager" / "cli"
@@ -80,15 +79,22 @@ def _argv(name: str, root: Path) -> list[str]:
     """Commands that reach a real projection without a cluster or network."""
     return {
         "validate-json": [
-            "validate", "run", "--all", "--format", "json",
+            "chart", "validate", "--all", "--output", "json",
             "--progress", "none", "--root", str(root),
         ],
+        # Deliberately does NOT name `--output json`: it lets `auto` resolve
+        # to json, which is what happens off a terminal and therefore what
+        # happens in CI. An *explicit* `-o json` implies `--quiet` (design doc
+        # 6.2), which would suppress the very warning this case exists to
+        # produce -- and the regression being guarded is a warning landing in
+        # the JSON document, which only has teeth while the warning is emitted.
+        # See `cli/output.resolve` for why auto-resolved json is not quiet.
         "validate-json-with-warning": [
-            "validate", "run", "--all", "--format", "json",
+            "chart", "validate", "--all",
             "--progress", "none", "--github-step-summary", "--root", str(root),
         ],
         "cluster-test-matrix": [
-            "ci", "cluster-test-matrix", "--all", "--root", str(root),
+            "plan", "-o", "github", "--all", "--root", str(root),
         ],
     }[name]
 
@@ -108,7 +114,7 @@ def test_json_projections_are_parseable_on_stdout(
     `json.loads` raised -- exactly what a `| jq` consumer would hit.
     """
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    result = CliRunner().invoke(app, _argv(command, root))
+    result = cli(*_argv(command, root))
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -123,7 +129,7 @@ def test_the_warning_case_actually_warns(root: Path, monkeypatch: pytest.MonkeyP
     while no longer testing anything.
     """
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    result = CliRunner().invoke(app, _argv("validate-json-with-warning", root))
+    result = cli(*_argv("validate-json-with-warning", root))
 
     assert "GITHUB_STEP_SUMMARY" in result.stderr
     assert "GITHUB_STEP_SUMMARY" not in result.stdout
@@ -132,10 +138,10 @@ def test_the_warning_case_actually_warns(root: Path, monkeypatch: pytest.MonkeyP
 def _narration_case(name: str, root: Path) -> tuple[list[str], str]:
     """(argv, the narration fragment it must print) for cluster-free commands."""
     if name == "nothing-to-clean":
-        return ["validate", "clean", "--root", str(root)], "nothing to clean"
+        return ["chart", "cache", "clean", "--root", str(root)], "nothing to clean"
     if name == "cleaned":
         (root / ".chart-manager" / "rendered").mkdir(parents=True)
-        return ["validate", "clean", "--root", str(root)], "cleaned:"
+        return ["chart", "cache", "clean", "--root", str(root)], "cleaned:"
     if name == "no-dashboards":
         return ["grafana", "lint-dashboards", "--root", str(root)], "no dashboards found"
     raise AssertionError(f"unknown narration case: {name}")
@@ -145,19 +151,19 @@ def _narration_case(name: str, root: Path) -> tuple[list[str], str]:
 def test_narration_goes_to_stderr_and_never_to_stdout(case: str, root: Path) -> None:
     """Status lines are not a projection, so nothing may pipe them."""
     argv, fragment = _narration_case(case, root)
-    result = CliRunner().invoke(app, argv)
+    result = cli(*argv)
 
     assert fragment in result.stderr, result.output
     assert fragment not in result.stdout
 
 
 def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> None:
-    """`validate clean` produces no document, so stdout must be empty.
+    """`chart cache clean` produces no document, so stdout must be empty.
 
     This is the property that makes `cmd >/dev/null` a safe way to silence
     a mutating command without also silencing its errors.
     """
-    result = CliRunner().invoke(app, ["validate", "clean", "--root", str(root)])
+    result = cli("chart", "cache", "clean", "--root", str(root))
 
     assert result.stdout == ""
     assert result.stderr != ""

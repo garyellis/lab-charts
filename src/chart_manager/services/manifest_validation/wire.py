@@ -2,7 +2,7 @@
 
 This module is the single source of truth for the machine-readable
 projections of a `RunResult`: the jq-friendly JSON payload and the
-GitHub-flavored markdown summary. Every surface -- the CLI's `--format
+GitHub-flavored markdown summary. Every surface -- the CLI's `--output
 json|md`, a REST endpoint, a PR-comment bot, a Slack app -- projects through
 these functions so they cannot diverge while all claiming the same
 `JSON_SCHEMA_VERSION`.

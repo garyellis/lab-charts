@@ -1,9 +1,10 @@
 from pathlib import Path
 
-from typer.testing import CliRunner, Result
+from typer.testing import Result
 
-from chart_manager.cli import main
 from chart_manager.services.grafana.dashboard_lint import lint_dashboard, lint_paths
+
+from .conftest import cli
 
 #: A dashboard that satisfies every rule, for the "exit 0 still means clean"
 #: case below.
@@ -123,7 +124,7 @@ def test_lint_result_on_empty_target_list_is_ok(tmp_path: Path) -> None:
 
 
 def _lint(*argv: str) -> Result:
-    return CliRunner().invoke(main.app, ["grafana", "lint-dashboards", *argv])
+    return cli("grafana", "lint-dashboards", *argv)
 
 
 def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(

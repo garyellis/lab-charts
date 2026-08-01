@@ -108,7 +108,7 @@ name but stores no credential in Helm values. Runtime registration still
 requires the Secret to exist and contain valid GitHub credentials.
 
 ```sh
-uv run chart-manager validate run --chart arc-runner-set --env ci --all
+uv run chart-manager chart validate --chart arc-runner-set --env ci --all
 uv run chart-manager charts spec arc-runner-set
 ```
 

@@ -29,10 +29,12 @@ from pathlib import Path
 
 import pytest
 import typer.main
-from typer.testing import CliRunner, Result
+from typer.testing import Result
 
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
+
+from .conftest import cli
 
 
 @pytest.fixture(autouse=True)
@@ -67,8 +69,8 @@ def _config(directory: Path, root: Path) -> Path:
 
 
 def _charts(*argv: str) -> Result:
-    """`charts list` is the cheapest command whose output names the root used."""
-    return CliRunner().invoke(main.app, [*argv])
+    """`chart list` is the cheapest command whose output names the root used."""
+    return cli(*argv)
 
 
 # --------------------------------------------------------------------------
@@ -81,7 +83,7 @@ def test_root_defaults_to_the_working_directory(
 ) -> None:
     monkeypatch.chdir(_repo_with_chart(tmp_path, "zeta"))
 
-    result = _charts("charts", "list")
+    result = _charts("chart", "list")
 
     assert result.exit_code == 0
     assert "zeta" in result.stdout
@@ -93,7 +95,7 @@ def test_config_file_beats_the_default(
     monkeypatch.chdir(tmp_path)
     from_file = _repo_with_chart(tmp_path / "file", "beta")
 
-    result = _charts("--config", str(_config(tmp_path, from_file)), "charts", "list")
+    result = _charts("--config", str(_config(tmp_path, from_file)), "chart", "list")
 
     assert result.exit_code == 0
     assert "beta" in result.stdout
@@ -107,7 +109,7 @@ def test_env_beats_the_config_file(
     from_env = _repo_with_chart(tmp_path / "env", "gama")
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(from_env))
 
-    result = _charts("--config", str(_config(tmp_path, from_file)), "charts", "list")
+    result = _charts("--config", str(_config(tmp_path, from_file)), "chart", "list")
 
     assert result.exit_code == 0
     assert "gama" in result.stdout
@@ -120,7 +122,7 @@ def test_flag_beats_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     from_flag = _repo_with_chart(tmp_path / "flag", "zeta")
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(from_env))
 
-    result = _charts("--root", str(from_flag), "charts", "list")
+    result = _charts("--root", str(from_flag), "chart", "list")
 
     assert result.exit_code == 0
     assert "zeta" in result.stdout
@@ -140,7 +142,7 @@ def test_a_commands_own_root_beats_the_global_root(
     command_root = _repo_with_chart(tmp_path / "cmd", "zeta")
 
     result = _charts(
-        "--root", str(global_root), "charts", "list", "--root", str(command_root)
+        "--root", str(global_root), "chart", "list", "--root", str(command_root)
     )
 
     assert result.exit_code == 0
@@ -160,9 +162,7 @@ def test_the_global_root_reaches_a_nested_group(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
-    result = CliRunner().invoke(
-        main.app, ["--root", str(elsewhere), "grafana", "lint-dashboards"]
-    )
+    result = cli("--root", str(elsewhere), "grafana", "lint-dashboards")
 
     # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
@@ -184,7 +184,7 @@ def test_settings_is_never_mutated_to_carry_the_root(
     assert Settings.model_config["frozen"] is True
 
     other = _repo_with_chart(tmp_path / "other", "zeta")
-    assert _charts("--root", str(other), "charts", "list").exit_code == 0
+    assert _charts("--root", str(other), "chart", "list").exit_code == 0
 
     assert Settings().root == Path(".")
 
@@ -196,7 +196,7 @@ def test_an_absent_config_file_is_not_an_error(
     monkeypatch.chdir(_repo_with_chart(tmp_path, "zeta"))
     assert not (tmp_path / DEFAULT_CONFIG_FILE).exists()
 
-    result = _charts("charts", "list")
+    result = _charts("chart", "list")
 
     assert result.exit_code == 0
 
@@ -289,7 +289,7 @@ def test_verbosity_is_a_count_not_a_boolean(
 
 
 def test_version_command_prints_the_version_on_stdout() -> None:
-    result = CliRunner().invoke(main.app, ["version"])
+    result = cli("version")
 
     assert result.exit_code == 0
     assert result.stdout.strip() == main._package_version()
@@ -302,31 +302,80 @@ def _root_option_names() -> set[str]:
     return {opt for param in command.params for opt in param.opts}
 
 
-def test_there_is_no_global_output_flag() -> None:
-    """`-o` still means an output *path* on `grafana export-dashboard`.
+def test_there_is_a_global_output_flag() -> None:
+    """P1.4 landed the root `-o`, together with the vocabulary unification.
 
-    Landing a root `-o table|json` before that is unified would ship a
-    release where one flag means three things (design doc 6.2 / 8.x).
+    It was deliberately held back from P0.10 (design doc 6.2 / plan 2.7)
+    until there was one vocabulary for it to name, so that no release ever
+    shipped `-o` meaning three different things.
     """
-    assert "-o" not in _root_option_names()
-    assert "--output" not in _root_option_names()
+    assert "-o" in _root_option_names()
+    assert "--output" in _root_option_names()
 
-    result = CliRunner().invoke(main.app, ["-o", "json", "version"])
-    assert result.exit_code == 2
+    result = cli("-o", "json", "version")
+    assert result.exit_code == 0
+
+
+def test_the_global_output_does_not_reach_grafana_export_dashboards_path() -> None:
+    """The collision that kept `-o` out of P0.10, proven absent.
+
+    `grafana export-dashboard` has its own `-o`, and it is a *file path*.
+    Two things could have broken it, and this asserts both are fine:
+
+      1. Click scopes options per command, so a root `-o` and a subcommand
+         `-o` are separate parameters and the subcommand's wins after its
+         own name.
+      2. `cli/main.global_options` seeds `ctx.default_map` for `--root` by
+         parameter *name*. Doing the same for `output` would hand this
+         command `Path("json")` and write the dashboard into a file called
+         `json` -- silently, exiting 0. It deliberately does not.
+
+    P2.2 flips this flag to a format on purpose, with no alias. Until then
+    it means a path, including under a global `-o`.
+    """
+    root_command = typer.main.get_command(main.app)
+    command = root_command.commands["grafana"].commands["export-dashboard"]
+    output_param = next(p for p in command.params if p.name == "output")
+    assert "-o" in output_param.opts
+    assert output_param.default is None
+
+    # Leg 2, checked against the whole nested tree rather than its top level.
+    # `_root_default_map` returns `{"grafana": {"export-dashboard": {...}}}`,
+    # so a top-level `"output" not in ...` would pass no matter what and prove
+    # nothing. Walk it.
+    def _keys(mapping: dict[str, object]) -> set[str]:
+        found: set[str] = set()
+        for key, value in mapping.items():
+            if isinstance(value, dict):
+                found |= _keys(value)
+            else:
+                found.add(key)
+        return found
+
+    seeded = main._root_default_map(root_command, Path(".")) or {}
+    assert _keys(seeded) == {"root"}, (
+        "the global callback may seed only `root` into default_map; seeding "
+        "`output` would redirect `grafana export-dashboard` into a file named "
+        "after the projection"
+    )
+
+    # And end to end: a global `-o json` must not become this command's path.
+    result = cli("-o", "json", "grafana", "export-dashboard", "--help")
+    assert result.exit_code == 0
 
 
 def test_there_is_no_global_version_flag() -> None:
     """`--version` is the *chart* version elsewhere; the CLI's is a command."""
     assert "--version" not in _root_option_names()
 
-    result = CliRunner().invoke(main.app, ["--version"])
+    result = cli("--version")
     assert result.exit_code == 2
 
 
 def test_chart_version_flag_still_belongs_to_the_commands_that_own_it() -> None:
     """Guard the guard for the test above: prove the collision is real."""
     command = typer.main.get_command(main.app)
-    publish = command.commands["publish"]
+    publish = command.commands["chart"].commands["publish"]
 
     assert "--version" in {opt for param in publish.params for opt in param.opts}
 

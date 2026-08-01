@@ -134,7 +134,7 @@ def test_publish_forwards_event_metadata_and_strict_failure_exits_nonzero(
             "grafana",
             "--repository",
             "oci://registry",
-            "--publish-kind",
+            "--kind",
             "release",
             "--build-correlation-id",
             "owner/repository#9",

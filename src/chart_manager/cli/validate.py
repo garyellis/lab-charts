@@ -1,4 +1,4 @@
-"""`chart-manager validate` sub-app.
+"""`chart-manager chart validate` and `chart cache clean`.
 
 Thin CLI shell over `services/manifest_validation/app.ManifestValidationService`: flag shape and
 help text, progress-display choice, output-format dispatch, and the
@@ -7,8 +7,26 @@ changes the *answer* — worklist construction, row assembly, helm binding,
 workers, run identity, artifact retention — lives in the service.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
-This `register(app)` pattern keeps cli/main.py free of validate-specific
-imports and lets the sub-app grow without touching main.py.
+The `register_*(app)` pattern keeps cli/main.py free of validate-specific
+imports and lets these commands grow without touching main.py.
+
+**`validate` is one command where there used to be two.** `validate chart
+--chart X --env E` and `validate run` were separate Typer commands that
+already shared `_execute`; they differed only in how they selected work.
+The merged form expresses that difference as *argv shape* rather than as
+two command names:
+
+    chart validate X --env dev     # name the chart -> validate exactly it
+    chart validate                 # name nothing   -> git-derived worklist
+
+`--chart` survives as a second spelling of that argument, because
+`validate run --chart X` already meant the same thing — the service says so
+itself (`ManifestValidationService._resolve_changed_files`: "A plain
+``--chart`` is an intentional request to validate that chart, not a filter
+over an unrelated Git diff"). So the merge costs no behaviour: for every
+argv either old command accepted, this one builds a request the service
+resolves to the same worklist. Both old spellings are hidden aliases of
+this one function, so neither can drift from it.
 """
 
 from __future__ import annotations
@@ -23,6 +41,7 @@ from typing import Annotated
 
 import typer
 
+from chart_manager.cli import output as output_mod
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
@@ -35,7 +54,7 @@ from chart_manager.cli.validate_render import (
 )
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.local_resources import resolve_chart_target
+from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ALL_PHASES,
     ManifestValidationService,
@@ -48,35 +67,25 @@ from chart_manager.services.manifest_validation.models import PHASE_ORDER, RunRe
 from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
 from chart_manager.services.manifest_validation.wire import to_json, to_markdown
 
-_FORMATS = ("text", "md", "json", "all")
+#: This command's output vocabulary. `all` is local to `validate` and is not
+#: really a projection: it prints the table on stdout *and* writes
+#: summary.md/summary.json sidecars into the render dir.
+#: `.github/workflows/ci.yaml` runs `--output all --keep --github-step-summary`,
+#: so it is load-bearing and must not be folded into `md` or `json`.
+#: `yaml` is deliberately absent -- there is no yaml projection to offer, and
+#: advertising one would be a lie the resolver would then have to invent.
+_OUTPUTS = (output_mod.TABLE, output_mod.MD, output_mod.JSON, output_mod.ALL)
 _PROGRESS_MODES = ("auto", "live", "plain", "none")
 # Maps a domain error's `hint` (an input name) onto the flag that carries it.
 _PARAM_HINTS = {
     "changed_files": "--changed-files",
-    "phases": "--phases",
+    "phases": "--phase",
 }
-
-
-def _validate_format(value: str) -> str:
-    """Return `value` if it is a known --format, else raise BadParameter."""
-    if value not in _FORMATS:
-        raise typer.BadParameter(
-            f"unknown format: {value} (allowed: {', '.join(_FORMATS)})",
-            param_hint="--format",
-        )
-    return value
 
 
 # --- Shared option declarations -------------------------------------------
 #
 # Shared options for the spec-driven chart and repository commands.
-ChartOption = Annotated[
-    str,
-    typer.Option(
-        "--chart",
-        help="Chart name or chart directory.",
-    ),
-]
 OutOption = Annotated[
     Path | None,
     typer.Option(
@@ -87,17 +96,16 @@ KeepOption = Annotated[
     bool,
     typer.Option("--keep/--no-keep", help="Keep rendered output on success."),
 ]
-FormatOption = Annotated[
-    str,
-    typer.Option(
-        "--format",
-        help="Output format: text (default), md, json, or all.",
-        # Validated at parse time, not at emission time. `_validate_format`
-        # is only reachable from inside `_emit_result`, which runs *after*
-        # the whole helm/kubeconform/kyverno pipeline -- so a typo cost a
-        # full validate run, and the BadParameter it raised unwound past
-        # `app.cleanup(outcome)`, orphaning the rendered tree on disk.
-        callback=_validate_format,
+#: Validated at parse time by `output_option`'s callback, not at emission
+#: time. That is not tidiness: the old `--format` was checked inside
+#: `_emit_result`, which runs *after* the whole helm/kubeconform/kyverno
+#: pipeline -- so a typo cost a full validate run, and the BadParameter it
+#: raised unwound past `app.cleanup(outcome)`, orphaning the rendered tree.
+OutputOption = Annotated[
+    str | None,
+    output_mod.output_option(
+        *_OUTPUTS,
+        extra_help=" all = table plus summary.md/summary.json sidecars in the render dir.",
     ),
 ]
 GithubStepSummaryOption = Annotated[
@@ -115,18 +123,21 @@ GithubStepSummaryOption = Annotated[
 ]
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 
-#: The selected `--format` projection. Goes to stdout.
+#: The selected `--output` projection. Goes to stdout.
 console = data_console()
 #: Warnings, spec errors, summaries. Goes to stderr -- these used to share
-#: the stdout console with the `--format json` payload written at
+#: the stdout console with the `--output json` payload written at
 #: `_emit_result`, which corrupted the JSON document in band.
 narration = narration_console()
 
 
-def register(app: typer.Typer) -> None:
-    """Attach the validate subcommands to the given Typer app."""
-    app.command("chart")(chart)
-    app.command("run")(run)
+def register_validate(app: typer.Typer) -> None:
+    """Attach the merged `validate` command to the given Typer app."""
+    app.command("validate")(validate)
+
+
+def register_cache(app: typer.Typer) -> None:
+    """Attach the render-cache commands to the given `chart cache` Typer app."""
     app.command("clean")(clean)
 
 
@@ -153,109 +164,19 @@ def _warn(message: str) -> None:
     narration.print(f"[yellow]{message}[/yellow]")
 
 
-def chart(
-    chart: ChartOption,
-    env: Annotated[
-        list[str],
-        typer.Option(
-            "--env",
-            help="Environment declared in chart-lifecycle.yaml (repeatable).",
+def validate(
+    ctx: typer.Context,
+    charts: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[CHART]...",
+            help=(
+                "Charts to validate, by name or chart directory. Naming a chart "
+                "validates it unconditionally; naming none derives the worklist "
+                "from changed files."
+            ),
         ),
-    ] = [],
-    all_envs: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Validate every environment declared for this chart.",
-        ),
-    ] = False,
-    kubeconform: Annotated[
-        bool,
-        typer.Option(
-            "--kubeconform/--no-kubeconform",
-            help="Enable or disable kubeconform schema validation for this invocation.",
-        ),
-    ] = True,
-    policy: Annotated[
-        bool,
-        typer.Option(
-            "--policy/--no-policy",
-            help="Enable or disable policy validation for this invocation.",
-        ),
-    ] = True,
-    out: OutOption = None,
-    keep: KeepOption = False,
-    progress: Annotated[
-        str,
-        typer.Option(
-            "--progress",
-            help="Progress UI: auto (default), live, plain, or none.",
-        ),
-    ] = "auto",
-    timings: Annotated[
-        bool,
-        typer.Option("--timings/--no-timings", help="Include per-phase elapsed times."),
-    ] = False,
-    fmt: FormatOption = "text",
-    github_step_summary: GithubStepSummaryOption = False,
-    root: RootOption = Path("."),
-) -> None:
-    """Validate one chart using its authored lifecycle environments and inputs."""
-    if all_envs and env:
-        raise typer.BadParameter(
-            "--all and --env are mutually exclusive",
-            param_hint="--all / --env",
-        )
-    if not all_envs and not env:
-        raise typer.BadParameter(
-            "select at least one --env or use --all",
-            param_hint="--env / --all",
-        )
-    phases = {"render"}
-    if kubeconform:
-        phases.add("schema")
-    if policy:
-        phases.add("policy")
-    root = root.resolve()
-    settings = Settings()
-    charts_dir: Path | None = None
-    try:
-        target = resolve_chart_target(
-            root,
-            chart,
-            charts_dir=settings.charts_dir,
-            local_config=settings.local_config,
-        )
-    except SpecError:
-        # The resolver owns name/path resolution; the surface must not
-        # second-guess it with a path heuristic. When it cannot place the
-        # token on disk we pass what the user typed straight through, so the
-        # validation service — which owns the chart namespace — raises the
-        # precise "unknown chart" error listing the available names.
-        pass
-    else:
-        chart = target.name
-        charts_dir = target.path.parent.relative_to(root)
-    request = RunRequest(
-        root=root,
-        charts=(chart,),
-        envs=() if all_envs else tuple(env),
-        skip_change_detection=True,
-        phases=frozenset(phases),
-        out=out,
-        keep=keep,
-    )
-    _execute(
-        request,
-        progress=progress,
-        timings=timings,
-        fmt=fmt,
-        github_step_summary=github_step_summary,
-        charts_dir=charts_dir,
-    )
-
-
-def run(
+    ] = None,
     chart: Annotated[
         list[str],
         typer.Option("--chart", help="Restrict worklist to this chart (repeatable)."),
@@ -282,13 +203,30 @@ def run(
         bool,
         typer.Option("--all", help="Validate every chart x env in every spec; ignore git."),
     ] = False,
-    phases: Annotated[
-        str,
+    phase: Annotated[
+        list[str],
         typer.Option(
-            "--phases",
-            help="Comma-separated subset of render,schema,policy. Default: all three.",
+            "--phase",
+            help=(
+                "Validation phase to run: render, schema, or policy. "
+                "Repeatable. Default: all three."
+            ),
         ),
-    ] = "render,schema,policy",
+    ] = [],
+    kubeconform: Annotated[
+        bool,
+        typer.Option(
+            "--kubeconform/--no-kubeconform",
+            help="Enable or disable kubeconform schema validation for this invocation.",
+        ),
+    ] = True,
+    policy: Annotated[
+        bool,
+        typer.Option(
+            "--policy/--no-policy",
+            help="Enable or disable policy validation for this invocation.",
+        ),
+    ] = True,
     out: OutOption = None,
     keep: KeepOption = False,
     workers: Annotated[
@@ -370,23 +308,49 @@ def run(
             ),
         ),
     ] = False,
-    fmt: FormatOption = "text",
+    output: OutputOption = None,
     github_step_summary: GithubStepSummaryOption = False,
     root: RootOption = Path("."),
 ) -> None:
-    """Build a lifecycle worklist, then render and run selected validators.
+    """Render each selected chart/environment and run the selected validators.
 
-    Worklist selection precedence:
-      --all > --changed-files > explicit --chart > git diff against --base.
+    Worklist selection, first that applies:
+      --all              every chart x env in every spec
+      --changed-files F  the environments the paths in F touch
+      a named chart      every environment that chart declares
+      otherwise          git diff against --base
+
+    A named chart (positional or `--chart`) narrows all four.
     """
-    enabled_phases = _parse_phases(phases)
+    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS, console=console)
+    selected = tuple(charts or ()) + tuple(chart)
+    enabled_phases = _parse_phases(phase)
+    # `--no-kubeconform` / `--no-policy` subtract from the phase set rather
+    # than replacing it, so at the `--phase` default they reproduce the old
+    # `validate chart` semantics exactly ({render} + schema? + policy?) while
+    # still composing with an explicit `--phase`.
+    if not kubeconform:
+        enabled_phases -= {"schema"}
+    if not policy:
+        enabled_phases -= {"policy"}
+    root = root.resolve()
+    target = _chart_target(selected, root=root)
     request = RunRequest(
         root=root,
-        charts=tuple(chart),
+        charts=selected if target is None else (target.name,),
         envs=tuple(env),
         base=base,
         changed_files=changed_files,
-        skip_change_detection=all_charts,
+        # Naming a chart is an unconditional request to validate it -- what
+        # `validate chart` meant, and what the service already says about a
+        # bare `--chart`. An explicit `--changed-files` still outranks it,
+        # because there the caller asked for a *narrowed* run and
+        # `validate run --chart X --changed-files F` meant exactly that.
+        # Those two clauses are what make the merge behaviour-free: on every
+        # argv either old command accepted, the request built here resolves
+        # to the worklist that command produced -- not only on the argv the
+        # alias gate happens to exercise.
+        skip_change_detection=all_charts or (bool(selected) and changed_files is None),
         phases=enabled_phases,
         out=out,
         keep=keep,
@@ -400,9 +364,39 @@ def run(
         request,
         progress=progress,
         timings=timings,
-        fmt=fmt,
+        mode=mode,
         github_step_summary=github_step_summary,
+        charts_dir=None if target is None else target.path.parent.relative_to(root),
     )
+
+
+def _chart_target(selected: tuple[str, ...], *, root: Path) -> ResolvedChartTarget | None:
+    """Place a single selected chart on disk, or return None.
+
+    Only a *single* selection is resolved, because `charts_dir` is one
+    directory: two charts under two different parents have no single answer,
+    and inventing one here would be exactly the surface-side heuristic design
+    commitment 6 forbids. Multi-chart selections therefore keep the
+    repository-wide `charts_dir`, which is what every such caller had before.
+
+    `SpecError` is swallowed on purpose. The resolver owns name/path
+    resolution and the surface must not second-guess it with a path
+    heuristic; when it cannot place the token we forward what the user typed
+    so the validation service — which owns the chart namespace — raises the
+    precise "unknown chart" error listing the available names.
+    """
+    if len(selected) != 1:
+        return None
+    settings = Settings()
+    try:
+        return resolve_chart_target(
+            root,
+            selected[0],
+            charts_dir=settings.charts_dir,
+            local_config=settings.local_config,
+        )
+    except SpecError:
+        return None
 
 
 def _execute(
@@ -410,7 +404,7 @@ def _execute(
     *,
     progress: str,
     timings: bool,
-    fmt: str,
+    mode: str,
     github_step_summary: bool,
     charts_dir: Path | None = None,
 ) -> None:
@@ -438,7 +432,7 @@ def _execute(
             "streamed subprocess output readable"
         )
 
-    display = _resolve_display(progress, fmt=fmt)
+    display = _resolve_display(progress, mode=mode)
 
     app = (
         _make_app(display)
@@ -451,13 +445,13 @@ def _execute(
         raise _bad_parameter(exc) from exc
 
     # Retention runs however emission ends. It is still ordered *after* the
-    # summary (with --format all the sidecars are written into the render
+    # summary (with `-o all` the sidecars are written into the render
     # dir), but a raise from _emit_result must not skip it and orphan the
     # rendered tree on disk.
     try:
         _emit_result(
             outcome,
-            fmt=fmt,
+            mode=mode,
             out_dir=outcome.out_dir,
             extra_warnings=outcome.warnings,
             requested_charts=request.charts,
@@ -467,7 +461,7 @@ def _execute(
             github_step_summary=github_step_summary,
         )
 
-        if fmt in ("text", "all"):
+        if mode in (output_mod.TABLE, output_mod.ALL):
             _print_summary(outcome)
     finally:
         app.cleanup(outcome)
@@ -479,13 +473,13 @@ def _bad_parameter(exc: ValidateInputError) -> typer.BadParameter:
     return typer.BadParameter(str(exc), param_hint=_PARAM_HINTS.get(exc.hint or "", exc.hint))
 
 
-def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
-    """Pick a display impl from the mode + format + TTY status.
+def _resolve_display(progress: str, *, mode: str) -> ProgressDisplay:
+    """Pick a display impl from the progress mode + output mode + TTY status.
 
     - none → NullDisplay.
     - plain → PlainNarrationDisplay (stderr lines).
     - live → LiveTableDisplay; falls back to plain if stderr isn't a TTY.
-    - auto → live in interactive text mode, plain elsewhere.
+    - auto → live in interactive table mode, plain elsewhere.
     """
     if progress == "none":
         return NullDisplay()
@@ -494,7 +488,7 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
     # stderr, which (a) confuses pipe consumers tee-ing both streams and
     # (b) silently masks any progress signal for downstream tooling. Drop
     # to the silent display so the contract is "machine output, no UI".
-    if fmt in ("json", "md"):
+    if mode in (output_mod.JSON, output_mod.MD):
         return NullDisplay()
     is_tty = sys.stderr.isatty()
     if progress == "plain":
@@ -508,15 +502,15 @@ def _resolve_display(progress: str, *, fmt: str) -> ProgressDisplay:
             return PlainNarrationDisplay()
         return LiveTableDisplay()
     # auto
-    if is_tty and fmt == "text":
+    if is_tty and mode == output_mod.TABLE:
         return LiveTableDisplay()
-    return PlainNarrationDisplay() if fmt != "json" else NullDisplay()
+    return PlainNarrationDisplay() if mode != output_mod.JSON else NullDisplay()
 
 
 def _emit_result(
     source: RunResult | RunOutcome,
     *,
-    fmt: str,
+    mode: str,
     out_dir: Path,
     extra_warnings: tuple[str, ...] = (),
     requested_charts: tuple[str, ...] = (),
@@ -525,7 +519,7 @@ def _emit_result(
     verbose: bool = False,
     github_step_summary: bool = False,
 ) -> None:
-    """Render a RunResult to stdout per `fmt` and side-emit summaries.
+    """Render a RunResult to stdout per `mode` and side-emit summaries.
 
     Writes markdown to $GITHUB_STEP_SUMMARY only when the caller passes
     `github_step_summary=True` (driven by the `--github-step-summary`
@@ -533,17 +527,19 @@ def _emit_result(
     callers must opt in explicitly so local debugging on a runner-like
     shell never triggers a surprise side-channel write.
 
-    For `fmt == "all"`, also writes <out_dir>/summary.md and
+    For `mode == "all"`, also writes <out_dir>/summary.md and
     <out_dir>/summary.json so post-job tooling can consume structured
     results without re-parsing markdown.
+
+    `mode` arrives already resolved and already validated (at parse time, by
+    `OutputOption`'s callback), so there is no re-check here.
     """
-    fmt = _validate_format(fmt)
     result = source.result if isinstance(source, RunOutcome) else source
 
     # Both projections are pure functions of (result, timings), and both have
-    # more than one consumer: markdown feeds --format md, the `all` sidecar,
-    # and the step summary; JSON feeds --format json and the sidecar. Memoize
-    # rather than compute eagerly — the default `text` path needs neither, and
+    # more than one consumer: markdown feeds `-o md`, the `all` sidecar, and
+    # the step summary; JSON feeds `-o json` and the sidecar. Memoize rather
+    # than compute eagerly — the default `table` path needs neither, and
     # recomputing was the previous behavior (markdown up to 3x per run). The
     # caches are closures, so they die with this call; nothing is retained.
     @functools.cache
@@ -569,12 +565,12 @@ def _emit_result(
             + "\n"
         )
 
-    if fmt == "json":
+    if mode == output_mod.JSON:
         sys.stdout.write(json_text())
-    elif fmt == "md":
+    elif mode == output_mod.MD:
         sys.stdout.write(markdown_text())
-    else:  # text or all
-        # The table and its detail blocks are the text projection.
+    else:  # table or all
+        # The table and its detail blocks are the table projection.
         console.print(to_text_table(result, include_timings=timings))
         for block in failure_details(result):
             console.print(block)
@@ -584,7 +580,7 @@ def _emit_result(
         for warn in extra_warnings:
             narration.print(f"[yellow]warn:[/yellow] {warn}")
 
-    if fmt == "all":
+    if mode == output_mod.ALL:
         # Best-effort: don't fail the run if the rendered tree was deleted.
         for filename, payload in (
             ("summary.md", markdown_text()),
@@ -619,19 +615,33 @@ def _emit_result(
                 )
 
 
-def _parse_phases(raw: str) -> frozenset[str]:
-    """Parse the comma-separated --phases value into a validated frozenset."""
-    parts = {p.strip() for p in raw.split(",") if p.strip()}
+def _parse_phases(values: list[str]) -> frozenset[str]:
+    """Turn the repeatable `--phase` values into a validated set.
+
+    An empty list means "not given", which is all three phases -- the same
+    default the old comma-separated `--phases render,schema,policy` spelled
+    out. Expressing the default as absence rather than as a literal string is
+    what lets `--no-kubeconform` stay subtractive without having to know
+    whether the caller typed the default explicitly.
+    """
+    parts = {value.strip() for value in values if value.strip()}
     if not parts:
-        raise typer.BadParameter("--phases must list at least one phase", param_hint="--phases")
+        if values:
+            # Given, but nothing but blanks -- `--phase ""`. Silently falling
+            # back to "all phases" would run more work than the caller asked
+            # for and report success for phases they tried to exclude.
+            raise typer.BadParameter(
+                "--phase needs a phase name", param_hint="--phase"
+            )
+        return frozenset(ALL_PHASES)
     unknown = parts - ALL_PHASES
     if unknown:
         raise typer.BadParameter(
             # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
-            # order the user would type them into --phases, which is also
-            # the order the flag's default and help text use.
+            # order the user would type them into --phase, which is also
+            # the order the flag's help text uses.
             f"unknown phase(s): {', '.join(sorted(unknown))}; valid: {','.join(PHASE_ORDER)}",
-            param_hint="--phases",
+            param_hint="--phase",
         )
     return frozenset(parts)
 
@@ -647,7 +657,7 @@ def _print_summary(outcome: RunOutcome) -> None:
     if outcome.charts_unvalidated:
         bits.append(f"{outcome.charts_unvalidated} chart(s) unvalidated")
     # Only a phase the caller *asked for* can be an anomaly worth reporting.
-    # `--phases render` marks schema and policy NOT_RUN by design, so counting
+    # `--phase render` marks schema and policy NOT_RUN by design, so counting
     # every NOT_RUN made a deliberately narrowed run always print
     # "summary: 2 phase(s) NOT_RUN" — training the reader to ignore the one
     # line that exists to flag silent skips.

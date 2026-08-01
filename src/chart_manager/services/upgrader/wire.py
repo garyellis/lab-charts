@@ -1,7 +1,7 @@
 """Versioned wire contract for `upgrade` and `upgrade-finalize`.
 
 This module is the single source of truth for the machine-readable shape of an
-upgrade outcome. Every surface -- the CLI's `--format json`, a REST endpoint, a
+upgrade outcome. Every surface -- the CLI's `-o json`, a REST endpoint, a
 Slack app, a CI step -- projects through `upgrade_to_dict` / `finalize_to_dict`
 so they cannot diverge while all claiming the same `SCHEMA_VERSION`.
 

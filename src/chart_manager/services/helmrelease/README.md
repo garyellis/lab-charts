@@ -149,7 +149,7 @@ chart-manager helmrelease promote \
   --flux-repo git@github.com:org/fluxcd.git \
   --base main \
   --path dev/ \
-  --chart-name cert-manager \
+  --chart cert-manager \
   --version 0.1.0 \
   --dry-run
 ```
@@ -302,8 +302,8 @@ repo if any `HelmRelease` resources under `--path` drift from that version.
 chart-manager helmrelease promote \
   --flux-repo git@github.com:org/lab-fluxcd.git \
   --path prod/ \
-  --environment prod \
-  --chart-name loki \
+  --env prod \
+  --chart loki \
   --version 0.1.2
 ```
 
@@ -313,7 +313,7 @@ Behavior:
    (`--depth 1 --branch <base-branch>`) into a temp directory and discards the
    workdir when the call ends. No local working tree assumed.
 2. Scans `<workdir>/<path>` recursively for `kind: HelmRelease` documents
-   whose `.spec.chart.spec.chart` equals `--chart-name`. Multi-doc YAML and
+   whose `.spec.chart.spec.chart` equals `--chart`. Multi-doc YAML and
    nested subdirectories are supported. Matches against any
    `helm.toolkit.fluxcd.io/v2*` apiVersion.
 3. For each match where `.spec.chart.spec.version` differs from `--version`,

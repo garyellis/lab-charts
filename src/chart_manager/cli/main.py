@@ -17,10 +17,16 @@ from rich.table import Table
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
+from chart_manager.cli import output as output_mod
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.cli.streams import (
+    data_console,
+    error_console,
+    narration_console,
+    set_narration_quiet,
+)
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
@@ -61,7 +67,10 @@ narration = narration_console()
 #: Terminal error reporting. Same stream as `narration`, separate console
 #: because `-q` silences narration and must not silence the reason a command
 #: failed -- a quiet run that dies with no output is unsupportable.
-errors = narration_console()
+#: `error_console()` rather than `narration_console()` is what makes that
+#: structural: only narration consoles are registered with
+#: `streams.set_narration_quiet`, which `-q` and `--output json` both drive.
+errors = error_console()
 
 
 def _container() -> Container:
@@ -124,43 +133,44 @@ def _exit_if_failed(ok: bool) -> None:
 
 
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
-charts_app = typer.Typer(
+chart_app = typer.Typer(
     no_args_is_help=True,
-    help="Inspect Helm charts and their lifecycle intent.",
+    help="Inspect, validate, test, publish, and upgrade Helm charts.",
+)
+chart_cache_app = typer.Typer(
+    no_args_is_help=True,
+    help="Manage chart-manager's on-disk render artifacts.",
 )
 local_app = typer.Typer(
     no_args_is_help=True,
     help="Create, stop, and reset local Kubernetes chart development environments.",
 )
-ci_app = typer.Typer(no_args_is_help=True, help="CI-oriented helpers.")
 helmrelease_app = typer.Typer(
     no_args_is_help=True,
     help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
 )
 # Grafana-specific subcommands. Anything that knows about Grafana JSON / API
-# conventions lives here, not under the generic `charts` group.
+# conventions lives here, not under the generic `chart` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
-validate_app = typer.Typer(
-    no_args_is_help=True,
-    help="Static chart validation: render plus configured validators.",
-)
 
-# setup the events command interface
-events_app = typer.Typer(no_args_is_help=True, help="Emit platform lifecycle events.")
-
-events_cli.register(events_app)
-validate_cli.register(validate_app)
+# The `event` group owns its own tree (group plus the `emit` subgroup), so it
+# mounts onto the root like upgrade/publish.
+events_cli.register(app)
 helmrelease_cli.register(helmrelease_app)
-upgrade_cli.register(app)
-publish_cli.register(app)
+validate_cli.register_validate(chart_app)
+validate_cli.register_cache(chart_cache_app)
+publish_cli.register(chart_app)
+upgrade_cli.register_upgrade(chart_app)
+# Root-level and frozen: `renovate-global.json` pins its literal spelling.
+upgrade_cli.register_finalize(app)
 
-app.add_typer(events_app, name="events")
-app.add_typer(charts_app, name="charts")
+chart_app.add_typer(chart_cache_app, name="cache")
+
+app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
-app.add_typer(ci_app, name="ci")
 app.add_typer(grafana_app, name="grafana")
-app.add_typer(validate_app, name="validate")
 app.add_typer(helmrelease_app, name="helmrelease")
+
 
 @dataclass(frozen=True)
 class GlobalOptions:
@@ -178,6 +188,12 @@ class GlobalOptions:
     quiet: bool
     verbosity: int
     no_color: bool
+    #: The invocation-wide `-o`. Read by `cli/output.resolve` via `ctx.obj`
+    #: and deliberately NOT seeded into `ctx.default_map`: `grafana
+    #: export-dashboard` has a `Path`-typed parameter also named `output`,
+    #: and seeding by name would redirect the dashboard into a file called
+    #: `json`. See `cli/output.py` for the full note.
+    output: str
 
 
 def _package_version() -> str:
@@ -253,17 +269,25 @@ def global_options(
         bool,
         typer.Option("--no-color", help="Disable color. The NO_COLOR environment variable does the same."),
     ] = False,
+    output: output_mod.GlobalOutputOption = output_mod.AUTO,
 ) -> None:
     """Local and CI workflows for lab Helm charts.
 
-    Deliberately absent, and not oversights:
+    `-o/--output` sets the default projection for whichever command runs.
+    A command's own `-o` still wins, so `chart-manager -o json plan -o table`
+    prints a table. Commands that have no projection ignore it.
 
-    * **No global `-o/--output`.** `grafana export-dashboard -o PATH` and
-      `helmrelease --output pretty|json` still exist, so a root `-o` would
-      ship a release in which one flag means three things. It arrives with
-      the format unification (design doc 6.2).
+    It does **not** collide with `grafana export-dashboard -o PATH`, which
+    still writes a file: Click scopes options per command, so the root's `-o`
+    and a subcommand's `-o` are separate parameters, and this callback
+    deliberately does not propagate `output` through `ctx.default_map` the
+    way it propagates `root`. See `cli/output.py`. That flag flips meaning in
+    P2.2, on purpose and with no alias.
+
+    Deliberately absent, and not an oversight:
+
     * **No global `--version` flag.** `--version` already means the *chart*
-      version on `events build/promote`, `publish`, and all three
+      version on `event emit build/promote`, `chart publish`, and all three
       `helmrelease` commands. One flag, two meanings by position, is a bad
       flag -- so the CLI's own version is the `version` command (8.6).
     """
@@ -285,7 +309,12 @@ def global_options(
     # Only narration is silenced. `console` carries the projection the caller
     # asked for and `errors` carries why it failed; `-q` must not swallow
     # either, or `-q` becomes indistinguishable from `2>/dev/null`.
-    narration.quiet = quiet
+    #
+    # Process-wide rather than `narration.quiet = quiet`: `cli/validate.py`,
+    # `cli/publish.py` and `cli/deprecation.py` hold their own narration
+    # consoles, so assigning only to this module's left `-q` a no-op for most
+    # of the surface's output.
+    set_narration_quiet(quiet)
 
     if verbose:
         setup_logging("DEBUG", fmt=settings.log_format)
@@ -296,6 +325,7 @@ def global_options(
         quiet=quiet,
         verbosity=verbose,
         no_color=disable_color,
+        output=output,
     )
     ctx.default_map = _root_default_map(ctx.command, resolved_root)
 
@@ -321,9 +351,6 @@ NamespaceOverrideOption = Annotated[
     ),
 ]
 
-_FORMATS = ("text", "json", "yaml")
-
-
 def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
     if value not in allowed:
         raise typer.BadParameter(
@@ -331,16 +358,6 @@ def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
             param_hint=option,
         )
     return value
-
-
-FormatOption = Annotated[
-    str,
-    typer.Option(
-        "--format",
-        help="Output format: text, json, or yaml.",
-        callback=lambda value: _choice(value, _FORMATS, "--format"),
-    ),
-]
 
 
 def _emit_json(data: dict[str, Any]) -> None:
@@ -351,7 +368,7 @@ def _emit_yaml(data: dict[str, Any]) -> None:
     typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
 
 
-@charts_app.command("list")
+@chart_app.command("list")
 def list_charts(root: RootOption = Path(".")) -> None:
     """List Helm charts and their lifecycle capability status."""
     service = ChartCatalogService(root, charts_dir=Settings().charts_dir)
@@ -421,15 +438,19 @@ def _run_chart_test(
     )
 
 
-@charts_app.command("test")
+@chart_app.command("test")
 def chart_test(
+    chart_argument: Annotated[
+        str | None,
+        typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
+    ] = None,
     chart: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--chart",
-            help="Chart name or chart directory.",
+            help="Chart name or chart directory. Retained alongside the CHART argument.",
         ),
-    ],
+    ] = None,
     root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
@@ -447,9 +468,18 @@ def chart_test(
     ] = False,
     lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
 ) -> None:
-    """Install and exercise one chart on an ephemeral local Kubernetes cluster."""
+    """Install and exercise one chart on an ephemeral local Kubernetes cluster.
+
+    The chart is named positionally; `--chart` is the older spelling and is
+    kept permanently, because `.github/workflows/ci.yaml` uses it and the
+    flag costs nothing to keep once the positional exists.
+    """
+    if (chart_argument is None) == (chart is None):
+        raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
+    selected = chart_argument if chart_argument is not None else chart
+    assert selected is not None
     _run_chart_test(
-        chart,
+        selected,
         root=root,
         profile=profile,
         namespace=namespace,
@@ -460,7 +490,7 @@ def chart_test(
     )
 
 
-@charts_app.command("lifecycle")
+@chart_app.command("show")
 def show_lifecycle(chart: str, root: RootOption = Path(".")) -> None:
     """Print one chart's normalized ChartLifecycle intent."""
     lifecycle = ChartCatalogService(
@@ -830,57 +860,6 @@ def _render_cluster_action(
         narration.print(f"stopped port-forward (pid {result.port_forward_pid})")
 
 
-@ci_app.command("publish-charts")
-def ci_publish_charts(
-    changed_files: Annotated[
-        Path,
-        typer.Option(
-            "--changed-files",
-            help="Newline-delimited repository-relative paths.",
-        ),
-    ],
-    root: RootOption = Path("."),
-) -> None:
-    """List every chart directly owned by an explicit changed file."""
-    service = _container().ci_service(root)
-    for chart in service.directly_changed_charts(changed_files):
-        console.print(chart)
-
-
-@ci_app.command("cluster-test-matrix")
-def ci_cluster_test_matrix(
-    root: RootOption = Path("."),
-    base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
-    all_charts: Annotated[
-        bool,
-        typer.Option("--all", help="Include every chart with enabled cluster tests."),
-    ] = False,
-    charts: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--chart",
-            help="Explicit chart to include; repeat for multiple charts.",
-        ),
-    ] = None,
-) -> None:
-    """Emit a GitHub-ready chart/profile cluster-test matrix as JSON."""
-    # Flag exclusivity is the one part of this that is genuinely the
-    # surface's: it classifies how the caller was *invoked*. Which selector
-    # runs, and what shape the answer takes, belong to services/.
-    if all_charts and charts:
-        raise ChartManagerError("--all and --chart are mutually exclusive")
-    selection = MatrixSelection(
-        base=base,
-        all_charts=all_charts,
-        charts=tuple(charts or ()),
-    )
-    entries = _container().ci_service(root).matrix(selection)
-    payload = cluster_test_matrix_to_dict(entries)
-    # Compact separators and sorted keys because this lands in a shell
-    # variable in `.github/workflows/ci.yaml`, not in a human's terminal.
-    typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-
-
 def _impact_service(root: Path) -> LifecycleImpactService:
     """Build the impact service at a seam tests can replace."""
     settings = Settings()
@@ -914,26 +893,40 @@ def _changed_paths(
     return changes
 
 
-def _render_impact_text(result: Any) -> None:
-    typer.echo("Validation:")
-    if not result.validation:
-        typer.echo("  none")
-    for case in result.validation:
-        typer.echo(f"  {case.chart}/{case.environment}")
-        for reason in case.reasons:
-            typer.echo(
-                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
-            )
+def _render_impact_text(
+    result: Any,
+    *,
+    validation: bool = True,
+    cluster_tests: bool = True,
+) -> None:
+    """Render the impact document as text, optionally narrowed to one section.
 
-    typer.echo("Cluster tests:")
-    if not result.cluster_tests:
-        typer.echo("  none")
-    for case in result.cluster_tests:
-        typer.echo(f"  {case.chart}/{case.profile}")
-        for reason in case.reasons:
-            typer.echo(
-                f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
-            )
+    `validation`/`cluster_tests` implement `plan --for`. Warnings and spec
+    errors are printed for every selection deliberately: a warning is usually
+    the answer to "why is nothing selected?", which is the question a narrowed
+    view is most often asked.
+    """
+    if validation:
+        typer.echo("Validation:")
+        if not result.validation:
+            typer.echo("  none")
+        for case in result.validation:
+            typer.echo(f"  {case.chart}/{case.environment}")
+            for reason in case.reasons:
+                typer.echo(
+                    f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+                )
+
+    if cluster_tests:
+        typer.echo("Cluster tests:")
+        if not result.cluster_tests:
+            typer.echo("  none")
+        for case in result.cluster_tests:
+            typer.echo(f"  {case.chart}/{case.profile}")
+            for reason in case.reasons:
+                typer.echo(
+                    f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}"
+                )
 
     if result.warnings:
         typer.echo("Warnings:")
@@ -945,8 +938,69 @@ def _render_impact_text(result: Any) -> None:
             typer.echo(f"  - {error}")
 
 
-@ci_app.command("impact")
-def ci_impact(
+#: `plan`'s output vocabulary: the core three plus its own `github`, the
+#: GitHub Actions matrix document. `github` stays command-local because it is
+#: meaningless for `chart list` or `local status` -- see `cli/output.py`.
+_PLAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML, output_mod.GITHUB)
+
+#: The kinds of work a plan can cover. `all` is the default because the
+#: question the command answers -- "given a change set, what work is
+#: selected?" -- is normally asked about the whole pipeline.
+_PLAN_KINDS = ("validate", "test", "publish", "all")
+
+PlanOutputOption = Annotated[
+    str | None,
+    output_mod.output_option(*_PLAN_OUTPUTS, extra_help=" github is the GHA matrix JSON."),
+]
+
+PlanForOption = Annotated[
+    str,
+    typer.Option(
+        "--for",
+        help="Work kind to plan: validate, test, publish, or all.",
+        callback=lambda value: _choice(value, _PLAN_KINDS, "--for"),
+    ),
+]
+
+
+def _plan_cluster_tests(
+    root: Path,
+    *,
+    base: str,
+    all_charts: bool,
+    charts: list[str] | None,
+    changed_files: Path | None,
+    changed_file: list[str],
+) -> tuple[Any, ...]:
+    """Select cluster-test entries from whichever change source was given.
+
+    Two engines, because the two change sources are genuinely different
+    questions and each already has a service that answers it:
+
+      * explicit paths (`--changed-files`/`--changed-file`) are what the
+        lifecycle impact service analyses, and its `cluster_tests` are the
+        same `ClusterTestImpact` values the matrix is built from;
+      * `--base`/`--all`/`--chart` is a `MatrixSelection`, and
+        `CiService.matrix` owns the `all` > `--chart` > diff precedence.
+
+    Neither branch decides *which charts* anything -- that stays in
+    `services/`. This function only decides which service was asked.
+    """
+    if changed_files is not None or changed_file:
+        paths = _changed_paths(changed_files, changed_file)
+        return tuple(_impact_service(root).analyze(paths).cluster_tests)
+    selection = MatrixSelection(
+        base=base,
+        all_charts=all_charts,
+        charts=tuple(charts or ()),
+    )
+    return tuple(_container().ci_service(root).matrix(selection))
+
+
+@app.command("plan")
+def plan(
+    ctx: typer.Context,
+    base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",
     changed_files: Annotated[
         Path | None,
         typer.Option(
@@ -961,23 +1015,104 @@ def ci_impact(
             help="Changed repository-relative path (repeatable).",
         ),
     ] = [],
-    fmt: FormatOption = "text",
+    all_charts: Annotated[
+        bool,
+        typer.Option("--all", help="Include every chart with enabled cluster tests."),
+    ] = False,
+    charts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--chart",
+            help="Explicit chart to include; repeat for multiple charts.",
+        ),
+    ] = None,
+    for_: PlanForOption = "all",
+    output: PlanOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
-    """Explain the validation and cluster-test work selected by changed paths.
+    """Answer "given a change set, what work is selected?".
 
-    The explain-mode twin of `cluster-test-matrix`, which computes the same
-    selection and projects away the reasons. Answers "why is this chart in my
-    matrix?" and, via warnings, "why is nothing selected?".
+    One command with output projections rather than one command per consumer.
+    `-o github` is the GitHub Actions matrix a workflow feeds to
+    `strategy.matrix`; `-o table` is the same selection with the *reasons*
+    kept, which is what answers "why is this chart in my matrix?" and, via
+    warnings, "why is nothing selected?"; `-o json`/`-o yaml` are the machine
+    document.
+
+    `--for` narrows the work kind. It selects the engine for `publish` (a
+    lexical ownership projection that must not inherit lifecycle fanout) and
+    narrows the `table` view for `validate`/`test`. `-o json`/`-o yaml`
+    deliberately emit the *complete* impact document whatever `--for` says:
+    the payload is a versioned wire contract owned by `services/`, and
+    deleting a key from it here would fork that contract in the surface.
+
+    The output default is `auto`, so a bare `plan` in a pipe emits `json`
+    rather than the table a terminal gets. `--for publish -o table` is the
+    newline-delimited chart list `.github/workflows/ci.yaml` captures, and it
+    names `-o table` explicitly for exactly that reason.
     """
+    output = output_mod.resolve(output, ctx, allowed=_PLAN_OUTPUTS, console=console)
+    if output == "github" and for_ in {"validate", "publish"}:
+        raise typer.BadParameter(
+            f"-o github is the cluster-test matrix, which has no '{for_}' projection",
+            param_hint="--for",
+        )
+    # Flag exclusivity is the one part of this that is genuinely the
+    # surface's: it classifies how the caller was *invoked*. Which selector
+    # runs, and what shape the answer takes, belong to services/.
+    if all_charts and charts:
+        raise ChartManagerError("--all and --chart are mutually exclusive")
+
+    if for_ == "publish":
+        # Direct ownership only, from an explicit list. `--changed-file` is
+        # not accepted because the service reads the file itself, and
+        # publishing must not inherit lifecycle or dependency fanout.
+        if changed_files is None:
+            raise typer.BadParameter(
+                "planning publish work needs an explicit changed-file list",
+                param_hint="--changed-files",
+            )
+        selected = _container().ci_service(root).directly_changed_charts(changed_files)
+        if output == "json":
+            typer.echo(json.dumps(selected, indent=2))
+        elif output == "yaml":
+            typer.echo(yaml.safe_dump(selected, sort_keys=False), nl=False)
+        else:
+            for chart in selected:
+                console.print(chart)
+        return
+
+    if output == "github":
+        entries = _plan_cluster_tests(
+            root,
+            base=base,
+            all_charts=all_charts,
+            charts=charts,
+            changed_files=changed_files,
+            changed_file=changed_file,
+        )
+        payload = cluster_test_matrix_to_dict(entries)
+        # Compact separators and sorted keys because this lands in a shell
+        # variable in `.github/workflows/ci.yaml`, not in a human's terminal.
+        typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        return
+
+    # table/json/yaml are projections of the impact document, which only the
+    # lifecycle impact service produces, and only from explicit paths.
+    # `_changed_paths` raises the "provide at least one changed path" usage
+    # error when neither source was given.
     result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
     data = result.to_dict()
-    if fmt == "json":
+    if output == "json":
         _emit_json(data)
-    elif fmt == "yaml":
+    elif output == "yaml":
         _emit_yaml(data)
     else:
-        _render_impact_text(result)
+        _render_impact_text(
+            result,
+            validation=for_ in {"validate", "all"},
+            cluster_tests=for_ in {"test", "all"},
+        )
     if result.spec_errors:
         raise typer.Exit(1)
 

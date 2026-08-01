@@ -21,7 +21,7 @@ cd lab-charts
 mise trust
 mise install
 mise run setup
-uv run chart-manager validate chart --chart grafana --env dev
+uv run chart-manager chart validate --chart grafana --env dev
 ```
 
 `mise install` pulls every pinned tool. `mise run setup` installs the Python CLI into a uv-managed venv. The final command renders the `grafana` chart for the `dev` environment, validates the manifests against the Kubernetes schema, and runs the policy set declared under `spec.validation` in its `chart-lifecycle.yaml`.
@@ -30,19 +30,19 @@ uv run chart-manager validate chart --chart grafana --env dev
 
 | Command | What it does |
 | --- | --- |
-| `uv run chart-manager validate chart --chart <name> --env <env>` | Render one chart for one authored env, then run its enabled validators. |
-| `uv run chart-manager validate chart --chart <name> --all` | Validate every environment authored for one chart. |
+| `uv run chart-manager chart validate --chart <name> --env <env>` | Render one chart for one authored env, then run its enabled validators. |
+| `uv run chart-manager chart validate --chart <name> --all` | Validate every environment authored for one chart. |
 | `mise run validate -- --all` | Same as above, fanned out across every chart and every env declared in the repo. |
-| `uv run chart-manager charts test --chart <name-or-path> --profile minimal` | Spin up a local Kubernetes test cluster, install the chart, and run its Helm test hooks when enabled. `--namespace` explicitly overrides the profile namespace. |
+| `uv run chart-manager chart test --chart <name-or-path> --profile minimal` | Spin up a local Kubernetes test cluster, install the chart, and run its Helm test hooks when enabled. `--namespace` explicitly overrides the profile namespace. |
 | `uv run chart-manager local up --chart <name-or-path> --profile minimal` | Create or start the chart's local cluster, run configured bootstrap releases, and converge the chart. |
 | `uv run chart-manager local up --stack <name-or-path>` | Converge a `LocalStack` from `.chart-manager/stacks/<name>.yaml` or an explicit YAML path. |
 | `uv run chart-manager local down` | Stop the configured local cluster while preserving releases, data, and image caches. |
 | `uv run chart-manager local reset --chart <name-or-path>` | Destroy and recreate that chart's cluster, then converge it. Use `--stack` for a stack. |
 | `mise run charts` | List every chart wrapper the CLI knows about. |
 | `mise run test` | Run the Python unit tests for the CLI. |
-| `uv run chart-manager ci impact --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
-| `uv run chart-manager publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
-| `uv run chart-manager upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
+| `uv run chart-manager plan --changed-file charts/<name>/values.yaml` | Explain validation and cluster-test fanout for explicit changed files. |
+| `uv run chart-manager chart publish grafana loki --repository oci://harbor.local/charts --version-suffix pr.318.g1a2b3c4` | Prepare a batch, then publish it to an authenticated OCI registry. |
+| `uv run chart-manager chart upgrade --path charts/<name>` | Discover Renovate updates in an isolated worktree and open an idempotent chart-upgrade PR. |
 
 Local operation has three authored concepts:
 
@@ -113,12 +113,13 @@ spec:
       timeout: 5m
 ```
 
-Use `uv run chart-manager validate chart --help` for local chart validation and
-`uv run chart-manager validate run --help` for changed-worklist and repository-wide runs.
+Use `uv run chart-manager chart validate --help`. One command covers all three
+selections: a single chart, a changed worklist, and a repository-wide run —
+which one you get is argv shape, not a separate subcommand.
 
 ## CI
 
-CI uses the same **`chart-manager charts test`** execution path as
+CI uses the same **`chart-manager chart test`** execution path as
 `mise run kind-test`. A `prep` job inspects the PR diff and decides which charts
 changed; `validate` runs against the full set; `sandbox-test` fans out as a
 matrix with one kind job per changed chart so unrelated charts never gate your
@@ -139,13 +140,13 @@ prep ──┬── validate ────────────────�
 
 Validation selection and the sandbox chart/profile matrix are derived by the
 lifecycle impact service. The workflow consumes
-`chart-manager ci cluster-test-matrix` instead of maintaining a second fanout
+`chart-manager plan -o github` instead of maintaining a second fanout
 heuristic in YAML.
 
 ## Reproducing a CI failure
 
 - Open the failed run and download `rendered-manifests-<run_id>` (validate) or `sandbox-logs-<chart>-<run_id>` (sandbox-test) from the Artifacts panel.
-- Reproduce a validate failure locally with `uv run chart-manager validate chart --chart <name> --env <env>`.
+- Reproduce a validate failure locally with `uv run chart-manager chart validate --chart <name> --env <env>`.
 - Reproduce a sandbox-test failure locally with `mise run kind-test -- --chart <name> --profile minimal`.
 
 ## Adding or editing a chart
