@@ -79,11 +79,18 @@ _EXIT_ALLOWED_DIRS = (_PKG / "cli",)
 _FORBIDDEN_ROOTS = ("rich", "typer")
 
 # Chart concepts are service-domain policy, not generic plumbing.
+# `cluster_tests.py` and `spec.py` no longer exist anywhere -- their contents
+# split across `api/lifecycle/v1alpha1.py`, `domain/cluster_test_policy.py` and
+# `manifest_validation/namespaces.py`. They stay on this ban list regardless:
+# it names spellings that may not appear under `plumbing/`, and a future
+# `plumbing/spec.py` would be exactly the violation it always was.
 _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
     "chart_deps.py",
     "charts.py",
+    "cluster_tests.py",
     "graph.py",
     "install_plan.py",
+    "spec.py",
 }
 
 

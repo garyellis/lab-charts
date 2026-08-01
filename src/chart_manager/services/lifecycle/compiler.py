@@ -348,9 +348,13 @@ def _validation_execution_inputs(root: Path) -> tuple[Path, ...]:
         root / "pyproject.toml",
         root / "uv.lock",
         # The authored lifecycle contract moved to `chart_manager/api`; without
-        # this entry an edit to `spec.validation`'s accepted shape would no
-        # longer invalidate cached validation actions.
-        root / "src" / "chart_manager" / "api",
+        # these entries an edit to `spec.validation`'s accepted shape would no
+        # longer invalidate cached validation actions. Scoped to the lifecycle
+        # group plus the shared strictness bases -- naming the whole `api/`
+        # package would make an edit to the `LocalCluster`/`LocalStack`
+        # contract, which validation never reads, bust every cached action.
+        root / "src" / "chart_manager" / "api" / "base.py",
+        root / "src" / "chart_manager" / "api" / "lifecycle",
         root / "src" / "chart_manager" / "services" / "chart_config.py",
         root / "src" / "chart_manager" / "services" / "manifest_validation",
         root / "src" / "chart_manager" / "services" / "lifecycle",

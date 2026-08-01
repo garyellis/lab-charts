@@ -8,9 +8,10 @@ additions, and every rule that can be decided by reading one document.
 
 Paths here are validated lexically only -- a relative spelling with no empty,
 ``.`` or ``..`` segments.  Resolving them against the repository root,
-checking that the file exists, agreeing a release name with ``Chart.yaml`` and
-looking up a lifecycle profile all need more than the document and therefore
-live in ``chart_manager.services.local_resources``.
+checking that the file exists and agreeing a release name with ``Chart.yaml``
+all need more than the document and therefore live in
+``chart_manager.services.local_resources``; looking up a lifecycle profile
+lives in ``chart_manager.services.domain.cluster_test_policy``.
 
 Declaration order is load-bearing and matches the original module: the
 ``_BootstrapRelease`` mixin must precede the three ``Bootstrap*`` classes that
