@@ -11,12 +11,12 @@ from packaging.version import InvalidVersion, Version
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
 from .state import PROMOTE_PHASE, PromoteStatus
-from .telemetry import emit_non_fatal
 
 CloneFn = Callable[[str, Path, str], None]
 DowngradeConfirmFn = Callable[[list[HelmReleaseMatch], str], bool]

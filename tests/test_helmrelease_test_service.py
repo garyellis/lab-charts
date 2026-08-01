@@ -885,6 +885,25 @@ class _SequencedCluster(_FakeCluster):
         return self._sequence.pop(0) if len(self._sequence) > 1 else self._sequence[0]
 
 
+class _RefreshFailingCluster(_FakeCluster):
+    """Answers the matching read, then fails the failure-path refresh."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._reads = 0
+
+    def get_status(
+        self, ref: HelmReleaseRef, *, timeout: float | None = None
+    ) -> HelmReleaseStatus:
+        self._record("get_status", (ref,), {"timeout": timeout})
+        self._reads += 1
+        if self._reads > 1:
+            raise ExternalCommandError("refresh failed", stderr="refresh boom")
+        item = self.statuses[(ref.namespace, ref.name)]
+        assert isinstance(item, HelmReleaseStatus)
+        return item
+
+
 def test_last_status_is_refreshed_after_helm_test_on_the_failure_path() -> None:
     """`last_status` must describe the release *after* the test ran.
 
@@ -927,3 +946,97 @@ def test_a_passing_run_does_not_pay_for_a_status_refresh() -> None:
     assert o.verdict == "passed"
     # One status read for matching; the failure-path refresh must not fire.
     assert len([c for c in cluster.calls if c[0] == "get_status"]) == 1
+
+
+# ----- what a swallowed cluster read leaves in the report -------------------
+#
+# Every case here used to render identically to a benign one: a pod that
+# would not delete looked like a pod name with no cause, a stale status
+# looked like a fresh one, an unlistable pod set looked like an empty one,
+# and an unreadable log looked like a pod that logged nothing. The failure
+# report is the only artifact anyone reads after a red CI run, so each
+# failure has to say which of the two it is.
+
+
+def test_residual_pods_carry_why_the_delete_failed() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _released_status(ref)},
+        test_pods={("loki", "loki"): [("loki", "loki-test-old", "Succeeded")]},
+        delete_failures={("loki", "loki-test-old")},
+    )
+
+    [o] = _make_service(cluster).test(_req()).outcomes
+
+    assert o.reason == "ReapIncomplete"
+    # "boom" is the fake's stderr: RBAC-denied and finalizer-stuck must not
+    # both render as a bare pod name.
+    assert "loki/loki-test-old: boom" in (o.diagnostics or "")
+
+
+def test_a_stale_status_is_marked_as_stale_in_the_report() -> None:
+    ref = _ref()
+    before = _released_status(ref)
+    cluster = _RefreshFailingCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): before},
+    )
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+
+    assert o.last_status is before
+    assert "status not refreshed: refresh boom" in (o.diagnostics or "")
+
+
+def test_unlistable_test_pods_are_distinguished_from_no_test_pods() -> None:
+    ref = _ref()
+    seq: list[list[tuple[str, str, str]] | BaseException] = [
+        [],  # reap sees nothing
+        ExternalCommandError("list boom", stderr="pods forbidden"),
+    ]
+
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+
+    def list_pods(
+        _ref: HelmReleaseRef, *, timeout: float | None = None
+    ) -> list[tuple[str, str, str]]:
+        item = seq.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    cluster.list_test_pods = list_pods  # type: ignore[assignment]
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+
+    assert "<test pods unavailable: pods forbidden>" in (o.diagnostics or "")
+
+
+def test_an_unreadable_pod_log_says_so_and_skips_the_previous_retry() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _released_status(ref)},
+        test_pods={("loki", "loki"): [("loki", "loki-test", "Failed")]},
+    )
+
+    def pod_logs(*args: Any, **kwargs: Any) -> str:
+        cluster.calls.append(("pod_logs", args, kwargs))
+        raise ExternalCommandError("logs boom", stderr="logs forbidden")
+
+    cluster.pod_logs = pod_logs  # type: ignore[assignment]
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+
+    [pod] = o.test_pods
+    assert pod.logs == "<logs unavailable: logs forbidden>"
+    # The --previous retry exists for a restarted container that logged
+    # nothing this time round; a read we never completed is not that, and
+    # retrying it just spends a round trip to record the same failure.
+    assert [c for c in cluster.calls if c[0] == "pod_logs" and c[2]["previous"]] == []

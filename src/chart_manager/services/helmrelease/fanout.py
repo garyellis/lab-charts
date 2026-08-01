@@ -80,9 +80,16 @@ def run_fanout[OutcomeT: HasRef](
                 # unwinds through the executor's shutdown.
                 cancel_event.set()
                 raise
-            except BaseException as exc:
+            except Exception as exc:
                 cancel_event.set()
                 raise ChartManagerError(f"{crash_label} crashed: {exc!r}") from exc
+            except BaseException:
+                # KeyboardInterrupt / SystemExit, re-raised unwrapped. Wrapping
+                # them made a Ctrl-C indistinguishable from a worker crash, so
+                # the callers' `except Exception:` telemetry handlers put a
+                # network write in front of the exit and the operator lost 130.
+                cancel_event.set()
+                raise
             outcomes.append(outcome)
             # Cancellation is checked after the append so the outcome that
             # triggered it is itself reported -- a fail-fast run that hid its

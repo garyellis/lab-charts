@@ -463,8 +463,11 @@ class TestService:
         for ns, name, _phase in [p for p in pods if p[2] in _STALE_PHASES]:
             try:
                 self._kubectl.delete_pod(ns, name, timeout=ctx.parsed.per_poll_sec)
-            except ExternalCommandError:
-                residual.append(f"{ns}/{name}")
+            except ExternalCommandError as exc:
+                # Carry the stderr, not just the pod name: "delete denied by
+                # RBAC", "apiserver unreachable" and "stuck on a finalizer"
+                # are three different operator actions and rendered as one.
+                residual.append(f"{ns}/{name}: {report.failure_detail(exc)}")
         if residual:
             return self._finalize(
                 ctx,
@@ -638,8 +641,11 @@ class TestService:
             # row showed the previous reconcile's value, which is actively
             # misleading in the one artifact read after a failure. Refresh
             # once, on the failure path only, and keep the pre-run status if
-            # the cluster can no longer be reached.
-            last_status = self._refresh_status(ctx) or last_status
+            # the cluster can no longer be reached -- saying so in the report,
+            # because a silent fallback reads exactly like a fresh read.
+            refreshed, stale_status = self._refresh_status(ctx)
+            if refreshed is not None:
+                last_status = refreshed
             diagnostics, test_pods = self._compose_diagnostics(
                 ctx=ctx,
                 verdict=verdict,
@@ -649,6 +655,7 @@ class TestService:
                 in_flight=in_flight,
                 residual=residual,
                 inline=inline_diagnostics,
+                stale_status=stale_status,
             )
 
         return TestOutcome(
@@ -665,17 +672,21 @@ class TestService:
             duration_seconds=duration_seconds,
         )
 
-    def _refresh_status(self, ctx: _RunContext) -> HelmReleaseStatus | None:
-        """Re-read the HelmRelease status for failure reporting; None if unavailable.
+    def _refresh_status(
+        self, ctx: _RunContext
+    ) -> tuple[HelmReleaseStatus | None, str | None]:
+        """Re-read the HelmRelease status for failure reporting.
 
-        Best-effort by design: this runs while composing a failure report,
-        so a cluster that has become unreachable must not replace the
-        diagnostics with an exception.
+        Returns `(status, None)` on success and `(None, detail)` when the read
+        failed. Best-effort by design: this runs while composing a failure
+        report, so a cluster that has become unreachable must not replace the
+        diagnostics with an exception -- but the caller has to be able to mark
+        the pre-run status it falls back to, so the detail comes back with it.
         """
         try:
-            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec)
-        except ExternalCommandError:
-            return None
+            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec), None
+        except ExternalCommandError as exc:
+            return None, report.failure_detail(exc)
 
     def _compose_diagnostics(
         self,
@@ -688,6 +699,7 @@ class TestService:
         in_flight: tuple[tuple[str, str, str], ...],
         residual: tuple[str, ...],
         inline: str | None,
+        stale_status: str | None,
     ) -> tuple[str, tuple[TestPodSnapshot, ...]]:
         """Render a markdown failure report and (for test failures) snapshot pod logs."""
         parts: list[str] = [report.header(ctx.ref, verdict, reason)]
@@ -697,6 +709,10 @@ class TestService:
             # on it. A test verdict comes from helm's exit code, and Stalled
             # describes the reconciler that ran before helm was invoked.
             parts.extend(report.conditions(last_status, ("Ready", "Released", "TestSuccess")))
+        if stale_status is not None:
+            parts.append(
+                f"- (status not refreshed: {stale_status}; any rows above predate `helm test`)"
+            )
 
         if in_flight:
             parts.append("\n### In-flight test pods")
@@ -714,8 +730,13 @@ class TestService:
 
         test_pods: tuple[TestPodSnapshot, ...] = ()
         if reason in (Reason.TEST_FAILED, Reason.TEST_POD_CONFLICT):
-            test_pods = self._snapshot_test_pods(ctx)
-            if test_pods:
+            test_pods, pods_unavailable = self._snapshot_test_pods(ctx)
+            if pods_unavailable is not None:
+                # Not the same statement as "no test pods": one says the chart
+                # left nothing behind, the other says we never got to look.
+                parts.append("\n### Test pod logs")
+                parts.append(f"<test pods unavailable: {pods_unavailable}>")
+            elif test_pods:
                 parts.append("\n### Test pod logs")
                 for pod in test_pods:
                     parts.append(f"\n#### {pod.namespace}/{pod.name} (phase={pod.phase})")
@@ -751,14 +772,23 @@ class TestService:
 
         return "\n".join(parts), test_pods
 
-    def _snapshot_test_pods(self, ctx: _RunContext) -> tuple[TestPodSnapshot, ...]:
-        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs."""
+    def _snapshot_test_pods(
+        self, ctx: _RunContext
+    ) -> tuple[tuple[TestPodSnapshot, ...], str | None]:
+        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs.
+
+        Returns `(snapshots, None)`, or `((), detail)` when the pods could not
+        be listed at all -- which the caller must render differently from an
+        empty list.
+        """
         try:
             pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
-        except ExternalCommandError:
-            return ()
+        except ExternalCommandError as exc:
+            return (), report.failure_detail(exc)
         snapshots: list[TestPodSnapshot] = []
         for pod_ns, pod_name, phase in pods[: ctx.request.diagnostics_pod_cap]:
+            log_error: str | None = None
+            logs = ""
             try:
                 logs = self._kubectl.pod_logs(
                     pod_ns,
@@ -767,13 +797,15 @@ class TestService:
                     previous=False,
                     timeout=ctx.parsed.per_poll_sec,
                 )
-            except ExternalCommandError:
-                logs = ""
+            except ExternalCommandError as exc:
+                log_error = report.failure_detail(exc)
             previous: str | None = None
             # Only retry with --previous for terminal-phase pods where the
             # current container is gone; for Running/Pending the empty
             # response just means "no logs yet", not a restarted container.
-            if not logs and phase in _STALE_PHASES:
+            # A failed fetch is neither, and retrying it just spends another
+            # round trip to record the same failure twice.
+            if log_error is None and not logs and phase in _STALE_PHASES:
                 try:
                     previous = self._kubectl.pod_logs(
                         pod_ns,
@@ -789,7 +821,11 @@ class TestService:
                     namespace=pod_ns,
                     name=pod_name,
                     phase=phase,
-                    logs=truncate_bytes(logs, ctx.request.pod_log_max_bytes),
+                    logs=(
+                        f"<logs unavailable: {log_error}>"
+                        if log_error is not None
+                        else truncate_bytes(logs, ctx.request.pod_log_max_bytes)
+                    ),
                     previous_logs=(
                         truncate_bytes(previous, ctx.request.pod_log_max_bytes)
                         if previous
@@ -797,7 +833,7 @@ class TestService:
                     ),
                 )
             )
-        return tuple(snapshots)
+        return tuple(snapshots), None
 
     # --- progress ---------------------------------------------------------
 

@@ -84,6 +84,7 @@ def _status(
     ready: str = "True",
     ready_reason: str = "ReconciliationSucceeded",
     released: str = "True",
+    suspended: bool = False,
 ) -> HelmReleaseStatus:
     return HelmReleaseStatus(
         ref=ref,
@@ -91,7 +92,7 @@ def _status(
         generation=1,
         observed_generation=1,
         resource_version="1",
-        suspended=False,
+        suspended=suspended,
         desired_chart_name=CHART,
         desired_chart_version=VERSION,
         last_applied_revision=None,
@@ -363,6 +364,53 @@ def test_helm_test_failure_closes_with_helm_test_failed_and_no_promoted() -> Non
         PromotionPhase.HELM_TEST_FAILED,
     ]
     assert events.events[1]["detail"]["verdict"] == "failed"
+
+
+def test_all_suspended_helm_test_run_emits_no_terminal_phase() -> None:
+    """Zero tests ran, so nothing was verified and nothing was promoted.
+
+    `SKIPPED_SUSPENDED` is a passing verdict, which used to make an
+    all-suspended run fold to `PASSED` and emit (HELM_TEST_OK, PROMOTED) --
+    recording a version as verified-live in the environment when helm was
+    never invoked. The interval still opens; it just has no terminal.
+    """
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _status(ref, suspended=True)},
+    )
+    events = _RecordingEvents()
+    result = _tester(cluster, _FakeHelm(), events).test(_test_req())
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.SKIPPED_SUSPENDED]
+    assert events.phases == [PromotionPhase.HELM_TEST_RUN]
+
+
+def test_all_suspended_rollout_emits_no_terminal_phase() -> None:
+    # Same contract on the monitor half: a rollout nobody was watching for
+    # is not a ROLLOUT_OK.
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _status(ref, suspended=True)},
+    )
+    events = _RecordingEvents()
+    result = _monitor(cluster, events).monitor(_monitor_req())
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.SKIPPED_SUSPENDED]
+    assert events.phases == [PromotionPhase.WAITING_ROLLOUT]
+
+
+def test_a_skip_alongside_a_real_pass_still_reports_the_pass() -> None:
+    # The narrow reading of the rule above: only an *entirely* suspended run
+    # is a non-transition. One suspended peer must not suppress the terminal
+    # phase for the release that actually went green.
+    assert (
+        run_verdict(
+            [Verdict.SKIPPED_SUSPENDED, Verdict.PASSED], success=Verdict.PASSED
+        )
+        is Verdict.PASSED
+    )
 
 
 def test_helm_test_emits_nothing_without_an_environment() -> None:
