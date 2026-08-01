@@ -461,7 +461,6 @@ def _execute(
             requested_charts=request.charts,
             requested_environments=request.envs,
             timings=timings,
-            verbose=request.verbose,
             github_step_summary=github_step_summary,
         )
 
@@ -524,7 +523,6 @@ def _emit_result(
     requested_charts: tuple[str, ...] = (),
     requested_environments: tuple[str, ...] = (),
     timings: bool = False,
-    verbose: bool = False,
     github_step_summary: bool = False,
 ) -> None:
     """Render a RunResult to stdout per `mode` and side-emit summaries.

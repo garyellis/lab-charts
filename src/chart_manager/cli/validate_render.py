@@ -7,7 +7,7 @@ carrying Rich console markup (`[red]...[/red]`) that only mean anything to a
 terminal and must not import this module.
 
 The machine-readable projections -- `to_json`, `to_markdown`,
-`JSON_SCHEMA_VERSION` -- live in `services.manifest_validation.wire` and import no Rich.
+`SCHEMA_VERSION` -- live in `services.manifest_validation.wire` and import no Rich.
 
 Note on `failure_details` / `advisory_details`: these return strings
 containing Rich markup, which is why they live here rather than in the wire

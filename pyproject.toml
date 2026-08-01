@@ -48,7 +48,7 @@ addopts = "-m 'not integration'"
 # lines in the 89-100 range that would be high-churn to rewrap during a
 # polish pass. Format-on-save can tighten this later if desired.
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 extend-exclude = ["tests/fixtures"]
 
@@ -56,7 +56,7 @@ extend-exclude = ["tests/fixtures"]
 # TID251 (flake8-tidy-imports banned-api) is selected by code rather than as
 # the whole TID family: TID252/TID253 are unrelated to the layering contract
 # below and would add unowned findings to the existing lint backlog.
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG"]
 
 # --- layer contract: cli/ must not import integrations/ ------------------
 #
@@ -122,7 +122,13 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # TID251: tests exercise adapters directly (fake CommandRunners against
 # Helm/Kubectl/HelmReleaseClient) and assert on integration-level types;
 # not a layer.
-"tests/**/*.py" = ["S101", "B011", "E501", "TID251"]
+# ARG: a test double only earns its keep by matching the real signature.
+# Fakes, stubs and `lambda plan, *, dry_run: plan` callbacks accept the
+# arguments the production caller passes and ignore the ones the assertion
+# doesn't care about -- 196 of the 210 ARG findings when the rule was
+# selected, none of them dead code. Renaming every one to `_arg` would make
+# the doubles *less* readable than the interfaces they stand in for.
+"tests/**/*.py" = ["S101", "B011", "E501", "TID251", "ARG"]
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
@@ -135,6 +141,16 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # deliberate and belongs with the data, not in a lint backlog. Revisit only
 # alongside a migration of the stored events.
 "src/chart_manager/services/events/lifecycle.py" = ["UP042"]
+# ARG on signatures that are not ours to shorten. `NullEventStore.write` is
+# the EventStore protocol's do-nothing implementation -- dropping the event
+# *is* the behavior, and the parameter name is part of the contract it
+# implements. `settings_customise_sources` is a pydantic-settings hook whose
+# full source list is mandated by the framework; deliberately omitting
+# `dotenv_settings` from the returned tuple is the documented decision at
+# settings.py:110. Both are structural, not dead code, so they are exempted
+# by code rather than left as a standing lint backlog.
+"src/chart_manager/services/events/store.py" = ["ARG002"]
+"src/chart_manager/settings.py" = ["ARG003"]
 # TID251 lift: the layers that are *supposed* to reach for adapters.
 # integrations/ is the adapter layer itself; services/ owns the ports that
 # wrap adapters; composition.py is the composition root, by definition the
@@ -152,7 +168,7 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # Mypy: strict=false to start. Tightens are tracked separately;
 # this is the initial baseline.
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = false
 check_untyped_defs = true
 warn_unused_ignores = true

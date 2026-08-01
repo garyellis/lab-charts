@@ -146,9 +146,11 @@ class LiveTableDisplay(ProgressDisplay):
         row: WorklistRow,
         phase: str,
         status: str,
-        elapsed_s: float | None = None,
+        # Protocol arg: the table's wall column is row wall-clock measured
+        # here across phases, not the per-phase elapsed the runner reports.
+        elapsed_s: float | None = None,  # noqa: ARG002
     ) -> None:
-        """Update the row's phase cell (and elapsed) and re-render, under the lock."""
+        """Update the row's phase cell and re-render, under the lock."""
         key = (row.chart, row.env)
         with self._lock:
             if key not in self._cells:
