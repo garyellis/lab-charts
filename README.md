@@ -263,6 +263,3 @@ is invalid. The most fundamental failure wins.
 - [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — authenticated,
   isolated Renovate upgrades, dependency coverage, versioning, and callback
   security.
-- [`docs/MENTAL_MODEL.md`](docs/MENTAL_MODEL.md) — how the pieces fit together.
-- [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — lifecycle intent
-  and compiled action plans.
