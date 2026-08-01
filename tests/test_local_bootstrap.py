@@ -7,18 +7,18 @@ from typing import Any
 
 import pytest
 
+from chart_manager.api.local.v1alpha1 import LocalCluster
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
-from chart_manager.services.local_resources import LocalCluster
 
 
 def _cluster(releases: list[dict[str, object]]) -> LocalCluster:
     return LocalCluster.model_validate(
         {
-            "apiVersion": "local.cmg.io/v1alpha1",
+            "apiVersion": "local.chartmanager.io/v1alpha1",
             "kind": "LocalCluster",
             "metadata": {"name": "default"},
             "spec": {
@@ -246,7 +246,7 @@ def test_preflight_resolves_bootstrap_lifecycle_identities(tmp_path: Path) -> No
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -292,7 +292,7 @@ def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -327,7 +327,7 @@ def test_preflight_resolves_every_release_before_linting_any(
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:

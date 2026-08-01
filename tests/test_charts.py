@@ -103,7 +103,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
     (disabled / "chart-lifecycle.yaml").write_text(
         yaml.safe_dump(
             {
-                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
                 "kind": "ChartLifecycle",
                 "metadata": {"name": "disabled"},
                 "spec": {"enabled": False},
@@ -115,7 +115,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
     (section_disabled / "chart-lifecycle.yaml").write_text(
         yaml.safe_dump(
             {
-                "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
                 "kind": "ChartLifecycle",
                 "metadata": {"name": "section-disabled"},
                 "spec": {
@@ -195,7 +195,7 @@ def test_charts_lifecycle_prints_the_normalized_envelope(
     result = cli("chart", "show", "alloy", "--root", str(chart_root))
 
     assert result.exit_code == 0
-    assert '"apiVersion": "lifecycle.cmg.io/v1alpha1"' in result.stdout
+    assert '"apiVersion": "lifecycle.chartmanager.io/v1alpha1"' in result.stdout
     assert '"kind": "ChartLifecycle"' in result.stdout
     assert '"clusterTest"' in result.stdout
     assert '"enabled": true' in result.stdout
@@ -344,7 +344,7 @@ def test_chart_show_yaml_is_the_authored_envelope(
 
     assert result.exit_code == 0, result.output
     document = yaml.safe_load(result.stdout)
-    assert document["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert document["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
     assert document["metadata"] == {"name": "alloy"}
     assert document["spec"]["clusterTest"]["enabled"] is True
 

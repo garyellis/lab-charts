@@ -4,9 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from chart_manager.api.lifecycle.v1alpha1 import ClusterTestRef
 from chart_manager.plumbing.errors import DependencyCycleError
 from chart_manager.services.domain.charts import ClusterTestChart
-from chart_manager.services.domain.cluster_tests import ClusterTestRef
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 
 
 @dataclass(frozen=True)
@@ -36,9 +37,9 @@ class DependencyResolver:
         permanent: set[tuple[str, str]] = set()
         temporary: list[tuple[str, str]] = []
 
-        def visit(ref: ClusterTestRef) -> None:
+        def visit(chart_name: str, profile_name: str) -> None:
             """DFS one node; append to plan after its requires are planned."""
-            key = (ref.chart, ref.profile)
+            key = (chart_name, profile_name)
             if key in permanent:
                 return
             if key in temporary:
@@ -46,15 +47,15 @@ class DependencyResolver:
                 raise DependencyCycleError(f"dependency cycle detected: {cycle}")
 
             temporary.append(key)
-            chart_model = self._load_chart(ref.chart)
-            profile_model = chart_model.spec.profile(ref.profile)
+            chart_model = self._load_chart(chart_name)
+            profile_model = require_cluster_test_profile(chart_model.spec, profile_name)
             for required in profile_model.requires:
-                visit(required)
+                visit(required.chart, required.profile)
             temporary.pop()
             permanent.add(key)
-            plan.append(InstallPlanEntry(ref.chart, ref.profile))
+            plan.append(InstallPlanEntry(chart_name, profile_name))
 
-        visit(ClusterTestRef(chart=chart, profile=profile))
+        visit(chart, profile)
         return plan
 
     def dependent_tests(self, chart: str) -> list[ClusterTestRef]:

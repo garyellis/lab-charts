@@ -1,0 +1,23 @@
+# Representative LocalStack used by tests/test_api_contract_freeze.py.
+#
+# A stack accepts only the `lifecycle` and `oci` release variants, and none of
+# the bootstrap-only contracts (runtimeValues, readiness). There is no
+# checked-in LocalStack anywhere in the repository yet, so this fixture is the
+# only authored example of the kind.
+apiVersion: local.chartmanager.io/v1alpha1
+kind: LocalStack
+metadata:
+  name: observability
+spec:
+  releases:
+    - type: lifecycle
+      chart: charts/grafana
+      profile: minimal
+    - type: oci
+      name: prometheus
+      chart: oci://example.test/charts/prometheus
+      version: 25.8.0
+      namespace: monitoring
+      values:
+        - values/prometheus.yaml
+      timeout: 10m

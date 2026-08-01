@@ -142,7 +142,7 @@ def test_manifest_planner_classifies_changes_under_custom_root(tmp_path: Path) -
     chart = _write_chart(tmp_path, "demo")
     (chart / "chart-lifecycle.yaml").write_text(
         """\
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata:
   name: demo

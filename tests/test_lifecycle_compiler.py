@@ -266,7 +266,7 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     second = compiler.compile_cluster_test("app", "minimal").to_dict()
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert first["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
     assert first["kind"] == "LifecyclePlan"
     assert first["actions"][0]["actionId"].startswith("cluster-test.app.minimal.")
     assert first["actions"][0]["target"]["workflow"] == "cluster-test"

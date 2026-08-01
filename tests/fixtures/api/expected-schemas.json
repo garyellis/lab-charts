@@ -1,0 +1,910 @@
+{
+  "ChartLifecycle": {
+    "$defs": {
+      "ChartLifecycleMetadata": {
+        "additionalProperties": false,
+        "description": "Identity of the chart governed by a lifecycle document.",
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ChartLifecycleMetadata",
+        "type": "object"
+      },
+      "ChartLifecycleSpec": {
+        "additionalProperties": false,
+        "description": "Capabilities authored for one chart.",
+        "properties": {
+          "clusterTest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClusterTestSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ManifestValidationSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "ChartLifecycleSpec",
+        "type": "object"
+      },
+      "ClusterTestProfile": {
+        "additionalProperties": false,
+        "description": "How to install and test a chart under one named profile.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "helmTest": {
+            "default": true,
+            "title": "Helmtest",
+            "type": "boolean"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Namespace"
+          },
+          "requires": {
+            "items": {
+              "$ref": "#/$defs/ClusterTestRef"
+            },
+            "title": "Requires",
+            "type": "array"
+          },
+          "timeout": {
+            "default": "10m",
+            "title": "Timeout",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "title": "ClusterTestProfile",
+        "type": "object"
+      },
+      "ClusterTestRef": {
+        "additionalProperties": false,
+        "description": "Reference to another chart's cluster-test profile.",
+        "properties": {
+          "chart": {
+            "title": "Chart",
+            "type": "string"
+          },
+          "profile": {
+            "default": "minimal",
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chart"
+        ],
+        "title": "ClusterTestRef",
+        "type": "object"
+      },
+      "ClusterTestSpec": {
+        "additionalProperties": false,
+        "description": "Authored configuration for a chart's live-cluster test workflows.",
+        "properties": {
+          "dependentTests": {
+            "items": {
+              "$ref": "#/$defs/ClusterTestRef"
+            },
+            "title": "Dependenttests",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "profiles": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ClusterTestProfile"
+            },
+            "title": "Profiles",
+            "type": "object"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "ClusterTestSpec",
+        "type": "object"
+      },
+      "ManifestValidationEnvironmentSpec": {
+        "additionalProperties": false,
+        "description": "Per-environment overrides: namespace and extra values files.",
+        "properties": {
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Namespace"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "title": "ManifestValidationEnvironmentSpec",
+        "type": "object"
+      },
+      "ManifestValidationPolicySpec": {
+        "additionalProperties": false,
+        "description": "Extra policy paths to run beyond the repo-wide defaults.",
+        "properties": {
+          "extra": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra",
+            "type": "array"
+          }
+        },
+        "title": "ManifestValidationPolicySpec",
+        "type": "object"
+      },
+      "ManifestValidationSpec": {
+        "additionalProperties": false,
+        "description": "Authored configuration for a chart's manifest-validation pipeline.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "environments": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ManifestValidationEnvironmentSpec"
+            },
+            "title": "Environments",
+            "type": "object"
+          },
+          "helmBinary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Helmbinary"
+          },
+          "helmVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Helmversion"
+          },
+          "kubernetesVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kubernetesversion"
+          },
+          "namespaceTemplate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Namespacetemplate"
+          },
+          "policies": {
+            "$ref": "#/$defs/ManifestValidationPolicySpec"
+          },
+          "releaseName": {
+            "title": "Releasename",
+            "type": "string"
+          },
+          "schemaLocations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Schemalocations",
+            "type": "array"
+          },
+          "triggerIgnores": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Triggerignores",
+            "type": "array"
+          },
+          "triggers": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "const": "match-by-basename",
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Triggers",
+            "type": "object"
+          },
+          "unmatchedChanges": {
+            "default": "warn",
+            "enum": [
+              "warn",
+              "all-environments"
+            ],
+            "title": "Unmatchedchanges",
+            "type": "string"
+          },
+          "validators": {
+            "$ref": "#/$defs/ManifestValidationValidatorsSpec"
+          }
+        },
+        "required": [
+          "releaseName",
+          "environments"
+        ],
+        "title": "ManifestValidationSpec",
+        "type": "object"
+      },
+      "ManifestValidationValidatorsSpec": {
+        "additionalProperties": false,
+        "description": "Per-validator gates for the rendered-manifest pipeline.\n\nDefaults preserve the historical pipeline for every existing lifecycle\ndocument.  The nested section gives future validators a stable home\nwithout adding more top-level validation flags.",
+        "properties": {
+          "kubeconform": {
+            "default": true,
+            "title": "Kubeconform",
+            "type": "boolean"
+          },
+          "policy": {
+            "default": true,
+            "title": "Policy",
+            "type": "boolean"
+          }
+        },
+        "title": "ManifestValidationValidatorsSpec",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Kubernetes-style lifecycle intent envelope for one Helm chart.",
+    "properties": {
+      "apiVersion": {
+        "const": "lifecycle.chartmanager.io/v1alpha1",
+        "title": "Apiversion",
+        "type": "string"
+      },
+      "kind": {
+        "const": "ChartLifecycle",
+        "title": "Kind",
+        "type": "string"
+      },
+      "metadata": {
+        "$ref": "#/$defs/ChartLifecycleMetadata"
+      },
+      "spec": {
+        "$ref": "#/$defs/ChartLifecycleSpec"
+      }
+    },
+    "required": [
+      "apiVersion",
+      "kind",
+      "metadata",
+      "spec"
+    ],
+    "title": "ChartLifecycle",
+    "type": "object"
+  },
+  "LocalCluster": {
+    "$defs": {
+      "BootstrapLifecycleRelease": {
+        "additionalProperties": false,
+        "description": "Lifecycle release augmented with bootstrap runtime contracts.",
+        "properties": {
+          "chart": {
+            "format": "path",
+            "title": "Chart",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BootstrapReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "runtimeValues": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Runtimevalues",
+            "type": "object"
+          },
+          "type": {
+            "const": "lifecycle",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chart",
+          "profile"
+        ],
+        "title": "BootstrapLifecycleRelease",
+        "type": "object"
+      },
+      "BootstrapLocalChartRelease": {
+        "additionalProperties": false,
+        "description": "Raw local release augmented with bootstrap runtime contracts.",
+        "properties": {
+          "chart": {
+            "format": "path",
+            "title": "Chart",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BootstrapReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "runtimeValues": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Runtimevalues",
+            "type": "object"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          },
+          "type": {
+            "const": "local",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "values",
+          "timeout",
+          "type",
+          "chart"
+        ],
+        "title": "BootstrapLocalChartRelease",
+        "type": "object"
+      },
+      "BootstrapOciChartRelease": {
+        "additionalProperties": false,
+        "description": "OCI release augmented with bootstrap runtime contracts.",
+        "properties": {
+          "chart": {
+            "title": "Chart",
+            "type": "string"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Digest"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BootstrapReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "runtimeValues": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Runtimevalues",
+            "type": "object"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          },
+          "type": {
+            "const": "oci",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "values",
+          "timeout",
+          "type",
+          "chart"
+        ],
+        "title": "BootstrapOciChartRelease",
+        "type": "object"
+      },
+      "BootstrapReadiness": {
+        "additionalProperties": false,
+        "description": "Generic readiness gates applied after one bootstrap release.",
+        "properties": {
+          "nodesReady": {
+            "default": false,
+            "title": "Nodesready",
+            "type": "boolean"
+          },
+          "workloadsReady": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorkloadsReady"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "BootstrapReadiness",
+        "type": "object"
+      },
+      "BootstrapRelease": {
+        "discriminator": {
+          "mapping": {
+            "lifecycle": "#/$defs/BootstrapLifecycleRelease",
+            "local": "#/$defs/BootstrapLocalChartRelease",
+            "oci": "#/$defs/BootstrapOciChartRelease"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/BootstrapLifecycleRelease"
+          },
+          {
+            "$ref": "#/$defs/BootstrapLocalChartRelease"
+          },
+          {
+            "$ref": "#/$defs/BootstrapOciChartRelease"
+          }
+        ]
+      },
+      "LocalBootstrap": {
+        "additionalProperties": false,
+        "description": "Releases installed after the cluster exists, in declaration order.\n\nThe executor is fail-fast and waits for each release's readiness gates\nbefore starting the next, so list order is the install order and a failure\nstops the rest. An empty list is valid -- it means a bare cluster.",
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/$defs/BootstrapRelease"
+            },
+            "title": "Releases",
+            "type": "array"
+          }
+        },
+        "title": "LocalBootstrap",
+        "type": "object"
+      },
+      "LocalClusterSettings": {
+        "additionalProperties": false,
+        "description": "Where the Kind configuration lives, as a repository-relative path.\n\nChart-manager never interprets that file -- Kind does. Changing a\ncreation-time setting inside it therefore needs `local reset`, not\n`local up`.",
+        "properties": {
+          "config": {
+            "format": "path",
+            "title": "Config",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "LocalClusterSettings",
+        "type": "object"
+      },
+      "LocalClusterSpec": {
+        "additionalProperties": false,
+        "description": "What a local cluster is made of: a Kind config, then a bootstrap sequence.",
+        "properties": {
+          "bootstrap": {
+            "$ref": "#/$defs/LocalBootstrap"
+          },
+          "cluster": {
+            "$ref": "#/$defs/LocalClusterSettings"
+          }
+        },
+        "required": [
+          "cluster",
+          "bootstrap"
+        ],
+        "title": "LocalClusterSpec",
+        "type": "object"
+      },
+      "ResourceMetadata": {
+        "additionalProperties": false,
+        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ResourceMetadata",
+        "type": "object"
+      },
+      "WorkloadsReady": {
+        "additionalProperties": false,
+        "description": "Wait for every workload in one namespace after bootstrap installation.",
+        "properties": {
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "timeout"
+        ],
+        "title": "WorkloadsReady",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Envelope for one authored local environment.\n\nRead from `.chart-manager/local-cluster.yaml` unless\n`CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.",
+    "properties": {
+      "apiVersion": {
+        "const": "local.chartmanager.io/v1alpha1",
+        "title": "Apiversion",
+        "type": "string"
+      },
+      "kind": {
+        "const": "LocalCluster",
+        "title": "Kind",
+        "type": "string"
+      },
+      "metadata": {
+        "$ref": "#/$defs/ResourceMetadata"
+      },
+      "spec": {
+        "$ref": "#/$defs/LocalClusterSpec"
+      }
+    },
+    "required": [
+      "apiVersion",
+      "kind",
+      "metadata",
+      "spec"
+    ],
+    "title": "LocalCluster",
+    "type": "object"
+  },
+  "LocalStack": {
+    "$defs": {
+      "LifecycleRelease": {
+        "additionalProperties": false,
+        "description": "Install a local chart through one authored lifecycle profile.",
+        "properties": {
+          "chart": {
+            "format": "path",
+            "title": "Chart",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "type": {
+            "const": "lifecycle",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chart",
+          "profile"
+        ],
+        "title": "LifecycleRelease",
+        "type": "object"
+      },
+      "LocalStackSpec": {
+        "additionalProperties": false,
+        "description": "Releases composing one stack, at least one.\n\nTyped as `StackRelease`, not `BootstrapRelease`: a `type: local` release is\nrejected here. A stack must stay reusable, so every release names either a\nlifecycle profile or a pinned OCI chart.",
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/$defs/StackRelease"
+            },
+            "minItems": 1,
+            "title": "Releases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "releases"
+        ],
+        "title": "LocalStackSpec",
+        "type": "object"
+      },
+      "OciChartRelease": {
+        "additionalProperties": false,
+        "description": "Install an OCI chart pinned by one exact version or content digest.",
+        "properties": {
+          "chart": {
+            "title": "Chart",
+            "type": "string"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Digest"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          },
+          "type": {
+            "const": "oci",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "values",
+          "timeout",
+          "type",
+          "chart"
+        ],
+        "title": "OciChartRelease",
+        "type": "object"
+      },
+      "ResourceMetadata": {
+        "additionalProperties": false,
+        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ResourceMetadata",
+        "type": "object"
+      },
+      "StackRelease": {
+        "discriminator": {
+          "mapping": {
+            "lifecycle": "#/$defs/LifecycleRelease",
+            "oci": "#/$defs/OciChartRelease"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/LifecycleRelease"
+          },
+          {
+            "$ref": "#/$defs/OciChartRelease"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "description": "Envelope for a reusable application composition.\n\nResolved by name from the `stacks/` directory beside the LocalCluster file,\nor from an explicit path. Composition only -- no templating or ordering\nlanguage, which is what keeps it narrower than Helmfile.",
+    "properties": {
+      "apiVersion": {
+        "const": "local.chartmanager.io/v1alpha1",
+        "title": "Apiversion",
+        "type": "string"
+      },
+      "kind": {
+        "const": "LocalStack",
+        "title": "Kind",
+        "type": "string"
+      },
+      "metadata": {
+        "$ref": "#/$defs/ResourceMetadata"
+      },
+      "spec": {
+        "$ref": "#/$defs/LocalStackSpec"
+      }
+    },
+    "required": [
+      "apiVersion",
+      "kind",
+      "metadata",
+      "spec"
+    ],
+    "title": "LocalStack",
+    "type": "object"
+  }
+}

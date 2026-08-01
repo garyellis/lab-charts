@@ -64,7 +64,7 @@ def _chart(root: Path, name: str, *, spec: str | None = _SPEC, extra: str = "") 
         if extra:
             body += textwrap.dedent(extra)
         envelope = (
-            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
             "kind: ChartLifecycle\n"
             "metadata:\n"
             f"  name: {name}\n"

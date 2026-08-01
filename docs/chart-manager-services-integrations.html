@@ -260,7 +260,7 @@
   <div class="lifecycle">
     <div class="stage s-amber"><div class="phase">intake</div><div class="name">Upgrade deps</div><div class="cmd">upgrade</div><div class="svc"><span class="ref" data-tip="services/upgrader/service.py:52 — class UpgradeService">UpgradeService</span> → <span class="ref" data-tip="integrations/renovate.py:65 — class Renovate">Renovate</span></div></div>
     <div class="sarrow">▸</div>
-    <div class="stage"><div class="phase">author</div><div class="name">Edit chart</div><div class="cmd">charts lifecycle</div><div class="svc"><span class="ref" data-tip="services/chart_catalog.py — class ChartCatalogService">ChartCatalogService</span> · strict <span class="ref" data-tip="services/chart_config.py — ChartLifecycle">ChartLifecycle</span></div></div>
+    <div class="stage"><div class="phase">author</div><div class="name">Edit chart</div><div class="cmd">charts lifecycle</div><div class="svc"><span class="ref" data-tip="services/chart_catalog.py — class ChartCatalogService">ChartCatalogService</span> · strict <span class="ref" data-tip="api/lifecycle/v1alpha1.py — ChartLifecycle">ChartLifecycle</span></div></div>
     <div class="sarrow">▸</div>
     <div class="stage s-green"><div class="phase">static gate</div><div class="name">Validate</div><div class="cmd">validate run</div><div class="svc"><span class="ref" data-tip="src/chart_manager/services/manifest_validation/">manifest_validation/ pipeline</span></div></div>
     <div class="sarrow">▸</div>
@@ -287,9 +287,9 @@
     <div class="ldivider">▼ requests in, frozen results out · no integrations import (ruff TID251 — and <b>zero</b> import sites remain)</div>
     <div class="lrow lc-comp"><div class="lname">settings.py + composition.py</div><div class="lbody"><span class="ref" data-tip="settings.py — frozen Pydantic BaseSettings model">Settings</span> owns process configuration: <code>kube_context</code>, <code>docker_host</code>, <code>command_timeout</code>, <code>event_source</code>, the repository-relative <code>charts_dir</code>, and the repository-relative <code>local_config</code>. Pydantic supplies environment overrides with the <code>CHART_MANAGER_</code> prefix, so the managed-chart root is overridden by <code>CHART_MANAGER_CHARTS_DIR</code> and the <code>LocalCluster</code> file by <code>CHART_MANAGER_LOCAL_CONFIG</code>. <span class="ref" data-tip="settings.py — RepositoryLayout(root, charts_dir)">RepositoryLayout</span> binds that path to a repository and provides shared discovery/path-prefix rules. <code>composition.py</code> remains the <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>. Its <span class="ref" data-tip="composition.py — class Container(settings=None)">Container</span> threads one settings instance into cluster, CI, validation, upgrader, finalizer, and event capabilities. There is no module-level singleton: the CLI builds configuration from the environment per process, while a server can construct one container at startup.</div></div>
     <div class="ldivider">▼ constructor-injected adapters — <b>required</b>, not <code>or Helm()</code> fallbacks</div>
-    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">78 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-amber">dependency intake</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. The validation context carries a closed provider registry plus provider-owned input resolution and adapters; <code>services/upgrader/</code> owns chart-scoped upgrade policy. The <code>services/lifecycle/</code> context owns versioned ordered action plans, input digests, impact reasoning, environment projection and cluster execution — six modules: <code>__init__.py</code>, <code>compiler.py</code>, <code>models.py</code>, <code>impact.py</code>, <code>cluster_executor.py</code>, <code>plan_projection.py</code>. <span class="ref" data-tip="services/local_resources.py — LocalCluster · LocalStack">services/local_resources.py</span> owns the authored local-environment resources. <code>services/domain/</code> owns authored chart/test configuration; runtime facts never flow back into it. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
+    <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">78 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-amber">dependency intake</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. The validation context carries a closed provider registry plus provider-owned input resolution and adapters; <code>services/upgrader/</code> owns chart-scoped upgrade policy. The <code>services/lifecycle/</code> context owns versioned ordered action plans, input digests, impact reasoning, environment projection and cluster execution — six modules: <code>__init__.py</code>, <code>compiler.py</code>, <code>models.py</code>, <code>impact.py</code>, <code>cluster_executor.py</code>, <code>plan_projection.py</code>. <span class="ref" data-tip="api/local/v1alpha1.py — LocalCluster · LocalStack; api/lifecycle/v1alpha1.py — ChartLifecycle"><code>chart_manager/api/</code></span> owns every authored resource contract; <code>services/local_resources.py</code> and <code>services/domain/</code> own loading, resolution and policy over them. Runtime facts never flow back into the contract. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
     <div class="ldivider">▼ typed results; one intentional shared-policy edge</div>
-    <div class="lrow lc-int"><div class="lname">integrations/</div><div class="lbody">One class per external tool: <span class="ref" data-tip="integrations/helm.py:62 — class Helm">helm</span> · <span class="ref" data-tip="integrations/kubectl.py:24 — class Kubectl">kubectl</span> · <span class="ref" data-tip="integrations/kind.py:34 — class Kind">kind</span> · <span class="ref" data-tip="integrations/helmrelease.py:111 — class HelmReleaseClient (was integrations/flux.py: class Flux)">helmrelease</span> · <span class="ref" data-tip="integrations/git.py:12 — class Git">git</span> · <span class="ref" data-tip="integrations/github.py:21 — class Github">github</span> · <span class="ref" data-tip="integrations/kubeconform.py:53 — class Kubeconform">kubeconform</span> · <span class="ref" data-tip="integrations/kyverno.py:80 — class Kyverno">kyverno</span> · <span class="ref" data-tip="integrations/renovate.py:65 — class Renovate">renovate</span> · <span class="ref" data-tip="integrations/aws/dynamodb/client.py">aws/dynamodb</span> · <span class="ref" data-tip="integrations/azure/cosmos/client.py">azure/cosmos</span>. Typed results; <code>Helm</code> deliberately consumes the shared chart-dependency freshness policy rather than duplicating it in the adapter. <b>All four kube-facing adapters take the same addressing arguments</b> — see the <a href="#integrations/helmrelease" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">HelmReleaseClient panel</a>.</div></div>
+    <div class="lrow lc-int"><div class="lname">integrations/</div><div class="lbody">One class per external tool: <span class="ref" data-tip="integrations/helm.py:62 — class Helm">helm</span> · <span class="ref" data-tip="integrations/kubectl.py:24 — class Kubectl">kubectl</span> · <span class="ref" data-tip="integrations/kind.py:34 — class Kind">kind</span> · <span class="ref" data-tip="integrations/helmrelease.py:111 — class HelmReleaseClient (was integrations/flux.py: class Flux)">helmrelease</span> · <span class="ref" data-tip="integrations/git.py:12 — class Git">git</span> · <span class="ref" data-tip="integrations/github.py:21 — class Github">github</span> · <span class="ref" data-tip="integrations/kubeconform.py:53 — class Kubeconform">kubeconform</span> · <span class="ref" data-tip="integrations/kyverno.py:80 — class Kyverno">kyverno</span> · <span class="ref" data-tip="integrations/renovate.py:65 — class Renovate">renovate</span> · <span class="ref" data-tip="integrations/dynamodb.py">aws/dynamodb</span> · <span class="ref" data-tip="integrations/cosmos.py">azure/cosmos</span>. Typed results; <code>Helm</code> deliberately consumes the shared chart-dependency freshness policy rather than duplicating it in the adapter. <b>All four kube-facing adapters take the same addressing arguments</b> — see the <a href="#integrations/helmrelease" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">HelmReleaseClient panel</a>.</div></div>
     <div class="ldivider">▼ every subprocess goes through one chokepoint</div>
     <div class="lrow lc-plumb"><div class="lname">plumbing/</div><div class="lbody">Generic, domain-neutral building blocks only: <span class="ref" data-tip="plumbing/commands.py — CommandRunner Protocol · SubprocessRunner">subprocess kernel</span> · <span class="ref" data-tip="plumbing/errors.py — shared exception taxonomy">errors</span> · <span class="ref" data-tip="plumbing/duration.py — parse_duration">duration parsing</span> · <span class="ref" data-tip="plumbing/paths.py — ensure_relative">relative-path validation</span> · <span class="ref" data-tip="plumbing/yaml_files.py — load_yaml_file">generic YAML loading</span> · <span class="ref" data-tip="plumbing/text.py — truncate_lines · truncate_bytes">text caps</span>. Chart, Helm dependency and validation policy live in <code>services/</code>, not here. <span class="pill p-green">domain-neutral</span> <a href="#plumbing/commands" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Plumbing tab</a></div></div>
   </div>
@@ -495,7 +495,7 @@
 
         <h3 class="sub">Target and environment ownership</h3>
         <div class="two-col">
-          <div class="block"><h4><span class="ref" data-tip="services/local_resources.py:440 — class LocalTargetResolver(LocalResourceLoader)">LocalTargetResolver</span> <span style="font-weight:500;font-size:11px"><a href="#services/localresources" style="color:var(--blue)">→ resource model</a></span></h4><ul>
+          <div class="block"><h4><span class="ref" data-tip="services/local_resources.py — class LocalTargetResolver(LocalResourceLoader)">LocalTargetResolver</span> <span style="font-weight:500;font-size:11px"><a href="#services/localresources" style="color:var(--blue)">→ resource model</a></span></h4><ul>
             <li>Accepts a configured chart name, repository-contained chart directory, named LocalStack, or explicit LocalStack YAML</li>
             <li>Validates chart identity and every repository-relative path before the service mutates cluster state</li>
             <li>A profile override is valid only for a single chart; stack releases declare their own profiles</li>
@@ -779,7 +779,7 @@
 
       <!-- testspec -->
       <div class="panel" id="svc-testspec">
-        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.clusterTest</code> → <span class="ref" data-tip="services/domain/cluster_tests.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span></h2><span class="loc">services/chart_config.py · cluster_test_catalog.py · domain/cluster_tests.py · install_plan.py</span><span class="pill p-blue">composed capability</span></div>
+        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.clusterTest</code> → <span class="ref" data-tip="api/lifecycle/v1alpha1.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span></h2><span class="loc">api/lifecycle/v1alpha1.py · services/chart_config.py · cluster_test_catalog.py · domain/install_plan.py</span><span class="pill p-blue">composed capability</span></div>
         <p class="oneliner">The optional per-chart <b>dynamic test capability</b>: which profiles exist, what each profile requires, which values files it layers, and whether <code>helm test</code> runs. <code>spec.enabled</code> and <code>spec.clusterTest.enabled</code> both default true; either can disable the capability. Ephemeral tests, persistent local convergence, and CI operate only on an enabled section.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to executable plan</div>
@@ -787,7 +787,7 @@
           <div class="carrow">▸<small>strict loaders</small></div>
           <div class="cnode c-svc2"><span class="ref" data-tip="services/domain/charts.py — ChartRepository.get; services/chart_config.py — load_optional_chart_lifecycle">ChartRepository → ChartLifecycle</span><small>Helm-only discovery, then strict optional capability loading</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="services/domain/cluster_tests.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span>.model_validate<small>extra=&quot;forbid&quot; — any typo raises</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="api/lifecycle/v1alpha1.py — class ClusterTestSpec(BaseModel)">ClusterTestSpec</span>.model_validate<small>extra=&quot;forbid&quot; — any typo raises</small></div>
           <div class="carrow">▸<small>via</small></div>
           <div class="cnode c-svc2"><span class="ref" data-tip="services/cluster_test_catalog.py — class ClusterTestCatalog">ClusterTestCatalog</span>.get(name)<small>requires root + spec.clusterTest enabled; composes ClusterTestChart</small></div>
           <div class="carrow">▸<small>requires DFS</small></div>
@@ -795,7 +795,7 @@
         </div>
 
         <div class="yml-title">A real standalone resource, annotated — <code>charts/harbor/chart-lifecycle.yaml</code> (<code>spec.clusterTest</code> excerpt)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>      <span class="a">→ exact supported API</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>      <span class="a">→ exact supported API</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>                         <span class="a">→ exact resource kind</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">harbor</span>                              <span class="a">→ must match directory + Chart.yaml name</span>
@@ -831,16 +831,16 @@
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th>yaml key</th><th class="mono">model field</th><th>type / default</th><th>validation</th></tr></thead>
           <tbody>
-            <tr><td class="mono">apiVersion</td><td class="mono">ChartLifecycle.api_version</td><td><code>Literal["lifecycle.cmg.io/v1alpha1"]</code></td><td>exact; no numeric or legacy version accepted</td></tr>
+            <tr><td class="mono">apiVersion</td><td class="mono">ChartLifecycle.api_version</td><td><code>Literal["lifecycle.chartmanager.io/v1alpha1"]</code></td><td>exact; no numeric or legacy version accepted</td></tr>
             <tr><td class="mono">kind</td><td class="mono">ChartLifecycle.kind</td><td><code>Literal["ChartLifecycle"]</code></td><td>exact resource-kind boundary</td></tr>
             <tr><td class="mono">metadata.name</td><td class="mono">ChartLifecycleMetadata.name</td><td><code>str</code> — required</td><td>must equal chart directory and Chart.yaml name</td></tr>
             <tr><td class="mono">spec.enabled</td><td class="mono">ChartLifecycleSpec.enabled</td><td><code>bool</code> = true</td><td>false disables every configured capability</td></tr>
             <tr><td class="mono">spec.clusterTest.enabled</td><td class="mono">ClusterTestSpec.enabled</td><td><code>bool</code> = true</td><td>false disables cluster tests without disabling manifest validation</td></tr>
-            <tr><td class="mono">profiles</td><td class="mono">ClusterTestSpec.profiles</td><td><code>dict[str, ClusterTestProfile]</code> — <b>required</b></td><td>lookup via <span class="ref" data-tip="services/domain/cluster_tests.py — ClusterTestSpec.profile(name) → SpecError with sorted profile list">.profile(name)</span>: unknown name ⇒ <code>SpecError: unknown profile 'x'. available profiles: minimal, routed</code></td></tr>
+            <tr><td class="mono">profiles</td><td class="mono">ClusterTestSpec.profiles</td><td><code>dict[str, ClusterTestProfile]</code> — <b>required</b></td><td>lookup via <span class="ref" data-tip="services/domain/cluster_test_policy.py — require_cluster_test_profile(spec, name) → SpecError with sorted profile list">require_cluster_test_profile(...)</span>: unknown name ⇒ <code>SpecError: unknown profile 'x'. available profiles: minimal, routed</code></td></tr>
             <tr><td class="mono">dependentTests</td><td class="mono">ClusterTestSpec.dependent_tests</td><td><code>list[ClusterTestRef]</code> = []</td><td>strict authored camelCase; legacy snake_case keys are rejected</td></tr>
             <tr><td class="mono">profiles.*.namespace</td><td class="mono">ClusterTestProfile.namespace</td><td><code>str | None</code> = None</td><td>None ⇒ installer's default namespace</td></tr>
             <tr><td class="mono">profiles.*.requires</td><td class="mono">ClusterTestProfile.requires</td><td><code>list[ClusterTestRef]</code> = []</td><td>each ref resolves through <code>ClusterTestCatalog</code> at plan time — a missing or disabled capability fails then, not at parse</td></tr>
-            <tr><td class="mono">profiles.*.values</td><td class="mono">ClusterTestProfile.values</td><td><code>list[str]</code> = <code>["values.yaml"]</code></td><td><span class="ref" data-tip="services/domain/cluster_tests.py — chart-relative values validator">values_must_be_relative</span>: absolute path or <code>..</code> ⇒ ValueError; existence checked later by <span class="ref" data-tip="services/cluster_test_catalog.py — ClusterTestCatalog.value_paths">ClusterTestCatalog.value_paths</span></td></tr>
+            <tr><td class="mono">profiles.*.values</td><td class="mono">ClusterTestProfile.values</td><td><code>list[str]</code> = <code>["values.yaml"]</code></td><td><span class="ref" data-tip="api/lifecycle/v1alpha1.py — chart-relative values validator">values_must_be_relative</span>: absolute path or <code>..</code> ⇒ ValueError; existence checked later by <span class="ref" data-tip="services/cluster_test_catalog.py — ClusterTestCatalog.value_paths">ClusterTestCatalog.value_paths</span></td></tr>
             <tr><td class="mono">profiles.*.helmTest</td><td class="mono">ClusterTestProfile.helm_test</td><td><code>bool</code> = true</td><td>false ⇒ omit the compiled Helm-test action; workload readiness remains explicit</td></tr>
             <tr><td class="mono">profiles.*.timeout</td><td class="mono">ClusterTestProfile.timeout</td><td><code>str</code> = &quot;10m&quot;</td><td>helm-style duration, forwarded verbatim to helm/kubectl</td></tr>
             <tr><td class="mono"><i>anything else</i></td><td class="mono">—</td><td>—</td><td><b>the resource and every section model use <code>extra=&quot;forbid&quot;</code></b> — old keys and typos fail with <code>SpecError: invalid ChartLifecycle resource &lt;path&gt;: …</code></td></tr>
@@ -891,13 +891,13 @@
 
       <!-- validatespec -->
       <div class="panel" id="svc-validatespec">
-        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.validation</code> → <span class="ref" data-tip="services/manifest_validation/spec.py — class ManifestValidationSpec(BaseModel)">ManifestValidationSpec</span></h2><span class="loc">services/chart_config.py · manifest_validation/spec.py · catalog.py · planner.py · compiler.py</span><span class="pill p-green">composed capability</span></div>
+        <div class="phead"><h2>chart-lifecycle.yaml → <code>spec.validation</code> → <span class="ref" data-tip="api/lifecycle/v1alpha1.py — class ManifestValidationSpec(BaseModel)">ManifestValidationSpec</span></h2><span class="loc">api/lifecycle/v1alpha1.py · services/chart_config.py · manifest_validation/{catalog,planner,compiler}.py</span><span class="pill p-green">composed capability</span></div>
         <p class="oneliner">The optional per-chart <b>static validation capability</b>: environments, ordered values overlays, namespaces, change triggers and validator gates. <code>spec.enabled</code> and <code>spec.validation.enabled</code> must both be true. Both <code>validate chart</code> and <code>validate run</code> consume this authored intent; the difference is selection ergonomics, not execution semantics.</p>
         <div class="comm">
           <div class="comm-title">Loading path — file to worklist rows</div>
           <div class="cnode c-store">charts/&lt;name&gt;/<br>Chart.yaml + chart-lifecycle.yaml</div>
           <div class="carrow">▸</div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/chart_config.py — ChartLifecycle · load_optional_chart_lifecycle">strict resource loader</span><small>v1alpha1 · identity + capability enablement</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="api/lifecycle/v1alpha1.py — ChartLifecycle; services/chart_config.py — load_optional_chart_lifecycle">strict resource loader</span><small>v1alpha1 · identity + capability enablement</small></div>
           <div class="carrow">▸<small>pydantic</small></div>
           <div class="cnode c-svc"><span class="ref" data-tip="services/manifest_validation/models.py — ManifestValidationTarget(chart: HelmChart, spec, spec_path)">ManifestValidationTarget</span><small>composition over shared HelmChart</small></div>
           <div class="carrow">▸<small>catalog + changed files</small></div>
@@ -909,7 +909,7 @@
         </div>
 
         <div class="yml-title">Real standalone resource ① — <code>charts/grafana/chart-lifecycle.yaml</code> (<code>spec.validation</code> excerpt; uat/prod elided)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">grafana</span>
@@ -939,7 +939,7 @@
   <span class="k">"values-ci.yaml":</span>   <span class="v">[ci]</span></div>
 
         <div class="yml-title">Real standalone resource ② — <code>charts/arc/chart-lifecycle.yaml</code> (<code>spec.validation</code> uses explicit namespace)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>
 <span class="k">metadata:</span> {<span class="k">name:</span> <span class="v">arc</span>}
 <span class="k">spec:</span>
@@ -973,9 +973,9 @@
           <thead><tr><th class="mono">validator</th><th>rule</th><th>error you'll see</th></tr></thead>
           <tbody>
             <tr><td class="mono">ChartLifecycle</td><td>exact apiVersion/kind; metadata identity matches Helm chart; enabled spec declares at least one capability; all unknown keys forbidden</td><td><code>invalid ChartLifecycle resource …</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_helm_exclusive">_check_helm_exclusive</span></td><td>at most one of <code>helmVersion</code> / <code>helmBinary</code></td><td><code>helmVersion and helmBinary are mutually exclusive</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_environments">_check_environments</span></td><td>≥1 env; and without <code>namespaceTemplate</code>, every env needs <code>namespace</code></td><td><code>namespaceTemplate is unset; every environment must declare 'namespace'. missing: dev, test</code></td></tr>
-            <tr><td class="mono"><span class="ref" data-tip="services/manifest_validation/spec.py — ManifestValidationSpec._check_triggers">_check_triggers</span></td><td>trigger values reference declared envs; <code>triggerIgnores</code> remains chart-relative</td><td><code>trigger 'values.yaml' references unknown environment(s): qa</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="api/lifecycle/v1alpha1.py — ManifestValidationSpec._check_helm_exclusive">_check_helm_exclusive</span></td><td>at most one of <code>helmVersion</code> / <code>helmBinary</code></td><td><code>helmVersion and helmBinary are mutually exclusive</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="api/lifecycle/v1alpha1.py — ManifestValidationSpec._check_environments">_check_environments</span></td><td>≥1 env; and without <code>namespaceTemplate</code>, every env needs <code>namespace</code></td><td><code>namespaceTemplate is unset; every environment must declare 'namespace'. missing: dev, test</code></td></tr>
+            <tr><td class="mono"><span class="ref" data-tip="api/lifecycle/v1alpha1.py — ManifestValidationSpec._check_triggers">_check_triggers</span></td><td>trigger values reference declared envs; <code>triggerIgnores</code> remains chart-relative</td><td><code>trigger 'values.yaml' references unknown environment(s): qa</code></td></tr>
           </tbody>
         </table></div>
 
@@ -1051,24 +1051,24 @@
 
       <!-- localresources -->
       <div class="panel" id="svc-localresources">
-        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/local_resources.py">local_resources.py</span> → <code>LocalCluster</code> · <code>LocalStack</code></h2><span class="loc">services/local_resources.py · 548 ln · apiVersion local.cmg.io/v1alpha1</span><span class="pill p-teal">authored local environment</span></div>
-        <p class="oneliner">Two strict authored resources describe a repository-local Kubernetes environment. <span class="ref" data-tip="services/local_resources.py:284 — class LocalCluster(_StrictModel)"><code>LocalCluster</code></span> owns the kind configuration and one ordered, fail-fast bootstrap sequence. <span class="ref" data-tip="services/local_resources.py:295 — class LocalStack(_StrictModel)"><code>LocalStack</code></span> is a reusable application composition — <b>composition only, deliberately narrower than Helmfile</b>: it has no templating, no conditionals and no orchestration language. Every authored path is repository-relative, so loading a resource can never reach outside the repository root.</p>
+        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/api/local/v1alpha1.py">api/local/v1alpha1.py</span> → <code>LocalCluster</code> · <code>LocalStack</code></h2><span class="loc">api/local/v1alpha1.py · apiVersion local.chartmanager.io/v1alpha1</span><span class="pill p-teal">authored local environment</span></div>
+        <p class="oneliner">Two strict authored resources describe a repository-local Kubernetes environment. <span class="ref" data-tip="api/local/v1alpha1.py — class LocalCluster(_StrictModel)"><code>LocalCluster</code></span> owns the kind configuration and one ordered, fail-fast bootstrap sequence. <span class="ref" data-tip="api/local/v1alpha1.py — class LocalStack(_StrictModel)"><code>LocalStack</code></span> is a reusable application composition — <b>composition only, deliberately narrower than Helmfile</b>: it has no templating, no conditionals and no orchestration language. Every authored path is repository-relative, so loading a resource can never reach outside the repository root.</p>
 
         <div class="comm">
           <div class="comm-title">Loading path — file to resolved target</div>
           <div class="cnode c-store">.chart-manager/<br>local-cluster.yaml<small>CHART_MANAGER_LOCAL_CONFIG overrides</small></div>
           <div class="carrow">▸<small>strict load</small></div>
-          <div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py:315 — load_local_cluster(path) · :320 — load_local_stack(path)">load_local_cluster · load_local_stack</span><small>pydantic, extra=&quot;forbid&quot;</small></div>
+          <div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py — load_local_cluster(path) · load_local_stack(path)">load_local_cluster · load_local_stack</span><small>pydantic, extra=&quot;forbid&quot;</small></div>
           <div class="carrow">▸<small>containment + existence</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="services/local_resources.py:349 — class LocalResourceLoader(root, *, local_config, stacks_dir)">LocalResourceLoader</span><small>load_cluster · load_stack · _validate_release</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/local_resources.py — class LocalResourceLoader(root, *, local_config, stacks_dir)">LocalResourceLoader</span><small>load_cluster · load_stack · _validate_release</small></div>
           <div class="carrow">▸<small>select</small></div>
-          <div class="cnode c-svc"><span class="ref" data-tip="services/local_resources.py:440 — class LocalTargetResolver(LocalResourceLoader)">LocalTargetResolver</span>.resolve<small>chart dir · stack name · stack file</small></div>
+          <div class="cnode c-svc"><span class="ref" data-tip="services/local_resources.py — class LocalTargetResolver(LocalResourceLoader)">LocalTargetResolver</span>.resolve<small>chart dir · stack name · stack file</small></div>
           <div class="carrow">▸</div>
-          <div class="cgroup"><div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py:325 — @frozen ResolvedChartTarget(kind='chart', name, path)">ResolvedChartTarget</span></div><div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py:335 — @frozen ResolvedStackTarget(kind='stack', name, path, stack)">ResolvedStackTarget</span></div></div>
+          <div class="cgroup"><div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py — @frozen ResolvedChartTarget(kind='chart', name, path)">ResolvedChartTarget</span></div><div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py — @frozen ResolvedStackTarget(kind='stack', name, path, stack)">ResolvedStackTarget</span></div></div>
         </div>
 
         <div class="yml-title">The authored <code>LocalCluster</code> — <code>.chart-manager/local-cluster.yaml</code>, annotated</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">local.cmg.io/v1alpha1</span>          <span class="a">→ Literal, exact</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">local.chartmanager.io/v1alpha1</span>          <span class="a">→ Literal, exact</span>
 <span class="k">kind:</span> <span class="v">LocalCluster</span>                        <span class="a">→ Literal, exact</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">default</span>                           <span class="a">→ ResourceMetadata.name</span>  <span class="c">(lowercase DNS label, ≤63 chars)</span>
@@ -1092,7 +1092,7 @@
 
         <div class="yml-title">A named <code>LocalStack</code> — resolved from the config file's sibling <code>stacks/</code> directory (constructed example, faithful to the model)</div>
         <div class="yml"><span class="c"># .chart-manager/stacks/observability.yaml  ⇐  selected as `--stack observability`</span>
-<span class="k">apiVersion:</span> <span class="v">local.cmg.io/v1alpha1</span>
+<span class="k">apiVersion:</span> <span class="v">local.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">LocalStack</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">observability</span>                     <span class="c">must equal the file stem when selected by name</span>
@@ -1114,21 +1114,21 @@
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th class="mono">type:</th><th class="mono">stack release</th><th class="mono">bootstrap release</th><th>required fields beyond <code>type</code></th></tr></thead>
           <tbody>
-            <tr><td class="mono">lifecycle</td><td class="mono"><span class="ref" data-tip="services/local_resources.py:95 — class LifecycleRelease(_StrictModel)">LifecycleRelease</span></td><td class="mono"><span class="ref" data-tip="services/local_resources.py:244 — class BootstrapLifecycleRelease(_BootstrapRelease, LifecycleRelease)">BootstrapLifecycleRelease</span></td><td><code>chart</code> (repository-relative directory) · <code>profile</code>. Helm settings are <b>not</b> authored — they come from the chart's <code>spec.clusterTest</code> profile</td></tr>
-            <tr><td class="mono">local</td><td class="mono" style="color:var(--muted)">— not permitted —</td><td class="mono"><span class="ref" data-tip="services/local_resources.py:248 — class BootstrapLocalChartRelease(_BootstrapRelease, LocalChartRelease)">BootstrapLocalChartRelease</span></td><td><span class="ref" data-tip="services/local_resources.py:146 — class LocalChartRelease(_RawHelmRelease)">LocalChartRelease</span> adds <code>chart</code> to the raw Helm fields; <code>name</code> must equal the chart's <code>Chart.yaml</code> name</td></tr>
-            <tr><td class="mono">oci</td><td class="mono"><span class="ref" data-tip="services/local_resources.py:158 — class OciChartRelease(_RawHelmRelease)">OciChartRelease</span></td><td class="mono"><span class="ref" data-tip="services/local_resources.py:252 — class BootstrapOciChartRelease(_BootstrapRelease, OciChartRelease)">BootstrapOciChartRelease</span></td><td><code>chart</code> is an <code>oci://</code> reference with no <code>@</code>; <b>exactly one</b> of <code>version</code> (exact SemVer) or <code>digest</code> (<code>sha256:</code> + 64 lowercase hex)</td></tr>
+            <tr><td class="mono">lifecycle</td><td class="mono"><span class="ref" data-tip="api/local/v1alpha1.py — class LifecycleRelease(_StrictModel)">LifecycleRelease</span></td><td class="mono"><span class="ref" data-tip="api/local/v1alpha1.py — class BootstrapLifecycleRelease(_BootstrapRelease, LifecycleRelease)">BootstrapLifecycleRelease</span></td><td><code>chart</code> (repository-relative directory) · <code>profile</code>. Helm settings are <b>not</b> authored — they come from the chart's <code>spec.clusterTest</code> profile</td></tr>
+            <tr><td class="mono">local</td><td class="mono" style="color:var(--muted)">— not permitted —</td><td class="mono"><span class="ref" data-tip="api/local/v1alpha1.py — class BootstrapLocalChartRelease(_BootstrapRelease, LocalChartRelease)">BootstrapLocalChartRelease</span></td><td><span class="ref" data-tip="api/local/v1alpha1.py — class LocalChartRelease(_RawHelmRelease)">LocalChartRelease</span> adds <code>chart</code> to the raw Helm fields; <code>name</code> must equal the chart's <code>Chart.yaml</code> name</td></tr>
+            <tr><td class="mono">oci</td><td class="mono"><span class="ref" data-tip="api/local/v1alpha1.py — class OciChartRelease(_RawHelmRelease)">OciChartRelease</span></td><td class="mono"><span class="ref" data-tip="api/local/v1alpha1.py — class BootstrapOciChartRelease(_BootstrapRelease, OciChartRelease)">BootstrapOciChartRelease</span></td><td><code>chart</code> is an <code>oci://</code> reference with no <code>@</code>; <b>exactly one</b> of <code>version</code> (exact SemVer) or <code>digest</code> (<code>sha256:</code> + 64 lowercase hex)</td></tr>
           </tbody>
         </table></div>
 
-        <div class="api"><span class="ref" data-tip="services/local_resources.py:113 — class _RawHelmRelease(_StrictModel)">_RawHelmRelease</span>  <span class="r">— Helm-owned settings, explicit for every non-lifecycle release</span>
+        <div class="api"><span class="ref" data-tip="api/local/v1alpha1.py — class _RawHelmRelease(_StrictModel)">_RawHelmRelease</span>  <span class="r">— Helm-owned settings, explicit for every non-lifecycle release</span>
   <span class="m">name</span> · <span class="m">namespace</span> <span class="r">DNS labels ≤63 chars</span> · <span class="m">values</span>: list[Path] <span class="r">repository-relative</span> · <span class="m">timeout</span> <span class="r">Helm duration &gt; 0</span>
 
-<span class="ref" data-tip="services/local_resources.py:225 — class _BootstrapRelease — mixin supplying bootstrap-only fields">_BootstrapRelease</span> <span class="r">— mixin available ONLY while bootstrapping a LocalCluster</span>
+<span class="ref" data-tip="api/local/v1alpha1.py — class _BootstrapRelease — mixin supplying bootstrap-only fields">_BootstrapRelease</span> <span class="r">— mixin available ONLY while bootstrapping a LocalCluster</span>
   <span class="m">runtimeValues</span>: dict[str, str] <span class="r">values restricted to the four kind placeholders</span>
-  <span class="m">readiness</span>: <span class="ref" data-tip="services/local_resources.py:215 — class BootstrapReadiness — nodesReady + workloadsReady">BootstrapReadiness</span> <span class="r">= nodesReady: bool + workloadsReady: </span><span class="ref" data-tip="services/local_resources.py:198 — class WorkloadsReady(namespace, timeout)">WorkloadsReady</span><span class="r"> | None</span>
+  <span class="m">readiness</span>: <span class="ref" data-tip="api/local/v1alpha1.py — class BootstrapReadiness — nodesReady + workloadsReady">BootstrapReadiness</span> <span class="r">= nodesReady: bool + workloadsReady: </span><span class="ref" data-tip="api/local/v1alpha1.py — class WorkloadsReady(namespace, timeout)">WorkloadsReady</span><span class="r"> | None</span>
 
-<span class="ref" data-tip="services/local_resources.py:256 — type BootstrapRelease = Annotated[..., Field(discriminator='type')]">type BootstrapRelease</span> = BootstrapLifecycleRelease | BootstrapLocalChartRelease | BootstrapOciChartRelease
-<span class="ref" data-tip="services/local_resources.py:260 — type StackRelease = Annotated[LifecycleRelease | OciChartRelease, Field(discriminator='type')]">type StackRelease</span>     = LifecycleRelease | OciChartRelease        <span class="s"># narrower on purpose</span></div>
+<span class="ref" data-tip="api/local/v1alpha1.py — type BootstrapRelease = Annotated[..., Field(discriminator='type')]">type BootstrapRelease</span> = BootstrapLifecycleRelease | BootstrapLocalChartRelease | BootstrapOciChartRelease
+<span class="ref" data-tip="api/local/v1alpha1.py — type StackRelease = Annotated[LifecycleRelease | OciChartRelease, Field(discriminator='type')]">type StackRelease</span>     = LifecycleRelease | OciChartRelease        <span class="s"># narrower on purpose</span></div>
 
         <div class="callout info"><b>Why a stack cannot carry a raw local chart.</b> <code>StackRelease</code> discriminates over <code>lifecycle</code> and <code>oci</code> only. A stack is a composition of things that already have an identity — an authored lifecycle profile, or an immutably pinned registry artifact — so it never needs to restate namespace, values and timeout for a directory in this repository. A bootstrap release may, because bootstrap converges the environment itself and sometimes has to install a chart that has no lifecycle profile at all. The <code>runtimeValues</code> and <code>readiness</code> fields are likewise bootstrap-only: they describe environment convergence, not application composition.</div>
 
@@ -1136,32 +1136,32 @@
         <div class="two-col">
           <div class="block"><h4>Model rules</h4>
             <ul>
-              <li>Every model extends <span class="ref" data-tip="services/local_resources.py:82 — class _StrictModel(BaseModel): model_config = ConfigDict(extra='forbid', strict=True)"><code>_StrictModel</code></span> — <code>extra="forbid"</code> plus <code>strict=True</code>, so an unknown key or a coerced type is an error, not a silent default</li>
+              <li>Every model extends <span class="ref" data-tip="api/base.py — class StrictApiModel(ApiModel): model_config = ConfigDict(strict=True)"><code>_StrictModel</code></span> — <code>extra="forbid"</code> plus <code>strict=True</code>, so an unknown key or a coerced type is an error, not a silent default</li>
               <li><code>apiVersion</code> and <code>kind</code> are <code>Literal</code>s; no other envelope is accepted</li>
-              <li><span class="ref" data-tip="services/local_resources.py:86 — class ResourceMetadata(_StrictModel)"><code>ResourceMetadata.name</code></span>, release <code>name</code>, <code>namespace</code> and <code>profile</code> are all lowercase DNS labels of at most 63 characters</li>
+              <li><span class="ref" data-tip="api/local/v1alpha1.py — class ResourceMetadata(_StrictModel)"><code>ResourceMetadata.name</code></span>, release <code>name</code>, <code>namespace</code> and <code>profile</code> are all lowercase DNS labels of at most 63 characters</li>
               <li><code>LocalStackSpec.releases</code> declares <code>min_length=1</code> — an empty stack is not a stack</li>
               <li>Failures are normalized into one <code>SpecError: invalid local resource &lt;path&gt;: …</code> boundary</li>
             </ul>
           </div>
           <div class="block"><h4>Path rules</h4>
             <ul>
-              <li><span class="ref" data-tip="services/local_resources.py:56 — _relative_path(value, *, field) — checks the authored spelling before Path normalization"><code>_relative_path</code></span> inspects the <b>authored spelling</b> before <code>Path</code> normalizes it away: empty strings, backslashes, leading <code>/</code>, and any <code>""</code>/<code>"."</code>/<code>".."</code> segment are rejected</li>
-              <li><span class="ref" data-tip="services/local_resources.py:418 — LocalResourceLoader._inside_root(path)"><code>_inside_root</code></span> resolves and re-checks containment, so a symlink cannot escape the repository root</li>
+              <li><span class="ref" data-tip="plumbing/paths.py — relative_path(value, *, field) — checks the authored spelling before Path normalization"><code>_relative_path</code></span> inspects the <b>authored spelling</b> before <code>Path</code> normalizes it away: empty strings, backslashes, leading <code>/</code>, and any <code>""</code>/<code>"."</code>/<code>".."</code> segment are rejected</li>
+              <li><span class="ref" data-tip="services/local_resources.py — LocalResourceLoader._inside_root(path)"><code>_inside_root</code></span> resolves and re-checks containment, so a symlink cannot escape the repository root</li>
               <li>Existence is checked too: <code>spec.cluster.config</code> must be a file, every <code>release.chart</code> a directory with a <code>Chart.yaml</code>, and every <code>release.values</code> entry a file</li>
               <li>A <code>lifecycle</code> release additionally requires the chart's <code>chart-lifecycle.yaml</code> to agree with <code>Chart.yaml</code> on name, to be enabled, and to declare an enabled <code>clusterTest</code> carrying the named profile</li>
             </ul>
           </div>
         </div>
 
-        <h3 class="sub">Target resolution — <span class="ref" data-tip="services/local_resources.py:443 — LocalTargetResolver.resolve(target) → ResolvedLocalTarget"><code>LocalTargetResolver.resolve</code></span></h3>
+        <h3 class="sub">Target resolution — <span class="ref" data-tip="services/local_resources.py — LocalTargetResolver.resolve(target) → ResolvedLocalTarget"><code>LocalTargetResolver.resolve</code></span></h3>
         <div class="seq">
           <div class="sq"><div class="who">an existing path</div><div class="what">a directory resolves as a chart: it must hold a <code>Chart.yaml</code> whose <code>name</code> is a valid DNS label ⇒ <code>ResolvedChartTarget(name, path)</code>. A file resolves as a stack and must use <code>.yaml</code>/<code>.yml</code></div></div>
-          <div class="sq"><div class="who">a bare name</div><div class="what">a single path segment with no suffix is a <b>named stack</b>: it resolves to <span class="ref" data-tip="services/local_resources.py:368 — LocalResourceLoader.stacks_path = root / local_config.parent / stacks_dir"><code>&lt;local_config parent&gt;/stacks/&lt;name&gt;.yaml</code></span> — with the default config file, <code>.chart-manager/stacks/</code></div></div>
+          <div class="sq"><div class="who">a bare name</div><div class="what">a single path segment with no suffix is a <b>named stack</b>: it resolves to <span class="ref" data-tip="services/local_resources.py — LocalResourceLoader.stacks_path = root / local_config.parent / stacks_dir"><code>&lt;local_config parent&gt;/stacks/&lt;name&gt;.yaml</code></span> — with the default config file, <code>.chart-manager/stacks/</code></div></div>
           <div class="sq"><div class="who">identity check</div><div class="what">a stack selected by name must carry the matching <code>metadata.name</code>; a mismatch is a <code>SpecError</code> rather than a silently loaded neighbour</div></div>
-          <div class="sq alt"><div class="who">chart-only entry points</div><div class="what"><span class="ref" data-tip="services/local_resources.py:494 — resolve_chart_target(root, chart, *, charts_dir, local_config) → ResolvedChartTarget"><code>resolve_chart_target</code></span> backs <code>--chart</code>: a bare name falls back to <code>&lt;charts_dir&gt;/&lt;name&gt;</code> when it is not a path in the repository root, and a resolved stack is rejected — <code>--chart must select a chart directory</code></div></div>
+          <div class="sq alt"><div class="who">chart-only entry points</div><div class="what"><span class="ref" data-tip="services/local_resources.py — resolve_chart_target(root, chart, *, charts_dir, local_config) → ResolvedChartTarget"><code>resolve_chart_target</code></span> backs <code>--chart</code>: a bare name falls back to <code>&lt;charts_dir&gt;/&lt;name&gt;</code> when it is not a path in the repository root, and a resolved stack is rejected — <code>--chart must select a chart directory</code></div></div>
         </div>
 
-        <div class="callout good"><b>Defaults and configuration.</b> <span class="ref" data-tip="services/local_resources.py:27 — DEFAULT_LOCAL_CONFIG = Path('.chart-manager/local-cluster.yaml')"><code>DEFAULT_LOCAL_CONFIG</code></span> is <code>.chart-manager/local-cluster.yaml</code> and <span class="ref" data-tip="services/local_resources.py:29 — DEFAULT_STACKS_DIR = Path('stacks')"><code>DEFAULT_STACKS_DIR</code></span> is <code>stacks</code>, resolved relative to the selected config file's own directory. The active value is <code>Settings.local_config</code>, so <code>CHART_MANAGER_LOCAL_CONFIG</code> selects a different environment definition — and its sibling stack directory moves with it. <a href="#services/environment" style="color:var(--green);font-weight:700">→ the provider boundary that consumes it</a></div>
+        <div class="callout good"><b>Defaults and configuration.</b> <span class="ref" data-tip="services/local_resources.py — DEFAULT_LOCAL_CONFIG = Path('.chart-manager/local-cluster.yaml')"><code>DEFAULT_LOCAL_CONFIG</code></span> is <code>.chart-manager/local-cluster.yaml</code> and <span class="ref" data-tip="services/local_resources.py — DEFAULT_STACKS_DIR = Path('stacks')"><code>DEFAULT_STACKS_DIR</code></span> is <code>stacks</code>, resolved relative to the selected config file's own directory. The active value is <code>Settings.local_config</code>, so <code>CHART_MANAGER_LOCAL_CONFIG</code> selects a different environment definition — and its sibling stack directory moves with it. <a href="#services/environment" style="color:var(--green);font-weight:700">→ the provider boundary that consumes it</a></div>
       </div>
 
       <!-- environment -->
@@ -1308,7 +1308,7 @@ networking.custom-cni · networking.control-plane-endpoint</div>
 
         <h3 class="sub">Options + run accounting — the internal shapes</h3>
         <div class="two-col">
-          <div class="block"><h4><span class="ref" data-tip="services/local_resources.py:346 — type ResolvedLocalTarget = ResolvedChartTarget | ResolvedStackTarget">ResolvedLocalTarget</span> + explicit lifecycle options <span style="font-weight:500;font-size:11px"><a href="#services/localresources" style="color:var(--blue)">→ resource model</a></span></h4>
+          <div class="block"><h4><span class="ref" data-tip="services/local_resources.py — type ResolvedLocalTarget = ResolvedChartTarget | ResolvedStackTarget">ResolvedLocalTarget</span> + explicit lifecycle options <span style="font-weight:500;font-size:11px"><a href="#services/localresources" style="color:var(--blue)">→ resource model</a></span></h4>
             <div class="api"><span class="s"># up/reset — composed target converge</span>
 <span class="m">target</span>         = <span class="s">chart | LocalStack</span>      <span class="r">— configured name or repository-contained path</span>
 <span class="m">cluster_name</span>   = <span class="s">"chart-manager"</span>         <span class="r">— configured local environment</span>
@@ -1385,7 +1385,7 @@ networking.custom-cni · networking.control-plane-endpoint</div>
 
         <h3 class="sub">Step-by-step (<span class="ref" data-tip="services/clusters/bootstrap.py — LocalBootstrapExecutor">preflight + execute</span>)</h3>
         <div class="seq">
-          <div class="sq"><div class="who">load authored releases</div><div class="what"><span class="ref" data-tip="services/local_resources.py:349 — class LocalResourceLoader"><code>LocalResourceLoader</code></span> strictly parses <code>.chart-manager/local-cluster.yaml</code>; the executor receives its already-validated ordered bootstrap union. <a href="#services/localresources" style="color:var(--blue)">→ resource model</a></div></div>
+          <div class="sq"><div class="who">load authored releases</div><div class="what"><span class="ref" data-tip="services/local_resources.py — class LocalResourceLoader"><code>LocalResourceLoader</code></span> strictly parses <code>.chart-manager/local-cluster.yaml</code>; the executor receives its already-validated ordered bootstrap union. <a href="#services/localresources" style="color:var(--blue)">→ resource model</a></div></div>
           <div class="sq"><div class="who">preflight lifecycle releases</div><div class="what">Resolve chart metadata, profiles, values, namespaces, and complete dependency plans. Optional lint prepares dependencies and lints every resolved lifecycle entry before environment mutation.</div></div>
           <div class="sq"><div class="who">resolve runtime facts</div><div class="what">Authored <code>runtimeValues</code> may reference the provider handle's cluster name and context, the control-plane host, or the fixed Kubernetes API port. Only the root lifecycle release receives those runtime sets.</div></div>
           <div class="sq"><div class="who">converge in declaration order</div><div class="what">Lifecycle entries run dependency-first; local and OCI releases run directly. Each returns a <code>BootstrapOutcome</code> with name, profile or immutable identity, namespace, and Helm status.</div></div>
@@ -2487,13 +2487,13 @@ promo_correlation_id = flux-repo PR</div>
       </div>
 
       <div class="panel" id="int-dynamodb">
-        <div class="phead"><h2><span class="ref" data-tip="integrations/aws/dynamodb/client.py:8 — get_dynamodb_resource()">aws/dynamodb</span></h2><span class="loc">integrations/aws/dynamodb/client.py</span><span class="pill p-green">→ boto3</span></div>
+        <div class="phead"><h2><span class="ref" data-tip="integrations/dynamodb.py — get_dynamodb_resource()">aws/dynamodb</span></h2><span class="loc">integrations/dynamodb.py</span><span class="pill p-green">→ boto3</span></div>
         <p class="oneliner">Client factory for the DynamoDB events backend, local-emulator aware: <code>DYNAMODB_ENDPOINT</code> points at dynamodb-local (feeding dummy creds because boto3 must sign even though local ignores values).</p>
         <div class="comm">
           <div class="comm-title">Consumers</div>
           <div class="cnode c-svc">events/store<small>EVENTS_BACKEND=dynamodb</small></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-int"><span class="ref" data-tip="integrations/aws/dynamodb/client.py:27 — get_table(table_name, partition_key, sort_key)">get_table()</span><small>create-if-missing, key schema</small></div>
+          <div class="cnode c-int"><span class="ref" data-tip="integrations/dynamodb.py — get_table(table_name, partition_key, sort_key)">get_table()</span><small>create-if-missing, key schema</small></div>
           <div class="carrow">▸<small>boto3</small></div>
           <div class="cnode c-ext">DynamoDB / dynamodb-local<small>tested via dynamodb.kind.local VirtualService</small></div>
         </div>
@@ -2502,13 +2502,13 @@ promo_correlation_id = flux-repo PR</div>
       </div>
 
       <div class="panel" id="int-cosmos">
-        <div class="phead"><h2><span class="ref" data-tip="integrations/azure/cosmos/client.py:11 — get_cosmos_client()">azure/cosmos</span></h2><span class="loc">integrations/azure/cosmos/client.py</span><span class="pill p-green">→ azure-cosmos SDK</span></div>
+        <div class="phead"><h2><span class="ref" data-tip="integrations/cosmos.py — get_cosmos_client()">azure/cosmos</span></h2><span class="loc">integrations/cosmos.py</span><span class="pill p-green">→ azure-cosmos SDK</span></div>
         <p class="oneliner">Cached CosmosClient factory with three auth paths — connection string, master key (emulator), DefaultAzureCredential — plus TLS overrides for the local emulator.</p>
         <div class="comm">
           <div class="comm-title">Consumers</div>
           <div class="cnode c-svc">events/store<small>EVENTS_BACKEND=cosmos (default)</small></div>
           <div class="carrow">▸</div>
-          <div class="cnode c-int"><span class="ref" data-tip="integrations/azure/cosmos/client.py:41 — get_container(database, container, partition_key)">get_container()</span><small>db "platform" · container "lifecycle-events"</small></div>
+          <div class="cnode c-int"><span class="ref" data-tip="integrations/cosmos.py — get_container(database, container, partition_key)">get_container()</span><small>db "platform" · container "lifecycle-events"</small></div>
           <div class="carrow">▸<small>azure-cosmos</small></div>
           <div class="cnode c-ext">Cosmos DB / emulator<small>COSMOS_CA_BUNDLE · COSMOS_VERIFY_TLS</small></div>
         </div>
@@ -2619,7 +2619,7 @@ promo_correlation_id = flux-repo PR</div>
           <thead><tr><th class="mono">class</th><th>raise sites</th><th>character</th></tr></thead>
           <tbody>
             <tr><td class="mono">ChartManagerError</td><td>~50 sites, everywhere above plumbing: service guard rails (expose port parsing, monitor/test <code>__post_init__</code> budget checks, promote's path-escape guard, scanner/editor YAML parse, grafana, kyverno parse failures), integrations that detect semantic failure (kind, kubectl), and <a href="#plumbing/duration" style="color:var(--blue)">parse_duration</a></td><td>the general-purpose &quot;operator did/configured something wrong&quot; error</td></tr>
-            <tr><td class="mono">SpecError</td><td>domain boundaries: <code>services/domain/cluster_tests.py</code> (missing/invalid cluster-test configuration, unknown profile), <code>services/manifest_validation/spec.py</code> (invalid manifest-validation configuration, unknown env), <code>services/domain/charts.py</code> (metadata/name/value errors), and validation compilation (invalid or missing authored paths)</td><td>every spec-boundary failure funnels into one type — validate maps it to exit 3</td></tr>
+            <tr><td class="mono">SpecError</td><td>domain boundaries: <code>api/lifecycle/v1alpha1.py</code> (missing/invalid cluster-test configuration, unknown profile), <code>api/lifecycle/v1alpha1.py</code> (invalid manifest-validation configuration, unknown env), <code>services/domain/charts.py</code> (metadata/name/value errors), and validation compilation (invalid or missing authored paths)</td><td>every spec-boundary failure funnels into one type — validate maps it to exit 3</td></tr>
             <tr><td class="mono">ChartNotFoundError</td><td>exactly one: <span class="ref" data-tip="services/domain/charts.py — raise ChartNotFoundError(f&quot;chart not found: {name}&quot;)">ChartRepository.get</span></td><td>a name that isn't a chart dir</td></tr>
             <tr><td class="mono">DependencyCycleError</td><td>exactly one: <span class="ref" data-tip="services/domain/install_plan.py — raise DependencyCycleError(f&quot;dependency cycle detected: {cycle}&quot;)">install_plan's DFS</span></td><td>message carries the full <code>chart:profile</code> chain</td></tr>
             <tr><td class="mono">ExternalCommandError</td><td>the <a href="#plumbing/commands" style="color:var(--blue)">kernel</a> (check-fail) plus integrations that post-process output and CI/ephemeral testing promoting a <code>helm test</code> rc≠0. <code>.stderr</code>/<code>.returncode</code> are populated at every raise site</td><td>&quot;a tool ran and failed&quot; — validate's phases catch it as <code>error_type=&quot;tool&quot;</code></td></tr>
@@ -2684,7 +2684,7 @@ promo_correlation_id = flux-repo PR</div>
 <span class="m">load_yaml_file</span>(path) <span class="r">→ dict[str, Any]</span></div>
             <ul style="margin-top:8px">
               <li>Both are shared by independent domain schemas without importing chart or validation vocabulary back into plumbing</li>
-              <li>Strict metadata shape belongs to <code>services/domain/charts.py</code>; authored validation shape belongs to <code>services/manifest_validation/spec.py</code></li>
+              <li>Strict metadata shape belongs to <code>services/domain/charts.py</code>; authored validation shape belongs to <code>api/lifecycle/v1alpha1.py</code></li>
             </ul>
           </div>
         </div>
@@ -2853,15 +2853,15 @@ promo_correlation_id = flux-repo PR</div>
 
       <!-- spec stub -->
       <div class="panel" id="plb-spec">
-        <div class="phead"><h2>Domain boundaries</h2><span class="loc">services/domain/ · services/manifest_validation/ · plumbing/</span><span class="pill p-green">enforced layering</span></div>
-        <p class="oneliner">One authored envelope composes two independently owned capability schemas; this panel records their boundary with generic plumbing.</p>
+        <div class="phead"><h2>Domain boundaries</h2><span class="loc">api/lifecycle/ · services/domain/ · services/manifest_validation/ · plumbing/</span><span class="pill p-green">enforced layering</span></div>
+        <p class="oneliner">One authored envelope composes two capability schemas. Both schemas are owned by <code>chart_manager/api</code>; each capability's <em>policy</em> is owned by a different service. This panel records that split and its boundary with generic plumbing.</p>
         <div class="two-col">
-          <div class="block"><h4>domain/cluster_tests.py — owns <code>spec.clusterTest</code></h4>
-            <p style="font-size:13px"><code>services/domain/</code> owns <code>ClusterTestRef</code>, checks, profiles, <code>ClusterTestSpec</code>, typed Helm metadata, install-plan policy and dependency freshness. <code>ClusterTestCatalog</code> composes the enabled capability with <code>HelmChart</code>.</p>
+          <div class="block"><h4><code>spec.clusterTest</code> — contract in api, policy in domain</h4>
+            <p style="font-size:13px"><code>api/lifecycle/v1alpha1.py</code> owns <code>ClusterTestRef</code>, <code>ClusterTestProfile</code> and <code>ClusterTestSpec</code> — the accepted shape. <code>services/domain/</code> owns what is decided about them: <code>cluster_test_policy.require_cluster_test_profile</code>, typed Helm metadata, install-plan traversal and dependency freshness. <code>ClusterTestCatalog</code> composes the enabled capability with <code>HelmChart</code>.</p>
             <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/testspec" style="color:var(--blue);font-weight:700">Services → chart-lifecycle.yaml / spec.clusterTest</a></p>
           </div>
-          <div class="block"><h4>services/manifest_validation/spec.py — owns <code>spec.validation</code></h4>
-            <p style="font-size:13px"><code>services/manifest_validation/</code> owns <code>ManifestValidationEnvironmentSpec</code>, <code>ManifestValidationPolicySpec</code>, <code>ManifestValidationSpec</code>, <code>ManifestValidationTarget</code>, selections and outcomes. It composes the shared <code>HelmChart</code>; it does not inherit from <code>ClusterTestSpec</code> or a common <code>BaseSpec</code>.</p>
+          <div class="block"><h4><code>spec.validation</code> — contract in api, policy in manifest_validation</h4>
+            <p style="font-size:13px"><code>api/lifecycle/v1alpha1.py</code> owns <code>ManifestValidationEnvironmentSpec</code>, <code>ManifestValidationPolicySpec</code>, <code>ManifestValidationValidatorsSpec</code> and <code>ManifestValidationSpec</code>. <code>services/manifest_validation/</code> owns <code>ManifestValidationTarget</code>, <code>namespaces.resolve_namespace</code>, selections and outcomes. It composes the shared <code>HelmChart</code>; the two capability schemas do not inherit from each other or from a common <code>BaseSpec</code>.</p>
             <p style="font-size:13px;margin-top:8px">→ full panel: <a href="#services/validatespec" style="color:var(--blue);font-weight:700">Services → chart-lifecycle.yaml / spec.validation</a></p>
           </div>
         </div>

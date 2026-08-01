@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-LIFECYCLE_API_VERSION = "lifecycle.cmg.io/v1alpha1"
+LIFECYCLE_API_VERSION = "lifecycle.chartmanager.io/v1alpha1"
 
 
 class Workflow(StrEnum):

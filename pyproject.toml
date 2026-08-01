@@ -60,6 +60,17 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
 
 # --- layer contract: cli/ must not import integrations/ ------------------
 #
+# The shape being defended:
+#
+#     cli/surfaces -> services -> api + domain + integrations
+#                              domain -> plumbing
+#                                 api -> plumbing (pure helpers only)
+#
+# Read the arrows as guidance, not permission. `integrations/` shares a rank
+# with `api/` and `domain/` because services depend on all three, not because
+# an adapter should reach for an authored API type -- adapters are handed
+# resolved service inputs.
+#
 # The surface layer (cli/, and any future REST/GraphQL/RPC/Slack surface)
 # talks to services/ and plumbing/ only. Adapters are assembled in the
 # composition root, `chart_manager.composition`, which is the single module
@@ -70,6 +81,21 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
 # The ban is declared globally and lifted per-directory below, so the default
 # for any NEW top-level package is "may not import integrations" -- a new
 # surface is guarded on the day it is created, without editing this table.
+# `src/chart_manager/api/**` is the worked example: the versioned YAML
+# contracts added in the configuration-API refactor are covered by the ban
+# without an entry of their own, purely by being absent from the lift table
+# below, and that absence is deliberate -- keep it.
+#
+# The other two arrows out of `api/` -- it may not import `chart_manager.
+# services` or `chart_manager.cli` either -- are NOT expressible here, and the
+# reason is the same one that pushed the `sys.exit` rule into a test.
+# banned-api is a global table and per-file-ignores are per-code, so banning
+# `chart_manager.services` to protect `api/` bans it for `cli/` as well, where
+# importing services is the entire job: 92 violations, measured, all of them
+# correct code. Those two arrows, plus "api/ imports nothing but stdlib,
+# Pydantic and pure lexical helpers", "authored envelopes live under api/",
+# "plumbing must not import api/" and "api/ raises ValueError, never
+# SpecError", are enforced in tests/test_layering.py under heading (d).
 #
 # TID251 matches every import form against the package prefix:
 #   from chart_manager.integrations.kubectl import Kubectl  -> flagged
@@ -78,8 +104,9 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
 #
 # Enforced in CI by `uv run ruff check --select TID251 src/` (see the
 # `layering` job in .github/workflows/ci.yaml and `mise run lint-layering`).
-# The companion invariants -- services/ must not import rich/typer, and
-# sys.exit belongs to cli/ only -- are enforced in tests/test_layering.py.
+# The companion invariants -- services/ must not import rich/typer, sys.exit
+# belongs to cli/ only, and the configuration API boundary described above --
+# are enforced in tests/test_layering.py.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "chart_manager.integrations".msg = """not importable from this layer. \
 Surfaces (cli/ and friends) depend on services/ + plumbing/ only; build \
@@ -112,7 +139,8 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # integrations/ is the adapter layer itself; services/ owns the ports that
 # wrap adapters; composition.py is the composition root, by definition the
 # one place outside those two that wires them. Note cli/ is deliberately
-# absent -- that is the whole point of the rule.
+# absent -- that is the whole point of the rule -- and so is api/, which
+# describes authored YAML and has no business running a command.
 "src/chart_manager/integrations/**/*.py" = ["TID251"]
 "src/chart_manager/services/**/*.py" = ["TID251"]
 "src/chart_manager/composition.py" = ["TID251"]

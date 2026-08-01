@@ -7,12 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.api.lifecycle.v1alpha1 import LIFECYCLE_API_VERSION, ChartLifecycle
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.services.chart_config import (
-    LIFECYCLE_API_VERSION,
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    ChartLifecycle,
     cluster_test_status,
     load_chart_lifecycle,
     load_optional_chart_lifecycle,
@@ -21,6 +20,7 @@ from chart_manager.services.chart_config import (
     validate_chart_lifecycle_identity,
     validation_status,
 )
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 
 
 def _write_lifecycle(tmp_path: Path, spec: str, *, name: str = "demo") -> Path:
@@ -73,7 +73,7 @@ def test_loads_each_capability_from_chart_lifecycle(tmp_path: Path) -> None:
     assert cluster.kind == "ChartLifecycle"
     assert cluster.metadata.name == "demo"
     assert cluster.spec.cluster_test is not None
-    assert cluster.spec.cluster_test.profile("minimal").helm_test is True
+    assert require_cluster_test_profile(cluster.spec.cluster_test, "minimal").helm_test is True
     assert cluster_test_status(cluster) is CapabilityStatus.ENABLED
 
     validation = load_chart_lifecycle(_write_lifecycle(tmp_path, _validation_spec()))
@@ -134,7 +134,7 @@ def test_enabled_defaults_true_and_capabilities_are_optional(tmp_path: Path) -> 
             f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: demo}\nspec: {}\nextra: true\n"
         ),
-        "- apiVersion\n- lifecycle.cmg.io/v1alpha1\n",
+        "- apiVersion\n- lifecycle.chartmanager.io/v1alpha1\n",
     ],
 )
 def test_envelope_is_strict(tmp_path: Path, body: str) -> None:

@@ -44,7 +44,7 @@ def _target(
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text("apiVersion: v2\nname: alpha\nversion: 0.1.0\n")
     (chart / "chart-lifecycle.yaml").write_text(
-        "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
         "kind: ChartLifecycle\n"
         "metadata:\n"
         "  name: alpha\n"

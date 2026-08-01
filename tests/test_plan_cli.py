@@ -47,7 +47,7 @@ def _impact(
         spec_errors=spec_errors,
         warnings=warnings,
         to_dict=lambda: {
-            "apiVersion": "lifecycle.cmg.io/v1alpha1",
+            "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
             "kind": "LifecycleImpact",
             "validationSelection": [{"chart": "grafana", "environment": "dev"}],
             "clusterTestMatrix": [{"chart": "grafana", "profile": "minimal"}],

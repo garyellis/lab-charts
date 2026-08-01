@@ -1,20 +1,62 @@
-"""Authored manifest-validation capability configuration.
+"""``lifecycle.chartmanager.io/v1alpha1`` -- the authored ``ChartLifecycle`` contract.
 
-The model is composed beneath ``spec.validation`` in the standalone
-``chart-lifecycle.yaml`` resource. Loading and envelope validation belong to
-``services.chart_config``; runtime consumers resolve this authored model
-into ``ResolvedManifestValidation`` before executing cases.
+``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
+module owns its complete accepted shape: the envelope, the metadata identity,
+and both capability sections (``spec.validation`` and ``spec.clusterTest``).
+
+Everything here is decidable from one document.  Loading the file, agreeing
+its ``metadata.name`` with the chart directory and ``Chart.yaml``, deciding
+whether a capability is enabled, resolving namespaces, and looking a profile
+up by name all need more than the document and therefore live in
+``chart_manager.services``.
+
+Types are declared dependency-first -- cluster test, then manifest
+validation, then the envelope -- so the module reads bottom-up from the
+leaves an author writes to the wrapper they write around them.
 """
 
 from __future__ import annotations
 
-from string import Template
-from typing import Literal
+from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.api.base import ApiModel, StrictApiModel
 from chart_manager.plumbing.paths import ensure_relative
+
+__all__ = [
+    "LIFECYCLE_API_VERSION",
+    "LIFECYCLE_KIND",
+    "MATCH_BY_BASENAME",
+    "ChartLifecycle",
+    "ChartLifecycleMetadata",
+    "ChartLifecycleSpec",
+    "ClusterTestProfile",
+    "ClusterTestRef",
+    "ClusterTestSpec",
+    "LifecycleApiVersion",
+    "LifecycleKind",
+    "ManifestValidationEnvironmentSpec",
+    "ManifestValidationPolicySpec",
+    "ManifestValidationSpec",
+    "ManifestValidationValidatorsSpec",
+    "TriggerValue",
+]
+
+# The group string and the kind are each spelled exactly once, here. The
+# envelope annotates its fields with these aliases and the constants are read
+# back out of them, so a rename cannot leave the accepted `apiVersion` and the
+# exported constant disagreeing -- which is precisely what happened while the
+# group moved off `cmg.io`.
+#
+# Plain assignment, not `type X = ...`: a PEP 695 alias makes Pydantic emit a
+# `$ref` into `$defs` instead of an inline `const`, which would change the
+# generated JSON Schema for no benefit.
+LifecycleApiVersion = Literal["lifecycle.chartmanager.io/v1alpha1"]
+LifecycleKind = Literal["ChartLifecycle"]
+
+LIFECYCLE_API_VERSION: LifecycleApiVersion = get_args(LifecycleApiVersion)[0]
+LIFECYCLE_KIND: LifecycleKind = get_args(LifecycleKind)[0]
 
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
@@ -24,10 +66,53 @@ MATCH_BY_BASENAME = "match-by-basename"
 TriggerValue = list[str] | Literal["match-by-basename"]
 
 
-class ManifestValidationEnvironmentSpec(BaseModel):
-    """Per-environment overrides: namespace and extra values files."""
+# ---------------------------------------------------------------------------
+# spec.clusterTest -- authored live-cluster test configuration
+# ---------------------------------------------------------------------------
 
-    model_config = ConfigDict(extra="forbid")
+
+class ClusterTestRef(ApiModel):
+    """Reference to another chart's cluster-test profile."""
+
+    chart: str
+    profile: str = "minimal"
+
+
+class ClusterTestProfile(ApiModel):
+    """How to install and test a chart under one named profile."""
+
+    description: str | None = None
+    namespace: str | None = None
+    requires: list[ClusterTestRef] = Field(default_factory=list)
+    values: list[str] = Field(default_factory=lambda: ["values.yaml"])
+    helm_test: bool = Field(default=True, alias="helmTest")
+    timeout: str = "10m"
+
+    @field_validator("values")
+    @classmethod
+    def values_must_be_relative(cls, values: list[str]) -> list[str]:
+        """Reject absolute or parent-escaping values paths."""
+        return ensure_relative(values, label="value file", relation="chart-relative")
+
+
+class ClusterTestSpec(ApiModel):
+    """Authored configuration for a chart's live-cluster test workflows."""
+
+    enabled: bool = True
+    profiles: dict[str, ClusterTestProfile]
+    dependent_tests: list[ClusterTestRef] = Field(
+        default_factory=list,
+        alias="dependentTests",
+    )
+
+
+# ---------------------------------------------------------------------------
+# spec.validation -- authored manifest-validation configuration
+# ---------------------------------------------------------------------------
+
+
+class ManifestValidationEnvironmentSpec(ApiModel):
+    """Per-environment overrides: namespace and extra values files."""
 
     namespace: str | None = None
     values: list[str] = Field(default_factory=list)
@@ -39,10 +124,8 @@ class ManifestValidationEnvironmentSpec(BaseModel):
         return ensure_relative(values, label="value file", relation="chart-relative")
 
 
-class ManifestValidationPolicySpec(BaseModel):
+class ManifestValidationPolicySpec(ApiModel):
     """Extra policy paths to run beyond the repo-wide defaults."""
-
-    model_config = ConfigDict(extra="forbid")
 
     extra: list[str] = Field(default_factory=list)
 
@@ -53,7 +136,7 @@ class ManifestValidationPolicySpec(BaseModel):
         return ensure_relative(extra, label="policy path", relation="chart-relative")
 
 
-class ManifestValidationValidatorsSpec(BaseModel):
+class ManifestValidationValidatorsSpec(ApiModel):
     """Per-validator gates for the rendered-manifest pipeline.
 
     Defaults preserve the historical pipeline for every existing lifecycle
@@ -61,16 +144,12 @@ class ManifestValidationValidatorsSpec(BaseModel):
     without adding more top-level validation flags.
     """
 
-    model_config = ConfigDict(extra="forbid")
-
     kubeconform: bool = True
     policy: bool = True
 
 
-class ManifestValidationSpec(BaseModel):
+class ManifestValidationSpec(ApiModel):
     """Authored configuration for a chart's manifest-validation pipeline."""
-
-    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     release_name: str = Field(alias="releaseName")
@@ -152,22 +231,37 @@ class ManifestValidationSpec(BaseModel):
         )
 
 
-def resolve_namespace(spec: ManifestValidationSpec, env: str) -> str:
-    """Return the namespace for `env`, preferring explicit per-env value.
+# ---------------------------------------------------------------------------
+# The ChartLifecycle envelope
+# ---------------------------------------------------------------------------
 
-    Falls back to `${env}` substitution against `spec.namespace_template`.
-    Model validators guarantee at least one of the two is present.
-    """
-    try:
-        env_spec = spec.environments[env]
-    except KeyError as exc:
-        raise SpecError(f"unknown environment '{env}' in manifest validation") from exc
-    if env_spec.namespace:
-        return env_spec.namespace
-    if spec.namespace_template is None:
-        # Defended by validator, but be explicit so a misuse surfaces here.
-        raise SpecError(
-            f"cannot resolve namespace for env '{env}': "
-            "no explicit namespace and no namespaceTemplate"
-        )
-    return Template(spec.namespace_template).safe_substitute(env=env)
+
+class ChartLifecycleMetadata(StrictApiModel):
+    """Identity of the chart governed by a lifecycle document."""
+
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_exact(cls, name: str) -> str:
+        """Reject whitespace-only and silently normalized chart names."""
+        if name != name.strip():
+            raise ValueError("metadata.name must not have leading or trailing whitespace")
+        return name
+
+
+class ChartLifecycleSpec(StrictApiModel):
+    """Capabilities authored for one chart."""
+
+    enabled: bool = True
+    validation: ManifestValidationSpec | None = None
+    cluster_test: ClusterTestSpec | None = Field(default=None, alias="clusterTest")
+
+
+class ChartLifecycle(StrictApiModel):
+    """Kubernetes-style lifecycle intent envelope for one Helm chart."""
+
+    api_version: LifecycleApiVersion = Field(alias="apiVersion")
+    kind: LifecycleKind
+    metadata: ChartLifecycleMetadata
+    spec: ChartLifecycleSpec

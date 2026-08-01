@@ -17,6 +17,9 @@ from typing import Any
 
 import pytest
 
+from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
+from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
+from chart_manager.api.local.v1alpha1 import LifecycleRelease
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters import development as lab_module
@@ -29,13 +32,11 @@ from chart_manager.services.domain.charts import (
     ClusterTestChart,
     HelmChart,
 )
-from chart_manager.services.domain.cluster_tests import ClusterTestProfile
-from chart_manager.services.domain.cluster_tests import ClusterTestSpec as _TestSpec
 from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
 )
-from chart_manager.services.local_resources import LifecycleRelease, ResolvedChartTarget
+from chart_manager.services.local_resources import ResolvedChartTarget
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
@@ -455,7 +456,7 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         )
         (chart / "chart-lifecycle.yaml").write_text(
             (
-                "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
                 "kind: ChartLifecycle\n"
                 f"metadata: {{name: {name}}}\n"
                 "spec:\n"

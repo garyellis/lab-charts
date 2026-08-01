@@ -131,7 +131,7 @@ def _local_cluster(root: Path, *, host_ports: list[int] | None = None) -> None:
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
         """
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
@@ -150,7 +150,7 @@ def _chart(root: Path, name: str, *, namespace: str = "observability") -> Path:
     )
     (path / "chart-lifecycle.yaml").write_text(
         (
-            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
             "kind: ChartLifecycle\n"
             f"metadata: {{name: {name}}}\n"
             "spec:\n"

@@ -5,12 +5,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.manifest_validation.spec import (
+from chart_manager.api.lifecycle.v1alpha1 import (
     MATCH_BY_BASENAME,
     ManifestValidationSpec,
-    resolve_namespace,
 )
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.manifest_validation.namespaces import resolve_namespace
 
 
 def _spec(**overrides: object) -> ManifestValidationSpec:

@@ -8,14 +8,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.lifecycle.models import LIFECYCLE_API_VERSION
-from chart_manager.services.local_resources import (
-    LifecycleRelease,
-    LocalChartRelease,
-    load_local_cluster,
-)
+from chart_manager.services.local_resources import load_local_cluster
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
 
@@ -294,7 +292,7 @@ class LifecycleImpactService:
             for reference in spec.dependent_tests:
                 try:
                     target = self.cluster_catalog.get(reference.chart)
-                    target.spec.profile(reference.profile)
+                    require_cluster_test_profile(target.spec, reference.profile)
                 except ChartManagerError as exc:
                     errors.append(
                         f"{changed_chart} dependentTests "
