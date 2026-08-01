@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.domain.charts import HelmChart
 from chart_manager.services.manifest_validation.spec import ManifestValidationSpec
 
@@ -81,9 +82,9 @@ class PhaseResult:
     status: PhaseStatus
     detail: str | None = None
     artifacts: tuple[Path, ...] = ()
-    # Distinguishes a validation FAIL (exit 1) from a tool runtime crash
-    # (exit 2) or a spec parse error (exit 3). Phase functions set this
-    # alongside status; RunResult.exit_code() reads it.
+    # Distinguishes a validation FAIL from a tool runtime crash or a spec
+    # parse error. Phase functions set this alongside status;
+    # RunResult.outcome() folds it into the outcome the surface exits on.
     error_type: ErrorType | None = None
     # Machine-readable reason for a skipped phase. Human-readable ``detail``
     # remains presentation text and must not be used to make orchestration or
@@ -115,23 +116,35 @@ class RunResult:
     # that prevent rows from being constructed at all.
     spec_errors: tuple[str, ...] = field(default_factory=tuple)
 
-    def exit_code(self) -> int:
-        """Fold all results into the process exit code."""
-        # Precedence: spec error (3) > tool error (2) > validation failure (1) > pass (0).
+    def outcome(self) -> Outcome:
+        """Fold all results into the one semantic outcome of the run.
+
+        An `Outcome`, not a number: what a bad spec or a crashed kubeconform
+        is *worth* as a process exit status is surface policy and lives in
+        `plumbing/exit_codes.py`. This layer only decides which of the four
+        things happened, so a non-CLI caller gets the same judgement without
+        inheriting a process convention it has no use for.
+
+        Precedence, most fundamental fault first: a spec error beats a tool
+        error beats a validation failure beats a pass. The reasoning is that
+        the later phases ran on input the earlier fault already invalidated,
+        so reporting the downstream symptom would send the operator to the
+        wrong file.
+        """
         if self.spec_errors:
-            return 3
+            return Outcome.SPEC
         has_tool_error = False
         has_fail = False
         for row in self.rows:
             for phase in row.phases.values():
                 if phase.error_type == "spec":
-                    return 3
+                    return Outcome.SPEC
                 if phase.error_type == "tool":
                     has_tool_error = True
                 if phase.status == "FAIL":
                     has_fail = True
         if has_tool_error:
-            return 2
+            return Outcome.TOOL
         if has_fail:
-            return 1
-        return 0
+            return Outcome.FAILED
+        return Outcome.SUCCESS

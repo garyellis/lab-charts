@@ -27,7 +27,7 @@ from chart_manager.cli.helmrelease_render import (
 )
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.composition import Container
-from chart_manager.plumbing.exit_codes import exit_code_for
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     PROMOTE_OUTCOME,
     HelmReleaseMatch,
@@ -208,7 +208,7 @@ def monitor(
         render_monitor_json(result, sys.stdout, chart=chart, version=version)
 
     if not result.ok:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 def _run_monitor(
@@ -278,7 +278,7 @@ def test(
         render_test_json(result, sys.stdout, chart=chart, version=version)
 
     if not result.ok:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 def _run_test(

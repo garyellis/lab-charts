@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -220,14 +221,14 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
 
 
 @pytest.mark.parametrize(
-    ("enabled", "expected_status", "expected_exit"),
-    [(False, "SKIP", 0), (True, "FAIL", 2)],
+    ("enabled", "expected_status", "expected_outcome"),
+    [(False, "SKIP", Outcome.SUCCESS), (True, "FAIL", Outcome.TOOL)],
 )
 def test_disabled_validator_needs_no_executor_but_enabled_missing_executor_fails(
     tmp_path: Path,
     enabled: bool,
     expected_status: str,
-    expected_exit: int,
+    expected_outcome: Outcome,
 ) -> None:
     invocation = ValidatorInvocation(
         validator_id="third",
@@ -254,4 +255,4 @@ def test_disabled_validator_needs_no_executor_but_enabled_missing_executor_fails
     )
 
     assert result.rows[0].phases["policy"].status == expected_status
-    assert result.exit_code() == expected_exit
+    assert result.outcome() is expected_outcome

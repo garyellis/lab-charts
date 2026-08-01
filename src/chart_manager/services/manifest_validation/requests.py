@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.models import ALL_PHASES, RunResult
 
 __all__ = [
@@ -108,11 +109,15 @@ class RunOutcome:
     enabled_phases: frozenset[str] = ALL_PHASES
 
     @property
-    def exit_code(self) -> int:
-        """Process-style exit code folded from the underlying RunResult."""
-        return self.result.exit_code()
+    def outcome(self) -> Outcome:
+        """The semantic outcome folded from the underlying RunResult.
+
+        The surface turns this into a number with `exit_code_for`; nothing
+        in this layer needs to know which number.
+        """
+        return self.result.outcome()
 
     @property
     def ok(self) -> bool:
-        """True when nothing failed (exit code 0)."""
-        return self.exit_code == 0
+        """True when nothing failed."""
+        return self.outcome is Outcome.SUCCESS

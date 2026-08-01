@@ -21,6 +21,7 @@ import pytest
 import yaml
 
 from chart_manager.cli import main as main_cli
+from chart_manager.plumbing.exit_codes import EXIT_SPEC
 
 from .conftest import cli
 
@@ -214,7 +215,9 @@ def test_impact_text_shows_reasons_warnings_and_exits_on_spec_errors(
     # off a terminal.
     result = cli("plan", "-o", "table", "--changed-file", "charts/grafana/values-dev.yaml")
 
-    assert result.exit_code == 1
+    # A spec error exits 3 -- the document still printed, but the authored
+    # lifecycle files it was built from did not parse.
+    assert result.exit_code == EXIT_SPEC
     assert "Validation:" in result.stdout
     assert "grafana/dev" in result.stdout
     assert "validation-trigger: charts/grafana/values-dev.yaml" in result.stdout

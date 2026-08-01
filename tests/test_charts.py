@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
+from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.domain.charts import ChartRepository
@@ -176,7 +177,10 @@ def test_charts_list_returns_nonzero_after_rendering_invalid_config(
 
     result = cli("chart", "list", "--root", str(chart_root))
 
-    assert result.exit_code == 1
+    # 3, not 1: an unparseable `chart-lifecycle.yaml` is a spec error in the
+    # exit-code table, and `chart list` is the command most likely to be the
+    # first to notice one.
+    assert result.exit_code == EXIT_SPEC
     assert "broken" in result.stdout
     assert "invalid" in result.stdout
 

@@ -17,15 +17,19 @@ Nothing outside this module may write an exit-code literal.
     |    5 | ENVIRONMENT     | no cluster, no kubecontext, backend down     |
     |  127 | MISSING_BINARY  | required binary is not on PATH               |
 
-Scope note (P0). Only the promote vertical routes through this module today
-(`services/helmrelease/state.py::PROMOTE_OUTCOME`, mapped to a number by
-`cli/helmrelease.py`). The rest of the table is declared now so P2.1 --
-which moves tool error from 2 to 4 and maps every `ChartManagerError`
-subclass in `main()` -- extends `EXIT_CODE`'s consumers rather than
-restructuring the module. **Declaring `TOOL = 4` here is not that move**:
-`services/manifest_validation/models.py` still returns 2 for a tool error
-and is untouched, because 2 -> 4 is a breaking change that ships alone with
-a `CHART_MANAGER_LEGACY_EXIT_CODES=1` escape hatch (§6, R1).
+Scope note. Every exit in `cli/` now comes from here, and
+`tests/test_exit_codes.py::test_no_module_outside_the_table_writes_a_nonzero_exit_literal`
+is the gate that keeps it that way: no module but this one may write a
+nonzero exit-code integer.
+
+The one renumbering this table has done is tool error, 2 -> 4. It shipped in
+a single step with no compatibility window -- the `CHART_MANAGER_LEGACY_EXIT_CODES=1`
+escape hatch the plan once proposed was **cancelled**, because nothing
+outside this repo reads a chart-manager exit code (`.github/workflows/`
+branches on success/failure only) and a ramp nobody needs is just a second
+table to keep honest. 2 now means what Click means by it and nothing else,
+so a CI wrapper can separate "you typed a bad flag" from "kubeconform would
+not run".
 
 Why the table is keyed on a semantic `Outcome` and not on each caller's own
 status enum
@@ -95,8 +99,9 @@ class Outcome(StrEnum):
 
     Deliberately not an `IntEnum`. Folding the number into the member would
     make `Outcome` unusable from `services/` without the service handling
-    exit codes again, which is the coupling this module exists to break --
-    and it would leave no table for P2.1's legacy 4 -> 2 remap to shadow.
+    exit codes again, which is the coupling this module exists to break:
+    `RunResult.outcome()` and `PROMOTE_OUTCOME` both answer "what happened"
+    with these members and never learn what they are worth.
     """
 
     SUCCESS = "success"
@@ -124,8 +129,9 @@ EXIT_CODE: Mapping[Outcome, int] = {
 def exit_code_for(outcome: Outcome) -> int:
     """Return the process exit code for `outcome`.
 
-    A function rather than a bare subscript at each call site so P2.1's
-    `CHART_MANAGER_LEGACY_EXIT_CODES=1` window has one place to shadow the
-    table from, instead of one edit per exit site.
+    A function rather than a bare subscript at each call site because it is
+    the name the rest of the tree greps for and the gate scans for: an exit
+    site that reads `exit_code_for(Outcome.SPEC)` states which kind of
+    failure it is, where `EXIT_CODE[...]` or a literal states only a number.
     """
     return EXIT_CODE[outcome]

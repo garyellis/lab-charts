@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.manifest_validation.models import (
     PHASE_ORDER,
     PhaseResult,
@@ -212,7 +213,12 @@ def to_json(
 
     payload: dict[str, object] = {
         "schema_version": JSON_SCHEMA_VERSION,
-        "exit_code": result.exit_code(),
+        # The number a caller reading this document off `chart validate -o
+        # json` would also see in `$?`. Both come from `exit_code_for` of the
+        # *same* `RunResult.outcome()` fold, which is what stops the payload
+        # and the process status from disagreeing about a run. The fold is
+        # the service's; the number is `plumbing/exit_codes.py`'s.
+        "exit_code": exit_code_for(result.outcome()),
         "rendered_root": str(result.rendered_root),
         "summary": {
             "rows": len(result.rows),
