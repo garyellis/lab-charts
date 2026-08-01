@@ -1,0 +1,52 @@
+# Representative LocalCluster used by tests/test_api_contract_freeze.py.
+#
+# Covers all three bootstrap release variants, both OCI pin styles, the Kind
+# runtime placeholders and both readiness gates. Paths point at directories
+# that need not exist: this fixture is parsed by the API model directly, never
+# through LocalResourceLoader, which is what performs the repository checks.
+apiVersion: local.cmg.io/v1alpha1
+kind: LocalCluster
+metadata:
+  name: freeze-demo
+spec:
+  cluster:
+    config: kind-config.yaml
+  bootstrap:
+    releases:
+      - type: lifecycle
+        chart: charts/cilium
+        profile: minimal
+        runtimeValues:
+          cilium.k8sServiceHost: "${kind.controlPlaneHost}"
+          cilium.k8sServicePort: "${kind.controlPlanePort}"
+        readiness:
+          nodesReady: true
+          workloadsReady:
+            namespace: kube-system
+            timeout: 15m
+      - type: local
+        name: raw-app
+        chart: charts/raw-app
+        namespace: platform
+        values:
+          - values/raw-app.yaml
+        timeout: 5m30s
+        runtimeValues:
+          server.host: "${kind.controlPlaneHost}"
+        readiness:
+          nodesReady: false
+      - type: oci
+        name: pinned-by-version
+        chart: oci://example.test/charts/pinned
+        version: 1.2.3-rc.1+build.5
+        namespace: platform
+        values: []
+        timeout: 10m
+      - type: oci
+        name: pinned-by-digest
+        chart: oci://example.test/charts/digest
+        digest: sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        namespace: platform
+        values:
+          - values/digest.yaml
+        timeout: 1h

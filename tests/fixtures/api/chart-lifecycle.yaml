@@ -1,0 +1,64 @@
+# Representative ChartLifecycle used by tests/test_api_contract_freeze.py.
+#
+# Deliberately maximal: every authored field of the lifecycle contract that a
+# chart may set appears here at least once, so an alias, default or validator
+# that changes during the api/ package move shows up as a diff.
+#
+# The `routed` cluster-test profile is deliberately near-empty so the fixture
+# also exercises the profile-level defaults.
+apiVersion: lifecycle.cmg.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: freeze-demo
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: freeze-demo
+    namespaceTemplate: "lab-${env}"
+    helmVersion: "4.1.3"
+    kubernetesVersion: "1.31.2"
+    schemaLocations:
+      - default
+      - schemas/custom
+    environments:
+      ci:
+        namespace: lab-ci
+        values:
+          - values.yaml
+          - values-ci.yaml
+      dev:
+        values:
+          - values.yaml
+    triggers:
+      "Chart.yaml": [ci, dev]
+      "values.yaml": [ci]
+      "envs/*.yaml": match-by-basename
+    triggerIgnores:
+      - README.md
+      - docs/**
+    unmatchedChanges: all-environments
+    validators:
+      kubeconform: true
+      policy: false
+    policies:
+      extra:
+        - policies/extra
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install the chart with defaults and run its helm tests.
+        namespace: freeze-demo
+        requires:
+          - chart: istio-base
+            profile: minimal
+        values:
+          - values.yaml
+        helmTest: true
+        timeout: 15m
+      routed:
+        requires: []
+    dependentTests:
+      - chart: downstream
+        profile: minimal
