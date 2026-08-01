@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -14,10 +14,16 @@ from weakref import WeakKeyDictionary
 from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
-from chart_manager.services.domain.chart_deps import (
-    chart_has_dependencies,
-    deps_are_fresh,
-)
+
+
+def _assume_stale(_chart_path: Path) -> bool:
+    """Default freshness policy: never claim fresh, so the update always runs."""
+    return False
+
+
+def _assume_dependencies(_chart_path: Path) -> bool:
+    """Default declaration policy: assume deps exist, so the update always runs."""
+    return True
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,8 @@ class Helm:
         verbose: bool = True,
         timeout: float | None = None,
         context: str | None = None,
+        deps_are_fresh: Callable[[Path], bool] = _assume_stale,
+        chart_has_dependencies: Callable[[Path], bool] = _assume_dependencies,
     ) -> None:
         """Resolve the helm binary (explicit path > mise version > PATH) and set defaults."""
         self.runner = runner or SubprocessRunner()
@@ -112,6 +120,13 @@ class Helm:
         # to `helm template`.
         self._deps_updated: set[Path] = set()
         self._deps_updated_lock = threading.Lock()
+        # Whether a chart declares dependencies, and whether its materialized
+        # ones are current, are questions about chart *metadata* -- service
+        # policy this adapter deliberately does not parse. `Container.helm`
+        # wires the real predicates from services/domain/chart_deps; unwired,
+        # both answers are the conservative ones, so the update always runs.
+        self._deps_are_fresh = deps_are_fresh
+        self._chart_has_dependencies = chart_has_dependencies
 
     def preflight(self) -> tuple[Check, ...]:
         """Report whether the helm this instance resolved is usable.
@@ -169,7 +184,7 @@ class Helm:
         with self._deps_updated_lock:
             if resolved in self._deps_updated:
                 return False
-            if deps_are_fresh(resolved):
+            if self._deps_are_fresh(resolved):
                 # Mark as updated so subsequent calls in this process skip
                 # the freshness probe entirely.
                 self._deps_updated.add(resolved)
@@ -421,7 +436,7 @@ class Helm:
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if _is_local_chart_ref(chart_ref) and chart_has_dependencies(Path(chart_ref)):
+        if _is_local_chart_ref(chart_ref) and self._chart_has_dependencies(Path(chart_ref)):
             self.dependency_update(Path(chart_ref))
 
         base_args = [

@@ -70,6 +70,7 @@ from chart_manager.services.clusters.environment import (
 )
 from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.doctor import CheckProvider, DoctorService
+from chart_manager.services.domain import chart_deps
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService
@@ -137,11 +138,18 @@ class Container:
         return HelmReleaseClient(self.kubectl())
 
     def helm(self, *, verbose: bool = True, context: str | None = None) -> Helm:
-        """A helm client. `verbose` defaults to the adapter's own default."""
+        """A helm client. `verbose` defaults to the adapter's own default.
+
+        The dependency-freshness predicates are injected here rather than
+        imported by the adapter: reading Chart.yaml/Chart.lock is service
+        policy, and `integrations/` must not reach up into `services/`.
+        """
         return Helm(
             self.command_runner(),
             verbose=verbose,
             context=context if context is not None else self._settings.kube_context,
+            deps_are_fresh=chart_deps.deps_are_fresh,
+            chart_has_dependencies=chart_deps.chart_has_dependencies,
         )
 
     def kubectl(self, *, context: str | None = None) -> Kubectl:

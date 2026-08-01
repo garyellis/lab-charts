@@ -1,18 +1,34 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.services.domain import chart_deps
 from tests.conftest import FakeCommandRunner, Reply
 
 
 @pytest.fixture(autouse=True)
 def _clear_mise_cache() -> None:
     helm_module._clear_mise_cache()
+
+
+def _helm(runner: FakeCommandRunner, **kwargs: Any) -> Helm:
+    """A Helm wired the way `Container.helm` wires it.
+
+    `template`'s "does this chart declare dependencies?" gate is injected, so
+    an un-wired Helm conservatively assumes it does and always runs the
+    update. These tests assert on the gate, so they need the real predicate.
+    """
+    return Helm(
+        runner=runner,
+        chart_has_dependencies=chart_deps.chart_has_dependencies,
+        **kwargs,
+    )
 
 
 def _write_chart(path: Path, *, with_deps: bool) -> None:
@@ -36,7 +52,7 @@ def test_template_emits_expected_args_without_deps(tmp_path: Path) -> None:
     values[0].write_text("key: value\n")
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     result_path = helm.template(
         "demo-release",
@@ -67,7 +83,7 @@ def test_template_runs_dependency_update_when_chart_has_deps(tmp_path: Path) -> 
     out_dir = tmp_path / "out"
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart, namespace="ns", output_dir=out_dir)
 
@@ -79,7 +95,7 @@ def test_template_runs_dependency_update_when_chart_has_deps(tmp_path: Path) -> 
 
 def test_template_skips_dependency_update_for_oci_ref(tmp_path: Path) -> None:
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", "oci://registry.example/charts/demo", namespace="ns", output_dir=tmp_path / "out")
 
@@ -95,7 +111,7 @@ def test_template_failure_reruns_with_debug_and_raises(tmp_path: Path) -> None:
     runner = FakeCommandRunner().script(
         Reply(returncode=1, stderr="boom"), Reply(returncode=1, stderr="boom")
     )
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     with pytest.raises(ExternalCommandError) as exc:
         helm.template("r", chart, namespace="ns", output_dir=out_dir)
@@ -112,7 +128,7 @@ def test_template_passes_api_versions_and_kube_version(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template(
         "r",
@@ -135,7 +151,7 @@ def test_template_skips_dependency_update_for_malformed_chart_yaml(tmp_path: Pat
     chart.mkdir()
     (chart / "Chart.yaml").write_text("not: : valid: yaml:\n  - [\n")
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
@@ -154,7 +170,7 @@ def test_template_skips_dependency_update_when_dependencies_is_non_list(tmp_path
         "apiVersion: v2\nname: demo\nversion: 0.1.0\ndependencies: not-a-list\n"
     )
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
@@ -167,7 +183,7 @@ def test_template_with_skip_tests_false_omits_flag(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out", skip_tests=False)
 
@@ -183,7 +199,7 @@ def test_dependency_update_deduped_per_chart_path(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=True)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out-a")
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out-b")
@@ -201,7 +217,7 @@ def test_dependency_update_runs_per_distinct_chart(tmp_path: Path) -> None:
     _write_chart(chart_b, with_deps=True)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     helm.template("r", chart_a, namespace="ns", output_dir=tmp_path / "out-a")
     helm.template("r", chart_b, namespace="ns", output_dir=tmp_path / "out-b")
@@ -216,7 +232,7 @@ def test_verbose_false_passes_capture_true_to_dependency_update(tmp_path: Path) 
     _write_chart(chart, with_deps=True)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner, verbose=False)
+    helm = _helm(runner, verbose=False)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
@@ -231,7 +247,7 @@ def test_verbose_true_streams_dependency_update(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=True)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner, verbose=True)
+    helm = _helm(runner, verbose=True)
 
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
@@ -247,7 +263,7 @@ def test_template_honors_verbose_for_streaming(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner, verbose=True)
+    helm = _helm(runner, verbose=True)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
     template_calls = [r for r in runner.records if r.args[1] == "template"]
@@ -260,7 +276,7 @@ def test_template_captures_when_not_verbose(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner, verbose=False)
+    helm = _helm(runner, verbose=False)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
     template_calls = [r for r in runner.records if r.args[1] == "template"]
@@ -273,7 +289,7 @@ def test_template_threads_timeout_to_runner(tmp_path: Path) -> None:
     _write_chart(chart, with_deps=False)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner, timeout=42.0)
+    helm = _helm(runner, timeout=42.0)
     helm.template("r", chart, namespace="ns", output_dir=tmp_path / "out")
 
     template_call = next(r for r in runner.records if r.args[1] == "template")
@@ -287,7 +303,7 @@ def test_dependency_update_explicit_timeout_kwarg_wins(tmp_path: Path) -> None:
     runner = FakeCommandRunner()
     # Instance-level timeout would be passed by .timeout; the explicit
     # `timeout=` kwarg on dependency_update is what the prefetch pass uses.
-    helm = Helm(runner=runner, timeout=999.0)
+    helm = _helm(runner, timeout=999.0)
     helm.dependency_update(chart, timeout=10.0)
 
     dep_call = next(r for r in runner.records if r.args[1] == "dependency")

@@ -26,6 +26,16 @@ def _clear_mise_cache() -> None:
     helm_module._clear_mise_cache()
 
 
+def _helm(runner: FakeCommandRunner) -> Helm:
+    """A Helm wired the way `Container.helm` wires it.
+
+    The freshness gate is injected, so an un-wired Helm conservatively
+    assumes stale and always runs the update. This file is the gate's
+    coverage, so it needs the real predicate.
+    """
+    return Helm(runner=runner, deps_are_fresh=chart_deps.deps_are_fresh)
+
+
 def _write_chart(path: Path, dependencies: str | None = None) -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "Chart.yaml").write_text(
@@ -83,7 +93,7 @@ def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> 
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     ran = helm.dependency_update_if_stale(chart)
 
@@ -101,7 +111,7 @@ def test_dependency_update_if_stale_runs_when_chart_yaml_is_newer(tmp_path: Path
     _mtime(chart / "Chart.lock", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     ran = helm.dependency_update_if_stale(chart)
 
@@ -115,7 +125,7 @@ def test_dependency_update_if_stale_runs_when_lock_missing(tmp_path: Path) -> No
     # No Chart.lock -> must run.
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     assert runner.calls == [("helm", "dependency", "update", str(chart))]
@@ -128,7 +138,7 @@ def test_dependency_update_if_stale_runs_when_charts_dir_missing(tmp_path: Path)
     # Lock fresh but no `charts/` -> deps were never materialized; must run.
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     assert runner.calls == [("helm", "dependency", "update", str(chart))]
@@ -170,7 +180,7 @@ def test_dependency_update_if_stale_runs_when_charts_dir_partial(tmp_path: Path)
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     assert runner.calls == [("helm", "dependency", "update", str(chart))]
@@ -190,7 +200,7 @@ def test_dependency_update_if_stale_runs_when_lock_malformed(tmp_path: Path) -> 
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     assert runner.calls == [("helm", "dependency", "update", str(chart))]
@@ -218,7 +228,7 @@ def test_dependency_update_runs_for_wrong_artifact_with_matching_count(
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     assert runner.calls == [("helm", "dependency", "update", str(chart))]
@@ -232,7 +242,7 @@ def test_dependency_update_runs_for_wrong_artifact_version(tmp_path: Path) -> No
     _materialize_dep(chart, version="0.9.0")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
-    assert Helm(runner=FakeCommandRunner()).dependency_update_if_stale(chart) is True
+    assert _helm(FakeCommandRunner()).dependency_update_if_stale(chart) is True
 
 
 def test_dependency_update_skips_for_expanded_matching_chart(tmp_path: Path) -> None:
@@ -247,7 +257,7 @@ def test_dependency_update_skips_for_expanded_matching_chart(tmp_path: Path) -> 
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    assert Helm(runner=runner).dependency_update_if_stale(chart) is False
+    assert _helm(runner).dependency_update_if_stale(chart) is False
     assert runner.calls == []
 
 
@@ -264,7 +274,7 @@ def test_dependency_update_ignores_unrelated_non_chart_files_and_dirs(
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    assert Helm(runner=runner).dependency_update_if_stale(chart) is False
+    assert _helm(runner).dependency_update_if_stale(chart) is False
     assert runner.calls == []
 
 
@@ -276,7 +286,7 @@ def test_dependency_update_runs_for_malformed_chart_package(tmp_path: Path) -> N
     (chart / "charts" / "foo-1.0.0.tgz").write_text("not a tar archive")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
-    assert Helm(runner=FakeCommandRunner()).dependency_update_if_stale(chart) is True
+    assert _helm(FakeCommandRunner()).dependency_update_if_stale(chart) is True
 
 
 def test_dependency_update_accounts_for_two_aliases_of_one_package(
@@ -314,7 +324,7 @@ def test_dependency_update_accounts_for_two_aliases_of_one_package(
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
-    assert Helm(runner=runner).dependency_update_if_stale(chart) is False
+    assert _helm(runner).dependency_update_if_stale(chart) is False
     assert runner.calls == []
 
 
@@ -325,7 +335,7 @@ def test_dependency_update_if_stale_per_instance_cache_dedupes(tmp_path: Path) -
     # call is a no-op regardless of freshness.
 
     runner = FakeCommandRunner()
-    helm = Helm(runner=runner)
+    helm = _helm(runner)
 
     assert helm.dependency_update_if_stale(chart) is True
     # Even if the lock is still missing the second call must short-circuit
