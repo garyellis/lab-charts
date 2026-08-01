@@ -134,7 +134,7 @@ def test_enabled_defaults_true_and_capabilities_are_optional(tmp_path: Path) -> 
             f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: demo}\nspec: {}\nextra: true\n"
         ),
-        "- apiVersion\n- lifecycle.cmg.io/v1alpha1\n",
+        "- apiVersion\n- lifecycle.chartmanager.io/v1alpha1\n",
     ],
 )
 def test_envelope_is_strict(tmp_path: Path, body: str) -> None:

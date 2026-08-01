@@ -6,7 +6,7 @@
 #
 # The `routed` cluster-test profile is deliberately near-empty so the fixture
 # also exercises the profile-level defaults.
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata:
   name: freeze-demo

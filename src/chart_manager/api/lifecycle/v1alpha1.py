@@ -1,4 +1,4 @@
-"""``lifecycle.cmg.io/v1alpha1`` -- the authored ``ChartLifecycle`` contract.
+"""``lifecycle.chartmanager.io/v1alpha1`` -- the authored ``ChartLifecycle`` contract.
 
 ``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
 module owns its complete accepted shape: the envelope, the metadata identity,
@@ -41,7 +41,7 @@ __all__ = [
     "TriggerValue",
 ]
 
-LIFECYCLE_API_VERSION = "lifecycle.cmg.io/v1alpha1"
+LIFECYCLE_API_VERSION = "lifecycle.chartmanager.io/v1alpha1"
 LIFECYCLE_KIND = "ChartLifecycle"
 
 # Literal string used as a trigger value to opt into basename-derived env
@@ -247,7 +247,7 @@ class ChartLifecycleSpec(StrictApiModel):
 class ChartLifecycle(StrictApiModel):
     """Kubernetes-style lifecycle intent envelope for one Helm chart."""
 
-    api_version: Literal["lifecycle.cmg.io/v1alpha1"] = Field(alias="apiVersion")
+    api_version: Literal["lifecycle.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
     kind: Literal["ChartLifecycle"]
     metadata: ChartLifecycleMetadata
     spec: ChartLifecycleSpec

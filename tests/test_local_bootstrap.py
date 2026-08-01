@@ -246,7 +246,7 @@ def test_preflight_resolves_bootstrap_lifecycle_identities(tmp_path: Path) -> No
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -292,7 +292,7 @@ def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -327,7 +327,7 @@ def test_preflight_resolves_every_release_before_linting_any(
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:

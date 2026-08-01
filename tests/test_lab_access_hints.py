@@ -456,7 +456,7 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         )
         (chart / "chart-lifecycle.yaml").write_text(
             (
-                "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
                 "kind: ChartLifecycle\n"
                 f"metadata: {{name: {name}}}\n"
                 "spec:\n"

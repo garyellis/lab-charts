@@ -43,7 +43,7 @@ def _chart(root: Path, relative: str, *, name: str = "demo", lifecycle: bool = T
             root,
             f"{relative}/chart-lifecycle.yaml",
             f"""
-apiVersion: lifecycle.cmg.io/v1alpha1
+apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {{name: {name}}}
 spec:

@@ -1,4 +1,4 @@
-"""The ``lifecycle.cmg.io`` API group.
+"""The ``lifecycle.chartmanager.io`` API group.
 
 Import the explicit version rather than this package::
 

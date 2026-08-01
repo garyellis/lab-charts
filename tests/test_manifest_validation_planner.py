@@ -43,7 +43,7 @@ def _chart(
     if spec is not None:
         section = textwrap.dedent(spec).removeprefix("\n")
         envelope = (
-            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
             "kind: ChartLifecycle\n"
             "metadata:\n"
             f"  name: {name}\n"

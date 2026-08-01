@@ -114,7 +114,7 @@ def make_chart(chart_root: Path) -> MakeChart:
         (chart_dir / "chart-lifecycle.yaml").write_text(
             yaml.safe_dump(
                 {
-                    "apiVersion": "lifecycle.cmg.io/v1alpha1",
+                    "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
                     "kind": "ChartLifecycle",
                     "metadata": {"name": name},
                     "spec": {

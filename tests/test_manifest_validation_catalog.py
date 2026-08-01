@@ -58,7 +58,7 @@ def test_discover_chart_lifecycle_present(tmp_path: Path) -> None:
     chart_dir = tmp_path / "charts" / "alpha"
     chart_dir.mkdir(parents=True)
     spec = chart_dir / "chart-lifecycle.yaml"
-    spec.write_text("apiVersion: lifecycle.cmg.io/v1alpha1\n")
+    spec.write_text("apiVersion: lifecycle.chartmanager.io/v1alpha1\n")
 
     result = discover_chart_lifecycle(chart_dir)
 

@@ -149,7 +149,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     (chart / "Chart.yaml").write_text("apiVersion: v2\nname: demo\nversion: 0.1.0\n")
     (chart / "values.yaml").write_text("{}\n")
     (chart / "chart-lifecycle.yaml").write_text(
-        "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
         "kind: ChartLifecycle\n"
         "metadata:\n"
         "  name: demo\n"

@@ -193,7 +193,7 @@ heuristic in YAML.
 
 Each managed chart owns one standalone
 `charts/<name>/chart-lifecycle.yaml` resource with
-`apiVersion: lifecycle.cmg.io/v1alpha1` and `kind: ChartLifecycle`.
+`apiVersion: lifecycle.chartmanager.io/v1alpha1` and `kind: ChartLifecycle`.
 `spec.validation` declares environments, composed values, triggers, policies,
 and default-true `validators.kubeconform` / `validators.policy` gates.
 `spec.clusterTest` declares live-cluster install profiles and whether each runs

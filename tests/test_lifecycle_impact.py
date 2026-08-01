@@ -277,7 +277,7 @@ def test_impact_is_deterministic_deduplicated_and_json_serializable(
     ]
     assert len(projected["validationSelection"]) == 1
     assert len(projected["clusterTestMatrix"]) == 1
-    assert projected["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert projected["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
     assert projected["kind"] == "LifecycleImpact"
     assert json.loads(json.dumps(projected)) == projected
 

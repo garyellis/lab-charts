@@ -12,7 +12,7 @@ requires bumping `SCHEMA_VERSION`.
 
 `lifecycle_to_dict` carries no `schema_version` on purpose. Its payload is
 the authored `ChartLifecycle` envelope itself, which already versions
-itself in-band with `apiVersion: lifecycle.cmg.io/v1alpha1` -- the same
+itself in-band with `apiVersion: lifecycle.chartmanager.io/v1alpha1` -- the same
 string a chart author types into `chart-lifecycle.yaml`. Wrapping it in a
 second version counter would mean two numbers describing one document, and
 the round trip "what did I author / what did the tool normalize it to"

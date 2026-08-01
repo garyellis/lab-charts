@@ -25,7 +25,7 @@ service inputs.
 
 | Group / version | Kinds | Module |
 |---|---|---|
-| `lifecycle.cmg.io/v1alpha1` | `ChartLifecycle` | `api/lifecycle/v1alpha1.py` |
+| `lifecycle.chartmanager.io/v1alpha1` | `ChartLifecycle` | `api/lifecycle/v1alpha1.py` |
 | `local.chartmanager.io/v1alpha1` | `LocalCluster`, `LocalStack` | `api/local/v1alpha1.py` |
 
 Reviewing one of those two modules shows the **complete** accepted shape of the

@@ -346,7 +346,7 @@
     "description": "Kubernetes-style lifecycle intent envelope for one Helm chart.",
     "properties": {
       "apiVersion": {
-        "const": "lifecycle.cmg.io/v1alpha1",
+        "const": "lifecycle.chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },

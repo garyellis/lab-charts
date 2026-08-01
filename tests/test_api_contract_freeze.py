@@ -146,7 +146,7 @@ def _assert_authored_subset(authored: Any, dumped: Any, where: str = "$") -> Non
 
 def test_authored_api_constants_are_frozen() -> None:
     """Group/version/kind strings appear verbatim in every authored document."""
-    assert LIFECYCLE_API_VERSION == "lifecycle.cmg.io/v1alpha1"
+    assert LIFECYCLE_API_VERSION == "lifecycle.chartmanager.io/v1alpha1"
     assert LIFECYCLE_KIND == "ChartLifecycle"
     assert LIFECYCLE_FILENAME == "chart-lifecycle.yaml"
     assert MATCH_BY_BASENAME == "match-by-basename"
@@ -602,7 +602,7 @@ def _validation(**overrides: Any) -> dict[str, Any]:
             id="snake-case-releaseName",
         ),
         pytest.param(
-            _lifecycle({}, apiVersion="lifecycle.cmg.io/v1"),
+            _lifecycle({}, apiVersion="lifecycle.chartmanager.io/v1"),
             "literal_error",
             id="wrong-apiVersion",
         ),
@@ -794,7 +794,7 @@ _DIGEST = "sha256:" + "0" * 64
             id="wrong-apiVersion",
         ),
         pytest.param(
-            _cluster(_bootstrap(), apiVersion="lifecycle.cmg.io/v1alpha1"),
+            _cluster(_bootstrap(), apiVersion="lifecycle.chartmanager.io/v1alpha1"),
             "literal_error",
             id="other-group-apiVersion",
         ),

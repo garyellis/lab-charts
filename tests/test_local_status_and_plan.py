@@ -150,7 +150,7 @@ def _chart(root: Path, name: str, *, namespace: str = "observability") -> Path:
     )
     (path / "chart-lifecycle.yaml").write_text(
         (
-            "apiVersion: lifecycle.cmg.io/v1alpha1\n"
+            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
             "kind: ChartLifecycle\n"
             f"metadata: {{name: {name}}}\n"
             "spec:\n"

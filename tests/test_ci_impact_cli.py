@@ -53,7 +53,7 @@ def _impact_result(
         ),
     )
     payload = {
-        "apiVersion": "lifecycle.cmg.io/v1alpha1",
+        "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
         "kind": "LifecycleImpact",
         "changedFiles": [
             "charts/grafana/values-dev.yaml",
@@ -249,6 +249,6 @@ def test_impact_yaml_preserves_machine_envelope(
 
     assert result.exit_code == 0
     payload = yaml.safe_load(result.stdout)
-    assert payload["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert payload["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
     assert payload["kind"] == "LifecycleImpact"
     assert payload["clusterTestMatrix"][0]["profile"] == "minimal"

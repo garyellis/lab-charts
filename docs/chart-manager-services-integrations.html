@@ -795,7 +795,7 @@
         </div>
 
         <div class="yml-title">A real standalone resource, annotated — <code>charts/harbor/chart-lifecycle.yaml</code> (<code>spec.clusterTest</code> excerpt)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>      <span class="a">→ exact supported API</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>      <span class="a">→ exact supported API</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>                         <span class="a">→ exact resource kind</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">harbor</span>                              <span class="a">→ must match directory + Chart.yaml name</span>
@@ -831,7 +831,7 @@
         <div class="ft-wrap"><table class="ft">
           <thead><tr><th>yaml key</th><th class="mono">model field</th><th>type / default</th><th>validation</th></tr></thead>
           <tbody>
-            <tr><td class="mono">apiVersion</td><td class="mono">ChartLifecycle.api_version</td><td><code>Literal["lifecycle.cmg.io/v1alpha1"]</code></td><td>exact; no numeric or legacy version accepted</td></tr>
+            <tr><td class="mono">apiVersion</td><td class="mono">ChartLifecycle.api_version</td><td><code>Literal["lifecycle.chartmanager.io/v1alpha1"]</code></td><td>exact; no numeric or legacy version accepted</td></tr>
             <tr><td class="mono">kind</td><td class="mono">ChartLifecycle.kind</td><td><code>Literal["ChartLifecycle"]</code></td><td>exact resource-kind boundary</td></tr>
             <tr><td class="mono">metadata.name</td><td class="mono">ChartLifecycleMetadata.name</td><td><code>str</code> — required</td><td>must equal chart directory and Chart.yaml name</td></tr>
             <tr><td class="mono">spec.enabled</td><td class="mono">ChartLifecycleSpec.enabled</td><td><code>bool</code> = true</td><td>false disables every configured capability</td></tr>
@@ -909,7 +909,7 @@
         </div>
 
         <div class="yml-title">Real standalone resource ① — <code>charts/grafana/chart-lifecycle.yaml</code> (<code>spec.validation</code> excerpt; uat/prod elided)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">grafana</span>
@@ -939,7 +939,7 @@
   <span class="k">"values-ci.yaml":</span>   <span class="v">[ci]</span></div>
 
         <div class="yml-title">Real standalone resource ② — <code>charts/arc/chart-lifecycle.yaml</code> (<code>spec.validation</code> uses explicit namespace)</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.cmg.io/v1alpha1</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">lifecycle.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">ChartLifecycle</span>
 <span class="k">metadata:</span> {<span class="k">name:</span> <span class="v">arc</span>}
 <span class="k">spec:</span>
