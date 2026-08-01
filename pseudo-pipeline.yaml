@@ -5,9 +5,11 @@ stages:
   # renovate upgrade/changelog pull requests
   # any harness delegate
   upgrade-dependencies:
+    # `chart upgrade` discovers BOTH container-image and chart-dependency
+    # updates for a wrapper chart and opens one idempotent PR, so the two
+    # former steps collapse into a single invocation.
     renovate-deps:
-      chart-manager upgrade-container-deps
-      chart-manager upgrade-chart-deps
+      chart-manager chart upgrade --path charts/cert-manager
 
     # waits for pull requests to be merged
     pull-requests-merged: # matrix of pull requests
