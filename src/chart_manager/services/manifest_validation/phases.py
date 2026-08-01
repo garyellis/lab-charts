@@ -59,14 +59,13 @@ def render(
 
 
 def schema(
-    row: WorklistRow,
     *,
     kubeconform: Kubeconform,
     rendered_dir: Path,
     kubernetes_version: str | None = None,
     schema_locations: list[str] | None = None,
 ) -> PhaseResult:
-    """Run kubeconform over rendered manifests for one row.
+    """Run kubeconform over one row's rendered manifests.
 
     Empty rendered_dir -> SKIP. Tool crash -> FAIL with error_type="tool"
     (`Outcome.TOOL`). Schema violations -> FAIL with a human-scannable
@@ -100,13 +99,12 @@ def schema(
 
 
 def policy(
-    row: WorklistRow,
     *,
     kyverno: Kyverno,
     rendered_dir: Path,
     policy_paths: list[Path],
 ) -> PhaseResult:
-    """Run kyverno over the rendered manifests for one row.
+    """Run kyverno over one row's rendered manifests.
 
     Empty policy_paths -> SKIP("no policies discovered") so charts without
     any policy coverage surface visibly (run summary later tallies these).

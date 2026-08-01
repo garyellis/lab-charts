@@ -24,16 +24,11 @@ from chart_manager.services.manifest_validation.runner import (
 from chart_manager.services.manifest_validation.validator_adapters import (
     KyvernoProvider,
 )
-from chart_manager.services.manifest_validation.validator_registry import (
-    VALIDATOR_REGISTRY,
-)
 from chart_manager.services.manifest_validation.validators import (
     ManifestValidator,
-    ValidationContext,
     ValidatorCategory,
     ValidatorCompileContext,
     ValidatorInvocation,
-    provider_by_id,
     validate_registry,
 )
 
@@ -72,7 +67,6 @@ class _Provider:
     validator_id: str
     category: ValidatorCategory
     order: int
-    lifecycle_action_kind: str
     executor: ManifestValidator | None = None
 
     def compile(self, context: ValidatorCompileContext) -> ValidatorInvocation:
@@ -80,7 +74,6 @@ class _Provider:
             validator_id=self.validator_id,
             category=self.category,
             order=self.order,
-            lifecycle_action_kind=self.lifecycle_action_kind,
             enabled=True,
             config={"strict": True},
         )
@@ -95,33 +88,24 @@ class _Provider:
         return self.executor
 
 
-def test_registry_rejects_duplicate_identity_order_and_action_kind() -> None:
-    base = _Provider("one", ValidatorCategory.SCHEMA, 10, "one-validate")
+def test_registry_rejects_duplicate_identity_and_order() -> None:
+    base = _Provider("one", ValidatorCategory.SCHEMA, 10)
 
     with pytest.raises(ValueError, match="duplicate validator id"):
-        validate_registry((base, _Provider("one", ValidatorCategory.POLICY, 20, "two")))
+        validate_registry((base, _Provider("one", ValidatorCategory.POLICY, 20)))
     with pytest.raises(ValueError, match="duplicate validator order"):
-        validate_registry((base, _Provider("two", ValidatorCategory.POLICY, 10, "two")))
-    with pytest.raises(ValueError, match="duplicate validator lifecycle action kind"):
-        validate_registry(
-            (base, _Provider("two", ValidatorCategory.POLICY, 20, "one-validate"))
-        )
+        validate_registry((base, _Provider("two", ValidatorCategory.POLICY, 10)))
 
 
 def test_registry_orders_definitions_deterministically() -> None:
     definitions = validate_registry(
         (
-            _Provider("later", ValidatorCategory.POLICY, 20, "later-validate"),
-            _Provider("first", ValidatorCategory.SCHEMA, 10, "first-validate"),
+            _Provider("later", ValidatorCategory.POLICY, 20),
+            _Provider("first", ValidatorCategory.SCHEMA, 10),
         )
     )
 
     assert [definition.validator_id for definition in definitions] == ["first", "later"]
-
-
-def test_registry_rejects_unknown_identity_with_valid_names() -> None:
-    with pytest.raises(ValueError, match="valid: kubeconform, kyverno"):
-        provider_by_id("kubeconfrom", VALIDATOR_REGISTRY)
 
 
 def test_third_validator_uses_shared_runner_without_orchestrator_branch(
@@ -129,10 +113,10 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
 ) -> None:
     class ThirdValidator:
         def __init__(self) -> None:
-            self.calls: list[ValidationContext] = []
+            self.calls: list[Path] = []
 
-        def validate(self, context: ValidationContext, config: object) -> PhaseResult:
-            self.calls.append(context)
+        def validate(self, rendered_dir: Path, config: object) -> PhaseResult:
+            self.calls.append(rendered_dir)
             assert config == {"strict": True}
             return PhaseResult(phase="policy", status="PASS", detail="third validator passed")
 
@@ -141,7 +125,6 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
         "third",
         ValidatorCategory.POLICY,
         300,
-        "policy-validate",
         third,
     )
     chart = tmp_path / "charts" / "demo"
@@ -192,7 +175,6 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
         "third",
         ValidatorCategory.POLICY,
         300,
-        "third-validate",
         third,
     )
     providers = (KyvernoProvider(), coexisting)
@@ -234,7 +216,6 @@ def test_disabled_validator_needs_no_executor_but_enabled_missing_executor_fails
         validator_id="third",
         category=ValidatorCategory.POLICY,
         order=300,
-        lifecycle_action_kind="third-validate",
         enabled=enabled,
         config=object(),
     )

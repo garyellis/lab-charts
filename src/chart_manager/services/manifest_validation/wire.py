@@ -5,11 +5,11 @@ projections of a `RunResult`: the jq-friendly JSON payload and the
 GitHub-flavored markdown summary. Every surface -- the CLI's `--output
 json|md`, a REST endpoint, a PR-comment bot, a Slack app -- projects through
 these functions so they cannot diverge while all claiming the same
-`JSON_SCHEMA_VERSION`.
+`SCHEMA_VERSION`.
 
 **Editing this module is a breaking change.** Adding a key is additive and
 safe at the current version; renaming, removing, or retyping a key requires
-bumping `JSON_SCHEMA_VERSION`.
+bumping `SCHEMA_VERSION`.
 
 Deliberately Rich-free and I/O-free. Nothing here may import `rich`: an HTTP
 server has no terminal, and `to_json` must not drag a TUI library into a
@@ -33,7 +33,7 @@ from chart_manager.services.manifest_validation.requests import RunOutcome
 
 # Stable, jq-friendly JSON shape. Bump on breaking changes only; additive
 # fields are safe at this version.
-JSON_SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1
 
 _MD_STATUS_EMOJI = {
     "PASS": "✅",  # check mark
@@ -43,7 +43,7 @@ _MD_STATUS_EMOJI = {
 }
 
 __all__ = [
-    "JSON_SCHEMA_VERSION",
+    "SCHEMA_VERSION",
     "row_elapsed_text",
     "to_json",
     "to_markdown",
@@ -212,7 +212,7 @@ def to_json(
         )
 
     payload: dict[str, object] = {
-        "schema_version": JSON_SCHEMA_VERSION,
+        "schema_version": SCHEMA_VERSION,
         # The number a caller reading this document off `chart validate -o
         # json` would also see in `$?`. Both come from `exit_code_for` of the
         # *same* `RunResult.outcome()` fold, which is what stops the payload
@@ -365,8 +365,8 @@ def _markdown_diagnostics(diagnostics: dict[str, object]) -> list[str]:
     lines: list[str] = []
     requested = selection["requested_filters"]
     unmatched = selection["unmatched_filters"]
-    assert isinstance(requested, dict)
-    assert isinstance(unmatched, dict)
+    if not isinstance(requested, dict) or not isinstance(unmatched, dict):
+        raise TypeError("selection diagnostics carry malformed filter maps")
     if requested["charts"]:
         lines.append(f"- Requested charts: {', '.join(requested['charts'])}")
     if requested["environments"]:

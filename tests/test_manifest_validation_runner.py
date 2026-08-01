@@ -161,7 +161,6 @@ def _cfg(
                 validator_id="kubeconform",
                 category=ValidatorCategory.SCHEMA,
                 order=100,
-                lifecycle_action_kind="schema-validate",
                 enabled="schema" in enabled_validators,
                 config=KubeconformConfig(
                     kubernetes_version=kubernetes_version,
@@ -172,7 +171,6 @@ def _cfg(
                 validator_id="kyverno",
                 category=ValidatorCategory.POLICY,
                 order=200,
-                lifecycle_action_kind="policy-validate",
                 enabled="policy" in enabled_validators,
                 config=KyvernoConfig(policy_paths=tuple(policy_paths or ())),
             ),

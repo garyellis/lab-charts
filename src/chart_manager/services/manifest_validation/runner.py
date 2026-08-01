@@ -43,7 +43,6 @@ from chart_manager.services.manifest_validation.output_paths import (
 )
 from chart_manager.services.manifest_validation.validators import (
     ManifestValidator,
-    ValidationContext,
     ValidatorCategory,
     ValidatorInvocation,
 )
@@ -466,7 +465,7 @@ class ManifestValidationRunner:
                 )
                 continue
             results[invocation.validator_id] = executor.validate(
-                ValidationContext(row=cfg.row, rendered_dir=rendered_dir),
+                rendered_dir,
                 invocation.config,
             )
         elapsed = time.monotonic() - start

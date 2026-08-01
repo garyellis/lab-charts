@@ -8,7 +8,6 @@ built-in validator is a reviewed code change, never dynamic plugin discovery.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -16,10 +15,7 @@ from typing import Protocol
 
 from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.manifest_validation.models import (
-    PhaseResult,
-    WorklistRow,
-)
+from chart_manager.services.manifest_validation.models import PhaseResult
 
 
 class ValidatorId(StrEnum):
@@ -53,7 +49,6 @@ def validate_registry(
 
     ids: set[str] = set()
     orders: set[int] = set()
-    action_kinds: set[str] = set()
     for provider in providers:
         if not provider.validator_id:
             raise ValueError("validator id must not be empty")
@@ -61,14 +56,8 @@ def validate_registry(
             raise ValueError(f"duplicate validator id: {provider.validator_id}")
         if provider.order in orders:
             raise ValueError(f"duplicate validator order: {provider.order}")
-        if provider.lifecycle_action_kind in action_kinds:
-            raise ValueError(
-                "duplicate validator lifecycle action kind: "
-                f"{provider.lifecycle_action_kind}"
-            )
         ids.add(provider.validator_id)
         orders.add(provider.order)
-        action_kinds.add(provider.lifecycle_action_kind)
     return tuple(sorted(providers, key=lambda provider: provider.order))
 
 
@@ -97,20 +86,9 @@ class ValidatorInvocation:
     validator_id: str
     category: ValidatorCategory
     order: int
-    lifecycle_action_kind: str
     enabled: bool
     config: ValidatorConfig
-    lifecycle_metadata: tuple[tuple[str, str], ...] = ()
-    lifecycle_additional_paths: tuple[Path, ...] = ()
     warnings: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ValidationContext:
-    """Inputs shared by every validator after Helm rendering."""
-
-    row: WorklistRow
-    rendered_dir: Path
 
 
 class ManifestValidator(Protocol):
@@ -118,13 +96,10 @@ class ManifestValidator(Protocol):
 
     def validate(
         self,
-        context: ValidationContext,
+        rendered_dir: Path,
         config: ValidatorConfig,
     ) -> PhaseResult:
         """Validate rendered manifests and return a category result."""
-
-
-ValidatorExecutors = Mapping[str, ManifestValidator]
 
 
 class ValidatorProvider(Protocol):
@@ -133,7 +108,6 @@ class ValidatorProvider(Protocol):
     validator_id: str
     category: ValidatorCategory
     order: int
-    lifecycle_action_kind: str
 
     def compile(self, context: ValidatorCompileContext) -> ValidatorInvocation:
         """Compile authored and resolved inputs for this validator."""
@@ -145,16 +119,3 @@ class ValidatorProvider(Protocol):
         timeout: float | None,
     ) -> ManifestValidator:
         """Build this validator's executor without probing its binary."""
-
-
-def provider_by_id(
-    validator_id: str,
-    providers: tuple[ValidatorProvider, ...],
-) -> ValidatorProvider:
-    """Resolve a registered validator or reject the unknown identity."""
-
-    for provider in providers:
-        if provider.validator_id == validator_id:
-            return provider
-    valid = ", ".join(provider.validator_id for provider in providers)
-    raise ValueError(f"unknown validator {validator_id!r}; valid: {valid}")

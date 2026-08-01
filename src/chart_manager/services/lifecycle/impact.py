@@ -121,7 +121,8 @@ class _FanoutRule:
         parts = path.parts
         if self.exact is not None:
             return parts == self.exact
-        assert self.prefix is not None
+        if self.prefix is None:
+            raise ValueError(f"fanout rule {self.name!r} declares neither prefix nor exact")
         return parts[: len(self.prefix)] == self.prefix
 
 
@@ -310,21 +311,6 @@ class LifecycleImpactService:
                     ),
                 )
         return selected, errors
-
-
-def analyze_lifecycle_impact(
-    root: Path,
-    changed_files: list[str] | tuple[str, ...],
-    *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
-    local_config: Path = DEFAULT_LOCAL_CONFIG,
-) -> LifecycleImpact:
-    """Convenience wrapper for explicit changed-file impact analysis."""
-    return LifecycleImpactService(
-        root,
-        charts_dir=charts_dir,
-        local_config=local_config,
-    ).analyze(changed_files)
 
 
 def _default_profile(profiles: Mapping[str, object]) -> str:

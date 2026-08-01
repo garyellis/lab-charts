@@ -79,7 +79,6 @@ def _updates_from_data(data: Mapping[str, Any] | None) -> tuple[UpdateMetadata, 
 def load_update_data(
     path: Path,
     *,
-    repo_root: Path | None = None,
     max_bytes: int = 1024 * 1024,
 ) -> Mapping[str, Any]:
     """Safely load an explicitly selected Renovate callback data file.

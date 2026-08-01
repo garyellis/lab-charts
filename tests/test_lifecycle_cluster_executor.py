@@ -295,16 +295,6 @@ def test_executes_lint_with_selected_values() -> None:
     assert calls == ["lint:grafana:1"]
 
 
-def test_rejects_validation_plan_before_calling_cluster_integrations() -> None:
-    render = action("validation:grafana:dev:render", ActionKind.RENDER)
-    calls: list[str] = []
-
-    with pytest.raises(ClusterPlanError, match="requires workflow"):
-        executor(calls).execute(plan((render,), workflow=Workflow.VALIDATION))
-
-    assert calls == []
-
-
 def test_rejects_empty_cluster_plan_instead_of_reporting_vacuous_success() -> None:
     calls: list[str] = []
 

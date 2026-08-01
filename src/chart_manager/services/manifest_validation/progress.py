@@ -81,16 +81,16 @@ class ProgressDisplay(Protocol):
 class NullDisplay(ProgressDisplay):
     """No-op display: the default for machine output and non-terminal surfaces."""
 
-    def start(self, rows: Sequence[WorklistRow]) -> None:
+    def start(self, _rows: Sequence[WorklistRow]) -> None:
         """No-op."""
         return
 
     def on_event(
         self,
-        row: WorklistRow,
-        phase: str,
-        status: str,
-        elapsed_s: float | None = None,
+        _row: WorklistRow,
+        _phase: str,
+        _status: str,
+        _elapsed_s: float | None = None,
     ) -> None:
         """No-op."""
         return

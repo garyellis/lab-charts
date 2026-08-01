@@ -165,7 +165,7 @@ def upgrade_finalize(
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
     root = Path(".").resolve()
-    update_data = load_update_data(data_file, repo_root=root)
+    update_data = load_update_data(data_file)
     result = _make_finalize_service(root).finalize(
         FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)
     )

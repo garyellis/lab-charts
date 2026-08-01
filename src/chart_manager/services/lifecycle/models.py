@@ -18,7 +18,6 @@ LIFECYCLE_API_VERSION = "lifecycle.chartmanager.io/v1alpha1"
 class Workflow(StrEnum):
     """Lifecycle workflows compiled from authored ChartLifecycle resources."""
 
-    VALIDATION = "validation"
     CLUSTER_TEST = "cluster-test"
 
 
@@ -26,9 +25,6 @@ class ActionKind(StrEnum):
     """Stable action vocabulary understood by executors and evidence stores."""
 
     HELM_DEPENDENCY_UPDATE = "helm-dependency-update"
-    RENDER = "render"
-    SCHEMA_VALIDATE = "schema-validate"
-    POLICY_VALIDATE = "policy-validate"
     NAMESPACE_ENSURE = "namespace-ensure"
     HELM_LINT = "helm-lint"
     HELM_UPGRADE_INSTALL = "helm-upgrade-install"

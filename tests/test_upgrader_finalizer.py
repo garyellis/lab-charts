@@ -158,7 +158,7 @@ def test_loads_explicit_renovate_temp_data_outside_repository(tmp_path: Path) ->
     repo.mkdir()
     data = tmp_path / "renovate-data.json"
     data.write_text('{"updates": []}', encoding="utf-8")
-    assert load_update_data(data, repo_root=repo) == {"updates": []}
+    assert load_update_data(data) == {"updates": []}
     link = tmp_path / "link.json"
     link.symlink_to(data)
     with pytest.raises(UpgradeError, match="symlink"):

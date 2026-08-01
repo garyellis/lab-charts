@@ -24,7 +24,7 @@ from chart_manager.services.manifest_validation.models import (
 )
 from chart_manager.services.manifest_validation.requests import RunOutcome
 from chart_manager.services.manifest_validation.wire import (
-    JSON_SCHEMA_VERSION,
+    SCHEMA_VERSION,
     to_json,
     to_markdown,
 )
@@ -322,7 +322,7 @@ def test_to_markdown_no_advisories_section_when_pass_without_detail() -> None:
 
 def test_to_json_shape_and_schema_version() -> None:
     data = to_json(_mixed_run_result())
-    assert data["schema_version"] == JSON_SCHEMA_VERSION == 1
+    assert data["schema_version"] == SCHEMA_VERSION == 1
     assert isinstance(data["exit_code"], int)
     # spec_errors present => exit_code == 3
     assert data["exit_code"] == 3

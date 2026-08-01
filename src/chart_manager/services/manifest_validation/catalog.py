@@ -20,12 +20,6 @@ from chart_manager.services.manifest_validation.models import ManifestValidation
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
-def discover_chart_lifecycle(chart_path: Path) -> Path | None:
-    """Return lifecycle intent when it is a regular file."""
-    candidate = chart_path / LIFECYCLE_FILENAME
-    return candidate if candidate.is_file() else None
-
-
 @dataclass(frozen=True)
 class CatalogEntry:
     """Best-effort load outcome for one repository chart."""

@@ -11,10 +11,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from chart_manager.services.lifecycle.models import (
-    LIFECYCLE_API_VERSION,
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
@@ -117,18 +116,6 @@ class ClusterActionOutcome:
     def elapsed_seconds(self) -> float:
         return (self.finished_at - self.started_at).total_seconds()
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "actionId": self.action_id,
-            "kind": self.kind,
-            "verdict": self.verdict,
-            "reason": self.reason,
-            "detail": self.detail,
-            "startedAt": self.started_at.isoformat(),
-            "finishedAt": self.finished_at.isoformat(),
-            "elapsedSeconds": self.elapsed_seconds,
-        }
-
 
 @dataclass(frozen=True)
 class ClusterExecutionResult:
@@ -141,14 +128,6 @@ class ClusterExecutionResult:
         """Whether every planned action passed."""
 
         return all(outcome.verdict == "PASS" for outcome in self.outcomes)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "apiVersion": LIFECYCLE_API_VERSION,
-            "kind": "ClusterExecutionResult",
-            "ok": self.ok,
-            "outcomes": [outcome.to_dict() for outcome in self.outcomes],
-        }
 
 
 def _required(value: str | None, action: LifecycleAction, field: str) -> str:

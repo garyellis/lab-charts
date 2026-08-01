@@ -12,7 +12,6 @@ from chart_manager.integrations.kubeconform import (
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.services.manifest_validation import phases
-from chart_manager.services.manifest_validation.models import WorklistRow
 
 
 class _StubKubeconform(Kubeconform):
@@ -47,10 +46,6 @@ class _StubKubeconform(Kubeconform):
         return self._report
 
 
-def _row() -> WorklistRow:
-    return WorklistRow(chart="demo", env="dev", release="demo", namespace="lab-dev")
-
-
 def _seed_manifest(dir_: Path) -> None:
     dir_.mkdir(parents=True, exist_ok=True)
     (dir_ / "deploy.yaml").write_text("kind: Deployment\n")
@@ -63,7 +58,7 @@ def test_schema_pass_returns_pass(tmp_path: Path) -> None:
     )
     kc = _StubKubeconform(report=report)
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=tmp_path)
+    result = phases.schema(kubeconform=kc, rendered_dir=tmp_path)
 
     assert result.status == "PASS"
     assert result.error_type is None
@@ -93,7 +88,7 @@ def test_schema_fail_formats_findings_one_per_line(tmp_path: Path) -> None:
     )
     kc = _StubKubeconform(report=report)
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=tmp_path)
+    result = phases.schema(kubeconform=kc, rendered_dir=tmp_path)
 
     assert result.status == "FAIL"
     assert result.error_type is None  # spec/chart-author failure, not a tool crash
@@ -109,7 +104,7 @@ def test_schema_tool_crash_returns_fail_with_tool_error_type(tmp_path: Path) -> 
     _seed_manifest(tmp_path)
     kc = _StubKubeconform(raise_exc=ExternalCommandError("kubeconform exploded"))
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=tmp_path)
+    result = phases.schema(kubeconform=kc, rendered_dir=tmp_path)
 
     assert result.status == "FAIL"
     assert result.error_type == "tool"
@@ -122,7 +117,7 @@ def test_schema_empty_dir_returns_skip(tmp_path: Path) -> None:
     # rendered_dir exists but contains no yaml/yml files.
     empty = tmp_path / "empty"
     empty.mkdir()
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=empty)
+    result = phases.schema(kubeconform=kc, rendered_dir=empty)
 
     assert result.status == "SKIP"
     assert result.detail == "no manifests"
@@ -132,7 +127,7 @@ def test_schema_empty_dir_returns_skip(tmp_path: Path) -> None:
 def test_schema_missing_dir_returns_skip(tmp_path: Path) -> None:
     kc = _StubKubeconform(report=KubeconformReport(resources=(), summary={}))
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=tmp_path / "does-not-exist")
+    result = phases.schema(kubeconform=kc, rendered_dir=tmp_path / "does-not-exist")
 
     assert result.status == "SKIP"
     assert result.detail == "no manifests"
@@ -145,7 +140,7 @@ def test_schema_skips_when_only_non_yaml_files_present(tmp_path: Path) -> None:
     (rendered / "NOTES.txt").write_text("post-install notes")
     kc = _StubKubeconform(report=KubeconformReport(resources=(), summary={}))
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=rendered)
+    result = phases.schema(kubeconform=kc, rendered_dir=rendered)
 
     assert result.status == "SKIP"
     assert kc.validate_calls == []
@@ -160,7 +155,7 @@ def test_schema_skips_through_cyclic_symlink_without_hanging(tmp_path: Path) -> 
     (rendered / "loop").symlink_to(rendered, target_is_directory=True)
     kc = _StubKubeconform(report=KubeconformReport(resources=(), summary={}))
 
-    result = phases.schema(_row(), kubeconform=kc, rendered_dir=rendered)
+    result = phases.schema(kubeconform=kc, rendered_dir=rendered)
 
     # No yaml files anywhere -> SKIP; the important part is that the walk
     # terminates rather than recursing into the symlinked cycle.
@@ -197,7 +192,6 @@ def test_policy_pass_returns_pass(tmp_path: Path) -> None:
     ky = _StubKyverno(report=KyvernoReport(results=(), summary={"pass": 1, "fail": 0}))
 
     result = phases.policy(
-        _row(),
         kyverno=ky,
         rendered_dir=tmp_path,
         policy_paths=[tmp_path / "policies"],
@@ -236,7 +230,7 @@ def test_policy_fail_formats_findings_one_per_line(tmp_path: Path) -> None:
         )
     )
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
+    result = phases.policy(kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
 
     assert result.status == "FAIL"
     assert result.error_type is None  # spec/chart-author failure, not tool crash
@@ -252,7 +246,7 @@ def test_policy_tool_crash_returns_fail_with_tool_error_type(tmp_path: Path) -> 
     _seed_manifest(tmp_path)
     ky = _StubKyverno(raise_exc=ExternalCommandError("kyverno exploded"))
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
+    result = phases.policy(kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
 
     assert result.status == "FAIL"
     assert result.error_type == "tool"
@@ -263,7 +257,7 @@ def test_policy_empty_policy_paths_returns_skip(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
     ky = _StubKyverno(report=KyvernoReport(results=(), summary={}))
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=tmp_path, policy_paths=[])
+    result = phases.policy(kyverno=ky, rendered_dir=tmp_path, policy_paths=[])
 
     assert result.status == "SKIP"
     assert result.detail == "no policies discovered"
@@ -275,7 +269,7 @@ def test_policy_empty_rendered_dir_returns_skip(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=empty, policy_paths=[Path("/p")])
+    result = phases.policy(kyverno=ky, rendered_dir=empty, policy_paths=[Path("/p")])
 
     assert result.status == "SKIP"
     assert result.detail == "no manifests"
@@ -286,7 +280,6 @@ def test_policy_missing_rendered_dir_returns_skip(tmp_path: Path) -> None:
     ky = _StubKyverno(report=KyvernoReport(results=(), summary={}))
 
     result = phases.policy(
-        _row(),
         kyverno=ky,
         rendered_dir=tmp_path / "does-not-exist",
         policy_paths=[Path("/p")],
@@ -315,7 +308,7 @@ def test_policy_warn_only_passes_with_advisory_detail(tmp_path: Path) -> None:
         )
     )
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
+    result = phases.policy(kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
 
     assert result.status == "PASS"
     assert result.detail is not None
@@ -352,7 +345,7 @@ def test_policy_fail_with_warns_includes_both_in_detail(tmp_path: Path) -> None:
         )
     )
 
-    result = phases.policy(_row(), kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
+    result = phases.policy(kyverno=ky, rendered_dir=tmp_path, policy_paths=[Path("/p")])
 
     assert result.status == "FAIL"
     assert result.detail is not None
@@ -368,7 +361,6 @@ def test_schema_passes_overrides_through_to_kubeconform(tmp_path: Path) -> None:
     kc = _StubKubeconform(report=KubeconformReport(resources=(), summary={}))
 
     phases.schema(
-        _row(),
         kubeconform=kc,
         rendered_dir=tmp_path,
         kubernetes_version="1.31.2",
