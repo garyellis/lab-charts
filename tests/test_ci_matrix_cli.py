@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from chart_manager.cli import main
+from chart_manager.cli import plan as plan_cli
 from chart_manager.services.ci import MatrixSelection, _select_cluster_tests
 from chart_manager.services.lifecycle import ClusterTestImpact
 
@@ -21,7 +21,7 @@ from .conftest import cli
 
 
 class _CiService:
-    """Stands in for `CiService` at `main._container()`.
+    """Stands in for `CiService` at `plan._container()`.
 
     `matrix` delegates to the real `_select_cluster_tests` rather than
     re-running the `--all` > `--chart` > `--base` precedence here. A double
@@ -67,7 +67,7 @@ class _CiService:
 
 def _wire(monkeypatch: pytest.MonkeyPatch, service: _CiService) -> None:
     monkeypatch.setattr(
-        main,
+        plan_cli,
         "_container",
         lambda: SimpleNamespace(ci_service=lambda _root: service),
     )
@@ -127,7 +127,7 @@ def test_cli_delegates_the_whole_selection_to_the_service(
     """The surface hands over intent, not a chosen selector.
 
     Without this, moving the `--all` > `--chart` > `--base` precedence back
-    into `cli/main.py` would leave every other test in this file green -- the
+    into `cli/plan.py` would leave every other test in this file green -- the
     double implements all three selectors, so a CLI calling them directly
     still gets the right answer. This is the assertion that makes
     `CiService.matrix` the contract rather than a convenience.
@@ -152,7 +152,7 @@ def test_matrix_rejects_conflicting_modes(
     result = cli("plan", "-o", "github", "--all", "--chart", "alpha")
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, main.ChartManagerError)
+    assert isinstance(result.exception, plan_cli.ChartManagerError)
     assert service.calls == []
 
 
@@ -171,4 +171,4 @@ def test_publish_charts_emits_newline_list_from_explicit_file(
 
     assert result.exit_code == 0
     assert result.stdout == "alpha\nzeta\n"
-    assert service.calls == [("publish", main.Path("changed.txt"))]
+    assert service.calls == [("publish", plan_cli.Path("changed.txt"))]

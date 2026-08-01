@@ -1,17 +1,19 @@
 """Surface glue every `cli/` module needs and none of them should own.
 
-Two things live here, and they are both one-liners that were previously
-copy-pasted with their docstrings into six modules:
+Three things live here, and each was previously copy-pasted with its
+docstring into several command modules:
 
   * `container()` -- the composition root for one invocation;
   * `exit_if_failed()` -- the surface's rule for a result that reports its
-    own failure.
+    own failure;
+  * `resolve_chart()` -- the shared reading of a chart name or directory.
 
-Neither is a capability. `services/` owns what a command *does*;
-`plumbing/exit_codes.py` owns which outcome is which number. What is left
-is the two lines of surface that bind them, which is exactly what a module
-with a leading underscore is for -- this is internal to `cli/` and nothing
-outside it should import it.
+None of them is a capability. `services/` owns what a command *does*;
+`plumbing/exit_codes.py` owns which outcome is which number;
+`services/local_resources.py` owns how a chart name is resolved. What is
+left is the few lines of surface that bind them to configuration, which is
+exactly what a module with a leading underscore is for -- this is internal
+to `cli/` and nothing outside it should import it.
 
 Note the test seam. Several `cli/` modules alias `container` into their own
 namespace (`from ._wiring import container as _container`) so a test can
@@ -22,10 +24,13 @@ body, and the alias exists purely so the patch stays scoped.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
-from chart_manager.composition import Container
+from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 
 
 def container() -> Container:
@@ -55,4 +60,21 @@ def exit_if_failed(ok: bool) -> None:
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
-__all__ = ["container", "exit_if_failed"]
+def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
+    """Resolve either a configured chart name or an explicit chart directory.
+
+    Here rather than in one of the two command modules that call it
+    (`chart test`, `local up`/`local reset`) because it is the point where a
+    chart name means the same thing to both, and design commitment 6 says no
+    command module carries a path heuristic of its own.
+    """
+    settings = Settings()
+    return resolve_chart_target(
+        root,
+        chart,
+        charts_dir=settings.charts_dir,
+        local_config=settings.local_config,
+    )
+
+
+__all__ = ["container", "exit_if_failed", "resolve_chart"]

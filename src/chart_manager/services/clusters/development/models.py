@@ -5,7 +5,7 @@ frozen (what crosses the service boundary) or an explicitly-named mutable
 accumulator (`_DevelopmentClusterRunSummary`, which never leaves the converge
 engine).
 
-Kept in its own module because `cli/main.py` renders these and the drift /
+Kept in its own module because `cli/local.py` renders these and the drift /
 access helpers read them — three importers, none of which need the
 converge engine.
 """

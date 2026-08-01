@@ -1,6 +1,7 @@
 """CLI rendering of the results the lab/sandbox services now return.
 
-`cli/main.py` is the only place that knows Rich exists. These tests pin
+`cli/local.py` is where the `local` group's Rich rendering lives -- the
+service layer knows nothing about a terminal. These tests pin
 the output shape so the services-return-results refactor stayed a refactor:
 the summary table, the access-hint blocks, the lifecycle lines and the
 progress narration must carry the same information they did when the
@@ -19,7 +20,7 @@ import pytest
 import typer
 from rich.console import Console
 
-from chart_manager.cli import main as cli_main
+from chart_manager.cli import local as cli_local
 from chart_manager.cli import streams
 from chart_manager.services.clusters.development import (
     DevelopmentClusterAccessHints,
@@ -35,7 +36,7 @@ from chart_manager.services.progress import detail, failure, info, step, warn
 def captured(monkeypatch: pytest.MonkeyPatch) -> Console:
     """Swap the module's *data* console (stdout) for a recording one."""
     console = Console(record=True, width=200)
-    monkeypatch.setattr(cli_main, "console", console)
+    monkeypatch.setattr(cli_local, "console", console)
     return console
 
 
@@ -45,12 +46,12 @@ def narrated(monkeypatch: pytest.MonkeyPatch) -> Console:
 
     Patched in two places because the consoles now live in `cli/streams.py`
     and each consumer binds its own module-level name to the same object:
-    `cli_main.narration` is what the renderers below reach, and
+    `cli_local.narration` is what the renderers below reach, and
     `streams.narration` is what `streams.print_progress` reaches. Patching
     one and not the other would silently record half the output.
     """
     console = Console(record=True, width=200)
-    monkeypatch.setattr(cli_main, "narration", console)
+    monkeypatch.setattr(cli_local, "narration", console)
     monkeypatch.setattr(streams, "narration", console)
     return console
 
@@ -98,7 +99,7 @@ def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -
         failed=(DevelopmentClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
-    cli_main._render_development_cluster_result(result, "table", command="up")
+    cli_local._render_development_cluster_result(result, "table", command="up")
     out = captured.export_text()
 
     assert "Lab install summary" in out
@@ -112,7 +113,7 @@ def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -
 def test_lab_result_omits_the_failure_line_when_ok(
     captured: Console, narrated: Console
 ) -> None:
-    cli_main._render_development_cluster_result(
+    cli_local._render_development_cluster_result(
         DevelopmentClusterResult(
             applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),)
         ),
@@ -128,7 +129,7 @@ def test_lab_result_omits_the_failure_line_when_ok(
 
 
 def test_access_hints_render_urls_and_grafana_credentials(narrated: Console) -> None:
-    cli_main._render_access_hints(
+    cli_local._render_access_hints(
         DevelopmentClusterAccessHints(
             urls=("https://grafana.localhost/", "https://loki.localhost/"),
             grafana_url="https://grafana.localhost/",
@@ -145,7 +146,7 @@ def test_access_hints_render_urls_and_grafana_credentials(narrated: Console) -> 
 
 
 def test_access_hints_render_the_secret_read_failure_in_place(narrated: Console) -> None:
-    cli_main._render_access_hints(
+    cli_local._render_access_hints(
         DevelopmentClusterAccessHints(
             urls=("https://grafana.localhost/",),
             grafana_url="https://grafana.localhost/",
@@ -160,7 +161,7 @@ def test_access_hints_render_the_secret_read_failure_in_place(narrated: Console)
 
 
 def test_access_hints_render_the_virtualservice_listing_failure(narrated: Console) -> None:
-    cli_main._render_access_hints(
+    cli_local._render_access_hints(
         DevelopmentClusterAccessHints(
             urls_error="could not list VirtualServices (boom); skipping URL hints"
         )
@@ -173,7 +174,7 @@ def test_access_hints_render_the_virtualservice_listing_failure(narrated: Consol
 
 
 def test_access_hints_are_silent_when_nothing_applies(narrated: Console) -> None:
-    cli_main._render_access_hints(DevelopmentClusterAccessHints())
+    cli_local._render_access_hints(DevelopmentClusterAccessHints())
 
     assert narrated.export_text().strip() == ""
 
@@ -183,9 +184,9 @@ def test_ca_hint_includes_macos_one_liner_on_darwin(
 ) -> None:
     # On Darwin we surface the `security add-trusted-cert` one-liner so the
     # dev doesn't have to remember the keychain incantation.
-    monkeypatch.setattr(cli_main.sys, "platform", "darwin")
+    monkeypatch.setattr(cli_local.sys, "platform", "darwin")
 
-    cli_main._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
+    cli_local._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
     out = narrated.export_text()
 
     assert "Trust the lab CA" in out
@@ -199,9 +200,9 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
     # On non-Darwin the `security add-trusted-cert` line is misleading (the
     # tool doesn't exist). The generic "import into your OS keychain" line
     # must still print so Linux devs aren't left without instruction.
-    monkeypatch.setattr(cli_main.sys, "platform", "linux")
+    monkeypatch.setattr(cli_local.sys, "platform", "linux")
 
-    cli_main._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
+    cli_local._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
     out = narrated.export_text()
 
     assert "Trust the lab CA" in out
@@ -211,7 +212,7 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
 
 
 def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -> None:
-    cli_main._render_access_hints(
+    cli_local._render_access_hints(
         DevelopmentClusterAccessHints(ca_trust_hint=False, urls=("https://x/",))
     )
 
@@ -224,7 +225,7 @@ def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -
 def test_cluster_action_reports_the_change_and_the_reaped_forward(
     narrated: Console,
 ) -> None:
-    cli_main._render_cluster_action(
+    cli_local._render_cluster_action(
         DevelopmentClusterActionResult(
             cluster_name="chart-manager", changed=True, port_forward_pid=4242
         ),
@@ -240,7 +241,7 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
 
 
 def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
-    cli_main._render_cluster_action(
+    cli_local._render_cluster_action(
         DevelopmentClusterActionResult(cluster_name="chart-manager", changed=False),
         "table",
         command="down",
@@ -311,10 +312,10 @@ def test_a_converge_with_failures_exits_non_zero(captured: Console) -> None:
     `mise run lab-up` read success from a run in which charts failed.
     """
     with pytest.raises(typer.Exit) as exc:
-        cli_main._exit_if_failed(_result(failed=True).ok)
+        cli_local._exit_if_failed(_result(failed=True).ok)
 
     assert exc.value.exit_code == 1
 
 
 def test_a_clean_converge_does_not_exit(captured: Console) -> None:
-    cli_main._exit_if_failed(_result(failed=False).ok)
+    cli_local._exit_if_failed(_result(failed=False).ok)

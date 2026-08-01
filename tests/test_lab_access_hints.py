@@ -3,7 +3,7 @@
 Three concerns covered here:
   * `_access_hints`: empty / one / many VS results, with grafana
     credentials attached to the grafana URL but only if a grafana host is
-    present. The service resolves the data; `cli/main.py` renders it (see
+    present. The service resolves the data; `cli/local.py` renders it (see
     test_lab_cli_rendering.py).
   * Cert + webhook waits: happy path (call recorded) and timeout path
     (warning surfaced, run continues).

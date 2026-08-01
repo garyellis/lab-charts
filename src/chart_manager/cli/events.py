@@ -97,7 +97,7 @@ def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) 
 
     The only judgement the surface makes here is *how the caller was
     invoked* -- positional token or deprecated flag pair -- which is the same
-    line `cli/main.py` draws for `--all` versus `--chart` on the CI matrix
+    line `cli/plan.py` draws for `--all` versus `--chart` on the CI matrix
     command. Both branches hand raw strings to `services/events/ref.py`,
     which owns what a chart name and a version may be.
 
