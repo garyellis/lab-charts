@@ -84,6 +84,14 @@ def _paths(value: object, *, field: str) -> list[Path]:
 
 
 class ResourceMetadata(StrictApiModel):
+    """Identity shared by both local kinds.
+
+    `name` is a lowercase DNS label, which is stricter than
+    `ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any
+    non-padded string. The two are separate models on purpose; merging them
+    would change what one of the groups accepts.
+    """
+
     name: str
 
     @field_validator("name")
@@ -273,6 +281,13 @@ type StackRelease = Annotated[
 
 
 class LocalClusterSettings(StrictApiModel):
+    """Where the Kind configuration lives, as a repository-relative path.
+
+    Chart-manager never interprets that file -- Kind does. Changing a
+    creation-time setting inside it therefore needs `local reset`, not
+    `local up`.
+    """
+
     config: Path
 
     @field_validator("config", mode="before")
@@ -282,15 +297,30 @@ class LocalClusterSettings(StrictApiModel):
 
 
 class LocalBootstrap(StrictApiModel):
+    """Releases installed after the cluster exists, in declaration order.
+
+    The executor is fail-fast and waits for each release's readiness gates
+    before starting the next, so list order is the install order and a failure
+    stops the rest. An empty list is valid -- it means a bare cluster.
+    """
+
     releases: list[BootstrapRelease] = Field(default_factory=list)
 
 
 class LocalClusterSpec(StrictApiModel):
+    """What a local cluster is made of: a Kind config, then a bootstrap sequence."""
+
     cluster: LocalClusterSettings
     bootstrap: LocalBootstrap
 
 
 class LocalCluster(StrictApiModel):
+    """Envelope for one authored local environment.
+
+    Read from `.chart-manager/local-cluster.yaml` unless
+    `CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.
+    """
+
     api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
     kind: Literal["LocalCluster"]
     metadata: ResourceMetadata
@@ -298,10 +328,24 @@ class LocalCluster(StrictApiModel):
 
 
 class LocalStackSpec(StrictApiModel):
+    """Releases composing one stack, at least one.
+
+    Typed as `StackRelease`, not `BootstrapRelease`: a `type: local` release is
+    rejected here. A stack must stay reusable, so every release names either a
+    lifecycle profile or a pinned OCI chart.
+    """
+
     releases: list[StackRelease] = Field(min_length=1)
 
 
 class LocalStack(StrictApiModel):
+    """Envelope for a reusable application composition.
+
+    Resolved by name from the `stacks/` directory beside the LocalCluster file,
+    or from an explicit path. Composition only -- no templating or ordering
+    language, which is what keeps it narrower than Helmfile.
+    """
+
     api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
     kind: Literal["LocalStack"]
     metadata: ResourceMetadata

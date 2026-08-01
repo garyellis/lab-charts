@@ -616,6 +616,7 @@
       },
       "LocalBootstrap": {
         "additionalProperties": false,
+        "description": "Releases installed after the cluster exists, in declaration order.\n\nThe executor is fail-fast and waits for each release's readiness gates\nbefore starting the next, so list order is the install order and a failure\nstops the rest. An empty list is valid -- it means a bare cluster.",
         "properties": {
           "releases": {
             "items": {
@@ -630,6 +631,7 @@
       },
       "LocalClusterSettings": {
         "additionalProperties": false,
+        "description": "Where the Kind configuration lives, as a repository-relative path.\n\nChart-manager never interprets that file -- Kind does. Changing a\ncreation-time setting inside it therefore needs `local reset`, not\n`local up`.",
         "properties": {
           "config": {
             "format": "path",
@@ -645,6 +647,7 @@
       },
       "LocalClusterSpec": {
         "additionalProperties": false,
+        "description": "What a local cluster is made of: a Kind config, then a bootstrap sequence.",
         "properties": {
           "bootstrap": {
             "$ref": "#/$defs/LocalBootstrap"
@@ -662,6 +665,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
+        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
         "properties": {
           "name": {
             "title": "Name",
@@ -696,6 +700,7 @@
       }
     },
     "additionalProperties": false,
+    "description": "Envelope for one authored local environment.\n\nRead from `.chart-manager/local-cluster.yaml` unless\n`CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.",
     "properties": {
       "apiVersion": {
         "const": "local.chartmanager.io/v1alpha1",
@@ -754,6 +759,7 @@
       },
       "LocalStackSpec": {
         "additionalProperties": false,
+        "description": "Releases composing one stack, at least one.\n\nTyped as `StackRelease`, not `BootstrapRelease`: a `type: local` release is\nrejected here. A stack must stay reusable, so every release names either a\nlifecycle profile or a pinned OCI chart.",
         "properties": {
           "releases": {
             "items": {
@@ -841,6 +847,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
+        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
         "properties": {
           "name": {
             "title": "Name",
@@ -872,6 +879,7 @@
       }
     },
     "additionalProperties": false,
+    "description": "Envelope for a reusable application composition.\n\nResolved by name from the `stacks/` directory beside the LocalCluster file,\nor from an explicit path. Composition only -- no templating or ordering\nlanguage, which is what keeps it narrower than Helmfile.",
     "properties": {
       "apiVersion": {
         "const": "local.chartmanager.io/v1alpha1",
