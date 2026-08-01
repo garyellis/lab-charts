@@ -8,6 +8,7 @@ import yaml
 
 from chart_manager.integrations.kind import Kind
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.clusters.development.models import PortMappingDrift
 from chart_manager.services.progress import ProgressCallback, warn
 
 KIND_CONFIG_FILENAME = "kind-config.yaml"
@@ -40,6 +41,36 @@ def kind_config_host_ports(kind_config: Path) -> set[int]:
     return ports
 
 
+def port_mapping_drift(
+    cluster_name: str,
+    *,
+    kind: Kind,
+    root: Path,
+    config: Path | None = None,
+) -> PortMappingDrift:
+    """Diff the kind-config host ports against the live container.
+
+    Kind bakes `extraPortMappings` into the node container spec at
+    cluster-create time. Editing kind-config.yaml then `local down`
+    + `local up` does NOT re-apply the mapping (docker start preserves
+    the old container spec), so the config and the container drift apart
+    with no other symptom than a port that stops answering.
+
+    The answer is data so both consumers can have it their way: `local up`
+    narrates it mid-converge, `local status` reports it as a field. An
+    un-runnable check (no config to compare against, or an inspection that
+    failed) is distinguishable from a clean one -- see `PortMappingDrift`.
+    """
+    expected = kind_config_host_ports(config or root / KIND_CONFIG_FILENAME)
+    if not expected:
+        return PortMappingDrift()
+    try:
+        live = kind.container_host_ports(cluster_name)
+    except (ExternalCommandError, ChartManagerError) as exc:
+        return PortMappingDrift(error=str(exc))
+    return PortMappingDrift(missing=tuple(sorted(expected - live)))
+
+
 def warn_on_port_mapping_drift(
     cluster_name: str,
     *,
@@ -48,29 +79,19 @@ def warn_on_port_mapping_drift(
     progress: ProgressCallback,
     config: Path | None = None,
 ) -> None:
-    """Diff the kind-config host ports against the live container.
-
-    Kind bakes `extraPortMappings` into the node container spec at
-    cluster-create time. Editing kind-config.yaml then `local down`
-    + `local up` does NOT re-apply the mapping (docker start preserves
-    the old container spec). Detect that and print a warning row so the
-    dev knows a `local reset` is required.
-    """
-    expected = kind_config_host_ports(config or root / KIND_CONFIG_FILENAME)
-    if not expected:
+    """Narrate `port_mapping_drift` so the dev knows a `local reset` is required."""
+    drift = port_mapping_drift(cluster_name, kind=kind, root=root, config=config)
+    if drift.error is not None:
+        progress(
+            warn(f"could not inspect container port mappings ({drift.error}); skipping drift check")
+        )
         return
-    try:
-        live = kind.container_host_ports(cluster_name)
-    except (ExternalCommandError, ChartManagerError) as exc:
-        progress(warn(f"could not inspect container port mappings ({exc}); skipping drift check"))
-        return
-    missing = expected - live
-    if not missing:
+    if not drift.drifted:
         return
     progress(
         warn(
             f"kind cluster port mappings do not match kind-config.yaml "
-            f"(missing host ports: {sorted(missing)}); run "
+            f"(missing host ports: {list(drift.missing)}); run "
             "'chart-manager local reset <same-target>' to apply "
             f"(current cluster: {cluster_name})."
         )
