@@ -244,6 +244,28 @@ def resolve(
     return selected
 
 
+def require_dry_run(value: str | None, *, dry_run: bool) -> None:
+    """Reject `-o` on a command whose only document is its `--dry-run` plan.
+
+    `chart test` and `chart cache clean` emit no projection when they run
+    for real -- one narrates progress, the other prints a status line. Their
+    `-o` therefore names the form of the *plan*, and accepting it on a real
+    run would be the accepted-and-ignored flag design doc 6.3 forbids: the
+    caller asked for json, got a cluster install, and nothing said
+    otherwise. Exit 2 naming the missing flag instead.
+
+    Only an *explicit* per-command `-o` is rejected. The invocation-wide one
+    is documented as a default that commands without a projection ignore, so
+    `chart-manager -o json chart test x` must keep working rather than fail
+    for having mentioned output at all.
+    """
+    if value is not None and not dry_run:
+        raise typer.BadParameter(
+            "this command's only document is its --dry-run plan; add --dry-run",
+            param_hint="--output",
+        )
+
+
 def _auto(console: Console | None) -> str:
     """`table` for a human at a terminal, `json` for everything else."""
     if os.environ.get("CI") == "true":
@@ -265,5 +287,6 @@ __all__ = [
     "GlobalOutputOption",
     "global_output",
     "output_option",
+    "require_dry_run",
     "resolve",
 ]

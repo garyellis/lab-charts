@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -30,7 +31,8 @@ from chart_manager.cli.streams import (
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.logger import setup_logging
-from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.services.chart_catalog import ChartCatalogEntry, ChartCatalogService
+from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
 from chart_manager.services.ci import MatrixSelection
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.clusters.development import (
@@ -53,6 +55,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestRequest,
 )
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
+from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.local_resources import (
     LocalTargetResolver,
     ResolvedChartTarget,
@@ -384,10 +387,70 @@ def _emit_yaml(data: dict[str, Any]) -> None:
     typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
 
 
+def _emit_document(data: dict[str, Any], *, mode: str, table: Table) -> None:
+    """Write one wire document in the resolved `--output` form.
+
+    The caller builds the terminal projection because only it knows what the
+    columns mean; the machine projections are the same two encoders every
+    command uses. Splitting it this way is what keeps `-o json` and
+    `-o yaml` from being re-decided per command.
+    """
+    if mode == output_mod.JSON:
+        _emit_json(data)
+    elif mode == output_mod.YAML:
+        _emit_yaml(data)
+    else:
+        console.print(table)
+
+
+#: `chart list` and `chart show` speak the core projections minus `md`:
+#: neither has a markdown form, and advertising one the resolver cannot
+#: produce is the lie `cli/output.py` exists to prevent.
+_CHART_CATALOG_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+
+ChartCatalogOutputOption = Annotated[
+    str | None,
+    output_mod.output_option(*_CHART_CATALOG_OUTPUTS),
+]
+
+#: The vocabulary a `--dry-run` plan is printed in. Same three projections;
+#: named separately because the document is a *plan*, not a catalog, and the
+#: two have no reason to stay equal.
+_DRY_RUN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+
+DryRunOutputOption = Annotated[
+    str | None,
+    output_mod.output_option(*_DRY_RUN_OUTPUTS, extra_help=" Requires --dry-run."),
+]
+
+
 @chart_app.command("list")
-def list_charts(root: RootOption = Path(".")) -> None:
-    """List Helm charts and their lifecycle capability status."""
-    service = ChartCatalogService(root, charts_dir=Settings().charts_dir)
+def list_charts(
+    ctx: typer.Context,
+    output: ChartCatalogOutputOption = None,
+    root: RootOption = Path("."),
+) -> None:
+    """List Helm charts and their lifecycle capability status.
+
+    `-o` defaults to `auto`: the table on a terminal, JSON in a pipe or in
+    CI. The table was this command's only output for its whole life, which
+    made `chart list | grep` a habit and the chart inventory unreadable to
+    anything else; the JSON payload is the versioned document in
+    `services/chart_catalog_wire.py`, so a second surface answers this
+    question with the same bytes.
+    """
+    mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
+    entries = ChartCatalogService(root, charts_dir=Settings().charts_dir).list_entries()
+    _emit_document(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
+    # A chart whose lifecycle document does not load is reported *in* the
+    # projection (as `error`, in every format) and again as the exit code, so
+    # neither a reader nor a pipeline has to learn the other's channel.
+    if any(entry.error is not None for entry in entries):
+        raise typer.Exit(1)
+
+
+def _catalog_table(entries: Sequence[ChartCatalogEntry]) -> Table:
+    """Render the chart catalog as the terminal projection."""
     table = Table(
         "Chart",
         "Type",
@@ -398,9 +461,7 @@ def list_charts(root: RootOption = Path(".")) -> None:
         "Cluster tests",
         "Profiles",
     )
-    invalid = False
-    for entry in service.list_entries():
-        invalid = invalid or entry.error is not None
+    for entry in entries:
         lifecycle_status = (
             f"[red]invalid: {escape(entry.error or '')}[/red]"
             if entry.error is not None
@@ -416,14 +477,58 @@ def list_charts(root: RootOption = Path(".")) -> None:
             entry.cluster_test.value,
             ", ".join(entry.profiles),
         )
-    console.print(table)
-    if invalid:
-        raise typer.Exit(1)
+    return table
+
+
+def _document_table(document: dict[str, Any], *, title: str) -> Table:
+    """Render a wire document as a Field/Value table over dotted paths.
+
+    A flattening of the same document `-o json` emits rather than a
+    hand-written layout, because `chart show`'s subject is the authored
+    ChartLifecycle envelope and that schema grows a section at a time. A
+    bespoke renderer would need editing every time the spec does, and until
+    someone did it would silently omit whatever it had not been taught --
+    which is the one thing a command called `show` must never do.
+    """
+    table = Table("Field", "Value", title=title)
+    for field, value in _flatten(document):
+        table.add_row(escape(field), escape(value))
+    return table
+
+
+def _flatten(value: Any, prefix: str = "") -> Iterator[tuple[str, str]]:
+    """Walk a JSON-shaped document into (dotted path, rendered leaf) rows.
+
+    A list of scalars stays on one row (`values: a.yaml, b.yaml`) because
+    that is how it reads in the file it came from; a list of objects is
+    indexed, because its members have structure worth addressing.
+    """
+    if isinstance(value, dict) and value:
+        for key, item in value.items():
+            yield from _flatten(item, f"{prefix}.{key}" if prefix else key)
+    elif isinstance(value, list) and value:
+        if any(isinstance(item, dict | list) for item in value):
+            for index, item in enumerate(value):
+                yield from _flatten(item, f"{prefix}[{index}]")
+        else:
+            yield prefix, ", ".join(_leaf(item) for item in value)
+    else:
+        yield prefix, _leaf(value)
+
+
+def _leaf(value: Any) -> str:
+    """Render one leaf as JSON spells it, minus the quotes around strings.
+
+    So a reader sees `true`/`null`/`{}` -- the tokens they would type back
+    into the document -- and not Python's `True`/`None`/`{}`.
+    """
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def _run_chart_test(
     chart: str,
     *,
+    ctx: typer.Context,
     root: Path,
     profile: str,
     namespace: str | None,
@@ -431,6 +536,8 @@ def _run_chart_test(
     dependent_tests: bool,
     no_ensure_cluster: bool,
     lint: bool,
+    dry_run: bool,
+    output: str | None,
 ) -> None:
     """Run one chart test through the canonical charts command."""
     root = root.resolve()
@@ -441,21 +548,50 @@ def _run_chart_test(
         progress=_print_progress,
         charts_dir=charts_dir,
     )
-    service.run(
-        EphemeralTestRequest(
-            chart=target.name,
-            profile=profile,
-            namespace=namespace,
-            cluster_name=cluster_name,
-            ensure_cluster=not no_ensure_cluster,
-            include_dependent_tests=dependent_tests,
-            lint=lint,
+    request = EphemeralTestRequest(
+        chart=target.name,
+        profile=profile,
+        namespace=namespace,
+        cluster_name=cluster_name,
+        ensure_cluster=not no_ensure_cluster,
+        include_dependent_tests=dependent_tests,
+        lint=lint,
+    )
+    if dry_run:
+        _render_test_plan(service.plan(request), ctx=ctx, output=output)
+        return
+    service.run(request)
+
+
+def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | None) -> None:
+    """Print the compiled cluster-test plan; say on stderr what did not happen.
+
+    The plan is what the caller asked for, so it is the projection and goes
+    to stdout. That it was *only* a plan is narration, and stays off the
+    stream a `-o json | jq` consumer reads.
+    """
+    mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
+    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release")
+    for step, action in enumerate(plan.actions, start=1):
+        table.add_row(
+            str(step),
+            action.kind.value,
+            action.target.chart,
+            action.target.profile or "",
+            action.target.namespace or "",
+            action.target.release or "",
         )
+    _emit_document(plan.to_dict(), mode=mode, table=table)
+    for warning in plan.warnings:
+        narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
+    narration.print(
+        "[yellow]dry run[/yellow]: no cluster was created, nothing was installed or tested"
     )
 
 
 @chart_app.command("test")
 def chart_test(
+    ctx: typer.Context,
     chart_argument: Annotated[
         str | None,
         typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
@@ -483,19 +619,40 @@ def chart_test(
         typer.Option("--no-ensure-cluster", help="Do not create the test cluster if missing."),
     ] = False,
     lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print the cluster-test plan and exit; create no cluster, install nothing.",
+        ),
+    ] = False,
+    output: DryRunOutputOption = None,
 ) -> None:
     """Install and exercise one chart on an ephemeral local Kubernetes cluster.
 
     The chart is named positionally; `--chart` is the older spelling and is
     kept permanently, because `.github/workflows/ci.yaml` uses it and the
     flag costs nothing to keep once the positional exists.
+
+    `--dry-run` prints the compiled lifecycle plan -- every namespace,
+    install and helm test the run would perform, in order -- and exits 0
+    having touched nothing. It is the same plan object the real run
+    executes, so it cannot describe work that would not happen.
+
+    `-o` selects the form that plan is printed in. It is only meaningful
+    with `--dry-run` -- a real run's report is progress narration, not a
+    document -- so naming it without `--dry-run` is a usage error rather
+    than a flag that is quietly ignored.
     """
     if (chart_argument is None) == (chart is None):
         raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
+    output_mod.require_dry_run(output, dry_run=dry_run)
     selected = chart_argument if chart_argument is not None else chart
     assert selected is not None
     _run_chart_test(
         selected,
+        ctx=ctx,
+        output=output,
         root=root,
         profile=profile,
         namespace=namespace,
@@ -503,18 +660,33 @@ def chart_test(
         dependent_tests=dependent_tests,
         no_ensure_cluster=no_ensure_cluster,
         lint=lint,
+        dry_run=dry_run,
     )
 
 
 @chart_app.command("show")
-def show_lifecycle(chart: str, root: RootOption = Path(".")) -> None:
-    """Print one chart's normalized ChartLifecycle intent."""
-    lifecycle = ChartCatalogService(
-        root,
-        charts_dir=Settings().charts_dir,
-    ).get_lifecycle(chart)
-    console.print_json(
-        data=lifecycle.model_dump(mode="json", by_alias=True, exclude_none=True)
+def show_lifecycle(
+    ctx: typer.Context,
+    chart: str,
+    output: ChartCatalogOutputOption = None,
+    root: RootOption = Path("."),
+) -> None:
+    """Print one chart's normalized ChartLifecycle intent.
+
+    `-o json`/`-o yaml` emit the authored envelope after normalization, so
+    the output can be diffed against -- or pasted back into --
+    `chart-lifecycle.yaml`. `-o table` flattens that same document onto
+    dotted field paths for reading at a terminal, which is what `auto`
+    selects there.
+    """
+    mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
+    document = lifecycle_to_dict(
+        ChartCatalogService(root, charts_dir=Settings().charts_dir).get_lifecycle(chart)
+    )
+    _emit_document(
+        document,
+        mode=mode,
+        table=_document_table(document, title=f"{chart} lifecycle"),
     )
 
 

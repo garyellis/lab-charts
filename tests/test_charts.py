@@ -6,6 +6,7 @@ bottom asserts containment, so adding a chart cannot turn it red.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -215,3 +216,142 @@ def test_the_repo_chart_tree_loads() -> None:
     assert names, "the repo should ship at least one chart"
     assert names == sorted(names)
     assert {"alloy", "grafana"} <= set(names)
+
+
+# --- the output vocabulary ---------------------------------------------------
+
+
+def test_chart_list_json_is_the_versioned_catalog_document(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """`chart list -o json` emits `services/chart_catalog_wire.py`'s payload.
+
+    Asserted key by key rather than against a golden file: the shape is a
+    contract a second surface renders from, so a rename has to be a
+    deliberate edit in two places, not a diff someone re-blesses.
+    """
+    make_chart("alloy", profiles={"minimal": {}, "telemetry": {}})
+
+    result = cli("chart", "list", "-o", "json", "--root", str(chart_root))
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["charts"] == [
+        {
+            "name": "alloy",
+            "type": "application",
+            "version": "0.1.0",
+            "dependencies": [],
+            "lifecycle": "enabled",
+            "manifest_validation": "absent",
+            "cluster_test": "enabled",
+            "profiles": ["minimal", "telemetry"],
+            "error": None,
+        }
+    ]
+
+
+def test_chart_list_yaml_carries_the_same_document(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """One document, two encoders -- `-o yaml` must not be a second shape."""
+    make_chart("alloy")
+
+    as_json = cli("chart", "list", "-o", "json", "--root", str(chart_root))
+    as_yaml = cli("chart", "list", "-o", "yaml", "--root", str(chart_root))
+
+    assert yaml.safe_load(as_yaml.stdout) == json.loads(as_json.stdout)
+
+
+def test_chart_list_table_is_the_projection_a_terminal_gets(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """`-o table` keeps the human inventory: headers plus one row per chart."""
+    make_chart("alloy")
+
+    result = cli("chart", "list", "-o", "table", "--root", str(chart_root))
+
+    assert result.exit_code == 0, result.output
+    assert "Manifest validation" in result.stdout
+    assert "alloy" in result.stdout
+
+
+def test_chart_list_off_a_terminal_resolves_auto_to_json(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """`auto` asks about stdout, and under CliRunner stdout is a pipe.
+
+    This is what makes `chart list | jq` work in CI with no flag, and it is
+    worth pinning: it means a bare `chart list` prints different things
+    depending on where it prints to.
+    """
+    make_chart("alloy")
+
+    result = cli("chart", "list", "--root", str(chart_root))
+
+    assert json.loads(result.stdout)["charts"][0]["name"] == "alloy"
+
+
+def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """A pipeline reads the exit code; a jq filter reads `error`. Both work."""
+    chart = make_chart("broken")
+    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
+
+    result = cli("chart", "list", "-o", "json", "--root", str(chart_root))
+
+    assert result.exit_code == 1
+    entry = json.loads(result.stdout)["charts"][0]
+    assert entry["lifecycle"] == "invalid"
+    assert entry["error"] is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["chart", "list"], ["chart", "show", "alloy"]],
+    ids=["list", "show"],
+)
+def test_a_projection_neither_command_has_is_rejected_at_parse_time(
+    chart_root: Path, make_chart: MakeChart, command: list[str]
+) -> None:
+    """Neither has a markdown form, so `-o md` is a usage error, not a table."""
+    make_chart("alloy")
+
+    result = cli(*command, "-o", "md", "--root", str(chart_root))
+
+    assert result.exit_code == 2
+    assert "md" in result.output
+
+
+def test_chart_show_yaml_is_the_authored_envelope(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """The point of `-o yaml` is that it can be diffed against the source."""
+    make_chart("alloy")
+
+    result = cli("chart", "show", "alloy", "-o", "yaml", "--root", str(chart_root))
+
+    assert result.exit_code == 0, result.output
+    document = yaml.safe_load(result.stdout)
+    assert document["apiVersion"] == "lifecycle.cmg.io/v1alpha1"
+    assert document["metadata"] == {"name": "alloy"}
+    assert document["spec"]["clusterTest"]["enabled"] is True
+
+
+def test_chart_show_table_flattens_the_envelope_onto_dotted_fields(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """`-o table` used to be unreachable: the command hardcoded JSON."""
+    make_chart("alloy", profiles={"minimal": {"values": ["values.yaml"]}})
+
+    result = cli("chart", "show", "alloy", "-o", "table", "--root", str(chart_root))
+
+    assert result.exit_code == 0, result.output
+    assert "spec.clusterTest.profiles.minimal.values" in result.stdout
+    assert "values.yaml" in result.stdout
+    # Leaves are spelled the way the document spells them, not the way
+    # Python repr's them: `true`, never `True`.
+    assert "spec.enabled" in result.stdout
+    assert "True" not in result.stdout

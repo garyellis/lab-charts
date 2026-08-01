@@ -95,8 +95,8 @@ def set_narration_quiet(quiet: bool) -> None:
     Two callers, both in `cli/`:
 
       * `main.global_options`, for `-q` alone. It runs for every invocation,
-        including commands that have no `--output` at all (`chart list`,
-        `local up`), which is why `-q` cannot be left to the resolver.
+        including commands that have no `--output` at all (`local up`,
+        `local down`), which is why `-q` cannot be left to the resolver.
       * `cli/output.resolve`, which folds `-q` together with an *explicitly*
         requested `-o json` (design doc 6.2).
 

@@ -422,6 +422,61 @@ def test_ephemeral_lint_is_a_first_class_action_before_install(
     assert result.installed == ("grafana",)
 
 
+def test_ephemeral_plan_compiles_the_run_without_touching_anything(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`plan` is `run`'s compile step and nothing else.
+
+    `calls == []` is the whole assertion: the helm, kind and kubectl fakes
+    record every invocation, so an empty list is proof that a `--dry-run`
+    created no cluster, updated no dependency and installed nothing --
+    including under `ensure_cluster=True`, which is the default and is what
+    a caller who only added `--dry-run` will have set.
+    """
+    calls: list[str] = []
+    service, kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _migration_plan(),
+    )
+
+    plan = service.plan(EphemeralTestRequest(chart="grafana"))
+
+    assert plan.chart == "grafana"
+    assert [action.kind for action in plan.actions] == [
+        action.kind for action in _migration_plan().actions
+    ]
+    assert calls == []
+    assert kubectl.diagnostic_namespaces == []
+
+
+def test_ephemeral_plan_keeps_the_lint_action_it_would_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--lint` still shapes the plan, though the dry run lints nothing.
+
+    `plan` calls the bootstrap preflight with `lint=False` so no `helm lint`
+    subprocess runs; the request's own `lint` reaches the compiler, so the
+    printed plan still shows the HELM_LINT action a real run would execute.
+    Those two are easy to conflate, which is why they are asserted together.
+    """
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        service.lifecycle_compiler,
+        "compile_cluster_test",
+        lambda *_args, **kwargs: _migration_plan(lint=kwargs["lint"]),
+    )
+
+    plan = service.plan(EphemeralTestRequest(chart="grafana", lint=True))
+
+    assert ActionKind.HELM_LINT in [action.kind for action in plan.actions]
+    assert calls == []
+
+
 def test_ephemeral_lint_failure_keeps_diagnostics_and_terminal_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

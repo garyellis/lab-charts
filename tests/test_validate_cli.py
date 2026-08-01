@@ -1141,3 +1141,75 @@ def test_run_rejects_an_empty_phase_list() -> None:
 
     assert result.exit_code == 2
     assert "--phase needs a phase name" in result.output
+
+
+# --- `chart cache clean --dry-run` -------------------------------------------
+
+
+def _render_cache(root: Path, runs: int = 2) -> Path:
+    """A render cache holding `runs` validate-run directories."""
+    cache = root / ".chart-manager" / "rendered"
+    for index in range(runs):
+        (cache / f"run-{index}").mkdir(parents=True)
+    return cache
+
+
+def test_cache_clean_dry_run_removes_nothing(tmp_path: Path) -> None:
+    """6.3: print the plan, exit 0, mutate nothing. The tree must survive."""
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "--dry-run", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert cache.is_dir()
+    payload = json.loads(result.stdout)
+    assert payload == {"path": str(cache.resolve()), "exists": True, "runs": 2}
+    assert "dry run" in result.stderr
+
+
+def test_cache_clean_dry_run_describes_a_cache_that_is_not_there(
+    tmp_path: Path,
+) -> None:
+    """"Nothing to remove" is an answer, not an error: still exit 0, still a plan."""
+    result = cli("chart", "cache", "clean", "--dry-run", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["exists"] is False
+
+
+def test_cache_clean_dry_run_renders_a_table(tmp_path: Path) -> None:
+    _render_cache(tmp_path, runs=3)
+
+    result = cli(
+        "chart", "cache", "clean", "--dry-run", "-o", "table", "--root", str(tmp_path)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "render cache" in result.stdout
+    assert "yes" in result.stdout
+
+
+def test_cache_clean_output_without_dry_run_is_a_usage_error(tmp_path: Path) -> None:
+    """A real clean emits no document, so `-o` must not be quietly ignored.
+
+    The tree is still there afterwards, which is the half that matters: the
+    rejection has to happen *before* the rmtree, not after it.
+    """
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "-o", "json", "--root", str(tmp_path))
+
+    assert result.exit_code == 2
+    assert "--dry-run" in result.output
+    assert cache.is_dir()
+
+
+def test_cache_clean_still_removes_the_tree_without_dry_run(tmp_path: Path) -> None:
+    """Guard the guard: the dry-run tests only mean something if this works."""
+    cache = _render_cache(tmp_path)
+
+    result = cli("chart", "cache", "clean", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert not cache.exists()
+    assert "cleaned:" in result.stderr
