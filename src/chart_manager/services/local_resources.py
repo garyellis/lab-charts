@@ -35,10 +35,8 @@ from chart_manager.plumbing.paths import relative_path
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.chart_config import LIFECYCLE_FILENAME, load_chart_lifecycle
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.settings import DEFAULT_CHARTS_DIR
+from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
-DEFAULT_LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
-DEFAULT_LOCAL_CLUSTER_FILE = Path("local-cluster.yaml")
 DEFAULT_STACKS_DIR = Path("stacks")
 
 
@@ -257,8 +255,6 @@ def resolve_chart_target(
 
 
 __all__ = [
-    "DEFAULT_LOCAL_CLUSTER_FILE",
-    "DEFAULT_LOCAL_CONFIG",
     "DEFAULT_STACKS_DIR",
     "LocalResourceLoader",
     "LocalTargetResolver",

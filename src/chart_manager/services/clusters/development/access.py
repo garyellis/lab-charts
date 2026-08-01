@@ -12,10 +12,10 @@ from collections.abc import Sequence
 from itertools import chain
 
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.models import (
     DevelopmentClusterAccessHints,
-    _DevelopmentClusterRunSummary,
+    RunSummary,
 )
 from chart_manager.services.progress import ProgressCallback, step, warn
 
@@ -45,7 +45,7 @@ LAB_CA_SECRET_NAMESPACE = "cert-manager"
 LAB_CA_OWNER_CHART = "istio-gateway"
 
 
-def lab_ca_present(summary: _DevelopmentClusterRunSummary) -> bool:
+def lab_ca_present(summary: RunSummary) -> bool:
     """True if the chart that owns the lab CA synced this run (applied or no-change)."""
     # The istio-gateway chart owns the cert-manager ClusterIssuer chain
     # (lab -> lab-root-ca -> lab-ca-issuer) and the wildcard cert. If it
@@ -58,7 +58,7 @@ def lab_ca_present(summary: _DevelopmentClusterRunSummary) -> bool:
 
 
 def wait_apps_wildcard_ready(
-    summary: _DevelopmentClusterRunSummary,
+    summary: RunSummary,
     *,
     kubectl: Kubectl,
     progress: ProgressCallback,
@@ -86,7 +86,7 @@ def wait_apps_wildcard_ready(
             namespace=APPS_WILDCARD_CERT_NAMESPACE,
             timeout=APPS_WILDCARD_CERT_TIMEOUT,
         )
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         progress(
             warn(
                 f"apps-wildcard cert not Ready "
@@ -112,7 +112,7 @@ def urls_and_grafana_host(hosts: Sequence[str]) -> tuple[tuple[str, ...], str | 
 
 
 def access_hints(
-    summary: _DevelopmentClusterRunSummary,
+    summary: RunSummary,
     *,
     kubectl: Kubectl,
     namespace: str,
@@ -142,7 +142,7 @@ def access_hints(
 
     try:
         hosts: Sequence[str] = kubectl.list_virtualservice_hosts()
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         hosts = ()
         urls_error = f"could not list VirtualServices ({exc}); skipping URL hints"
 

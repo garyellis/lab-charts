@@ -1,9 +1,9 @@
 """The target convergence engine and persistent-environment lifecycle.
 
 Target convergence and the install loop share three hand-threaded mutable
-accumulators (`_DevelopmentClusterRunSummary`, `installed_keys`,
-`namespaces_created`). Drift detection and access hints, which need neither
-the accumulators nor the chart repository, live in `drift.py` / `access.py`.
+accumulators (`RunSummary`, `installed_keys`, `namespaces_created`). Drift
+detection and access hints, which need neither the accumulators nor the chart
+repository, live in `drift.py` / `access.py`.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterPlanEntry,
     DevelopmentClusterResult,
     DevelopmentClusterStatus,
-    _DevelopmentClusterRunSummary,
+    RunSummary,
 )
 from chart_manager.services.clusters.development.status import cluster_status
 from chart_manager.services.clusters.environment import (
@@ -54,7 +54,6 @@ from chart_manager.services.local_resources import (
     LocalResourceLoader,
     ResolvedChartTarget,
     ResolvedLocalTarget,
-    ResolvedStackTarget,
 )
 from chart_manager.services.progress import (
     ProgressCallback,
@@ -64,7 +63,7 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR
+from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 # cert-manager webhook deployment. Must be Available before the
 # istio-gateway chart installs (its Certificate / ClusterIssuer CRs go
@@ -81,6 +80,18 @@ class _TargetLocalExecution:
     plan: tuple[InstallPlanEntry, ...]
 
 
+#: One preflighted release, carrying whatever converging it needs.
+#:
+#: `_preflight_target` used to return executions index-aligned with the
+#: releases it was given, `None` for every OCI entry, and both callers
+#: re-zipped the two sequences under an `assert execution is not None`. The
+#: alignment was an invariant across a function boundary with nothing but the
+#: assert holding it -- and `python -O` deletes asserts. A lifecycle release
+#: and its resolved plan are one value here, so there is no pairing left to
+#: get wrong.
+type _TargetStep = _TargetLocalExecution | OciChartRelease
+
+
 class DevelopmentClusterService:
     """Converge a chart or LocalStack onto a persistent local environment."""
 
@@ -94,7 +105,7 @@ class DevelopmentClusterService:
         expose: ExposeService,
         progress: ProgressCallback | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
-        local_config: Path = Path(".chart-manager/local-cluster.yaml"),
+        local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl, ExposeService]]
         | None = None,
@@ -120,7 +131,6 @@ class DevelopmentClusterService:
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
         self._client_factory = client_factory
-        self._environment_handle: EnvironmentHandle | None = None
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
@@ -140,17 +150,9 @@ class DevelopmentClusterService:
         """
         local_cluster = self.local_resources.load_cluster()
         releases = self._target_releases(target, profile=profile)
-        bootstrap = LocalBootstrapExecutor(
-            self.root,
-            helm=self.helm,
-            kind=self.kind,
-            kubectl=self.kubectl,
-            progress=self._progress,
-        )
-        bootstrap_identities = bootstrap.preflight(local_cluster)
-        executions = self._preflight_target(
+        steps = self._preflight_target(
             releases,
-            excluded_lifecycle_identities=bootstrap_identities,
+            excluded_lifecycle_identities=self._bootstrap_executor().preflight(local_cluster),
         )
         config = (self.root / local_cluster.spec.cluster.config).resolve()
         self._progress(step("Ensuring local cluster", cluster_name))
@@ -158,9 +160,14 @@ class DevelopmentClusterService:
         self._progress(step("Waiting for kube-apiserver"))
         self.kubectl.wait_apiserver_ready()
 
-        summary = _DevelopmentClusterRunSummary()
+        summary = RunSummary()
         installed_keys = self._existing_release_keys()
         namespaces_created: set[str] = set()
+        # Built here, after `_ensure_environment` rebound the clients: an
+        # executor constructed alongside the preflight one above carries the
+        # pre-rebind Helm and converges bootstrap against whatever
+        # kubecontext the workstation happens to hold.
+        bootstrap = self._bootstrap_executor()
         for outcome in bootstrap.execute(local_cluster, environment=environment):
             bucket = summary.applied if outcome.status == "applied" else summary.no_change
             bucket.append(
@@ -173,26 +180,25 @@ class DevelopmentClusterService:
             installed_keys.add((outcome.namespace, outcome.name))
             namespaces_created.add(outcome.namespace)
 
-        for release, execution in zip(releases, executions, strict=True):
-            if isinstance(release, LifecycleRelease):
-                assert execution is not None
+        for target_step in steps:
+            if isinstance(target_step, _TargetLocalExecution):
                 self._install_plan(
-                    list(execution.plan),
+                    list(target_step.plan),
                     default_namespace="default",
                     installed_keys=installed_keys,
                     namespaces_created=namespaces_created,
                     summary=summary,
                     skip_installed=skip_installed,
-                    cluster_tests=execution.catalog,
+                    cluster_tests=target_step.catalog,
                 )
                 continue
 
             self._converge_oci_release(
-                release.name,
-                release,
-                namespace=release.namespace,
-                values=[self.root / path for path in release.values],
-                timeout=release.timeout,
+                target_step.name,
+                target_step,
+                namespace=target_step.namespace,
+                values=[self.root / path for path in target_step.values],
+                timeout=target_step.timeout,
                 installed_keys=installed_keys,
                 summary=summary,
                 skip_installed=skip_installed,
@@ -284,17 +290,9 @@ class DevelopmentClusterService:
         bootstrap ordering rule for a display detail.
         """
         local_cluster = self.local_resources.load_cluster()
-        releases = self._target_releases(target, profile=profile)
-        bootstrap = LocalBootstrapExecutor(
-            self.root,
-            helm=self.helm,
-            kind=self.kind,
-            kubectl=self.kubectl,
-            progress=self._progress,
-        )
-        bootstrap_identities = bootstrap.preflight(local_cluster)
-        executions = self._preflight_target(
-            releases,
+        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
+        steps = self._preflight_target(
+            self._target_releases(target, profile=profile),
             excluded_lifecycle_identities=bootstrap_identities,
         )
         entries = [
@@ -309,20 +307,19 @@ class DevelopmentClusterService:
                 key=lambda i: (i.chart, i.profile, i.namespace),
             )
         ]
-        for release, execution in zip(releases, executions, strict=True):
-            if isinstance(release, OciChartRelease):
+        for target_step in steps:
+            if isinstance(target_step, OciChartRelease):
                 entries.append(
                     DevelopmentClusterPlanEntry(
-                        chart=release.name,
-                        profile=release.version or release.digest or "pinned",
-                        namespace=release.namespace,
+                        chart=target_step.name,
+                        profile=target_step.version or target_step.digest or "pinned",
+                        namespace=target_step.namespace,
                         source="target",
                     )
                 )
                 continue
-            assert execution is not None
-            for entry in execution.plan:
-                chart = execution.catalog.get(entry.chart)
+            for entry in target_step.plan:
+                chart = target_step.catalog.get(entry.chart)
                 entries.append(
                     DevelopmentClusterPlanEntry(
                         chart=entry.chart,
@@ -398,14 +395,7 @@ class DevelopmentClusterService:
         """Destroy and fully converge a chart or LocalStack."""
         # All authored state is resolved before deleting a healthy cluster.
         local_cluster = self.local_resources.load_cluster()
-        bootstrap = LocalBootstrapExecutor(
-            self.root,
-            helm=self.helm,
-            kind=self.kind,
-            kubectl=self.kubectl,
-            progress=self._progress,
-        )
-        bootstrap_identities = bootstrap.preflight(local_cluster)
+        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
         self._preflight_target(
             self._target_releases(target, profile=profile),
             excluded_lifecycle_identities=bootstrap_identities,
@@ -416,6 +406,24 @@ class DevelopmentClusterService:
             profile=profile,
             cluster_name=cluster_name,
             skip_installed=False,
+        )
+
+    def _bootstrap_executor(self) -> LocalBootstrapExecutor:
+        """A bootstrap executor bound to the clients bound *right now*.
+
+        Built per phase and never stored: `_ensure_environment` rebinds
+        `self.helm` / `self.kubectl` to the resolved kubecontext, so an
+        executor that outlives that call converges against the clients it
+        was constructed with. The preflight phase has to run before the
+        cluster is mutated and the converge phase has to run after, which is
+        exactly why one object cannot serve both.
+        """
+        return LocalBootstrapExecutor(
+            self.root,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            progress=self._progress,
         )
 
     def _handle(self, cluster_name: str) -> EnvironmentHandle:
@@ -439,7 +447,6 @@ class DevelopmentClusterService:
             config=config,
         )
         handle = self.environment_provider.ensure(spec)
-        self._environment_handle = handle
         if self._client_factory is not None:
             self.helm, self.kubectl, self.expose = self._client_factory(handle)
         return handle
@@ -463,7 +470,6 @@ class DevelopmentClusterService:
                 "--profile is only valid for a chart target; LocalStack releases "
                 "declare their profiles"
             )
-        assert isinstance(target, ResolvedStackTarget)
         return tuple(target.stack.spec.releases)
 
     def _preflight_target(
@@ -473,13 +479,18 @@ class DevelopmentClusterService:
         excluded_lifecycle_identities: frozenset[
             ExternallySatisfiedLifecycle
         ] = frozenset(),
-    ) -> tuple[_TargetLocalExecution | None, ...]:
-        """Compile and validate all local identities without mutating Helm state."""
+    ) -> tuple[_TargetStep, ...]:
+        """Compile and validate all local identities without mutating Helm state.
+
+        Authored order is preserved: an OCI release passes through as itself
+        (there is nothing to compile), a lifecycle release is replaced by the
+        plan it resolved to.
+        """
         seen: dict[Path, tuple[str, str]] = {}
-        executions: list[_TargetLocalExecution | None] = []
+        steps: list[_TargetStep] = []
         for release in releases:
             if isinstance(release, OciChartRelease):
-                executions.append(None)
+                steps.append(release)
                 continue
             chart_document = load_yaml_file(self.root / release.chart / "Chart.yaml")
             release_name = chart_document.get("name")
@@ -527,13 +538,13 @@ class DevelopmentClusterService:
                     )
                 seen[chart_path] = identity
                 deduped.append(entry)
-            executions.append(
+            steps.append(
                 _TargetLocalExecution(
                     catalog=catalog,
                     plan=tuple(deduped),
                 )
             )
-        return tuple(executions)
+        return tuple(steps)
 
     # ----- internals --------------------------------------------------------
 
@@ -543,10 +554,14 @@ class DevelopmentClusterService:
         Used to skip charts on re-run. Best-effort: a failure to list (no
         kubeconfig, cluster just created and apiserver still settling, etc.)
         falls back to "nothing installed" rather than aborting.
+
+        Catches the base error rather than `ExternalCommandError` alone, so
+        this agrees with `status._releases`, which asks Helm the same
+        question about the same cluster.
         """
         try:
             releases = self.helm.list_releases(all_namespaces=True)
-        except ExternalCommandError as exc:
+        except ChartManagerError as exc:
             self._progress(
                 warn(f"could not list helm releases ({exc}); proceeding as if no releases exist")
             )
@@ -560,7 +575,7 @@ class DevelopmentClusterService:
         default_namespace: str,
         installed_keys: set[tuple[str, str]],
         namespaces_created: set[str],
-        summary: _DevelopmentClusterRunSummary,
+        summary: RunSummary,
         skip_installed: bool,
         cluster_tests: ClusterTestCatalog | None = None,
     ) -> None:
@@ -633,11 +648,16 @@ class DevelopmentClusterService:
                 namespaces_created.add(namespace)
                 continue
 
-            if namespace not in namespaces_created:
-                self.kubectl.create_namespace(namespace)
-                namespaces_created.add(namespace)
-
             try:
+                # Namespace creation is inside the guard for the same reason
+                # profile resolution above is: `kubectl.create_namespace`
+                # tolerates an "already exists" exit, but a CommandTimeout or
+                # a missing binary still raises, and sitting outside the try
+                # that aborted the whole converge instead of recording one
+                # failed row.
+                if namespace not in namespaces_created:
+                    self.kubectl.create_namespace(namespace)
+                    namespaces_created.add(namespace)
                 values = catalog.value_paths(chart, entry.profile)
                 self._progress(step("Updating dependencies", entry.chart))
                 # mtime-gated: skips the subprocess when Chart.lock is
@@ -670,7 +690,7 @@ class DevelopmentClusterService:
                     # aren't racing against a still-rolling deployment.
                     self._progress(step("Waiting for workloads", entry.chart))
                     self.kubectl.wait_workloads_ready(namespace, timeout=profile.timeout)
-                    self._post_install_hook(entry.chart, namespace)
+                    self._post_install_hook(entry.chart)
                 else:
                     # No-change: nothing is rolling, so the rollout-status
                     # wait would just be a no-op against the existing
@@ -681,7 +701,7 @@ class DevelopmentClusterService:
                 bucket = summary.applied if applied else summary.no_change
                 bucket.append(DevelopmentClusterEntryOutcome(entry.chart, entry.profile, namespace))
                 installed_keys.add(key)
-            except (ExternalCommandError, ChartManagerError) as exc:
+            except ChartManagerError as exc:
                 self._progress(failure("apply failed:", f"{entry.chart}:{entry.profile} -> {exc}"))
                 summary.failed.append(
                     DevelopmentClusterEntryFailure(
@@ -702,7 +722,7 @@ class DevelopmentClusterService:
         values: list[Path],
         timeout: str,
         installed_keys: set[tuple[str, str]],
-        summary: _DevelopmentClusterRunSummary,
+        summary: RunSummary,
         skip_installed: bool,
     ) -> None:
         """Converge one immutable OCI Helm source with Helm-owned readiness."""
@@ -748,7 +768,7 @@ class DevelopmentClusterService:
             bucket = summary.applied if result.status == "applied" else summary.no_change
             bucket.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
             installed_keys.add(key)
-        except (ExternalCommandError, ChartManagerError) as exc:
+        except ChartManagerError as exc:
             self._progress(failure("apply failed:", f"{release}@{identity} -> {exc}"))
             summary.failed.append(
                 DevelopmentClusterEntryFailure(
@@ -759,7 +779,7 @@ class DevelopmentClusterService:
                 )
             )
 
-    def _post_install_hook(self, chart: str, namespace: str) -> None:
+    def _post_install_hook(self, chart: str) -> None:
         """Best-effort follow-up wait after the chart's own rollout-ready.
 
         Single hook today: after cert-manager applies, wait for the webhook
@@ -789,7 +809,7 @@ class DevelopmentClusterService:
                     namespace=CERT_MANAGER_WEBHOOK_NAMESPACE,
                     timeout=CERT_MANAGER_WEBHOOK_TIMEOUT,
                 )
-            except (ExternalCommandError, ChartManagerError) as exc:
+            except ChartManagerError as exc:
                 self._progress(
                     warn(
                         f"cert-manager webhook not Available "
@@ -818,12 +838,12 @@ class DevelopmentClusterService:
     # is what lets those modules stay free of `DevelopmentClusterService` while the converge
     # engine reads the same as it did before the split.
 
-    def _wait_apps_wildcard_ready(self, summary: _DevelopmentClusterRunSummary) -> None:
+    def _wait_apps_wildcard_ready(self, summary: RunSummary) -> None:
         """Wait for the wildcard cert, best-effort (see access.py)."""
         wait_apps_wildcard_ready(summary, kubectl=self.kubectl, progress=self._progress)
 
     def _access_hints(
-        self, summary: _DevelopmentClusterRunSummary, *, namespace: str
+        self, summary: RunSummary, *, namespace: str
     ) -> DevelopmentClusterAccessHints:
         """Resolve the post-converge advisory data (see access.py)."""
         return access_hints(summary, kubectl=self.kubectl, namespace=namespace)

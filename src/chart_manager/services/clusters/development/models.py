@@ -2,8 +2,7 @@
 
 Pure data: no integrations, no IO, no progress. Everything here is either
 frozen (what crosses the service boundary) or an explicitly-named mutable
-accumulator (`_DevelopmentClusterRunSummary`, which never leaves the converge
-engine).
+accumulator (`RunSummary`, which never leaves the converge engine).
 
 Kept in its own module because `cli/local.py` renders these and the drift /
 access helpers read them — three importers, none of which need the
@@ -189,7 +188,7 @@ class DevelopmentClusterActionResult:
 
 
 @dataclass
-class _DevelopmentClusterRunSummary:
+class RunSummary:
     """Mutable accumulator threaded through the install loop.
 
     Frozen `DevelopmentClusterResult` is what leaves the service; this is the in-flight

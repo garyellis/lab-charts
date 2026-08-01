@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from chart_manager.integrations.kind import Kind
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.models import PortMappingDrift
 from chart_manager.services.progress import ProgressCallback, warn
 
@@ -66,7 +66,7 @@ def port_mapping_drift(
         return PortMappingDrift()
     try:
         live = kind.container_host_ports(cluster_name)
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         return PortMappingDrift(error=str(exc))
     return PortMappingDrift(missing=tuple(sorted(expected - live)))
 

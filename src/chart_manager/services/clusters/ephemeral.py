@@ -29,7 +29,7 @@ from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     HelmTestResult,
 )
-from chart_manager.services.lifecycle.compiler import LifecycleCompiler
+from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
@@ -41,7 +41,7 @@ from chart_manager.services.lifecycle.plan_projection import (
 )
 from chart_manager.services.local_resources import LocalResourceLoader
 from chart_manager.services.progress import ProgressCallback, info, step, warn
-from chart_manager.settings import DEFAULT_CHARTS_DIR
+from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 DEFAULT_NAMESPACE = "observability"
@@ -96,7 +96,7 @@ class EphemeralTestClusterService:
         kubectl: Kubectl,
         progress: ProgressCallback | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
-        local_config: Path = Path(".chart-manager/local-cluster.yaml"),
+        local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl]] | None = None,
     ) -> None:
@@ -111,17 +111,15 @@ class EphemeralTestClusterService:
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
         # repository seams once rather than patching two independent graphs.
-        self.lifecycle_compiler = LifecycleCompiler(self.root, charts_dir=charts_dir)
-        self.lifecycle_compiler.cluster_tests = self.cluster_tests
-        self.lifecycle_compiler.resolver = self.resolver
+        self.cluster_test_compiler = ClusterTestCompiler(self.root, charts_dir=charts_dir)
+        self.cluster_test_compiler.cluster_tests = self.cluster_tests
+        self.cluster_test_compiler.resolver = self.resolver
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
-        self._local_cluster: LocalCluster | None = None
         self._client_factory = client_factory
-        self._environment_handle: EnvironmentHandle | None = None
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
@@ -131,19 +129,43 @@ class EphemeralTestClusterService:
         ``LocalCluster`` owns the Kind config path and bootstrap sequence;
         callers only select the cluster identity.
         """
-        local_cluster = self.local_resources.load_cluster()
-        self._local_cluster = local_cluster
-        self._progress(step("Ensuring local cluster", cluster_name))
-        spec = EnvironmentSpec(
+        self._ensure_environment(cluster_name, self.local_resources.load_cluster())
+        return cluster_name
+
+    def _environment_spec(
+        self,
+        cluster_name: str,
+        local_cluster: LocalCluster,
+    ) -> EnvironmentSpec:
+        return EnvironmentSpec(
             name=cluster_name,
             cluster_name=cluster_name,
             config=(self.root / local_cluster.spec.cluster.config).resolve(),
         )
-        handle = self.environment_provider.ensure(spec)
-        self._environment_handle = handle
+
+    def _ensure_environment(
+        self,
+        cluster_name: str,
+        local_cluster: LocalCluster,
+    ) -> EnvironmentHandle:
+        """Create/start the environment and bind the clients to its context."""
+        self._progress(step("Ensuring local cluster", cluster_name))
+        return self._bind_clients(
+            self.environment_provider.ensure(
+                self._environment_spec(cluster_name, local_cluster)
+            )
+        )
+
+    def _bind_clients(self, handle: EnvironmentHandle) -> EnvironmentHandle:
+        """Address every cluster-facing client at the resolved environment.
+
+        Returned rather than stored: the handle is what bootstrap converges
+        against, and a caller that has not resolved one has nothing to
+        converge -- keeping it a local makes that unrepresentable.
+        """
         if self._client_factory is not None:
             self.helm, self.kubectl = self._client_factory(handle)
-        return cluster_name
+        return handle
 
     def plan(self, options: EphemeralTestRequest) -> LifecyclePlan:
         """Compile what ``run`` would execute, without touching a cluster.
@@ -174,7 +196,6 @@ class EphemeralTestClusterService:
         # Reload it for every run so a long-lived service cannot carry an
         # earlier run's externally-satisfied identities forward.
         local_cluster = self.local_resources.load_cluster()
-        self._local_cluster = local_cluster
         bootstrap_preflight = LocalBootstrapExecutor(
             self.root,
             helm=self.helm,
@@ -203,7 +224,7 @@ class EphemeralTestClusterService:
         """
         local_cluster, plan = self._load_and_compile(options, lint=options.lint)
         if options.ensure_cluster:
-            self.ensure_cluster(options.cluster_name)
+            handle = self._ensure_environment(options.cluster_name, local_cluster)
             # ensure_cluster may have started stopped node containers
             # (DevelopmentClusterService's `down` path leaves them stopped
             # on disk). On
@@ -217,24 +238,16 @@ class EphemeralTestClusterService:
             # The caller owns environment existence, but chart-manager still
             # owns addressing. Never fall back to ambient kubeconfig merely
             # because creation was skipped.
-            handle = self.environment_provider.handle(
-                EnvironmentSpec(
-                    name=options.cluster_name,
-                    cluster_name=options.cluster_name,
-                    config=(self.root / local_cluster.spec.cluster.config).resolve(),
+            handle = self._bind_clients(
+                self.environment_provider.handle(
+                    self._environment_spec(options.cluster_name, local_cluster)
                 )
             )
-            self._environment_handle = handle
-            if self._client_factory is not None:
-                self.helm, self.kubectl = self._client_factory(handle)
 
         installed: set[str] = set()
         tested: list[str] = []
         namespaces_created: set[str] = set()
 
-        handle = self._environment_handle or self.environment_provider.handle(
-            EnvironmentSpec(name=options.cluster_name, cluster_name=options.cluster_name)
-        )
         bootstrap = LocalBootstrapExecutor(
             self.root,
             helm=self.helm,
@@ -247,7 +260,6 @@ class EphemeralTestClusterService:
             namespaces_created.add(outcome.namespace)
 
         self._execute_lifecycle_plan(
-            options,
             plan=plan,
             installed=installed,
             tested=tested,
@@ -265,7 +277,6 @@ class EphemeralTestClusterService:
 
     def _execute_lifecycle_plan(
         self,
-        options: EphemeralTestRequest,
         *,
         plan: LifecyclePlan,
         installed: set[str],
@@ -339,7 +350,7 @@ class EphemeralTestClusterService:
             )
         plans = [
             exclude_bootstrap_owned_charts(
-                self.lifecycle_compiler.compile_cluster_test(
+                self.cluster_test_compiler.compile_cluster_test(
                     chart,
                     profile,
                     default_namespace=DEFAULT_NAMESPACE,

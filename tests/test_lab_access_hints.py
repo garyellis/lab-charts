@@ -27,6 +27,7 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterService,
 )
+from chart_manager.services.clusters.development.service import _TargetLocalExecution
 from chart_manager.services.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -226,8 +227,8 @@ def _wire_repo(
 def _install_plan(
     service: DevelopmentClusterService,
     plan: list[InstallPlanEntry],
-) -> lab_module._DevelopmentClusterRunSummary:
-    summary = lab_module._DevelopmentClusterRunSummary()
+) -> lab_module.RunSummary:
+    summary = lab_module.RunSummary()
     service._install_plan(
         plan,
         default_namespace="observability",
@@ -251,7 +252,7 @@ def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=[])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -265,7 +266,7 @@ def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) ->
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -281,7 +282,7 @@ def test_many_virtualservices_yield_sorted_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -301,7 +302,7 @@ def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(
+        lab_module.RunSummary(
             applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
         ),
         namespace="observability",
@@ -317,7 +318,7 @@ def test_virtualservice_listing_failure_is_captured_not_raised(tmp_path: Path) -
     kubectl = _RecordingKubectl(vs_raise=ExternalCommandError("no such CRD"))
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -334,7 +335,7 @@ def test_grafana_secret_failure_is_captured_not_raised(tmp_path: Path) -> None:
     )
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -351,7 +352,7 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._DevelopmentClusterRunSummary(no_change=list(_GATEWAY_SYNCED))
+    summary = lab_module.RunSummary(no_change=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
 
     assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
@@ -362,7 +363,7 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._DevelopmentClusterRunSummary(
+    summary = lab_module.RunSummary(
         applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
     )
     svc._wait_apps_wildcard_ready(summary)
@@ -378,7 +379,7 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
     )
     progress = _Recorder()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress)
-    summary = lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED))
+    summary = lab_module.RunSummary(applied=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
     assert "warn:" in progress.text
     assert "apps-wildcard cert not Ready" in progress.text
@@ -476,7 +477,7 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         kubectl=_RecordingKubectl(),
     )
 
-    executions = svc._preflight_target(
+    steps = svc._preflight_target(
         (
             LifecycleRelease(
                 type="lifecycle",
@@ -496,8 +497,8 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         ),
     )
 
-    assert executions[0] is not None
-    assert [entry.chart for entry in executions[0].plan] == ["app"]
+    assert isinstance(steps[0], _TargetLocalExecution)
+    assert [entry.chart for entry in steps[0].plan] == ["app"]
 
 
 def test_relative_repository_root_accepts_an_absolute_resolved_chart(
@@ -632,7 +633,7 @@ def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(
+        lab_module.RunSummary(
             applied=[
                 *_GATEWAY_SYNCED,
                 # Grafana installed into its own namespace, not the default.
@@ -654,7 +655,7 @@ def test_grafana_secret_falls_back_to_the_run_namespace_when_absent(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 

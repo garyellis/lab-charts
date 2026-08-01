@@ -30,7 +30,6 @@ class EnvironmentHandle:
     identity: str
     context: str
     provider_type: str
-    capabilities: frozenset[str] = frozenset()
 
 
 @runtime_checkable
@@ -85,14 +84,6 @@ class KindEnvironmentProvider:
             identity=cluster_name,
             context=kind_context(cluster_name),
             provider_type="kind",
-            capabilities=frozenset(
-                {
-                    "lifecycle.stop",
-                    "lifecycle.destroy",
-                    "networking.custom-cni",
-                    "networking.control-plane-endpoint",
-                }
-            ),
         )
 
 

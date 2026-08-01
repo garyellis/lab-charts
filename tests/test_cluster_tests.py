@@ -318,7 +318,7 @@ def test_ephemeral_default_executes_projected_action_order(
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
@@ -351,7 +351,7 @@ def test_ephemeral_no_ensure_binds_clients_to_selected_provider_context(
 
     service._client_factory = bind  # type: ignore[assignment]
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
@@ -377,7 +377,7 @@ def test_ephemeral_failure_records_partial_evidence_then_reports_diagnostics(
         fail_dependency=True,
     )
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
@@ -396,7 +396,7 @@ def test_ephemeral_lint_is_a_first_class_action_before_install(
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(lint=True),
     )
@@ -434,7 +434,7 @@ def test_ephemeral_plan_compiles_the_run_without_touching_anything(
     calls: list[str] = []
     service, kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
@@ -463,7 +463,7 @@ def test_ephemeral_plan_keeps_the_lint_action_it_would_run(
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **kwargs: _migration_plan(lint=kwargs["lint"]),
     )
@@ -481,7 +481,7 @@ def test_ephemeral_lint_failure_keeps_diagnostics_and_terminal_evidence(
     calls: list[str] = []
     service, kubectl = _migration_service(tmp_path, calls=calls, fail_lint=True)
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(lint=True),
     )
@@ -524,7 +524,7 @@ def test_ephemeral_bootstrap_target_only_runs_readiness_and_tests(
         ),
     )
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(lint=True),
     )
@@ -566,7 +566,7 @@ def test_ephemeral_bootstrap_transitive_dependency_is_not_reinstalled_or_reteste
         ),
     )
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _fanout_plan(
             "grafana", prerequisite=("network", "minimal"), lint=True
@@ -612,7 +612,7 @@ def test_ephemeral_recomputes_bootstrap_satisfaction_for_every_run(
         lambda *_args, **_kwargs: next(identities),
     )
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda *_args, **_kwargs: _migration_plan(),
     )
@@ -652,7 +652,7 @@ def test_ephemeral_dependent_fanout_dedupes_shared_profile_and_preserves_order(
         ),
     }
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda chart, profile, **_kwargs: plans[(chart, profile)],
     )
@@ -682,7 +682,7 @@ def test_ephemeral_fanout_reconverges_same_release_for_distinct_profiles(
         lambda _chart: (SimpleNamespace(chart="main", profile="full"),),
     )
     monkeypatch.setattr(
-        service.lifecycle_compiler,
+        service.cluster_test_compiler,
         "compile_cluster_test",
         lambda chart, profile, **_kwargs: _fanout_plan(chart, profile),
     )

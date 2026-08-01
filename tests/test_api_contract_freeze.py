@@ -68,7 +68,8 @@ from chart_manager.api.local.v1alpha1 import (
     ResourceMetadata,
 )
 from chart_manager.services.chart_config import LIFECYCLE_FILENAME
-from chart_manager.services.local_resources import DEFAULT_LOCAL_CONFIG, DEFAULT_STACKS_DIR
+from chart_manager.services.local_resources import DEFAULT_STACKS_DIR
+from chart_manager.settings import DEFAULT_LOCAL_CONFIG
 
 from .conftest import REPO_ROOT
 

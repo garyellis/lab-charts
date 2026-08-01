@@ -22,7 +22,7 @@ from pathlib import Path
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.access import urls_and_grafana_host
 from chart_manager.services.clusters.development.drift import port_mapping_drift
 from chart_manager.services.clusters.development.models import (
@@ -100,7 +100,7 @@ def _releases(helm: Helm) -> tuple[tuple[DevelopmentClusterRelease, ...], str | 
     """
     try:
         found = helm.list_releases(all_namespaces=True)
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         return (), f"could not list helm releases ({exc})"
     return (
         tuple(
@@ -120,7 +120,7 @@ def _urls(kubectl: Kubectl) -> tuple[tuple[str, ...], str | None]:
     """The reachable URLs, through the same projection `local up` prints."""
     try:
         hosts = kubectl.list_virtualservice_hosts()
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         return (), f"could not list VirtualServices ({exc}); skipping URL hints"
     urls, _grafana_host = urls_and_grafana_host(hosts)
     return urls, None
