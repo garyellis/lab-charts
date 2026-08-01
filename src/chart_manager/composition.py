@@ -51,11 +51,14 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
+from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import HelmReleaseClient
 from chart_manager.integrations.kind import Kind
+from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
@@ -66,6 +69,8 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
 )
 from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
+from chart_manager.services.doctor import CheckProvider, DoctorService
+from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
@@ -168,6 +173,40 @@ class Container:
         if self._event_writer is None:
             self._event_writer = EventWriter(source=self._settings.event_source)
         return self._event_writer
+
+    def doctor_service(self, root: Path | None = None) -> DoctorService:
+        """Assemble the preflight providers, one per capability.
+
+        This is the whole of `doctor`'s wiring, and it is deliberately dull:
+        every value is a *bound method on a configured adapter*, so each
+        check runs against exactly the helm binary, kube context and docker
+        daemon the real command would use. A provider built any other way --
+        a lambda constructing its own adapter, a check implemented in `cli/`
+        -- would be free to probe a different tool than the one that then
+        fails, which is the failure mode a preflight exists to remove.
+
+        Insertion order is the report order: toolchain first (the things you
+        install), then the cluster-facing pair, then the repository tools,
+        then telemetry. `DoctorService` preserves it rather than sorting, so
+        the order is decided here, next to the reasoning.
+
+        `root` addresses the git/gh checks; it falls back to the configured
+        repository root exactly as the CLI's `--root` does.
+        """
+        runner = self.command_runner()
+        resolved_root = (root if root is not None else self._settings.root).resolve()
+        providers: dict[str, CheckProvider] = {
+            "helm": self.helm().preflight,
+            "kubeconform": Kubeconform(runner, timeout=self._settings.command_timeout).preflight,
+            "kyverno": Kyverno(runner, timeout=self._settings.command_timeout).preflight,
+            "kubectl": self.kubectl().preflight,
+            "kind": self.kind().preflight,
+            "git": Git(resolved_root, runner, charts_dir=self._settings.charts_dir).preflight,
+            "github": Github(resolved_root, runner).preflight,
+            "renovate": Renovate(runner).preflight,
+            "events": preflight_event_store,
+        }
+        return DoctorService(providers)
 
     def monitor_service(self, *, progress: HelmReleaseProgress | None = None) -> MonitorService:
         """Build the HelmRelease convergence monitor.

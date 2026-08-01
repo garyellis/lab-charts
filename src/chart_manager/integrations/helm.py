@@ -13,6 +13,7 @@ from weakref import WeakKeyDictionary
 
 from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.preflight import Check, probe_binary
 from chart_manager.services.domain.chart_deps import (
     chart_has_dependencies,
     deps_are_fresh,
@@ -111,6 +112,24 @@ class Helm:
         # to `helm template`.
         self._deps_updated: set[Path] = set()
         self._deps_updated_lock = threading.Lock()
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report whether the helm this instance resolved is usable.
+
+        Probes `self._helm_bin`, not the literal string "helm": `_resolve`
+        may have picked a mise-managed binary out of a shim directory, and a
+        preflight that checked a different helm than the one every other
+        method runs would be worse than no preflight.
+        """
+        return (
+            probe_binary(
+                self.runner,
+                self._helm_bin,
+                name="helm",
+                version_args=("version", "--short"),
+                remediation="install helm 3.x -- https://helm.sh/docs/intro/install/",
+            ),
+        )
 
     def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
         """Run `helm dependency update`, at most once per chart per instance."""

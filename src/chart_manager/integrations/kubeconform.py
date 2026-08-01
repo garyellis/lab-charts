@@ -17,6 +17,7 @@ from typing import Literal
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.preflight import Check, probe_binary
 
 _log = logging.getLogger(__name__)
 
@@ -74,6 +75,25 @@ class Kubeconform:
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --row-timeout so a hung kubeconform doesn't pin a worker.
         self.timeout = timeout
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report whether the configured kubeconform binary is usable.
+
+        `-v` rather than `--version`: kubeconform accepts only the short
+        spelling, and the long one exits non-zero -- which would report a
+        perfectly good install as broken.
+        """
+        return (
+            probe_binary(
+                self.runner,
+                self._bin,
+                name="kubeconform",
+                version_args=("-v",),
+                remediation=(
+                    "install kubeconform -- https://github.com/yannh/kubeconform#installation"
+                ),
+            ),
+        )
 
     def validate(
         self,

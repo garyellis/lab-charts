@@ -185,6 +185,7 @@ def make_chart(chart_root: Path) -> MakeChart:
 #: appear here, so a new group cannot quietly bypass the seam.
 _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("chart",): ("chart",),
+    ("doctor",): ("doctor",),
     ("event",): ("event",),
     ("grafana",): ("grafana",),
     ("helmrelease",): ("helmrelease",),

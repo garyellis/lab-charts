@@ -7,6 +7,8 @@ from pathlib import Path
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import Check, CheckStatus, probe_binary
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
@@ -24,6 +26,34 @@ class Git:
         self.root = root
         self.runner = runner or SubprocessRunner()
         self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+
+    def preflight(self) -> tuple[Check, ...]:
+        """Report the git binary and whether `root` is actually a work tree.
+
+        The second check is why this is not a bare binary probe: every
+        changed-file selector in the CI verbs answers "nothing changed" for
+        a directory that is not a checkout, which is indistinguishable from
+        a clean tree and is the failure a preflight should name.
+        """
+        binary = probe_binary(
+            self.runner,
+            "git",
+            name="git",
+            remediation="install git -- https://git-scm.com/downloads",
+        )
+        if binary.status is not CheckStatus.OK:
+            return (binary, Check.skipped("git-repository", "git unavailable"))
+        if not self.is_repository():
+            return (
+                binary,
+                Check.failed(
+                    "git-repository",
+                    f"{self.root} is not inside a git work tree",
+                    remediation="run from a checkout, or point --root at one",
+                    outcome=Outcome.ENVIRONMENT,
+                ),
+            )
+        return (binary, Check.ok("git-repository", str(self.root)))
 
     def is_repository(self) -> bool:
         """True if `root` is inside a git work tree."""
