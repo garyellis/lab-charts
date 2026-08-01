@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from chart_manager.cli import main
+from chart_manager.cli import _wiring
+from chart_manager.cli import chart as chart_cli
+from chart_manager.cli import local as local_cli
 from chart_manager.services.clusters.development import (
     DevelopmentClusterActionResult,
     DevelopmentClusterPlan,
@@ -143,7 +145,7 @@ def test_chart_up_delegates_profile_and_skip_installed(
         def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", Container)
     result = cli(
         "local",
         "up",
@@ -180,7 +182,7 @@ def test_named_stack_up_loads_the_authored_composition(
         def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", Container)
     result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
@@ -239,7 +241,7 @@ def test_down_and_reset_address_the_same_cluster(
         def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", Container)
     down = cli("local", "down", "--root", str(tmp_path))
     reset = cli("local", "reset", "--stack", "platform", "--root", str(tmp_path))
     assert down.exit_code == reset.exit_code == 0
@@ -318,7 +320,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingService:
         def development_cluster_service(self, _root: Path, *, progress: object) -> _RecordingService:
             return service
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", Container)
     return service
 
 
@@ -424,7 +426,7 @@ def test_status_exits_zero_for_an_absent_cluster(
         def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", Container)
     result = cli("local", "status", "--root", str(tmp_path), "-o", "json")
 
     assert result.exit_code == 0, result.output
@@ -506,8 +508,8 @@ def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
 def test_chart_name_and_directory_resolve_to_the_same_target(tmp_path: Path) -> None:
     chart = _chart(tmp_path, "cert-manager")
 
-    by_name = main._resolve_chart_target(tmp_path, "cert-manager")
-    by_path = main._resolve_chart_target(tmp_path, "./charts/cert-manager")
+    by_name = _wiring.resolve_chart(tmp_path, "cert-manager")
+    by_path = _wiring.resolve_chart(tmp_path, "./charts/cert-manager")
 
     assert by_name.path == by_path.path == chart.resolve()
 
@@ -546,7 +548,7 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
             selected_charts_dir = charts_dir
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(chart_cli, "_container", Container)
     result = cli(
         "chart",
         "test",
@@ -587,7 +589,7 @@ def test_chart_test_accepts_the_chart_positionally(
         ) -> Service:
             return Service()
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(chart_cli, "_container", Container)
     positional = cli("chart", "test", "alloy", "--root", str(tmp_path))
     flag = cli("chart", "test", "--chart", "alloy", "--root", str(tmp_path))
 
@@ -670,7 +672,7 @@ def planning_container(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         ) -> _PlanningService:
             return _PlanningService(called)
 
-    monkeypatch.setattr(main, "_container", Container)
+    monkeypatch.setattr(chart_cli, "_container", Container)
     return called
 
 

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 import yaml
 
-from chart_manager.cli import main
+from chart_manager.cli import grafana as grafana_cli
 from chart_manager.services.grafana.dashboard_export import (
     ExportRequest,
     GrafanaExporter,
@@ -217,7 +217,7 @@ _DASHBOARD = {
 
 @pytest.fixture
 def exporter(monkeypatch: pytest.MonkeyPatch) -> list[ExportRequest]:
-    """Wire a fetch-only exporter into `main._container()`; return its requests."""
+    """Wire a fetch-only exporter into `grafana._container()`; return its requests."""
     requests: list[ExportRequest] = []
 
     def fetch(request: ExportRequest) -> dict[str, Any]:
@@ -225,7 +225,7 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> list[ExportRequest]:
         return dict(_DASHBOARD)
 
     monkeypatch.setattr(
-        main,
+        grafana_cli,
         "_container",
         lambda: SimpleNamespace(
             grafana_exporter=lambda: SimpleNamespace(fetch=fetch),

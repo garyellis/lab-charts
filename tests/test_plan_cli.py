@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 import yaml
 
-from chart_manager.cli import main as main_cli
+from chart_manager.cli import plan as plan_cli
 from chart_manager.services.lifecycle import ClusterTestImpact
 
 from .conftest import cli
@@ -61,7 +61,7 @@ def _wire_impact(monkeypatch: pytest.MonkeyPatch, result: Any) -> list[list[str]
     """Replace the impact service, recording the paths it was handed."""
     seen: list[list[str]] = []
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: SimpleNamespace(analyze=lambda paths: seen.append(paths) or result),
     )
@@ -83,7 +83,7 @@ class _CiService:
 
 def _wire_ci(monkeypatch: pytest.MonkeyPatch, service: _CiService) -> None:
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_container",
         lambda: SimpleNamespace(ci_service=lambda _root: service),
     )
@@ -127,7 +127,7 @@ def test_github_matrix_still_uses_the_matrix_selector_without_explicit_paths(
     service = _CiService()
     _wire_ci(monkeypatch, service)
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: pytest.fail("the impact service must not be used for --base"),
     )
@@ -212,7 +212,7 @@ def test_publish_plan_is_direct_ownership_and_never_the_impact_service(
     service = _CiService()
     _wire_ci(monkeypatch, service)
     monkeypatch.setattr(
-        main_cli,
+        plan_cli,
         "_impact_service",
         lambda root: pytest.fail("publish selection must not use lifecycle impact"),
     )
@@ -275,7 +275,7 @@ def test_all_and_chart_remain_mutually_exclusive() -> None:
     result = cli("plan", "--all", "--chart", "alpha", "-o", "github")
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, main_cli.ChartManagerError)
+    assert isinstance(result.exception, plan_cli.ChartManagerError)
 
 
 def test_table_output_still_requires_an_explicit_change_source() -> None:

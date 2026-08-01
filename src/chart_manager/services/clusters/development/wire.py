@@ -17,7 +17,7 @@ Picking an encoder and writing it is the surface's job.
 One thing is deliberately *absent* from `converge_to_dict`: the access hints
 (`urls`, the CA-trust advice, the Grafana credentials). They are advice for
 an operator about how to reach what was just installed, they are printed on
-stderr for exactly that reason (`cli/main._render_access_hints`), and a
+stderr for exactly that reason (`cli/local._render_access_hints`), and a
 credential does not belong in a document a caller pipes into a file. The
 document version of "what can I reach" is `status_to_dict`, where it is the
 answer to the question rather than a footnote on a mutation -- and where it

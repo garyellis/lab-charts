@@ -17,6 +17,7 @@ import typer
 from rich.console import Console
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._wiring import container as _container
 from chart_manager.cli.helmrelease_render import (
     _PrettyProgressDriver,
     render_monitor_json,
@@ -26,7 +27,6 @@ from chart_manager.cli.helmrelease_render import (
     render_test_pretty,
 )
 from chart_manager.cli.streams import data_console, narration_console
-from chart_manager.composition import Container
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     PROMOTE_OUTCOME,
@@ -53,11 +53,6 @@ ProgressCb = Callable[[HelmReleaseRef, Transition], None]
 # Adapter wiring lives in `chart_manager.composition`; these stay as
 # module-level functions purely as a test seam -- `tests/test_cli_helmrelease.py`
 # monkeypatches them to inject fakes without touching the container.
-
-
-def _container() -> Container:
-    """Build the composition root for one CLI invocation."""
-    return Container()
 
 
 def _make_monitor_service(*, progress: ProgressCb | None) -> MonitorService:
