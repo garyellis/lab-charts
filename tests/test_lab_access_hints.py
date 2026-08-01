@@ -211,22 +211,23 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestCh
     )
 
 
-def _wire_repo(
-    monkeypatch: pytest.MonkeyPatch,
-    service: DevelopmentClusterService,
-    *,
-    charts: dict[str, ClusterTestChart],
-) -> None:
-    def _get(name: str) -> ClusterTestChart:
-        return charts[name]
+class _StubCatalog:
+    """The two-method slice of ClusterTestCatalog that _install_plan reads."""
 
-    monkeypatch.setattr(service.cluster_tests, "get", _get)
-    monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
+    def __init__(self, charts: dict[str, ClusterTestChart]) -> None:
+        self._charts = charts
+
+    def get(self, name: str) -> ClusterTestChart:
+        return self._charts[name]
+
+    def value_paths(self, _chart: ClusterTestChart, _profile: str) -> list[Path]:
+        return []
 
 
 def _install_plan(
     service: DevelopmentClusterService,
     plan: list[InstallPlanEntry],
+    charts: dict[str, ClusterTestChart],
 ) -> lab_module.RunSummary:
     summary = lab_module.RunSummary()
     service._install_plan(
@@ -236,6 +237,7 @@ def _install_plan(
         namespaces_created=set(),
         summary=summary,
         skip_installed=False,
+        cluster_tests=_StubCatalog(charts),  # type: ignore[arg-type]
     )
     return summary
 
@@ -399,8 +401,7 @@ def test_webhook_wait_runs_after_cert_manager_apply(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
 
     assert kubectl.webhook_waits == [("cert-manager-webhook", "cert-manager", "120s")]
 
@@ -414,8 +415,7 @@ def test_webhook_wait_skipped_for_other_charts(
 
     plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
     assert kubectl.webhook_waits == []
 
 
@@ -430,15 +430,10 @@ def test_local_install_uses_the_chart_lifecycle_profile_namespace(
         kind=_Kind(),
         kubectl=_RecordingKubectl(),
     )
-    _wire_repo(
-        monkeypatch,
-        svc,
-        charts={"grafana": _stub_chart("grafana", namespace="monitoring")},
-    )
-
     summary = _install_plan(
         svc,
         [InstallPlanEntry(chart="grafana", profile="minimal")],
+        {"grafana": _stub_chart("grafana", namespace="monitoring")},
     )
 
     assert helm.upgrade_calls == [("grafana", "monitoring")]
@@ -537,8 +532,7 @@ def test_webhook_wait_warning_does_not_abort_run(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
     assert "cert-manager webhook not Available" in progress.text
 
 

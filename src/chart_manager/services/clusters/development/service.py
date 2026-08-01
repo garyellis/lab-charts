@@ -63,7 +63,7 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
+from chart_manager.settings import DEFAULT_LOCAL_CONFIG
 
 # cert-manager webhook deployment. Must be Available before the
 # istio-gateway chart installs (its Certificate / ClusterIssuer CRs go
@@ -104,7 +104,6 @@ class DevelopmentClusterService:
         kubectl: Kubectl,
         expose: ExposeService,
         progress: ProgressCallback | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
         local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl, ExposeService]]
@@ -118,7 +117,6 @@ class DevelopmentClusterService:
         composition root is now the only place these are built.
         """
         self.root = root.resolve()
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
@@ -577,14 +575,18 @@ class DevelopmentClusterService:
         namespaces_created: set[str],
         summary: RunSummary,
         skip_installed: bool,
-        cluster_tests: ClusterTestCatalog | None = None,
+        cluster_tests: ClusterTestCatalog,
     ) -> None:
         """Converge each plan entry, bucketing outcomes into `summary`.
+
+        The catalog is required and always derived from the release's own
+        chart path by the caller -- a repository-wide default here would
+        silently resolve charts against the wrong tree.
 
         Continue-on-error: a failed entry is recorded and the loop moves
         on. Mutates `installed_keys` / `namespaces_created` in place.
         """
-        catalog = cluster_tests or self.cluster_tests
+        catalog = cluster_tests
         for entry in plan:
             try:
                 chart = catalog.get(entry.chart)

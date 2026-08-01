@@ -300,7 +300,6 @@ class Container:
             kubectl=self.kubectl(),
             expose=self.expose_service(),
             progress=progress,
-            charts_dir=self._settings.charts_dir,
             local_config=self._settings.local_config,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=clients,

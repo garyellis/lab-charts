@@ -231,8 +231,13 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
         "loki": _stub_chart("loki", namespace="observability"),
         "grafana": _stub_chart("grafana", namespace="monitoring"),
     }
-    monkeypatch.setattr(service.cluster_tests, "get", lambda name: charts[name])
-    monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
+
+    class _Catalog:
+        def get(self, name: str) -> Any:
+            return charts[name]
+
+        def value_paths(self, _chart: Any, _profile: str) -> list[Path]:
+            return []
 
     summary = RunSummary()
     service._install_plan(
@@ -245,6 +250,7 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
         namespaces_created=set(),
         summary=summary,
         skip_installed=False,
+        cluster_tests=_Catalog(),  # type: ignore[arg-type]
     )
 
     assert [(f.chart, f.namespace) for f in summary.failed] == [("loki", "observability")]
