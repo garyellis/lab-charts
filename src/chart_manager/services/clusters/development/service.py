@@ -32,9 +32,13 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterActionResult,
     DevelopmentClusterEntryFailure,
     DevelopmentClusterEntryOutcome,
+    DevelopmentClusterPlan,
+    DevelopmentClusterPlanEntry,
     DevelopmentClusterResult,
+    DevelopmentClusterStatus,
     _DevelopmentClusterRunSummary,
 )
+from chart_manager.services.clusters.development.status import cluster_status
 from chart_manager.services.clusters.environment import (
     EnvironmentHandle,
     EnvironmentSpec,
@@ -205,6 +209,146 @@ class DevelopmentClusterService:
             "default",
         )
         return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
+
+    def status(self, cluster_name: str) -> DevelopmentClusterStatus:
+        """Report the current state of the development cluster.
+
+        Read-only and total: nothing here mutates, and a cluster that is
+        absent or unreachable is reported rather than raised. The kind
+        config is resolved from the LocalCluster when there is one, so the
+        drift check compares against the file `up` would have used and not
+        against a same-named default that may not exist.
+
+        The client factory is the same one `_ensure_environment` applies
+        after creating the cluster, so a report and a converge address one
+        kubecontext. Without it `status` answers about the workstation's
+        ambient kubeconfig, which is a different cluster with the same
+        command spelling.
+        """
+        return cluster_status(
+            cluster_name,
+            clients=self._client_factory or self._current_clients,
+            kind=self.kind,
+            environment_provider=self.environment_provider,
+            root=self.root,
+            config=self._authored_kind_config(),
+        )
+
+    def _current_clients(
+        self, _handle: EnvironmentHandle
+    ) -> tuple[Helm, Kubectl, ExposeService]:
+        """Fall back to the injected clients when no factory was wired.
+
+        Only tests construct the service without a factory; the composition
+        root always supplies one.
+        """
+        return self.helm, self.kubectl, self.expose
+
+    def _authored_kind_config(self) -> Path | None:
+        """The LocalCluster's kind config, or None when it cannot be read.
+
+        `status` must answer even in a repository with no authored
+        LocalCluster (or an invalid one) -- that is a spec error worth
+        raising from `up`, where it blocks a mutation, and worth nothing
+        from a report, where it only means the drift check has no baseline.
+        """
+        try:
+            local_cluster = self.local_resources.load_cluster()
+        except (ChartManagerError, OSError):
+            return None
+        return (self.root / local_cluster.spec.cluster.config).resolve()
+
+    def plan_target(
+        self,
+        target: ResolvedLocalTarget,
+        *,
+        profile: str | None,
+        cluster_name: str,
+        destroys: bool = False,
+    ) -> DevelopmentClusterPlan:
+        """Resolve what a converge would install, without touching the cluster.
+
+        This is `up_target`'s preflight and nothing else: the same
+        `load_cluster` / `bootstrap.preflight` / `_preflight_target`
+        sequence, stopping where the mutating path calls `_ensure_environment`.
+        A `--dry-run` therefore fails on an unresolvable plan exactly as the
+        real run would, and succeeds only where the real run would proceed.
+
+        Deliberately offline. Nothing here asks Kind, Helm, or the apiserver
+        anything, so a plan can be printed with no cluster running and no
+        Docker daemon -- which is most of what makes a dry run worth having.
+
+        Bootstrap entries are reported sorted rather than in authored order:
+        `LocalBootstrapExecutor.preflight` returns identities as a set, and
+        re-deriving the sequence here would be a second copy of the
+        bootstrap ordering rule for a display detail.
+        """
+        local_cluster = self.local_resources.load_cluster()
+        releases = self._target_releases(target, profile=profile)
+        bootstrap = LocalBootstrapExecutor(
+            self.root,
+            helm=self.helm,
+            kind=self.kind,
+            kubectl=self.kubectl,
+            progress=self._progress,
+        )
+        bootstrap_identities = bootstrap.preflight(local_cluster)
+        executions = self._preflight_target(
+            releases,
+            excluded_lifecycle_identities=bootstrap_identities,
+        )
+        entries = [
+            DevelopmentClusterPlanEntry(
+                chart=identity.chart,
+                profile=identity.profile,
+                namespace=identity.namespace,
+                source="bootstrap",
+            )
+            for identity in sorted(
+                bootstrap_identities,
+                key=lambda i: (i.chart, i.profile, i.namespace),
+            )
+        ]
+        for release, execution in zip(releases, executions, strict=True):
+            if isinstance(release, OciChartRelease):
+                entries.append(
+                    DevelopmentClusterPlanEntry(
+                        chart=release.name,
+                        profile=release.version or release.digest or "pinned",
+                        namespace=release.namespace,
+                        source="target",
+                    )
+                )
+                continue
+            assert execution is not None
+            for entry in execution.plan:
+                chart = execution.catalog.get(entry.chart)
+                entries.append(
+                    DevelopmentClusterPlanEntry(
+                        chart=entry.chart,
+                        profile=entry.profile,
+                        namespace=chart.spec.profile(entry.profile).namespace or "default",
+                        source="target",
+                    )
+                )
+        return DevelopmentClusterPlan(
+            command="reset" if destroys else "up",
+            cluster_name=cluster_name,
+            target=target.name,
+            target_kind=target.kind,
+            destroys=destroys,
+            entries=tuple(entries),
+        )
+
+    def plan_down(self, cluster_name: str) -> DevelopmentClusterPlan:
+        """The plan for `down`: stop this cluster, install nothing.
+
+        Offline for the same reason as `plan_target`. `down` takes no target
+        and resolves no releases, so the whole plan is which cluster it
+        addresses -- which is exactly the thing worth confirming before
+        stopping it.
+        """
+        return DevelopmentClusterPlan(command="down", cluster_name=cluster_name)
 
     def down(self, cluster_name: str) -> DevelopmentClusterActionResult:
         """Stop the cluster's node containers; preserve all state.

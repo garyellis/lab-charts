@@ -38,7 +38,13 @@ from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAMESPACE,
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
+    DevelopmentClusterPlan,
     DevelopmentClusterResult,
+    DevelopmentClusterStatus,
+    action_to_dict,
+    converge_to_dict,
+    plan_to_dict,
+    status_to_dict,
 )
 from chart_manager.services.clusters.ephemeral import (
     DEFAULT_CLUSTER_NAME,
@@ -143,7 +149,7 @@ chart_cache_app = typer.Typer(
 )
 local_app = typer.Typer(
     no_args_is_help=True,
-    help="Create, stop, and reset local Kubernetes chart development environments.",
+    help="Create, inspect, stop, and reset local Kubernetes chart development environments.",
 )
 helmrelease_app = typer.Typer(
     no_args_is_help=True,
@@ -731,8 +737,37 @@ def _validate_local_profile(target: ResolvedLocalTarget, profile: str | None) ->
         )
 
 
+#: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
+#: projection, and offering one that silently rendered as a table would be
+#: the "silently different answer" `cli/output.py` refuses.
+_LOCAL_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+
+LocalOutputOption = Annotated[str | None, output_mod.output_option(*_LOCAL_OUTPUTS)]
+
+DryRunOption = Annotated[
+    bool,
+    typer.Option(
+        "--dry-run",
+        help="Resolve and print the plan in --output form, then exit 0. Changes nothing.",
+    ),
+]
+
+
+def _emit_document(data: dict[str, Any], output: str) -> None:
+    """Write a wire payload in the resolved machine projection.
+
+    Only reached once `resolve()` has narrowed the mode, so `yaml` is the
+    only alternative to `json` and a third arm would be unreachable.
+    """
+    if output == output_mod.JSON:
+        _emit_json(data)
+    else:
+        _emit_yaml(data)
+
+
 @local_app.command("up")
 def local_up(
+    ctx: typer.Context,
     chart: Annotated[
         str | None,
         typer.Option("--chart", help="Chart name or chart directory."),
@@ -758,6 +793,8 @@ def local_up(
             ),
         ),
     ] = False,
+    dry_run: DryRunOption = False,
+    output: LocalOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
     """Create or start a local cluster and converge the chart or stack.
@@ -771,22 +808,37 @@ def local_up(
     manifests haven't changed. This is the helmfile/Argo workflow and
     picks up values-file edits on re-run. Pass `--skip-installed` to avoid
     invoking Helm for releases already in `helm list -A`.
+
+    `--dry-run` runs the same preflight the real converge runs first --
+    LocalCluster, bootstrap, and the target's install plan are all resolved
+    -- and prints what would be installed without touching Kind, Helm, or
+    the apiserver.
     """
+    output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
+    if dry_run:
+        _render_plan(
+            service.plan_target(resolved, profile=profile, cluster_name=DEFAULT_CLUSTER_NAME),
+            output,
+        )
+        return
     result = service.up_target(
         resolved,
         profile=profile,
         cluster_name=DEFAULT_CLUSTER_NAME,
         skip_installed=skip_installed,
     )
-    _render_development_cluster_result(result)
+    _render_development_cluster_result(result, output, command="up")
     _exit_if_failed(result.ok)
 
 
 @local_app.command("down")
 def local_down(
+    ctx: typer.Context,
+    dry_run: DryRunOption = False,
+    output: LocalOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
     """Stop the configured local cluster while preserving its state.
@@ -796,10 +848,15 @@ def local_down(
     environment is stopped with it.
 
     """
+    output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    service = _container().development_cluster_service(root, progress=_print_progress)
+    if dry_run:
+        _render_plan(service.plan_down(DEFAULT_CLUSTER_NAME), output)
+        return
     _render_cluster_action(
-        _container()
-        .development_cluster_service(root, progress=_print_progress)
-        .down(DEFAULT_CLUSTER_NAME),
+        service.down(DEFAULT_CLUSTER_NAME),
+        output,
+        command="down",
         verb="stopped",
         absent="not running",
     )
@@ -807,6 +864,7 @@ def local_down(
 
 @local_app.command("reset")
 def local_reset(
+    ctx: typer.Context,
     chart: Annotated[
         str | None,
         typer.Option("--chart", help="Chart name or chart directory."),
@@ -822,38 +880,175 @@ def local_reset(
             help=("Profile for a single chart. Authored stack files declare profiles per release."),
         ),
     ] = None,
+    dry_run: DryRunOption = False,
+    output: LocalOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
-    """Destroy and recreate a local cluster, then converge the chart or stack."""
+    """Destroy and recreate a local cluster, then converge the chart or stack.
+
+    `--dry-run` prints the same plan `local up --dry-run` would, marked as
+    destructive: reset resolves everything first and only then deletes, so
+    the plan a dry run shows is exactly the work the real run would do
+    after the delete.
+    """
+    output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
+    if dry_run:
+        _render_plan(
+            service.plan_target(
+                resolved,
+                profile=profile,
+                cluster_name=DEFAULT_CLUSTER_NAME,
+                destroys=True,
+            ),
+            output,
+        )
+        return
     result = service.reset_target(
         resolved,
         profile=profile,
         cluster_name=DEFAULT_CLUSTER_NAME,
     )
-    _render_development_cluster_result(result)
+    _render_development_cluster_result(result, output, command="reset")
     _exit_if_failed(result.ok)
 
 
-def _render_development_cluster_result(result: DevelopmentClusterResult) -> None:
-    """Print the converge summary table, then the access hints.
+@local_app.command("status")
+def local_status(
+    ctx: typer.Context,
+    output: LocalOutputOption = None,
+    root: RootOption = Path("."),
+) -> None:
+    """Report the local cluster: whether it exists, its releases, and its URLs.
+
+    A read, not a grade. The cluster being absent, unreachable, or full of
+    failed releases is *the answer* and still exits 0 -- the caller decides
+    what counts as bad, which is what makes the documented idiom work:
+
+        chart-manager local status -o json | jq '.releases[] | select(.status!="deployed")'
+
+    Every lookup is the one the converge path already makes: `helm list -A`
+    is the same snapshot `local up` uses to skip installed releases, and the
+    URLs are the same VirtualService hosts it prints when it finishes.
+    """
+    output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    status = (
+        _container()
+        .development_cluster_service(root, progress=_print_progress)
+        .status(DEFAULT_CLUSTER_NAME)
+    )
+    if output != output_mod.TABLE:
+        _emit_document(status_to_dict(status), output)
+        return
+    _render_status_table(status)
+
+
+def _render_status_table(status: DevelopmentClusterStatus) -> None:
+    """Print the human projection of a cluster snapshot.
+
+    All of it lands on stdout, unlike the converge commands' access hints:
+    here the state *is* the result, so a caller who redirects stderr must
+    still get the whole report.
+    """
+    state = "[green]running[/green]" if status.exists else "[yellow]absent[/yellow]"
+    console.print(f"cluster [bold]{escape(status.cluster_name)}[/bold]: {state}")
+    if not status.exists:
+        return
+    console.print(f"  context: {escape(status.context or '')} ({escape(status.provider or '')})")
+    if status.port_forward_pid is not None:
+        console.print(f"  port-forward: pid {status.port_forward_pid}")
+
+    if status.releases_error is not None:
+        console.print(f"  [yellow]{escape(status.releases_error)}[/yellow]")
+    elif not status.releases:
+        console.print("  no helm releases installed")
+    else:
+        table = Table("Namespace", "Release", "Revision", "Status", title="Helm releases")
+        for release in status.releases:
+            table.add_row(
+                release.namespace,
+                release.name,
+                str(release.revision),
+                release.status,
+            )
+        console.print(table)
+
+    if status.urls_error is not None:
+        console.print(f"  [yellow]{escape(status.urls_error)}[/yellow]")
+    elif status.urls:
+        console.print("\n[bold]URLs:[/bold]")
+        for url in status.urls:
+            console.print(f"  {url}")
+
+    if status.drift.error is not None:
+        console.print(f"  [yellow]drift check skipped: {escape(status.drift.error)}[/yellow]")
+    elif status.drift.drifted:
+        console.print(
+            f"  [yellow]port mapping drift[/yellow]: kind-config declares host ports "
+            f"{list(status.drift.missing)} that the running cluster does not publish; "
+            "'chart-manager local reset' applies them"
+        )
+
+
+def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
+    """Print a resolved `--dry-run` plan and change nothing.
+
+    The plan is the projection, so it lands on stdout in every mode; the
+    "nothing was changed" reassurance is narration, because a caller piping
+    the plan into a file wants the plan and not the disclaimer.
+    """
+    if output != output_mod.TABLE:
+        _emit_document(plan_to_dict(plan), output)
+        return
+    title = f"Dry run: local {plan.command}"
+    if plan.target is not None:
+        title += f" -> {plan.target} ({plan.target_kind})"
+    console.print(f"[bold]{escape(title)}[/bold]  cluster={escape(plan.cluster_name)}")
+    if plan.destroys:
+        console.print("  [yellow]would destroy and recreate the cluster first[/yellow]")
+    if plan.entries:
+        table = Table("Source", "Chart", "Profile", "Namespace", title="Would install")
+        for entry in plan.entries:
+            table.add_row(entry.source, entry.chart, entry.profile, entry.namespace)
+        console.print(table)
+    narration.print("[dim]dry run: nothing was changed[/dim]")
+
+
+def _render_development_cluster_result(
+    result: DevelopmentClusterResult,
+    output: str,
+    *,
+    command: str,
+) -> None:
+    """Print the converge summary, then the access hints.
 
     Order is operational and load-bearing: what happened, then how to reach
     it. Everything here is pure formatting -- every decision (which bucket,
     whether the CA hint applies, which URLs exist) was already made by
     DevelopmentClusterService and arrives on the result.
+
+    The access hints print in every mode, because they are narration on
+    stderr in every mode. They are advice for an operator, not part of the
+    document -- see `services/clusters/development/wire.py` for why the
+    payload does not carry them.
     """
-    table = Table("Status", "Chart", "Profile", "Namespace", title="Lab install summary")
-    for entry in result.applied:
-        table.add_row("[green]applied[/green]", entry.chart, entry.profile, entry.namespace)
-    for entry in result.no_change:
-        table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
-    for failed in result.failed:
-        table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
-    # The summary table is the result projection; the rest narrates.
-    console.print(table)
+    if output == output_mod.TABLE:
+        table = Table("Status", "Chart", "Profile", "Namespace", title="Lab install summary")
+        for entry in result.applied:
+            table.add_row("[green]applied[/green]", entry.chart, entry.profile, entry.namespace)
+        for entry in result.no_change:
+            table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
+        for failed in result.failed:
+            table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
+        # The summary table is the result projection; the rest narrates.
+        console.print(table)
+    else:
+        _emit_document(
+            converge_to_dict(result, command=command, cluster_name=DEFAULT_CLUSTER_NAME),
+            output,
+        )
     if not result.ok:
         narration.print(
             f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above"
@@ -934,13 +1129,24 @@ def _print_ca_import_hint() -> None:
 
 
 def _render_cluster_action(
-    result: DevelopmentClusterActionResult, *, verb: str, absent: str
+    result: DevelopmentClusterActionResult,
+    output: str,
+    *,
+    command: str,
+    verb: str,
+    absent: str,
 ) -> None:
     """Print the outcome of ``down`` plus any port-forward we reaped.
 
-    A mutation status line, not a projection: `local down` produces no
-    document to pipe, so this narrates.
+    The human form is a mutation status line rather than a document, so it
+    narrates onto stderr as it always did. `-o json`/`-o yaml` do produce a
+    document -- `changed` is the one bit a script cannot recover afterwards,
+    since a cluster that was already stopped and one this call stopped look
+    identical a moment later.
     """
+    if output != output_mod.TABLE:
+        _emit_document(action_to_dict(result, command=command), output)
+        return
     state = verb if result.changed else absent
     narration.print(f"local cluster {state}: {result.cluster_name}")
     if result.port_forward_pid is not None:

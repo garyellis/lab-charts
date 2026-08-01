@@ -89,7 +89,7 @@ def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -
         failed=(DevelopmentClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
-    cli_main._render_development_cluster_result(result)
+    cli_main._render_development_cluster_result(result, "table", command="up")
     out = captured.export_text()
 
     assert "Lab install summary" in out
@@ -106,7 +106,9 @@ def test_lab_result_omits_the_failure_line_when_ok(
     cli_main._render_development_cluster_result(
         DevelopmentClusterResult(
             applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),)
-        )
+        ),
+        "table",
+        command="up",
     )
 
     assert "chart(s) failed" not in narrated.export_text()
@@ -217,6 +219,8 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
         DevelopmentClusterActionResult(
             cluster_name="chart-manager", changed=True, port_forward_pid=4242
         ),
+        "table",
+        command="down",
         verb="stopped",
         absent="not running",
     )
@@ -229,6 +233,8 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
 def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
     cli_main._render_cluster_action(
         DevelopmentClusterActionResult(cluster_name="chart-manager", changed=False),
+        "table",
+        command="down",
         verb="deleted",
         absent="not present",
     )
