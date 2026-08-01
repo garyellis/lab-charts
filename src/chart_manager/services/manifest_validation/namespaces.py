@@ -1,9 +1,16 @@
-"""Interpretation of an already-valid authored manifest-validation section.
+"""Resolve the namespace an authored validation environment renders into.
 
 The accepted shape of ``spec.validation`` is owned by
-``chart_manager.api.lifecycle.v1alpha1``.  What remains here is application
-interpretation of a document that already parsed: resolving the namespace an
-environment renders into.
+``chart_manager.api.lifecycle.v1alpha1``; this is application interpretation
+of a document that already parsed, so it raises ``SpecError`` rather than a
+Pydantic error.
+
+It is a leaf module rather than a function on
+``manifest_validation.compiler`` because ``planner`` needs it too, and
+``planner`` -- along with ``lifecycle.impact``, which imports ``planner`` --
+is currently free of ``chart_manager.integrations``.  Importing the compiler
+would drag the helm, kubeconform and kyverno adapters into both for the sake
+of one pure string substitution.
 """
 
 from __future__ import annotations

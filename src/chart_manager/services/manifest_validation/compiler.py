@@ -10,8 +10,8 @@ from chart_manager.services.manifest_validation.models import (
     ManifestValidationTarget,
     WorklistRow,
 )
+from chart_manager.services.manifest_validation.namespaces import resolve_namespace
 from chart_manager.services.manifest_validation.runner import RowConfig
-from chart_manager.services.manifest_validation.spec import resolve_namespace
 from chart_manager.services.manifest_validation.validator_inputs import require_within
 from chart_manager.services.manifest_validation.validator_registry import (
     VALIDATOR_REGISTRY,

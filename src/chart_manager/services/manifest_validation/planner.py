@@ -18,7 +18,7 @@ from chart_manager.services.manifest_validation.models import (
     SelectionResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.spec import resolve_namespace
+from chart_manager.services.manifest_validation.namespaces import resolve_namespace
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 

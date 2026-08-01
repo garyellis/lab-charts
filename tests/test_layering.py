@@ -104,7 +104,7 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     )
 
     validation_domain = _SERVICES / "manifest_validation"
-    expected = {"models.py", "output_paths.py", "spec.py"}
+    expected = {"models.py", "output_paths.py"}
     actual = {path.name for path in validation_domain.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual
 

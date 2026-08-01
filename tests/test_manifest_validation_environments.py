@@ -6,7 +6,7 @@ import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.manifest_validation.spec import resolve_namespace
+from chart_manager.services.manifest_validation.namespaces import resolve_namespace
 
 
 def _spec(**kwargs) -> ManifestValidationSpec:
