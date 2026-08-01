@@ -208,6 +208,15 @@ for a minimal validation example. The lifecycle resource intentionally remains
 in packaged charts so later lifecycle automation consumes the same
 authoritative intent.
 
+The accepted shape of that file is defined in one place:
+[`src/chart_manager/api/lifecycle/v1alpha1.py`](src/chart_manager/api/lifecycle/v1alpha1.py).
+The shape of `.chart-manager/local-cluster.yaml` and `stacks/*.yaml` is
+[`src/chart_manager/api/local/v1alpha1.py`](src/chart_manager/api/local/v1alpha1.py).
+Reading one of those modules is reading the whole contract — field names,
+aliases, defaults and single-document validation — with no loader or planner in
+the way. See [`docs/architecture.md`](docs/architecture.md) for why the contract
+lives apart from the code that interprets it.
+
 `charts/` is the default managed-chart directory, not a fixed repository
 layout. Set `CHART_MANAGER_CHARTS_DIR` to a repository-relative path such as
 `deploy/helm` to move the entire chart tree. Discovery, Git change
@@ -249,6 +258,8 @@ is invalid. The most fundamental failure wins.
 
 ## Going deeper
 
+- [`docs/architecture.md`](docs/architecture.md) — where a type belongs: the
+  authored API contract versus domain, service and execution types.
 - [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — authenticated,
   isolated Renovate upgrades, dependency coverage, versioning, and callback
   security.
