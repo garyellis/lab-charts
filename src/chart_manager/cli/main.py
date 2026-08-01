@@ -925,11 +925,14 @@ DryRunOption = Annotated[
 ]
 
 
-def _emit_document(data: dict[str, Any], output: str) -> None:
+def _emit_machine_document(data: dict[str, Any], output: str) -> None:
     """Write a wire payload in the resolved machine projection.
 
     Only reached once `resolve()` has narrowed the mode, so `yaml` is the
-    only alternative to `json` and a third arm would be unreachable.
+    only alternative to `json` and a third arm would be unreachable. The
+    `local` commands render their terminal form through dedicated renderers
+    rather than a single `Table`, which is why they take this narrower door
+    and not `_emit_document`.
     """
     if output == output_mod.JSON:
         _emit_json(data)
@@ -1112,7 +1115,7 @@ def local_status(
         .status(DEFAULT_CLUSTER_NAME)
     )
     if output != output_mod.TABLE:
-        _emit_document(status_to_dict(status), output)
+        _emit_machine_document(status_to_dict(status), output)
         return
     _render_status_table(status)
 
@@ -1172,7 +1175,7 @@ def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
     the plan into a file wants the plan and not the disclaimer.
     """
     if output != output_mod.TABLE:
-        _emit_document(plan_to_dict(plan), output)
+        _emit_machine_document(plan_to_dict(plan), output)
         return
     title = f"Dry run: local {plan.command}"
     if plan.target is not None:
@@ -1217,7 +1220,7 @@ def _render_development_cluster_result(
         # The summary table is the result projection; the rest narrates.
         console.print(table)
     else:
-        _emit_document(
+        _emit_machine_document(
             converge_to_dict(result, command=command, cluster_name=DEFAULT_CLUSTER_NAME),
             output,
         )
@@ -1317,7 +1320,7 @@ def _render_cluster_action(
     identical a moment later.
     """
     if output != output_mod.TABLE:
-        _emit_document(action_to_dict(result, command=command), output)
+        _emit_machine_document(action_to_dict(result, command=command), output)
         return
     state = verb if result.changed else absent
     narration.print(f"local cluster {state}: {result.cluster_name}")
