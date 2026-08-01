@@ -150,7 +150,7 @@ def test_authored_api_constants_are_frozen() -> None:
     assert LIFECYCLE_KIND == "ChartLifecycle"
     assert LIFECYCLE_FILENAME == "chart-lifecycle.yaml"
     assert MATCH_BY_BASENAME == "match-by-basename"
-    assert LOCAL_API_VERSION == "local.cmg.io/v1alpha1"
+    assert LOCAL_API_VERSION == "local.chartmanager.io/v1alpha1"
     assert LOCAL_CLUSTER_KIND == "LocalCluster"
     assert LOCAL_STACK_KIND == "LocalStack"
 
@@ -607,7 +607,7 @@ def _validation(**overrides: Any) -> dict[str, Any]:
             id="wrong-apiVersion",
         ),
         pytest.param(
-            _lifecycle({}, apiVersion="local.cmg.io/v1alpha1"),
+            _lifecycle({}, apiVersion="local.chartmanager.io/v1alpha1"),
             "literal_error",
             id="other-group-apiVersion",
         ),
@@ -789,7 +789,7 @@ _DIGEST = "sha256:" + "0" * 64
             id="unknown-envelope-field",
         ),
         pytest.param(
-            _cluster(_bootstrap(), apiVersion="local.cmg.io/v1"),
+            _cluster(_bootstrap(), apiVersion="local.chartmanager.io/v1"),
             "literal_error",
             id="wrong-apiVersion",
         ),

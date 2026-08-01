@@ -1,4 +1,4 @@
-"""``local.cmg.io/v1alpha1`` -- the authored ``LocalCluster``/``LocalStack`` contract.
+"""``local.chartmanager.io/v1alpha1`` -- the authored ``LocalCluster``/``LocalStack`` contract.
 
 ``LocalCluster`` owns the Kind configuration and the ordered bootstrap
 sequence.  ``LocalStack`` is a reusable application composition.  This module
@@ -55,7 +55,7 @@ __all__ = [
     "WorkloadsReady",
 ]
 
-LOCAL_API_VERSION = "local.cmg.io/v1alpha1"
+LOCAL_API_VERSION = "local.chartmanager.io/v1alpha1"
 LOCAL_CLUSTER_KIND = "LocalCluster"
 LOCAL_STACK_KIND = "LocalStack"
 
@@ -291,7 +291,7 @@ class LocalClusterSpec(StrictApiModel):
 
 
 class LocalCluster(StrictApiModel):
-    api_version: Literal["local.cmg.io/v1alpha1"] = Field(alias="apiVersion")
+    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
     kind: Literal["LocalCluster"]
     metadata: ResourceMetadata
     spec: LocalClusterSpec
@@ -302,7 +302,7 @@ class LocalStackSpec(StrictApiModel):
 
 
 class LocalStack(StrictApiModel):
-    api_version: Literal["local.cmg.io/v1alpha1"] = Field(alias="apiVersion")
+    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
     kind: Literal["LocalStack"]
     metadata: ResourceMetadata
     spec: LocalStackSpec

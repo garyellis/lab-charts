@@ -104,7 +104,7 @@ def _local_cluster(tmp_path: Path) -> None:
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
         """
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:

@@ -46,7 +46,7 @@ def _stack(root: Path, name: str = "platform") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalStack
 metadata:
   name: {name}

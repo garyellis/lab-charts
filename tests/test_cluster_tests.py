@@ -288,7 +288,7 @@ def _migration_service(
     local_cluster.parent.mkdir()
     local_cluster.write_text(
         """
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:

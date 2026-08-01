@@ -4,7 +4,7 @@
 # the bootstrap-only contracts (runtimeValues, readiness). There is no
 # checked-in LocalStack anywhere in the repository yet, so this fixture is the
 # only authored example of the kind.
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalStack
 metadata:
   name: observability

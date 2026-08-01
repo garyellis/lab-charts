@@ -18,7 +18,7 @@ from chart_manager.services.lifecycle.plan_projection import ExternallySatisfied
 def _cluster(releases: list[dict[str, object]]) -> LocalCluster:
     return LocalCluster.model_validate(
         {
-            "apiVersion": "local.cmg.io/v1alpha1",
+            "apiVersion": "local.chartmanager.io/v1alpha1",
             "kind": "LocalCluster",
             "metadata": {"name": "default"},
             "spec": {

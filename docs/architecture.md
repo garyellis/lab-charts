@@ -26,7 +26,7 @@ service inputs.
 | Group / version | Kinds | Module |
 |---|---|---|
 | `lifecycle.cmg.io/v1alpha1` | `ChartLifecycle` | `api/lifecycle/v1alpha1.py` |
-| `local.cmg.io/v1alpha1` | `LocalCluster`, `LocalStack` | `api/local/v1alpha1.py` |
+| `local.chartmanager.io/v1alpha1` | `LocalCluster`, `LocalStack` | `api/local/v1alpha1.py` |
 
 Reviewing one of those two modules shows the **complete** accepted shape of the
 corresponding YAML — field names, aliases, defaults, enums, and every rule

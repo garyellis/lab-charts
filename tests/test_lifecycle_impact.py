@@ -142,7 +142,7 @@ def test_local_bootstrap_chart_change_fans_out_without_cni_knowledge(
     config.parent.mkdir()
     config.write_text(
         """
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:

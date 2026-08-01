@@ -797,7 +797,7 @@ def test_the_api_import_rule_stays_quiet_on_what_a_contract_legitimately_needs()
 _ENVELOPE_LEAKS = {
     "a-new-authored-resource-next-to-its-loader": (
         "class LocalRegistry(StrictApiModel):\n"
-        '    api_version: Literal["local.cmg.io/v1alpha1"] = Field(alias="apiVersion")\n'
+        '    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")\n'
         '    kind: Literal["LocalRegistry"]\n'
     ),
     "the-same-thing-spelled-without-an-alias": (

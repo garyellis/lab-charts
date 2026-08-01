@@ -1,4 +1,4 @@
-"""The ``local.cmg.io`` API group.
+"""The ``local.chartmanager.io`` API group.
 
 Import the explicit version rather than this package::
 

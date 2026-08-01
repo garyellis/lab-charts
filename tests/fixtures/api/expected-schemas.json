@@ -698,7 +698,7 @@
     "additionalProperties": false,
     "properties": {
       "apiVersion": {
-        "const": "local.cmg.io/v1alpha1",
+        "const": "local.chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
@@ -874,7 +874,7 @@
     "additionalProperties": false,
     "properties": {
       "apiVersion": {
-        "const": "local.cmg.io/v1alpha1",
+        "const": "local.chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },

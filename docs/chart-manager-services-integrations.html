@@ -1051,7 +1051,7 @@
 
       <!-- localresources -->
       <div class="panel" id="svc-localresources">
-        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/local_resources.py">local_resources.py</span> → <code>LocalCluster</code> · <code>LocalStack</code></h2><span class="loc">services/local_resources.py · 548 ln · apiVersion local.cmg.io/v1alpha1</span><span class="pill p-teal">authored local environment</span></div>
+        <div class="phead"><h2><span class="ref" data-tip="src/chart_manager/services/local_resources.py">local_resources.py</span> → <code>LocalCluster</code> · <code>LocalStack</code></h2><span class="loc">services/local_resources.py · 548 ln · apiVersion local.chartmanager.io/v1alpha1</span><span class="pill p-teal">authored local environment</span></div>
         <p class="oneliner">Two strict authored resources describe a repository-local Kubernetes environment. <span class="ref" data-tip="services/local_resources.py:284 — class LocalCluster(_StrictModel)"><code>LocalCluster</code></span> owns the kind configuration and one ordered, fail-fast bootstrap sequence. <span class="ref" data-tip="services/local_resources.py:295 — class LocalStack(_StrictModel)"><code>LocalStack</code></span> is a reusable application composition — <b>composition only, deliberately narrower than Helmfile</b>: it has no templating, no conditionals and no orchestration language. Every authored path is repository-relative, so loading a resource can never reach outside the repository root.</p>
 
         <div class="comm">
@@ -1068,7 +1068,7 @@
         </div>
 
         <div class="yml-title">The authored <code>LocalCluster</code> — <code>.chart-manager/local-cluster.yaml</code>, annotated</div>
-        <div class="yml"><span class="k">apiVersion:</span> <span class="v">local.cmg.io/v1alpha1</span>          <span class="a">→ Literal, exact</span>
+        <div class="yml"><span class="k">apiVersion:</span> <span class="v">local.chartmanager.io/v1alpha1</span>          <span class="a">→ Literal, exact</span>
 <span class="k">kind:</span> <span class="v">LocalCluster</span>                        <span class="a">→ Literal, exact</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">default</span>                           <span class="a">→ ResourceMetadata.name</span>  <span class="c">(lowercase DNS label, ≤63 chars)</span>
@@ -1092,7 +1092,7 @@
 
         <div class="yml-title">A named <code>LocalStack</code> — resolved from the config file's sibling <code>stacks/</code> directory (constructed example, faithful to the model)</div>
         <div class="yml"><span class="c"># .chart-manager/stacks/observability.yaml  ⇐  selected as `--stack observability`</span>
-<span class="k">apiVersion:</span> <span class="v">local.cmg.io/v1alpha1</span>
+<span class="k">apiVersion:</span> <span class="v">local.chartmanager.io/v1alpha1</span>
 <span class="k">kind:</span> <span class="v">LocalStack</span>
 <span class="k">metadata:</span>
   <span class="k">name:</span> <span class="v">observability</span>                     <span class="c">must equal the file stem when selected by name</span>

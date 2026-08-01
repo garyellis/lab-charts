@@ -90,7 +90,7 @@ Named stacks are resolved from the selected file's sibling `stacks/` directory.
 This repository's bootstrap is ordinary authored configuration:
 
 ```yaml
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
@@ -111,7 +111,7 @@ spec:
 A named stack is similarly small:
 
 ```yaml
-apiVersion: local.cmg.io/v1alpha1
+apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {name: platform}
 spec:
