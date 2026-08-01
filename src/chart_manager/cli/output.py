@@ -44,22 +44,29 @@ chatter interleaved on stderr is at best noise in their logs. Resolving to
 `json` therefore silences narration process-wide via `cli/streams.py`.
 Errors are *not* silenced -- see `streams.error_console`.
 
+`--output` is a format; a file is `--to`
+----------------------------------------
+Design commitment 4, and the reason `grafana dashboard export` was renamed:
+as `grafana export-dashboard`, its `-o` named the *destination file*, so
+`chart-manager -o json grafana export-dashboard UID` wrote the dashboard
+into a file called `json` -- silently, exiting 0. The command now takes
+`--to PATH` and reads `-o` the way everything else does, and `_check` says
+so by name when a rejected token looks like a path, because the old spelling
+lives on in muscle memory and in scripts.
+
 Why the global `-o` is not propagated through `default_map`
 -----------------------------------------------------------
 `cli/main.py` hands the global `--root` down with a nested Click
 `default_map` keyed by parameter *name*. Doing the same for `output` would
-be a live grenade: `grafana export-dashboard` has a parameter also named
-`output`, but it is a `Path` -- the file to write the dashboard to. Seeding
-it turns `chart-manager -o json grafana export-dashboard UID` into "write
-the dashboard to a file called `json`", silently, with a zero exit code.
-(Verified against typer 0.26.7: the parameter arrives as
-`PosixPath('json')`.)
+seed every parameter that happens to be called `output`, whatever it means
+there, and would defeat this module's precedence rule: `default_map` sits
+below the command line but *above* the declared default, so a command's own
+`-o` would arrive as the global value rather than as `None`, and "not given"
+would become indistinguishable from "given globally".
 
 So the global travels on `ctx.obj` instead, and only commands that opt in by
-calling `resolve()` ever see it. A command whose `-o` means something else
-is unaffected by construction rather than by an exclusion list someone has
-to remember to update. `grafana export-dashboard -o PATH` keeps its meaning
-until P2.2 flips it deliberately.
+calling `resolve()` ever see it -- by construction rather than by an
+exclusion list someone has to remember to update.
 """
 
 from __future__ import annotations
@@ -96,13 +103,31 @@ ALL = "all"
 KNOWN_MODES: tuple[str, ...] = (*CORE_MODES, GITHUB, ALL)
 
 
+#: Appended when the rejected token is a path rather than a typo'd format.
+#: `grafana dashboard export` is the reason: its `-o` used to *be* the output
+#: file, so the first thing an old script or an old habit produces here is a
+#: path, and "unknown output: charts/x.json" on its own does not say where
+#: the path was supposed to go.
+_TO_HINT = " -- --output names a format; write to a file with --to"
+
+
+def _looks_like_a_path(value: str) -> bool:
+    """True for a token that was meant as a filename, not as a format.
+
+    No format token contains a separator or an extension, so the three
+    characters are sufficient and cannot misfire on a real projection name.
+    """
+    return bool(set(value) & {"/", "\\", "."})
+
+
 def _check(value: str | None, allowed: Sequence[str], *, param_hint: str) -> str | None:
     """Reject an unknown token at parse time; `None` means "not given"."""
     if value is None:
         return None
     if value not in (*allowed, AUTO):
         raise typer.BadParameter(
-            f"unknown output: {value} (allowed: {', '.join(allowed)})",
+            f"unknown output: {value} (allowed: {', '.join(allowed)})"
+            + (_TO_HINT if _looks_like_a_path(value) else ""),
             param_hint=param_hint,
         )
     return value

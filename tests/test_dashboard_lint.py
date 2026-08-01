@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
 
+import yaml
 from typer.testing import Result
 
 from chart_manager.services.grafana.dashboard_lint import lint_dashboard, lint_paths
+from chart_manager.services.grafana.wire import SCHEMA_VERSION, lint_result_to_dict
 
 from .conftest import cli
 
@@ -124,7 +127,7 @@ def test_lint_result_on_empty_target_list_is_ok(tmp_path: Path) -> None:
 
 
 def _lint(*argv: str) -> Result:
-    return cli("grafana", "lint-dashboards", *argv)
+    return cli("grafana", "dashboard", "lint", *argv)
 
 
 def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
@@ -158,3 +161,68 @@ def test_lint_dashboards_exit_zero_still_means_a_clean_lint(
 
     assert result.exit_code == 0
     assert "1 dashboards passed" in result.stderr
+
+
+# --- the wire contract and the projections that carry it -------------------
+
+
+def test_wire_payload_carries_the_tally_as_well_as_the_findings(
+    tmp_path: Path,
+) -> None:
+    """`files_scanned` is not derivable from an empty `findings` list.
+
+    A clean run over 40 dashboards and a run that found no dashboards at all
+    both produce no findings; the tally is what separates them, which is the
+    distinction design doc 8.7 is about.
+    """
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"panels": [], "templating": {"list": []}}')
+
+    payload = lint_result_to_dict(lint_paths([bad]))
+
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["ok"] is False
+    assert payload["files_scanned"] == 1
+    assert payload["files_with_findings"] == 1
+    assert {finding["rule"] for finding in payload["findings"]} >= {"R001-title", "R002-uid"}
+    assert {finding["path"] for finding in payload["findings"]} == {bad.as_posix()}
+
+
+def test_table_projection_is_one_greppable_line_per_finding(tmp_path: Path) -> None:
+    """The text projection is what a CI log grep matches, so it stays flat."""
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"panels": [], "templating": {"list": []}}')
+
+    result = _lint("--path", str(bad), "-o", "table")
+
+    assert result.exit_code == 1
+    lines = result.stdout.splitlines()
+    assert lines
+    # Square brackets are a rule id, not Rich markup, and nothing is wrapped.
+    assert all(line.startswith(f"{bad}: [") for line in lines)
+    assert any("[R002-uid]" in line for line in lines)
+
+
+def test_json_and_yaml_projections_are_the_same_wire_document(
+    tmp_path: Path,
+) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"panels": [], "templating": {"list": []}}')
+    expected = lint_result_to_dict(lint_paths([bad]))
+
+    as_json = _lint("--path", str(bad), "-o", "json")
+    as_yaml = _lint("--path", str(bad), "-o", "yaml")
+
+    assert as_json.exit_code == 1
+    assert json.loads(as_json.stdout) == expected
+    assert yaml.safe_load(as_yaml.stdout) == expected
+
+
+def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:
+    """`md` is offered only where a markdown projection exists (cli/output.py)."""
+    good = tmp_path / "good.json"
+    good.write_text(_PASSING_DASHBOARD)
+
+    result = _lint("--path", str(good), "-o", "md")
+
+    assert result.exit_code == 2
