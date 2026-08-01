@@ -33,7 +33,7 @@ from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.chart_config import load_chart_lifecycle
+from chart_manager.services.chart_config import LIFECYCLE_FILENAME, load_chart_lifecycle
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
@@ -141,7 +141,7 @@ class LocalResourceLoader:
                     f"{chart_yaml} name {chart_name!r}"
                 )
             if isinstance(release, LifecycleRelease):
-                lifecycle_path = chart / "chart-lifecycle.yaml"
+                lifecycle_path = chart / LIFECYCLE_FILENAME
                 lifecycle = load_chart_lifecycle(lifecycle_path)
                 if lifecycle.metadata.name != chart_name:
                     raise SpecError(

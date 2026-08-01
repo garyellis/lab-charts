@@ -17,7 +17,7 @@ leaves an author writes to the wrapper they write around them.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
@@ -34,6 +34,8 @@ __all__ = [
     "ClusterTestProfile",
     "ClusterTestRef",
     "ClusterTestSpec",
+    "LifecycleApiVersion",
+    "LifecycleKind",
     "ManifestValidationEnvironmentSpec",
     "ManifestValidationPolicySpec",
     "ManifestValidationSpec",
@@ -41,8 +43,20 @@ __all__ = [
     "TriggerValue",
 ]
 
-LIFECYCLE_API_VERSION = "lifecycle.chartmanager.io/v1alpha1"
-LIFECYCLE_KIND = "ChartLifecycle"
+# The group string and the kind are each spelled exactly once, here. The
+# envelope annotates its fields with these aliases and the constants are read
+# back out of them, so a rename cannot leave the accepted `apiVersion` and the
+# exported constant disagreeing -- which is precisely what happened while the
+# group moved off `cmg.io`.
+#
+# Plain assignment, not `type X = ...`: a PEP 695 alias makes Pydantic emit a
+# `$ref` into `$defs` instead of an inline `const`, which would change the
+# generated JSON Schema for no benefit.
+LifecycleApiVersion = Literal["lifecycle.chartmanager.io/v1alpha1"]
+LifecycleKind = Literal["ChartLifecycle"]
+
+LIFECYCLE_API_VERSION: LifecycleApiVersion = get_args(LifecycleApiVersion)[0]
+LIFECYCLE_KIND: LifecycleKind = get_args(LifecycleKind)[0]
 
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
@@ -247,7 +261,7 @@ class ChartLifecycleSpec(StrictApiModel):
 class ChartLifecycle(StrictApiModel):
     """Kubernetes-style lifecycle intent envelope for one Helm chart."""
 
-    api_version: Literal["lifecycle.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["ChartLifecycle"]
+    api_version: LifecycleApiVersion = Field(alias="apiVersion")
+    kind: LifecycleKind
     metadata: ChartLifecycleMetadata
     spec: ChartLifecycleSpec

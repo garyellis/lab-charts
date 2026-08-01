@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
@@ -42,12 +42,15 @@ __all__ = [
     "BootstrapReadiness",
     "BootstrapRelease",
     "LifecycleRelease",
+    "LocalApiVersion",
     "LocalBootstrap",
     "LocalChartRelease",
     "LocalCluster",
+    "LocalClusterKind",
     "LocalClusterSettings",
     "LocalClusterSpec",
     "LocalStack",
+    "LocalStackKind",
     "LocalStackSpec",
     "OciChartRelease",
     "ResourceMetadata",
@@ -55,9 +58,22 @@ __all__ = [
     "WorkloadsReady",
 ]
 
-LOCAL_API_VERSION = "local.chartmanager.io/v1alpha1"
-LOCAL_CLUSTER_KIND = "LocalCluster"
-LOCAL_STACK_KIND = "LocalStack"
+# The group string and both kinds are each spelled exactly once, here. The two
+# envelopes annotate their fields with these aliases and the constants are read
+# back out of them, so a rename cannot leave `LocalCluster` and `LocalStack`
+# disagreeing about what they accept -- which is exactly what happened while
+# the group moved off `cmg.io`.
+#
+# Plain assignment, not `type X = ...`: a PEP 695 alias makes Pydantic emit a
+# `$ref` into `$defs` instead of an inline `const`, which would change the
+# generated JSON Schema for no benefit.
+LocalApiVersion = Literal["local.chartmanager.io/v1alpha1"]
+LocalClusterKind = Literal["LocalCluster"]
+LocalStackKind = Literal["LocalStack"]
+
+LOCAL_API_VERSION: LocalApiVersion = get_args(LocalApiVersion)[0]
+LOCAL_CLUSTER_KIND: LocalClusterKind = get_args(LocalClusterKind)[0]
+LOCAL_STACK_KIND: LocalStackKind = get_args(LocalStackKind)[0]
 
 _EXACT_SEMVER = re.compile(
     r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
@@ -321,8 +337,8 @@ class LocalCluster(StrictApiModel):
     `CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.
     """
 
-    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["LocalCluster"]
+    api_version: LocalApiVersion = Field(alias="apiVersion")
+    kind: LocalClusterKind
     metadata: ResourceMetadata
     spec: LocalClusterSpec
 
@@ -346,7 +362,7 @@ class LocalStack(StrictApiModel):
     language, which is what keeps it narrower than Helmfile.
     """
 
-    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["LocalStack"]
+    api_version: LocalApiVersion = Field(alias="apiVersion")
+    kind: LocalStackKind
     metadata: ResourceMetadata
     spec: LocalStackSpec

@@ -1095,6 +1095,13 @@ def test_root_model_json_schema_matches_the_snapshot(name: str) -> None:
     Pydantic's JSON Schema is derived from class names, docstrings, aliases,
     defaults and field order -- never from the module a class lives in -- so a
     pure move leaves this byte-identical.
+
+    What this pins is the schema's *content*: every property, its type, its
+    `const`/`enum`, its default, and the `required` list (a JSON array, so its
+    order is compared). It does not pin property order -- the comparison is
+    between parsed dicts and `_serialize_schemas` writes with `sort_keys=True`.
+    Authored key order is covered instead by the alias round-trip tests, which
+    assert exact key sequences at every level of a real document.
     """
     expected = json.loads(SCHEMA_SNAPSHOT.read_text(encoding="utf-8"))
 
