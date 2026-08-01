@@ -19,7 +19,7 @@ from typing import Annotated
 
 import typer
 
-from chart_manager.composition import Container
+from chart_manager.cli._wiring import container
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.ref import (
@@ -78,7 +78,7 @@ def _make_event_writer() -> EventWriter:
     of once per emitted event. Harmless in a process-per-invocation CLI,
     load-bearing for a long-lived server fronting the same capability.
     """
-    return Container().event_writer()
+    return container().event_writer()
 
 
 def _parse_at(at: str | None) -> datetime | None:

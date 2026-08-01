@@ -39,10 +39,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-import yaml
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.cli._wiring import container as _container
+from chart_manager.cli.streams import console, narration
 from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
     PlainNarrationDisplay,
@@ -53,7 +53,7 @@ from chart_manager.cli.validate_render import (
     render_cache_table,
     to_text_table,
 )
-from chart_manager.composition import Container, Settings
+from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
@@ -140,14 +140,6 @@ GithubStepSummaryOption = Annotated[
 ]
 RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 
-#: The selected `--output` projection. Goes to stdout.
-console = data_console()
-#: Warnings, spec errors, summaries. Goes to stderr -- these used to share
-#: the stdout console with the `--output json` payload written at
-#: `_emit_result`, which corrupted the JSON document in band.
-narration = narration_console()
-
-
 def register_validate(app: typer.Typer) -> None:
     """Attach the merged `validate` command to the given Typer app."""
     app.command("validate")(validate)
@@ -156,11 +148,6 @@ def register_validate(app: typer.Typer) -> None:
 def register_cache(app: typer.Typer) -> None:
     """Attach the render-cache commands to the given `chart cache` Typer app."""
     app.command("clean")(clean)
-
-
-def _container() -> Container:
-    """Build the composition root for one CLI invocation."""
-    return Container()
 
 
 def _make_app(
@@ -741,11 +728,5 @@ def _render_cache_plan(
 ) -> None:
     """Print the cache state as the selected projection; narrate the no-op."""
     mode = output_mod.resolve(output, ctx, allowed=_CLEAN_OUTPUTS, console=console)
-    document = state.to_dict()
-    if mode == output_mod.JSON:
-        typer.echo(json.dumps(document, indent=2, sort_keys=True))
-    elif mode == output_mod.YAML:
-        typer.echo(yaml.safe_dump(document, sort_keys=False), nl=False)
-    else:
-        console.print(render_cache_table(state))
+    output_mod.emit(state.to_dict(), mode=mode, table=render_cache_table(state))
     narration.print("[yellow]dry run[/yellow]: nothing was removed")

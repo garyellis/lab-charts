@@ -16,7 +16,8 @@ from typing import Annotated, Any, Protocol
 import typer
 
 from chart_manager.cli import output as output_mod
-from chart_manager.composition import Container, Settings
+from chart_manager.cli._wiring import container as _container
+from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.upgrader import (
@@ -60,11 +61,6 @@ class _FinalizeService(Protocol):
     def finalize(self, request: FinalizeRequest) -> FinalizeResult:
         """Finalize a Renovate callback."""
         ...
-
-
-def _container() -> Container:
-    """Build one composition root (module-level so tests can replace it)."""
-    return Container()
 
 
 def _make_upgrade_service(root: Path) -> _UpgradeService:

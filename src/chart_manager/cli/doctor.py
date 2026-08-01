@@ -22,13 +22,12 @@ import json
 from typing import Annotated
 
 import typer
-from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli.streams import data_console, narration_console
-from chart_manager.composition import Container
+from chart_manager.cli._wiring import container
+from chart_manager.cli.streams import console, narration
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.services.doctor import DoctorReport, DoctorService
@@ -70,7 +69,7 @@ def _make_doctor_service() -> DoctorService:
     lives in the composition root, and this function exists only so a test
     can inject fake providers without a real helm on the developer's PATH.
     """
-    return Container().doctor_service()
+    return container().doctor_service()
 
 
 def register(app: typer.Typer) -> None:
@@ -97,7 +96,6 @@ def doctor(
     kubecontext, an unreachable backend), 3 when configuration is invalid,
     4 when a tool is installed but broken. Most fundamental failure wins.
     """
-    console = data_console()
     mode = output_mod.resolve(output, ctx, allowed=_DOCTOR_OUTPUTS, console=console)
     service = _make_doctor_service()
     if for_ is not None and for_ not in service.commands():
@@ -111,13 +109,13 @@ def doctor(
     if mode == output_mod.JSON:
         typer.echo(json.dumps(report.to_dict(), indent=2))
     else:
-        _render_table(console, report)
+        _render_table(report)
 
     if not report.ok:
         raise typer.Exit(code=exit_code_for(report.outcome))
 
 
-def _render_table(console: Console, report: DoctorReport) -> None:
+def _render_table(report: DoctorReport) -> None:
     """Render the report for a human, with the fixes beside the failures.
 
     `remediation` gets its own column rather than a footnote because the
@@ -144,7 +142,6 @@ def _summarize(report: DoctorReport) -> None:
     and `chart-manager doctor | grep FAIL` must not also match a summary
     line. See `cli/streams.py`.
     """
-    narration = narration_console()
     failed = [check for check in report.checks if check.status is CheckStatus.FAILED]
     if not failed:
         scope = "" if report.selector is None else f" for `{report.selector}`"

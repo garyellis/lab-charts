@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-import yaml
 from rich.markup import escape
 from rich.table import Table
 
@@ -23,13 +22,11 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
-from chart_manager.cli.streams import (
-    data_console,
-    error_console,
-    narration_console,
-    set_narration_quiet,
-)
-from chart_manager.composition import Container, Settings
+from chart_manager.cli._wiring import container as _container
+from chart_manager.cli._wiring import exit_if_failed as _exit_if_failed
+from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.cli.streams import print_progress as _print_progress
+from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
@@ -70,89 +67,7 @@ from chart_manager.services.local_resources import (
     ResolvedStackTarget,
     resolve_chart_target,
 )
-from chart_manager.services.progress import ProgressEvent
 from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
-
-#: The selected `--output` projection -- tables, listings, JSON documents.
-#: Goes to stdout, because that is what a caller pipes or captures.
-console = data_console()
-#: Everything the caller did not ask for as output -- progress, hints,
-#: warnings. Goes to stderr so it can never corrupt `console`.
-#: See `cli/streams.py` for the rule.
-narration = narration_console()
-#: Terminal error reporting. Same stream as `narration`, separate console
-#: because `-q` silences narration and must not silence the reason a command
-#: failed -- a quiet run that dies with no output is unsupportable.
-#: `error_console()` rather than `narration_console()` is what makes that
-#: structural: only narration consoles are registered with
-#: `streams.set_narration_quiet`, which `-q` and `--output json` both drive.
-errors = error_console()
-
-
-def _container() -> Container:
-    """Build the composition root for one CLI invocation.
-
-    Module-level, mirroring `cli/helmrelease.py` and `cli/validate.py`, so a
-    test can monkeypatch the whole wiring in one place. Every cluster-facing
-    service below is built through it: constructing them inline is what let
-    `Settings.kube_context` be configured and then ignored.
-    """
-    return Container()
-
-
-# Severity -> Rich style for the narration the long-running services emit.
-# The service picks the severity; only this table knows it becomes markup.
-_PROGRESS_STYLES: dict[str, str | None] = {
-    "step": "bold",
-    "detail": "dim",
-    "warn": "yellow",
-    "error": "red",
-    "info": None,
-}
-
-
-def _print_progress(event: ProgressEvent) -> None:
-    """Render one service progress event to the console.
-
-    The event's `label` carries the severity emphasis and `message` stays
-    plain, which reproduces the `[bold]Applying[/bold] chart:profile` shape
-    the services used to build themselves. A label-less event emphasizes
-    the whole line.
-
-    Both fields are escaped before they reach Rich. They carry subprocess
-    output -- helm/kubectl stderr, raw `kubectl get events` dumps -- and an
-    unmatched closing tag (a bracketed path like `[/etc/hosts]`, a JSON
-    Patch path, an XML fragment) raises MarkupError. That turned the one
-    diagnostic an operator needs into a traceback.
-    """
-    style = _PROGRESS_STYLES.get(event.severity)
-    message = escape(event.message)
-    label = None if event.label is None else escape(event.label)
-    if label is None:
-        text = f"[{style}]{message}[/{style}]" if style else message
-    elif style:
-        text = f"[{style}]{label}[/{style}] {message}".rstrip()
-    else:
-        text = f"{label} {message}".rstrip()
-    narration.print(text)
-
-
-def _exit_if_failed(ok: bool) -> None:
-    """The surface's single rule for a result that reports its own failure.
-
-    Services report partial failure on the result object rather than by
-    raising, so a surface that only renders it reports success for a run in
-    which charts failed.
-
-    A boolean `ok` is all these results carry, so `Outcome.FAILED` is the
-    only outcome derivable from it -- "the thing you asked about failed",
-    design §6.1's row 1. A command whose result can distinguish *why* it
-    failed should map its own outcome instead of funnelling through here,
-    the way `cli/helmrelease.py::promote` maps `PROMOTE_OUTCOME`.
-    """
-    if not ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
-
 
 app = typer.Typer(no_args_is_help=True, help="Local and CI workflows for lab Helm charts.")
 chart_app = typer.Typer(
@@ -385,39 +300,6 @@ NamespaceOverrideOption = Annotated[
     ),
 ]
 
-def _choice(value: str, allowed: tuple[str, ...], option: str) -> str:
-    if value not in allowed:
-        raise typer.BadParameter(
-            f"unknown value: {value} (allowed: {', '.join(allowed)})",
-            param_hint=option,
-        )
-    return value
-
-
-def _emit_json(data: dict[str, Any]) -> None:
-    typer.echo(json.dumps(data, indent=2, sort_keys=True))
-
-
-def _emit_yaml(data: dict[str, Any]) -> None:
-    typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
-
-
-def _emit_document(data: dict[str, Any], *, mode: str, table: Table) -> None:
-    """Write one wire document in the resolved `--output` form.
-
-    The caller builds the terminal projection because only it knows what the
-    columns mean; the machine projections are the same two encoders every
-    command uses. Splitting it this way is what keeps `-o json` and
-    `-o yaml` from being re-decided per command.
-    """
-    if mode == output_mod.JSON:
-        _emit_json(data)
-    elif mode == output_mod.YAML:
-        _emit_yaml(data)
-    else:
-        console.print(table)
-
-
 #: `chart list` and `chart show` speak the core projections minus `md`:
 #: neither has a markdown form, and advertising one the resolver cannot
 #: produce is the lie `cli/output.py` exists to prevent.
@@ -456,7 +338,7 @@ def list_charts(
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
     entries = ChartCatalogService(root, charts_dir=Settings().charts_dir).list_entries()
-    _emit_document(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
+    output_mod.emit(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
     # A chart whose lifecycle document does not load is reported *in* the
     # projection (as `error`, in every format) and again as the exit code, so
     # neither a reader nor a pipeline has to learn the other's channel. What
@@ -599,7 +481,7 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
             action.target.namespace or "",
             action.target.release or "",
         )
-    _emit_document(plan.to_dict(), mode=mode, table=table)
+    output_mod.emit(plan.to_dict(), mode=mode, table=table)
     for warning in plan.warnings:
         narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
     narration.print(
@@ -701,7 +583,7 @@ def show_lifecycle(
     document = lifecycle_to_dict(
         ChartCatalogService(root, charts_dir=Settings().charts_dir).get_lifecycle(chart)
     )
-    _emit_document(
+    output_mod.emit(
         document,
         mode=mode,
         table=_document_table(document, title=f"{chart} lifecycle"),
@@ -818,7 +700,7 @@ def grafana_dashboard_export(
         if mode == output_mod.JSON:
             typer.echo(canonical_json(dashboard), nl=False)
         else:
-            _emit_yaml(dashboard)
+            output_mod.emit(dashboard, mode=output_mod.YAML)
 
 
 @grafana_dashboard_app.command("lint")
@@ -876,10 +758,8 @@ def grafana_dashboard_lint(
 
     result = lint_paths(targets)
     # The findings are this command's report -- its data projection.
-    if mode == output_mod.JSON:
-        _emit_json(lint_result_to_dict(result))
-    elif mode == output_mod.YAML:
-        _emit_yaml(lint_result_to_dict(result))
+    if mode != output_mod.TABLE:
+        output_mod.emit(lint_result_to_dict(result), mode=mode)
     else:
         # `typer.echo`, not `console.print`: a finding carries a rule id in
         # square brackets and a message quoting a PromQL expression, so Rich
@@ -957,21 +837,6 @@ DryRunOption = Annotated[
         help="Resolve and print the plan in --output form, then exit 0. Changes nothing.",
     ),
 ]
-
-
-def _emit_machine_document(data: dict[str, Any], output: str) -> None:
-    """Write a wire payload in the resolved machine projection.
-
-    Only reached once `resolve()` has narrowed the mode, so `yaml` is the
-    only alternative to `json` and a third arm would be unreachable. The
-    `local` commands render their terminal form through dedicated renderers
-    rather than a single `Table`, which is why they take this narrower door
-    and not `_emit_document`.
-    """
-    if output == output_mod.JSON:
-        _emit_json(data)
-    else:
-        _emit_yaml(data)
 
 
 @local_app.command("up")
@@ -1149,7 +1014,7 @@ def local_status(
         .status(DEFAULT_CLUSTER_NAME)
     )
     if output != output_mod.TABLE:
-        _emit_machine_document(status_to_dict(status), output)
+        output_mod.emit(status_to_dict(status), mode=output)
         return
     _render_status_table(status)
 
@@ -1209,7 +1074,7 @@ def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
     the plan into a file wants the plan and not the disclaimer.
     """
     if output != output_mod.TABLE:
-        _emit_machine_document(plan_to_dict(plan), output)
+        output_mod.emit(plan_to_dict(plan), mode=output)
         return
     title = f"Dry run: local {plan.command}"
     if plan.target is not None:
@@ -1254,9 +1119,9 @@ def _render_development_cluster_result(
         # The summary table is the result projection; the rest narrates.
         console.print(table)
     else:
-        _emit_machine_document(
+        output_mod.emit(
             converge_to_dict(result, command=command, cluster_name=DEFAULT_CLUSTER_NAME),
-            output,
+            mode=output,
         )
     if not result.ok:
         narration.print(
@@ -1354,7 +1219,7 @@ def _render_cluster_action(
     identical a moment later.
     """
     if output != output_mod.TABLE:
-        _emit_machine_document(action_to_dict(result, command=command), output)
+        output_mod.emit(action_to_dict(result, command=command), mode=output)
         return
     state = verb if result.changed else absent
     narration.print(f"local cluster {state}: {result.cluster_name}")
@@ -1460,7 +1325,7 @@ PlanForOption = Annotated[
     typer.Option(
         "--for",
         help="Work kind to plan: validate, test, publish, or all.",
-        callback=lambda value: _choice(value, _PLAN_KINDS, "--for"),
+        callback=lambda value: output_mod.choice(value, _PLAN_KINDS, param_hint="--for"),
     ),
 ]
 
@@ -1575,13 +1440,11 @@ def plan(
                 param_hint="--changed-files",
             )
         selected = _container().ci_service(root).directly_changed_charts(changed_files)
-        if output == "json":
-            typer.echo(json.dumps(selected, indent=2))
-        elif output == "yaml":
-            typer.echo(yaml.safe_dump(selected, sort_keys=False), nl=False)
-        else:
+        if output == output_mod.TABLE:
             for chart in selected:
                 console.print(chart)
+        else:
+            output_mod.emit(selected, mode=output)
         return
 
     if output == "github":
@@ -1604,11 +1467,8 @@ def plan(
     # `_changed_paths` raises the "provide at least one changed path" usage
     # error when neither source was given.
     result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
-    data = result.to_dict()
-    if output == "json":
-        _emit_json(data)
-    elif output == "yaml":
-        _emit_yaml(data)
+    if output != output_mod.TABLE:
+        output_mod.emit(result.to_dict(), mode=output)
     else:
         _render_impact_text(
             result,

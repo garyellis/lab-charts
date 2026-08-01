@@ -6,11 +6,11 @@ the summary table, the access-hint blocks, the lifecycle lines and the
 progress narration must carry the same information they did when the
 services printed them themselves.
 
-`cli/main.py` holds two consoles (see `cli/streams.py`): `console` for the
-selected output projection and `narration` for everything else. These tests
-record them separately, so which fixture a test asks for *is* the assertion
-about which stream the text lands on. `tests/test_output_streams.py` owns
-the general rule; these pin the per-block content.
+`cli/streams.py` owns two consoles: `console` for the selected output
+projection and `narration` for everything else. These tests record them
+separately, so which fixture a test asks for *is* the assertion about which
+stream the text lands on. `tests/test_output_streams.py` owns the general
+rule; these pin the per-block content.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import typer
 from rich.console import Console
 
 from chart_manager.cli import main as cli_main
+from chart_manager.cli import streams
 from chart_manager.services.clusters.development import (
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
@@ -40,9 +41,17 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> Console:
 
 @pytest.fixture
 def narrated(monkeypatch: pytest.MonkeyPatch) -> Console:
-    """Swap the module's *narration* console (stderr) for a recording one."""
+    """Swap the *narration* console (stderr) for a recording one.
+
+    Patched in two places because the consoles now live in `cli/streams.py`
+    and each consumer binds its own module-level name to the same object:
+    `cli_main.narration` is what the renderers below reach, and
+    `streams.narration` is what `streams.print_progress` reaches. Patching
+    one and not the other would silently record half the output.
+    """
     console = Console(record=True, width=200)
     monkeypatch.setattr(cli_main, "narration", console)
+    monkeypatch.setattr(streams, "narration", console)
     return console
 
 
@@ -73,7 +82,7 @@ def narrated(monkeypatch: pytest.MonkeyPatch) -> Console:
 def test_progress_events_render_label_then_message(
     narrated: Console, event: object, expected: str
 ) -> None:
-    cli_main._print_progress(event)  # type: ignore[arg-type]
+    streams.print_progress(event)  # type: ignore[arg-type]
 
     assert narrated.export_text().strip() == expected
 
@@ -265,14 +274,14 @@ def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
 def test_progress_never_raises_markup_error_on_subprocess_output(
     narrated: Console, message: str
 ) -> None:
-    cli_main._print_progress(failure("failed", message))
+    streams.print_progress(failure("failed", message))
 
     # Rendered literally, not swallowed and not interpreted as styling.
     assert message in narrated.export_text()
 
 
 def test_progress_still_styles_the_label(narrated: Console) -> None:
-    cli_main._print_progress(step("Applying", "grafana:minimal"))
+    streams.print_progress(step("Applying", "grafana:minimal"))
 
     assert "Applying grafana:minimal" in narrated.export_text()
 

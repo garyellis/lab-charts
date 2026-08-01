@@ -35,10 +35,13 @@ from __future__ import annotations
 import weakref
 
 from rich.console import Console
+from rich.markup import escape
+
+from chart_manager.services.progress import ProgressEvent
 
 #: Every narration console handed out, so `set_narration_quiet` can reach the
-#: ones built at import time in `main.py`, `validate.py` and `publish.py` as
-#: well as the ones `helmrelease.py` builds per invocation.
+#: ones built at import time here as well as the ones `helmrelease.py` builds
+#: per invocation.
 #:
 #: A `WeakSet` rather than a list because `helmrelease.py` builds a console per
 #: call: in a process-per-invocation CLI a list would be equivalent, but this
@@ -47,9 +50,9 @@ from rich.console import Console
 _QUIETABLE: weakref.WeakSet[Console] = weakref.WeakSet()
 
 #: Applied to consoles built *after* a `set_narration_quiet` call. Needed
-#: because `--output json` is resolved inside a command, which is after
-#: `main.py` built its module-level consoles but before `helmrelease.py`
-#: builds its per-call ones.
+#: because `--output json` is resolved inside a command, which is after this
+#: module built its three shared consoles but before `helmrelease.py` builds
+#: its per-call ones.
 _QUIET = False
 
 
@@ -115,8 +118,31 @@ def set_narration_quiet(quiet: bool) -> None:
         console.quiet = quiet
 
 
-#: Shared narration sink for the module-level `narrate()` helper below.
-_NARRATION = narration_console()
+# --- the three shared consoles ----------------------------------------------
+#
+# One set for the whole surface. Every `cli/` module used to derive its own --
+# `main.py` called it `console`, `publish.py` called the same thing `data`,
+# `doctor.py` built a fresh pair inside the command body -- so `--no-color`
+# reached exactly the three `main.py` happened to hold and nothing else, and
+# "which console does this line go to?" was answered per module. Import these
+# instead; `from ... import console` still binds a module-level name, so a
+# test that swaps one module's console keeps working.
+
+#: The selected `--output` projection -- tables, listings, JSON documents.
+#: Goes to stdout, because that is what a caller pipes or captures.
+console = data_console()
+
+#: Everything the caller did not ask for as output -- progress, hints,
+#: warnings. Goes to stderr so it can never corrupt `console`.
+narration = narration_console()
+
+#: Terminal error reporting. Same stream as `narration`, separate console
+#: because `-q` silences narration and must not silence the reason a command
+#: failed -- a quiet run that dies with no output is unsupportable.
+#: `error_console()` rather than `narration_console()` is what makes that
+#: structural: only narration consoles are registered with
+#: `set_narration_quiet`, which `-q` and `--output json` both drive.
+errors = error_console()
 
 
 def narrate(message: str) -> None:
@@ -125,4 +151,48 @@ def narrate(message: str) -> None:
     For call sites that just need a warning or a status line and have no
     reason to hold a console of their own.
     """
-    _NARRATION.print(message)
+    narration.print(message)
+
+
+# --- service progress -------------------------------------------------------
+
+#: Severity -> Rich style for the narration the long-running services emit.
+#: The service picks the severity; only this table knows it becomes markup.
+_PROGRESS_STYLES: dict[str, str | None] = {
+    "step": "bold",
+    "detail": "dim",
+    "warn": "yellow",
+    "error": "red",
+    "info": None,
+}
+
+
+def print_progress(event: ProgressEvent) -> None:
+    """Render one service progress event to the narration console.
+
+    Here rather than in a command module because every long-running service
+    on this surface -- converge, ephemeral test, cluster lifecycle -- hands
+    its `progress=` callback the same shape, and the severity-to-style table
+    is the whole of the decision.
+
+    The event's `label` carries the severity emphasis and `message` stays
+    plain, which reproduces the `[bold]Applying[/bold] chart:profile` shape
+    the services used to build themselves. A label-less event emphasizes
+    the whole line.
+
+    Both fields are escaped before they reach Rich. They carry subprocess
+    output -- helm/kubectl stderr, raw `kubectl get events` dumps -- and an
+    unmatched closing tag (a bracketed path like `[/etc/hosts]`, a JSON
+    Patch path, an XML fragment) raises MarkupError. That turned the one
+    diagnostic an operator needs into a traceback.
+    """
+    style = _PROGRESS_STYLES.get(event.severity)
+    message = escape(event.message)
+    label = None if event.label is None else escape(event.label)
+    if label is None:
+        text = f"[{style}]{message}[/{style}]" if style else message
+    elif style:
+        text = f"[{style}]{label}[/{style}] {message}".rstrip()
+    else:
+        text = f"{label} {message}".rstrip()
+    narration.print(text)
