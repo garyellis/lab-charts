@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
+from chart_manager.api.local.v1alpha1 import LocalCluster
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
-from chart_manager.services.local_resources import LocalCluster
 
 
 def _cluster(releases: list[dict[str, object]]) -> LocalCluster:

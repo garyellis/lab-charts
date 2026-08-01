@@ -1,303 +1,45 @@
-"""Strict authored resources for repository-local Kubernetes environments.
+"""Load repository-local authored resources and resolve them against the tree.
 
-``LocalCluster`` owns the Kind configuration and the ordered bootstrap
-sequence. ``LocalStack`` is a reusable application composition.  Both use
-repository-relative paths so loading them never grants access outside the
-repository root.
+The accepted shape of ``LocalCluster`` and ``LocalStack`` is owned by
+``chart_manager.api.local.v1alpha1``.  What is left here is everything that
+needs more than a single document: reading the YAML and translating decode
+failures into ``SpecError``, keeping every referenced path inside the
+repository root, checking that charts, ``Chart.yaml`` files and values files
+actually exist, agreeing a release name with the chart it names, and resolving
+a command-line target to either a chart directory or a loaded stack.
+
+Paths authored in those documents are repository-relative by construction, so
+resolving one never grants access outside the repository root.
 """
 
 from __future__ import annotations
 
-import re
-from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict
 
+from chart_manager.api.local.v1alpha1 import (
+    BootstrapRelease,
+    LifecycleRelease,
+    LocalChartRelease,
+    LocalCluster,
+    LocalStack,
+    OciChartRelease,
+    StackRelease,
+)
 from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.names import dns_label
+from chart_manager.plumbing.paths import relative_path
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.chart_config import load_chart_lifecycle
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
-LOCAL_API_VERSION = "local.cmg.io/v1alpha1"
-LOCAL_CLUSTER_KIND = "LocalCluster"
-LOCAL_STACK_KIND = "LocalStack"
 DEFAULT_LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 DEFAULT_LOCAL_CLUSTER_FILE = Path("local-cluster.yaml")
 DEFAULT_STACKS_DIR = Path("stacks")
-
-_DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
-_EXACT_SEMVER = re.compile(
-    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
-    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
-_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-_HELM_DURATION = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$")
-_HELM_DURATION_NUMBER = re.compile(r"(\d+(?:\.\d+)?)(?:ns|us|µs|ms|s|m|h)")
-_KIND_RUNTIME_PLACEHOLDERS = frozenset(
-    {
-        "${kind.clusterName}",
-        "${kind.context}",
-        "${kind.controlPlaneHost}",
-        "${kind.controlPlanePort}",
-    }
-)
-
-
-def _name(value: str, *, field: str) -> str:
-    if len(value) > 63 or not _DNS_LABEL.fullmatch(value):
-        raise ValueError(f"{field} must be a lowercase DNS label of at most 63 characters")
-    return value
-
-
-def _relative_path(value: object, *, field: str) -> Path:
-    if not isinstance(value, (str, Path)):
-        raise ValueError(f"{field} must be a repository-relative path")
-    raw = str(value)
-    # Check the authored spelling before Path normalizes away "." segments.
-    if (
-        not raw
-        or "\\" in raw
-        or raw.startswith("/")
-        or any(part in {"", ".", ".."} for part in raw.split("/"))
-    ):
-        raise ValueError(
-            f"{field} must be a repository-relative path without empty, '.' or '..' segments"
-        )
-    path = Path(raw)
-    if path.is_absolute():
-        raise ValueError(f"{field} must be a repository-relative path")
-    return path
-
-
-def _paths(value: object, *, field: str) -> list[Path]:
-    if not isinstance(value, list):
-        raise ValueError(f"{field} must be a list of repository-relative paths")
-    return [_relative_path(item, field=f"{field}[]") for item in value]
-
-
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-
-class ResourceMetadata(_StrictModel):
-    name: str
-
-    @field_validator("name")
-    @classmethod
-    def _valid_name(cls, value: str) -> str:
-        return _name(value, field="metadata.name")
-
-
-class LifecycleRelease(_StrictModel):
-    """Install a local chart through one authored lifecycle profile."""
-
-    type: Literal["lifecycle"]
-    chart: Path
-    profile: str
-
-    @field_validator("chart", mode="before")
-    @classmethod
-    def _safe_chart(cls, value: object) -> Path:
-        return _relative_path(value, field="release.chart")
-
-    @field_validator("profile")
-    @classmethod
-    def _valid_profile(cls, value: str) -> str:
-        return _name(value, field="release.profile")
-
-
-class _RawHelmRelease(_StrictModel):
-    """Helm-owned settings that must be explicit for non-lifecycle releases."""
-
-    name: str
-    namespace: str
-    values: list[Path]
-    timeout: str
-
-    @field_validator("name")
-    @classmethod
-    def _valid_name(cls, value: str) -> str:
-        return _name(value, field="release.name")
-
-    @field_validator("namespace")
-    @classmethod
-    def _valid_namespace(cls, value: str) -> str:
-        return _name(value, field="release.namespace")
-
-    @field_validator("values", mode="before")
-    @classmethod
-    def _safe_values(cls, value: object) -> list[Path]:
-        return _paths(value, field="release.values")
-
-    @field_validator("timeout")
-    @classmethod
-    def _valid_timeout(cls, value: str) -> str:
-        if value != value.strip() or not _HELM_DURATION.fullmatch(value):
-            raise ValueError("release.timeout must be a positive Helm duration such as '10m'")
-        if not any(Decimal(number) > 0 for number in _HELM_DURATION_NUMBER.findall(value)):
-            raise ValueError("release.timeout must be greater than zero")
-        return value
-
-
-class LocalChartRelease(_RawHelmRelease):
-    """Install a local chart directly, outside chart lifecycle ownership."""
-
-    type: Literal["local"]
-    chart: Path
-
-    @field_validator("chart", mode="before")
-    @classmethod
-    def _safe_chart(cls, value: object) -> Path:
-        return _relative_path(value, field="release.chart")
-
-
-class OciChartRelease(_RawHelmRelease):
-    """Install an OCI chart pinned by one exact version or content digest."""
-
-    type: Literal["oci"]
-    chart: str
-    version: str | None = None
-    digest: str | None = None
-
-    @field_validator("chart")
-    @classmethod
-    def _valid_chart(cls, value: str) -> str:
-        if value != value.strip() or not value.startswith("oci://") or value == "oci://":
-            raise ValueError("release.chart must be a non-empty oci:// reference")
-        if "@" in value:
-            raise ValueError("put the OCI digest in release.digest, not release.chart")
-        return value
-
-    @field_validator("version")
-    @classmethod
-    def _exact_version(cls, value: str | None) -> str | None:
-        if value is not None and not _EXACT_SEMVER.fullmatch(value):
-            raise ValueError("release.version must be an exact SemVer version")
-        return value
-
-    @field_validator("digest")
-    @classmethod
-    def _exact_digest(cls, value: str | None) -> str | None:
-        if value is not None and not _SHA256.fullmatch(value):
-            raise ValueError(
-                "release.digest must be sha256 followed by 64 lowercase hexadecimal digits"
-            )
-        return value
-
-    @model_validator(mode="after")
-    def _exactly_one_pin(self) -> OciChartRelease:
-        if (self.version is None) == (self.digest is None):
-            raise ValueError("OCI release requires exactly one of version or digest")
-        return self
-
-
-class WorkloadsReady(_StrictModel):
-    """Wait for every workload in one namespace after bootstrap installation."""
-
-    namespace: str
-    timeout: str
-
-    @field_validator("namespace")
-    @classmethod
-    def _valid_namespace(cls, value: str) -> str:
-        return _name(value, field="release.readiness.workloadsReady.namespace")
-
-    @field_validator("timeout")
-    @classmethod
-    def _valid_timeout(cls, value: str) -> str:
-        return _RawHelmRelease._valid_timeout(value)
-
-
-class BootstrapReadiness(_StrictModel):
-    """Generic readiness gates applied after one bootstrap release."""
-
-    nodes_ready: bool = Field(default=False, alias="nodesReady")
-    workloads_ready: WorkloadsReady | None = Field(
-        default=None,
-        alias="workloadsReady",
-    )
-
-
-class _BootstrapRelease:
-    """Fields available only while bootstrapping a ``LocalCluster``."""
-
-    runtime_values: dict[str, str] = Field(default_factory=dict, alias="runtimeValues")
-    readiness: BootstrapReadiness | None = None
-
-    @field_validator("runtime_values")
-    @classmethod
-    def _known_runtime_values(cls, values: dict[str, str]) -> dict[str, str]:
-        invalid = sorted(set(values.values()) - _KIND_RUNTIME_PLACEHOLDERS)
-        if invalid:
-            supported = ", ".join(sorted(_KIND_RUNTIME_PLACEHOLDERS))
-            raise ValueError(
-                "release.runtimeValues values must be Kind runtime placeholders; "
-                f"unsupported: {', '.join(invalid)}; supported: {supported}"
-            )
-        return values
-
-
-class BootstrapLifecycleRelease(_BootstrapRelease, LifecycleRelease):
-    """Lifecycle release augmented with bootstrap runtime contracts."""
-
-
-class BootstrapLocalChartRelease(_BootstrapRelease, LocalChartRelease):
-    """Raw local release augmented with bootstrap runtime contracts."""
-
-
-class BootstrapOciChartRelease(_BootstrapRelease, OciChartRelease):
-    """OCI release augmented with bootstrap runtime contracts."""
-
-
-type BootstrapRelease = Annotated[
-    BootstrapLifecycleRelease | BootstrapLocalChartRelease | BootstrapOciChartRelease,
-    Field(discriminator="type"),
-]
-type StackRelease = Annotated[
-    LifecycleRelease | OciChartRelease,
-    Field(discriminator="type"),
-]
-
-
-class LocalClusterSettings(_StrictModel):
-    config: Path
-
-    @field_validator("config", mode="before")
-    @classmethod
-    def _safe_config(cls, value: object) -> Path:
-        return _relative_path(value, field="spec.cluster.config")
-
-
-class LocalBootstrap(_StrictModel):
-    releases: list[BootstrapRelease] = Field(default_factory=list)
-
-
-class LocalClusterSpec(_StrictModel):
-    cluster: LocalClusterSettings
-    bootstrap: LocalBootstrap
-
-
-class LocalCluster(_StrictModel):
-    api_version: Literal["local.cmg.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["LocalCluster"]
-    metadata: ResourceMetadata
-    spec: LocalClusterSpec
-
-
-class LocalStackSpec(_StrictModel):
-    releases: list[StackRelease] = Field(min_length=1)
-
-
-class LocalStack(_StrictModel):
-    api_version: Literal["local.cmg.io/v1alpha1"] = Field(alias="apiVersion")
-    kind: Literal["LocalStack"]
-    metadata: ResourceMetadata
-    spec: LocalStackSpec
 
 
 def _load_resource(path: Path, model: type[LocalCluster] | type[LocalStack]):
@@ -323,7 +65,7 @@ def load_local_stack(path: Path) -> LocalStack:
     return _load_resource(path, LocalStack)
 
 
-class ResolvedChartTarget(_StrictModel):
+class ResolvedChartTarget(BaseModel):
     """An explicit chart directory selected as a local target."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -333,7 +75,7 @@ class ResolvedChartTarget(_StrictModel):
     path: Path
 
 
-class ResolvedStackTarget(_StrictModel):
+class ResolvedStackTarget(BaseModel):
     """A loaded stack and its canonical authored source."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -358,8 +100,8 @@ class LocalResourceLoader:
         stacks_dir: Path = DEFAULT_STACKS_DIR,
     ) -> None:
         self.root = root.resolve()
-        self.local_config = _relative_path(local_config, field="local_config")
-        self.stacks_dir = _relative_path(stacks_dir, field="stacks_dir")
+        self.local_config = relative_path(local_config, field="local_config")
+        self.stacks_dir = relative_path(stacks_dir, field="stacks_dir")
 
     @property
     def cluster_path(self) -> Path:
@@ -453,7 +195,7 @@ class LocalTargetResolver(LocalResourceLoader):
         if candidate.is_absolute() or len(candidate.parts) != 1 or candidate.suffix:
             raise SpecError(f"local target path does not exist: {candidate}")
         try:
-            name = _name(raw, field="LocalStack name")
+            name = dns_label(raw, field="LocalStack name")
         except ValueError as exc:
             raise SpecError(str(exc)) from exc
         stack_path = self.stacks_path / f"{name}.yaml"
@@ -477,7 +219,7 @@ class LocalTargetResolver(LocalResourceLoader):
             if not isinstance(name, str):
                 raise SpecError(f"{chart_yaml} must define a string name")
             try:
-                _name(name, field="Chart.yaml name")
+                dns_label(name, field="Chart.yaml name")
             except ValueError as exc:
                 raise SpecError(f"invalid chart target {path}: {exc}") from exc
             return ResolvedChartTarget(name=name, path=absolute)
@@ -518,31 +260,11 @@ __all__ = [
     "DEFAULT_LOCAL_CLUSTER_FILE",
     "DEFAULT_LOCAL_CONFIG",
     "DEFAULT_STACKS_DIR",
-    "LOCAL_API_VERSION",
-    "LOCAL_CLUSTER_KIND",
-    "LOCAL_STACK_KIND",
-    "BootstrapLifecycleRelease",
-    "BootstrapLocalChartRelease",
-    "BootstrapOciChartRelease",
-    "BootstrapReadiness",
-    "BootstrapRelease",
-    "LifecycleRelease",
-    "LocalBootstrap",
-    "LocalChartRelease",
-    "LocalCluster",
-    "LocalClusterSettings",
-    "LocalClusterSpec",
     "LocalResourceLoader",
-    "LocalStack",
-    "LocalStackSpec",
     "LocalTargetResolver",
-    "OciChartRelease",
     "ResolvedChartTarget",
     "ResolvedLocalTarget",
     "ResolvedStackTarget",
-    "ResourceMetadata",
-    "StackRelease",
-    "WorkloadsReady",
     "load_local_cluster",
     "load_local_stack",
     "resolve_chart_target",

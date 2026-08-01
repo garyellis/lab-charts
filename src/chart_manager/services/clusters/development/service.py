@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from chart_manager.api.local.v1alpha1 import LifecycleRelease, OciChartRelease
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -50,9 +51,7 @@ from chart_manager.services.domain.install_plan import DependencyResolver, Insta
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.local_resources import (
-    LifecycleRelease,
     LocalResourceLoader,
-    OciChartRelease,
     ResolvedChartTarget,
     ResolvedLocalTarget,
     ResolvedStackTarget,

@@ -4,15 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.local_resources import (
+from chart_manager.api.local.v1alpha1 import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
     LifecycleRelease,
+    OciChartRelease,
+)
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.local_resources import (
     LocalResourceLoader,
     LocalTargetResolver,
-    OciChartRelease,
     ResolvedChartTarget,
     ResolvedStackTarget,
     load_local_stack,

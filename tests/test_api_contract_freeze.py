@@ -52,10 +52,7 @@ from chart_manager.api.lifecycle.v1alpha1 import (
     ManifestValidationSpec,
     ManifestValidationValidatorsSpec,
 )
-from chart_manager.services.chart_config import LIFECYCLE_FILENAME
-from chart_manager.services.local_resources import (
-    DEFAULT_LOCAL_CONFIG,
-    DEFAULT_STACKS_DIR,
+from chart_manager.api.local.v1alpha1 import (
     LOCAL_API_VERSION,
     LOCAL_CLUSTER_KIND,
     LOCAL_STACK_KIND,
@@ -70,6 +67,8 @@ from chart_manager.services.local_resources import (
     OciChartRelease,
     ResourceMetadata,
 )
+from chart_manager.services.chart_config import LIFECYCLE_FILENAME
+from chart_manager.services.local_resources import DEFAULT_LOCAL_CONFIG, DEFAULT_STACKS_DIR
 
 from .conftest import REPO_ROOT
 

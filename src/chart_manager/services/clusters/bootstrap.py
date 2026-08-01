@@ -11,6 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from chart_manager.api.local.v1alpha1 import (
+    BootstrapLifecycleRelease,
+    BootstrapLocalChartRelease,
+    BootstrapOciChartRelease,
+    BootstrapRelease,
+    LocalCluster,
+)
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -21,13 +28,6 @@ from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
-from chart_manager.services.local_resources import (
-    BootstrapLifecycleRelease,
-    BootstrapLocalChartRelease,
-    BootstrapOciChartRelease,
-    BootstrapRelease,
-    LocalCluster,
-)
 from chart_manager.services.progress import ProgressCallback, emit, step
 
 DEFAULT_NAMESPACE = "default"
