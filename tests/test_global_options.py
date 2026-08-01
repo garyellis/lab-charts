@@ -16,11 +16,11 @@ each step below is asserted rather than assumed:
     the 18 per-command `--root` flags keep overriding it. That is what makes
     this callback a non-breaking addition.
 
-Also pinned here: the two things deliberately NOT in the root callback. A
-global `-o/--output` would collide with `grafana export-dashboard -o PATH`
-and `helmrelease --output pretty|json`; a global `--version` would collide
-with the *chart* `--version` on `publish`, `events`, and `helmrelease`. Both
-are asserted absent so neither returns by accident.
+Also pinned here: the global `-o/--output` reaches commands through
+`ctx.obj` and never through `default_map`, and there is deliberately no
+global `--version`, which would collide with the *chart* `--version` on
+`publish`, `events`, and `helmrelease`. Both are asserted so neither
+property is lost by accident.
 """
 
 from __future__ import annotations
@@ -155,14 +155,14 @@ def test_the_global_root_reaches_a_nested_group(
 ) -> None:
     """`default_map` is nested per command name, so depth is a real risk.
 
-    `grafana lint-dashboards` sits two levels below the root group. If the
+    `grafana dashboard lint` sits three levels below the root group. If the
     map were flat this would silently keep using the working directory.
     """
     monkeypatch.chdir(_repo_with_chart(tmp_path / "cwd", "zeta"))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
-    result = cli("--root", str(elsewhere), "grafana", "lint-dashboards")
+    result = cli("--root", str(elsewhere), "grafana", "dashboard", "lint")
 
     # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
@@ -212,8 +212,8 @@ def test_quiet_suppresses_narration_but_not_the_projection(
     monkeypatch.chdir(tmp_path)
     root = _repo_with_chart(tmp_path / "repo", "zeta")
 
-    loud = _charts("--root", str(root), "grafana", "lint-dashboards")
-    quiet = _charts("-q", "--root", str(root), "grafana", "lint-dashboards")
+    loud = _charts("--root", str(root), "grafana", "dashboard", "lint")
+    quiet = _charts("-q", "--root", str(root), "grafana", "dashboard", "lint")
 
     assert "no dashboards found" in loud.stderr
     assert quiet.stderr == ""
@@ -316,33 +316,22 @@ def test_there_is_a_global_output_flag() -> None:
     assert result.exit_code == 0
 
 
-def test_the_global_output_does_not_reach_grafana_export_dashboards_path() -> None:
-    """The collision that kept `-o` out of P0.10, proven absent.
+def test_the_global_output_travels_on_ctx_obj_and_not_through_default_map() -> None:
+    """`--root` is propagated by parameter name; `-o` must not be.
 
-    `grafana export-dashboard` has its own `-o`, and it is a *file path*.
-    Two things could have broken it, and this asserts both are fine:
+    `cli/main.global_options` seeds `ctx.default_map` for `--root`, which
+    Click looks up *below* the command line but *above* the declared default.
+    Seeding `output` the same way would hand every command's `-o` the global
+    value in place of `None`, and `None`-means-not-given is what
+    `cli/output.resolve` builds its `command -o > global -o > auto`
+    precedence on. The flag reaches commands through `ctx.obj` instead.
 
-      1. Click scopes options per command, so a root `-o` and a subcommand
-         `-o` are separate parameters and the subcommand's wins after its
-         own name.
-      2. `cli/main.global_options` seeds `ctx.default_map` for `--root` by
-         parameter *name*. Doing the same for `output` would hand this
-         command `Path("json")` and write the dashboard into a file called
-         `json` -- silently, exiting 0. It deliberately does not.
-
-    P2.2 flips this flag to a format on purpose, with no alias. Until then
-    it means a path, including under a global `-o`.
+    Checked against the whole nested tree rather than its top level:
+    `_root_default_map` returns `{"grafana": {"dashboard": {...}}}`, so a
+    top-level `"output" not in ...` would pass no matter what.
     """
     root_command = typer.main.get_command(main.app)
-    command = root_command.commands["grafana"].commands["export-dashboard"]
-    output_param = next(p for p in command.params if p.name == "output")
-    assert "-o" in output_param.opts
-    assert output_param.default is None
 
-    # Leg 2, checked against the whole nested tree rather than its top level.
-    # `_root_default_map` returns `{"grafana": {"export-dashboard": {...}}}`,
-    # so a top-level `"output" not in ...` would pass no matter what and prove
-    # nothing. Walk it.
     def _keys(mapping: dict[str, object]) -> set[str]:
         found: set[str] = set()
         for key, value in mapping.items():
@@ -354,14 +343,36 @@ def test_the_global_output_does_not_reach_grafana_export_dashboards_path() -> No
 
     seeded = main._root_default_map(root_command, Path(".")) or {}
     assert _keys(seeded) == {"root"}, (
-        "the global callback may seed only `root` into default_map; seeding "
-        "`output` would redirect `grafana export-dashboard` into a file named "
-        "after the projection"
+        "the global callback may seed only `root` into default_map"
     )
 
-    # And end to end: a global `-o json` must not become this command's path.
-    result = cli("-o", "json", "grafana", "export-dashboard", "--help")
-    assert result.exit_code == 0
+
+def test_no_command_reads_output_as_a_file_path() -> None:
+    """`--output` is a format everywhere; a destination file is `--to`.
+
+    `grafana export-dashboard -o PATH` was the last exception, and it is the
+    reason the command is now `grafana dashboard export ... --to PATH`. A
+    `Path`-typed parameter named `output` anywhere in the tree would mean the
+    exception is back -- and under a global `-o json` it would silently write
+    into a file called `json`.
+    """
+    # `param.type.name` rather than an isinstance check against `click.Path`:
+    # typer 0.26 vendors click, so there is no importable `click` for a test
+    # to name (see the note in `tests/conftest.py`).
+    pending = [typer.main.get_command(main.app)]
+    offenders: list[str] = []
+    while pending:
+        command = pending.pop()
+        pending.extend(getattr(command, "commands", {}).values())
+        for param in command.params:
+            if param.name == "output" and getattr(param.type, "name", "") == "path":
+                offenders.append(f"{command.name}: {param.opts}")
+
+    assert not offenders, offenders
+
+    export = typer.main.get_command(main.app).commands["grafana"].commands["dashboard"]
+    to_param = next(p for p in export.commands["export"].params if p.name == "to")
+    assert to_param.opts == ["--to"]
 
 
 def test_there_is_no_global_version_flag() -> None:

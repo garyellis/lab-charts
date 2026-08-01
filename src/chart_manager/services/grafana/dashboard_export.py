@@ -109,6 +109,51 @@ def canonical_json(dashboard: dict[str, Any]) -> str:
     return json.dumps(dashboard, sort_keys=True, indent=2) + "\n"
 
 
+@dataclass(frozen=True)
+class DashboardSummary:
+    """The few facts that identify one dashboard, for a human-readable report.
+
+    A dashboard is a deep tree with no table form, so a surface asked for a
+    human projection of one has to pick fields. Picking them here rather than
+    in the CLI keeps the choice reviewable in one place and available to any
+    other surface -- and keeps `cli/` from re-deriving `schemaVersion` and
+    the templated datasource variables, which are the two things an export is
+    normally checked for (see rules R003 and R007 in `dashboard_lint`).
+
+    `top_level_panels` deliberately counts only the top level: panels nested
+    inside a row are the row's contents, and a count that silently mixed the
+    two would answer neither "how big is this board" nor "how many rows".
+    """
+
+    uid: str
+    title: str
+    schema_version: int | None
+    top_level_panels: int
+    datasource_variables: tuple[str, ...]
+
+
+def summarize_dashboard(dashboard: dict[str, Any]) -> DashboardSummary:
+    """Reduce a dashboard object to its identifying facts.
+
+    Every field is optional in the input: this runs on whatever Grafana
+    returned, and a dashboard missing `uid` or `schemaVersion` is a lint
+    finding rather than a reason to fail an export.
+    """
+    schema_version = dashboard.get("schemaVersion")
+    templating = (dashboard.get("templating") or {}).get("list") or []
+    return DashboardSummary(
+        uid=str(dashboard.get("uid") or ""),
+        title=str(dashboard.get("title") or ""),
+        schema_version=schema_version if isinstance(schema_version, int) else None,
+        top_level_panels=len(dashboard.get("panels") or []),
+        datasource_variables=tuple(
+            str(var.get("name") or "")
+            for var in templating
+            if var.get("type") == "datasource"
+        ),
+    )
+
+
 def normalize_dashboard(dashboard: dict[str, Any]) -> dict[str, Any]:
     """Strip churn, force editable, rewrite datasource UIDs to template form.
 
