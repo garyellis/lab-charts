@@ -24,6 +24,11 @@ per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
 supposed to wrap adapters), while rule (c) needs it *enforced* there -- that
 is exactly where a stray `sys.exit` would do the most damage. One code cannot
 be both, so (c) is checked here instead of weakening (a).
+
+A fourth invariant -- versioned wire contracts live in `services/*/wire.py`,
+never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
+because it is about dict literals rather than imports and so is invisible to
+both TID251 and the scans here.
 """
 
 from __future__ import annotations
