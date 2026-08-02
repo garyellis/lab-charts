@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from chart_manager.domain.charts import ChartRepository
 from chart_manager.integrations.git import Git
-from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.services.upgrader.paths import resolve_chart_path

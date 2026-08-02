@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
+from chart_manager.domain import chart_deps
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.services.domain import chart_deps
 from tests.conftest import FakeCommandRunner, Reply
 
 

@@ -123,7 +123,7 @@ class Helm:
         # Whether a chart declares dependencies, and whether its materialized
         # ones are current, are questions about chart *metadata* -- service
         # policy this adapter deliberately does not parse. `Container.helm`
-        # wires the real predicates from services/domain/chart_deps; unwired,
+        # wires the real predicates from domain/chart_deps; unwired,
         # both answers are the conservative ones, so the update always runs.
         self._deps_are_fresh = deps_are_fresh
         self._chart_has_dependencies = chart_has_dependencies

@@ -51,6 +51,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
+from chart_manager.domain import chart_deps
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -71,7 +72,6 @@ from chart_manager.services.clusters.environment import (
 )
 from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.doctor import CheckProvider, DoctorService
-from chart_manager.services.domain import chart_deps
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.expose import ExposeService

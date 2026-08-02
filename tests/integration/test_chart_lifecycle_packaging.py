@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from chart_manager.services.chart_config import LIFECYCLE_FILENAME
+from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 
 pytestmark = pytest.mark.integration
 

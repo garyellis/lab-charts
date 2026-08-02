@@ -6,18 +6,18 @@ import pytest
 from pydantic import ValidationError
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.chart_config import (
+from chart_manager.domain.lifecycle_policy import (
     load_chart_lifecycle,
     require_cluster_test,
+    require_cluster_test_profile,
 )
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
 )
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,

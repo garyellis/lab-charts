@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.chart_config import (
+from chart_manager.domain.charts import (
+    ChartRepository,
+    ClusterTestChart,
+)
+from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,
     load_optional_chart_lifecycle,
     require_cluster_test,
+    require_cluster_test_profile,
     validate_chart_lifecycle_identity,
 )
-from chart_manager.services.domain.charts import (
-    ChartRepository,
-    ClusterTestChart,
-)
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 

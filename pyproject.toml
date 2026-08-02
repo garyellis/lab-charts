@@ -36,7 +36,13 @@ dev = [
 chart-manager = "chart_manager.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
+# src layout: hatchling walks the package, so `chart_manager/domain/` and any
+# future sibling are picked up without an entry of their own.
 packages = ["src/chart_manager"]
+# Lint configuration is not runtime code. `domain/.ruff.toml` scopes the
+# layer ban to that one package (the file explains why it cannot live in
+# this table) and has no business in an installed wheel.
+exclude = ["**/.ruff.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,13 +73,21 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG"]
 # The shape being defended:
 #
 #     cli/surfaces -> services -> api + domain + integrations
-#                              domain -> plumbing
+#                              domain -> api + plumbing
 #                                 api -> plumbing (pure helpers only)
 #
 # Read the arrows as guidance, not permission. `integrations/` shares a rank
 # with `api/` and `domain/` because services depend on all three, not because
 # an adapter should reach for an authored API type -- adapters are handed
 # resolved service inputs.
+#
+# `src/chart_manager/domain/` is a real top-level package, not a subpackage of
+# `services/`, so the diagram and the tree now agree. Its own ban -- domain may
+# not import `chart_manager.services` or `chart_manager.integrations` -- is
+# declared in `src/chart_manager/domain/.ruff.toml`, because banned-api is
+# global and banning `chart_manager.services` here would ban it for `cli/` as
+# well (see the paragraph below on why rule (d) is a test). Ruff resolves that
+# nested config automatically for files under `domain/`; no extra flag needed.
 #
 # The surface layer (cli/, and any future REST/GraphQL/RPC/Slack surface)
 # talks to services/ and plumbing/ only. Adapters are assembled in the
@@ -159,8 +173,9 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # integrations/ is the adapter layer itself; services/ owns the ports that
 # wrap adapters; composition.py is the composition root, by definition the
 # one place outside those two that wires them. Note cli/ is deliberately
-# absent -- that is the whole point of the rule -- and so is api/, which
-# describes authored YAML and has no business running a command.
+# absent -- that is the whole point of the rule -- and so are api/, which
+# describes authored YAML, and domain/, which interprets it: neither has any
+# business running a command.
 "src/chart_manager/integrations/**/*.py" = ["TID251"]
 "src/chart_manager/services/**/*.py" = ["TID251"]
 "src/chart_manager/composition.py" = ["TID251"]

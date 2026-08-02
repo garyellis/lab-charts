@@ -18,8 +18,8 @@ import typer
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._wiring import container as _container
 from chart_manager.composition import Settings
+from chart_manager.domain.local_resources import resolve_chart_target
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.upgrader import (
     FinalizeRequest,
     FinalizeResult,

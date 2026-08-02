@@ -32,6 +32,11 @@ from chart_manager.cli._wiring import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.composition import Settings
+from chart_manager.domain.local_resources import (
+    LocalTargetResolver,
+    ResolvedLocalTarget,
+    ResolvedStackTarget,
+)
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
@@ -47,11 +52,6 @@ from chart_manager.services.clusters.development import (
     status_to_dict,
 )
 from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME
-from chart_manager.services.local_resources import (
-    LocalTargetResolver,
-    ResolvedLocalTarget,
-    ResolvedStackTarget,
-)
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
 #: projection, and offering one that silently rendered as a table would be

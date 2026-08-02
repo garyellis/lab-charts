@@ -20,6 +20,13 @@ import pytest
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
 from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalCluster
+from chart_manager.domain.charts import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
+from chart_manager.domain.install_plan import InstallPlanEntry
+from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters import development as lab_module
@@ -29,16 +36,9 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
 )
 from chart_manager.services.clusters.development.service import _TargetLocalExecution
-from chart_manager.services.domain.charts import (
-    ChartMetadata,
-    ClusterTestChart,
-    HelmChart,
-)
-from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
 )
-from chart_manager.services.local_resources import ResolvedChartTarget
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new

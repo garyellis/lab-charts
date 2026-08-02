@@ -1,0 +1,34 @@
+# Layer contract for `chart_manager.domain`, enforced where ruff can see it.
+#
+# `domain/` sits one rank below `services/`: it interprets `api/` contracts and
+# `Chart.yaml`, and answers questions about them. Nothing above it may be
+# imported from here -- an install-plan algorithm that reaches for a service
+# inverts the direction the whole graph is built on.
+#
+# Why this lives in a nested config instead of the table in pyproject.toml:
+# ruff's `banned-api` is declared once, globally, and `per-file-ignores` are
+# per-*code*. Banning `chart_manager.services` in pyproject.toml would ban it
+# for `cli/` too, where importing services is the entire job (92 legitimate
+# imports, measured). Ruff resolves configuration per file against the closest
+# config in its ancestors, so a `.ruff.toml` here is the one place the ban can
+# be scoped to a single package. `extend` inherits `select`, line length and
+# the per-file-ignores from the root config; `ruff check src/ tests/` and
+# `ruff check --select TID251 src/` both pick this up with no extra flags.
+#
+# `chart_manager.integrations` is restated below rather than inherited: a
+# nested `banned-api` table REPLACES the root table rather than merging into
+# it, so omitting the entry here would quietly lift the adapter ban for
+# exactly the layer that must never run a command. Both bans are also checked
+# structurally in tests/test_layering.py, which does not depend on ruff's
+# config discovery.
+extend = "../../../pyproject.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"chart_manager.services".msg = """not importable from chart_manager.domain. \
+Domain is below services in the layer graph: services compose domain policy, \
+never the other way round. If a domain algorithm needs something a service \
+computes, take it as a parameter (see DependencyResolver's ClusterTestLoader \
+callable) rather than importing upward."""
+"chart_manager.integrations".msg = """not importable from chart_manager.domain. \
+Domain interprets authored documents and Chart.yaml; running helm, kubectl or \
+flux is a service's job, wired in `chart_manager.composition.Container`."""

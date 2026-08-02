@@ -38,10 +38,11 @@ The obvious shape -- `Mapping[PromoteStatus, int]` living here -- would make
 `plumbing/` import `services.helmrelease.state`. That inverts the one
 dependency direction this codebase actually holds: ~30 modules under
 `services/` import `plumbing/`, and *no* module under `plumbing/` imports
-`services/`. `tests/test_layering.py::test_plumbing_does_not_import_service_domains`
+`services/` or `domain/`.
+`tests/test_layering.py::test_plumbing_does_not_import_domain_or_validation_policy`
 exists to keep it that way ("generic plumbing must not depend on chart or
-validation service policy"), and a second vertical wanting an exit code
-would drag a second domain enum in behind the first.
+validation policy"), and a second vertical wanting an exit code would drag a
+second domain enum in behind the first.
 
 So the split follows the question each layer can actually answer:
 

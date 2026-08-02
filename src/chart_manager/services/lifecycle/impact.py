@@ -8,10 +8,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalChartRelease
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
+from chart_manager.domain.local_resources import load_local_cluster
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.local_resources import load_local_cluster
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
 

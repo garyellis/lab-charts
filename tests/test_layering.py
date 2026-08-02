@@ -3,7 +3,7 @@
 The diagram this file encodes:
 
     cli/surfaces -> services -> api + domain + integrations
-                             domain -> plumbing
+                             domain -> api + plumbing
                                 api -> plumbing (pure helpers only)
 
 Read the arrows as guidance, not as permission. `integrations/` sits on the
@@ -12,7 +12,12 @@ because an adapter should reach for an authored API type: adapters are handed
 resolved service inputs, which is what keeps `Helm` ignorant of how a
 `ChartLifecycle` is spelled.
 
-Four invariants keep `cli/` a thin surface, so the same capabilities can be
+`domain/` is a top-level package, so the diagram and the directory tree agree.
+Membership is decided by what a module *is* -- policy and algorithms over
+`api/` models plus the schemas this project does not own (`Chart.yaml`,
+`Chart.lock`) -- not by who imports it.
+
+Five invariants keep `cli/` a thin surface, so the same capabilities can be
 fronted by a REST API, a GraphQL resolver, an RPC handler, or a Slack Bolt
 app without re-implementing the CLI:
 
@@ -36,19 +41,29 @@ app without re-implementing the CLI:
       done; nothing about loading, resolution, execution or display can hide
       in there. Six checks under "(d)" below.
 
-Why (c) and (d) are tests and not more banned-api entries: ruff reports every
-banned-api violation under the single code TID251, and per-file-ignores are
-per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
+  (e) `chart_manager.domain` may not import `services/`, `integrations/` or
+      `cli/`. Services compose domain policy; the reverse is a cycle waiting
+      to happen, and it is how `domain/` acquired its previous
+      "lives here because of who calls it" membership rule.
+      `test_domain_imports_only_api_plumbing_and_the_standard_library` below,
+      plus the TID251 table in `src/chart_manager/domain/.ruff.toml`.
+
+Why (c), (d) and (e) are tests and not just banned-api entries: ruff reports
+every banned-api violation under the single code TID251, and per-file-ignores
+are per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
 supposed to wrap adapters), while rule (c) needs it *enforced* there -- that
 is exactly where a stray `sys.exit` would do the most damage. One code cannot
 be both, so (c) is checked here instead of weakening (a). Rule (d) hits the
 same wall from the other side: banned-api is declared globally, so banning
 `chart_manager.services` to protect `api/` also bans it for `cli/`, where it
-is the whole point -- 92 legitimate imports, measured. The one arrow TID251
-does carry for free is `api -/-> integrations`: that ban is already global and
-`api/` is deliberately absent from the lift table in pyproject.toml.
+is the whole point -- 92 legitimate imports, measured. Rule (e) needs the same
+ban, but only under one directory, so it is declared in a nested `.ruff.toml`
+that ruff resolves per file; the scan below is the copy that does not depend
+on ruff's config discovery. The one arrow TID251 carries for free everywhere
+is `-/-> integrations`: that ban is global, and `api/`, `domain/` and `cli/`
+are all deliberately absent from the lift table in pyproject.toml.
 
-A fifth invariant -- versioned wire contracts live in `services/*/wire.py`,
+A sixth invariant -- versioned wire contracts live in `services/*/wire.py`,
 never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
 because it is about dict literals rather than imports and so is invisible to
 both TID251 and the scans here.
@@ -68,6 +83,7 @@ import pytest
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _PKG = _SRC / "chart_manager"
 _API = _PKG / "api"
+_DOMAIN = _PKG / "domain"
 _SERVICES = _PKG / "services"
 _PLUMBING = _PKG / "plumbing"
 _INTEGRATIONS = _PKG / "integrations"
@@ -78,9 +94,9 @@ _EXIT_ALLOWED_DIRS = (_PKG / "cli",)
 #: Import either of these and a headless surface has a TUI in its address space.
 _FORBIDDEN_ROOTS = ("rich", "typer")
 
-# Chart concepts are service-domain policy, not generic plumbing.
-# `cluster_tests.py` and `spec.py` no longer exist anywhere -- their contents
-# split across `api/lifecycle/v1alpha1.py`, `domain/cluster_test_policy.py` and
+# Chart concepts are domain policy, not generic plumbing.
+# `graph.py` and `spec.py` no longer exist anywhere -- their contents split
+# across `api/lifecycle/v1alpha1.py`, `domain/lifecycle_policy.py` and
 # `manifest_validation/namespaces.py`. They stay on this ban list regardless:
 # it names spellings that may not appear under `plumbing/`, and a future
 # `plumbing/spec.py` would be exactly the violation it always was.
@@ -90,6 +106,8 @@ _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
     "cluster_tests.py",
     "graph.py",
     "install_plan.py",
+    "lifecycle_policy.py",
+    "local_resources.py",
     "spec.py",
 }
 
@@ -136,32 +154,35 @@ def _imports_matching(directory: Path, prefixes: tuple[str, ...]) -> list[str]:
 
 
 def test_chart_domain_modules_stay_out_of_plumbing() -> None:
-    """Keep chart models and policy in services/domain, not generic utilities."""
+    """Keep chart models and policy in domain, not generic utilities."""
     misplaced = sorted(
         path.name
         for path in _PLUMBING.glob("*.py")
         if path.name in _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING
     )
     assert not misplaced, (
-        "chart-domain modules belong in chart_manager/services/domain, "
+        "chart-domain modules belong in chart_manager/domain, "
         f"not plumbing: {', '.join(misplaced)}"
     )
 
-    # `cluster_test_policy.py` is here because the profile lookup and its error
-    # wording were split out of the authored `ClusterTestSpec` when that model
-    # moved to `api/lifecycle/v1alpha1.py`: the shape is a contract, choosing a
-    # profile and phrasing the failure is policy. It must not drift back.
+    # `lifecycle_policy.py` is here because the capability gate and the profile
+    # lookup were split out of the authored models when they moved to
+    # `api/lifecycle/v1alpha1.py`: the shape is a contract, deciding whether a
+    # capability is usable and phrasing the failure is policy. It must not
+    # drift back -- and it must not drift *up* into `services/` either, which
+    # is where `require_validation` and `require_cluster_test` used to sit
+    # while their sibling `require_cluster_test_profile` sat down here.
     expected = {
         "chart_deps.py",
         "charts.py",
-        "cluster_test_policy.py",
+        "cluster_tests.py",
         "install_plan.py",
+        "lifecycle_policy.py",
+        "local_resources.py",
     }
-    actual = {
-        path.name for path in (_SERVICES / "domain").glob("*.py") if path.name != "__init__.py"
-    }
+    actual = {path.name for path in _DOMAIN.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual, (
-        f"missing from services/domain: {sorted(expected - actual)} -- these are "
+        f"missing from domain: {sorted(expected - actual)} -- these are "
         "chart policy, not authored contract and not generic plumbing"
     )
 
@@ -195,18 +216,90 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     )
 
 
-def test_plumbing_does_not_import_service_domains() -> None:
-    """Generic plumbing may not depend on chart or validation service policy."""
+def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
+    """Generic plumbing may not depend on chart or validation policy."""
     offenders = _imports_matching(
         _PLUMBING,
         (
-            "chart_manager.services.domain",
+            "chart_manager.domain",
             "chart_manager.services.manifest_validation",
         ),
     )
 
     assert not offenders, (
-        "generic plumbing must not import service-domain modules:\n  " + "\n  ".join(offenders)
+        "generic plumbing must not import domain or service policy:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_domain_modules_are_discoverable() -> None:
+    """Guard the guard: an empty sweep would make the next test vacuously pass."""
+    paths = sorted(_DOMAIN.rglob("*.py"))
+    assert len(paths) > 5, f"suspiciously few domain modules found: {paths}"
+    assert _DOMAIN / "install_plan.py" in paths
+    assert _DOMAIN / "lifecycle_policy.py" in paths
+
+
+#: What `chart_manager.domain` may import, beyond the standard library.
+#: An allowlist rather than a ban list, so a *new* top-level package is out of
+#: bounds for `domain/` on the day it is created, the same way the TID251 lift
+#: table in pyproject.toml defaults a new package to "no adapters".
+#:
+#: `chart_manager.settings` is on the list and `api/` is denied it, and the
+#: asymmetry is the point: a contract must describe what a YAML file may say
+#: without knowing which repository it was found in, while resolving
+#: `charts/<name>/Chart.yaml` is most of what domain does. `yaml` and
+#: `pydantic` are here for the same reason -- turning bytes into a validated
+#: document is the loading boundary domain owns, which is exactly the work
+#: `api/` is forbidden from doing.
+_DOMAIN_ALLOWED_IMPORTS = frozenset(
+    {
+        "chart_manager.api",
+        "chart_manager.domain",
+        "chart_manager.plumbing",
+        "chart_manager.settings",
+        "pydantic",
+        "yaml",
+    }
+)
+
+
+def test_domain_imports_only_api_plumbing_and_the_standard_library() -> None:
+    """Domain is below services: nothing above it may be imported from here.
+
+    This is the rule whose absence produced the previous membership criterion,
+    where a policy function lived in `domain/` because a domain algorithm
+    happened to call it, while its two siblings lived in `services/` because
+    only services called them. With the direction enforced, "what is it?" is
+    the only question left to answer, and the answer is stable.
+
+    `src/chart_manager/domain/.ruff.toml` bans `chart_manager.services` and
+    `chart_manager.integrations` under TID251, which reports them at lint
+    time. This scan is the copy that does not depend on ruff's nested-config
+    discovery, and being an allowlist it also covers `cli/`, the composition
+    root, and whatever gets added next.
+    """
+    offenders: list[str] = []
+    for path in sorted(_DOMAIN.rglob("*.py")):
+        label = str(path.relative_to(_SRC))
+        for lineno, module in _imports_in(
+            path.read_text(encoding="utf-8"), label, _package_of(path)
+        ):
+            root = module.split(".")[0]
+            if root in sys.stdlib_module_names:
+                continue
+            if any(
+                module == allowed or module.startswith(allowed + ".")
+                for allowed in _DOMAIN_ALLOWED_IMPORTS
+            ):
+                continue
+            offenders.append(f"{label}:{lineno}: {module}")
+
+    assert not offenders, (
+        "domain/ sits below services/ and may import only api/, plumbing/, "
+        "settings and the standard library:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nTake what the algorithm needs as a parameter instead -- "
+        "DependencyResolver's ClusterTestLoader callable is the pattern."
     )
 
 
@@ -228,7 +321,7 @@ def test_integrations_do_not_import_services() -> None:
 
     Whatever an adapter needs from a service is passed in by the caller:
     `Helm` takes its dependency-freshness predicates as constructor
-    arguments, wired from `services/domain/chart_deps` in
+    arguments, wired from `domain/chart_deps` in
     `chart_manager.composition`, so the helm wrapper never has to know how a
     Chart.lock is parsed.
     """
@@ -307,10 +400,11 @@ def _probe(modules: list[str], forbidden: tuple[str, ...] = _FORBIDDEN_ROOTS) ->
 
 def test_service_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
-    modules = _modules_under(_SERVICES)
+    modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
     assert "chart_manager.services.manifest_validation.app" in modules
+    assert "chart_manager.domain.lifecycle_policy" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -323,12 +417,15 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     plain result objects plus versioned wire projections
     (`services/*/wire.py`).
 
+    `domain/` is swept alongside `services/`: it is further from the terminal,
+    not closer, so the same rule applies with more force.
+
     Strategy: one subprocess importing every service module (~0.5s), which is
     all the passing case needs. Only on failure do we pay for a per-module
     re-probe, so the report still names the exact file that regressed rather
     than the whole layer.
     """
-    modules = _modules_under(_SERVICES)
+    modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     leaked = _probe(modules)
     if not leaked:
         return
@@ -336,7 +433,7 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     culprits = {m: found for m in modules if (found := _probe([m]))}
     detail = "\n".join(f"  {m} -> {found}" for m, found in sorted(culprits.items()))
     pytest.fail(
-        f"services/ leaked {leaked} into sys.modules.\n"
+        f"services/ + domain/ leaked {leaked} into sys.modules.\n"
         f"Modules responsible:\n{detail}\n\n"
         "Move the terminal rendering into cli/ and hand the service a "
         "callback or a plain result object instead."
@@ -440,6 +537,7 @@ _API_ROOT_MODELS = {
 #: Used twice: statically, against the imports written in `api/`, and at
 #: runtime, against what importing `api/` actually loads.
 _API_FORBIDDEN_IMPORTS = {
+    "chart_manager.domain": "interpreting a decoded document is the layer above",
     "chart_manager.services": "loading and interpretation happen after decode",
     "chart_manager.integrations": "adapters run commands; a contract describes text",
     "chart_manager.cli": "a contract must not know how it is rendered",
@@ -744,7 +842,7 @@ def test_authored_resource_envelopes_live_under_the_api_package() -> None:
 # --------------------------------------------------------------------------
 
 _API_LEAKS = {
-    "reaching-for-the-loader": "from chart_manager.services.chart_config import load",
+    "reaching-for-the-loader": "from chart_manager.domain.lifecycle_policy import load",
     "reaching-for-an-adapter": "from chart_manager.integrations.helm import Helm",
     "reaching-for-the-surface": "import chart_manager.cli.output",
     "reaching-for-settings": "from chart_manager.settings import Settings",
@@ -753,7 +851,7 @@ _API_LEAKS = {
     "a-plumbing-module-that-is-not-a-pure-rule": (
         "from chart_manager.plumbing.errors import SpecError"
     ),
-    "an-escape-hatch-spelled-relatively": "from ...services.chart_config import load",
+    "an-escape-hatch-spelled-relatively": "from ...domain.lifecycle_policy import load",
 }
 
 _API_ALLOWED_SOURCES = {

@@ -11,6 +11,7 @@ import yaml
 from chart_manager.cli import _wiring
 from chart_manager.cli import chart as chart_cli
 from chart_manager.cli import local as local_cli
+from chart_manager.domain.local_resources import ResolvedStackTarget
 from chart_manager.services.clusters.development import (
     DevelopmentClusterActionResult,
     DevelopmentClusterPlan,
@@ -26,7 +27,6 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
-from chart_manager.services.local_resources import ResolvedStackTarget
 
 from .conftest import cli
 

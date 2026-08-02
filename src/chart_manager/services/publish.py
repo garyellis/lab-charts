@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from chart_manager.domain.charts import ChartRepository
 from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase
 from chart_manager.services.events.writer import EventWriter

@@ -9,6 +9,12 @@ import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
+from chart_manager.domain.charts import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
+from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
@@ -16,12 +22,6 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
 )
-from chart_manager.services.domain.charts import (
-    ChartMetadata,
-    ClusterTestChart,
-    HelmChart,
-)
-from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.progress import ProgressEvent
 
 

@@ -61,9 +61,9 @@ from chart_manager.cli.validate_render import (
     to_text_table,
 )
 from chart_manager.composition import Settings
+from chart_manager.domain.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunOutcome,

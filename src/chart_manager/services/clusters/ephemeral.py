@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import cast
 
 from chart_manager.api.local.v1alpha1 import LocalCluster
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.install_plan import DependencyResolver
+from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.clusters._shared import kind_config_path
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import (
@@ -26,7 +28,6 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
-from chart_manager.services.domain.install_plan import DependencyResolver
 from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     HelmTestResult,
@@ -41,7 +42,6 @@ from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
     exclude_bootstrap_owned_charts,
 )
-from chart_manager.services.local_resources import LocalResourceLoader
 from chart_manager.services.progress import ProgressCallback, info, step, warn
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 

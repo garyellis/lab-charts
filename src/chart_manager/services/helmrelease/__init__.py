@@ -8,9 +8,11 @@ because that is where it was first parsed. Surfaces that need to *name* the type
 e.g. `cli/helmrelease_render.py` typing its progress driver -- import it from
 here, so no surface has to reach into `integrations/` for a type annotation.
 
-The underlying question (that `plumbing/` and `integrations/` both hold domain
-model which probably wants its own `domain/` package) is tracked separately;
-this re-export is the local fix, not that split.
+The underlying question -- whether the Flux identity records `plumbing/` and
+`integrations/` hold belong in `chart_manager.domain` alongside the chart
+policy -- is still open, and deliberately so: `domain/` today is chart and
+lifecycle policy, and moving a Flux type in would need the same "what is it?"
+answer, not just a free slot. This re-export is the local fix, not that split.
 
 Scope boundary (kept from this package's deleted README, which was otherwise
 stale planning prose): one `PromoteService.promote()` call promotes one chart

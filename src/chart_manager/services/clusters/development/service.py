@@ -14,11 +14,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.api.local.v1alpha1 import LifecycleRelease, OciChartRelease
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.install_plan import InstallPlanEntry
+from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
+from chart_manager.domain.local_resources import (
+    LocalResourceLoader,
+    ResolvedChartTarget,
+    ResolvedLocalTarget,
+)
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.clusters._shared import (
     DEFAULT_NAMESPACE,
     kind_config_path,
@@ -54,15 +61,8 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
-from chart_manager.services.local_resources import (
-    LocalResourceLoader,
-    ResolvedChartTarget,
-    ResolvedLocalTarget,
-)
 from chart_manager.services.progress import (
     ProgressCallback,
     detail,

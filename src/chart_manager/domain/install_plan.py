@@ -5,9 +5,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestRef
+from chart_manager.domain.charts import ClusterTestChart
+from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.plumbing.errors import DependencyCycleError
-from chart_manager.services.domain.charts import ClusterTestChart
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
 
 
 @dataclass(frozen=True)

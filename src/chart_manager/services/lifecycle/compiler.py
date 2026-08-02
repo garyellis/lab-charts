@@ -6,10 +6,10 @@ import hashlib
 import re
 from pathlib import Path
 
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.install_plan import DependencyResolver
+from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.domain.install_plan import DependencyResolver
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,

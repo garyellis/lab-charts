@@ -10,7 +10,7 @@ docstring into several command modules:
 
 None of them is a capability. `services/` owns what a command *does*;
 `plumbing/exit_codes.py` owns which outcome is which number;
-`services/local_resources.py` owns how a chart name is resolved. What is
+`domain/local_resources.py` owns how a chart name is resolved. What is
 left is the few lines of surface that bind them to configuration, which is
 exactly what a module with a leading underscore is for -- this is internal
 to `cli/` and nothing outside it should import it.
@@ -29,8 +29,8 @@ from pathlib import Path
 import typer
 
 from chart_manager.composition import Container, Settings
+from chart_manager.domain.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 
 
 def container() -> Container:
