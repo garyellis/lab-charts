@@ -271,7 +271,30 @@ class TestService:
             per_poll=parsed.per_poll_sec,
         )
 
+        _LOG.info(
+            "helm test run started: chart=%s version=%s namespace=%s environment=%s "
+            "matched=%d concurrency=%d per_hr=%s total=%s per_poll=%s",
+            request.chart_name,
+            request.version,
+            request.namespace or "(all)",
+            request.environment or "(none)",
+            len(matched),
+            request.concurrency,
+            request.per_hr_timeout,
+            request.total_timeout,
+            request.per_poll_timeout,
+        )
+
         if not matched:
+            # `TestResult.ok` is False for a no-match run, but the single
+            # NO_MATCH outcome is easy to read as "nothing to do" -- say which
+            # selector found nothing.
+            _LOG.warning(
+                "helm test matched no HelmReleases: chart=%s version=%s namespace=%s",
+                request.chart_name,
+                request.version,
+                request.namespace or "(all)",
+            )
             elapsed = self._clock() - start
             return TestResult(
                 outcomes=(
@@ -326,6 +349,13 @@ class TestService:
                 # operator wants the whole matrix, not the first red cell.
             )
         except Exception:
+            _LOG.exception(
+                "helm test run crashed: chart=%s version=%s matched=%d completed=%d",
+                request.chart_name,
+                request.version,
+                len(matched),
+                len(outcomes),
+            )
             # An infrastructure failure still ends the interval opened above.
             # Without this the timeline keeps a HELM_TEST_RUN that nothing
             # ever closes -- the exact defect this wiring exists to remove.
@@ -353,6 +383,16 @@ class TestService:
             run_verdict((o.verdict for o in result.outcomes), success=Verdict.PASSED),
             total=len(result.outcomes),
             failures=len(result.failures),
+        )
+        _LOG.info(
+            "helm test run finished: chart=%s version=%s outcomes=%d failures=%d "
+            "cancelled=%s elapsed=%.1fs",
+            request.chart_name,
+            request.version,
+            len(result.outcomes),
+            len(result.failures),
+            result.total_timed_out,
+            elapsed,
         )
         return result
 
@@ -429,6 +469,12 @@ class TestService:
         try:
             pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
         except ExternalCommandError as exc:
+            _LOG.error(
+                "test pod listing failed during reap: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                report.failure_detail(exc),
+            )
             return self._finalize(
                 ctx,
                 verdict=Verdict.FAILED,
@@ -455,6 +501,15 @@ class TestService:
                 # Carry the stderr, not just the pod name: "delete denied by
                 # RBAC", "apiserver unreachable" and "stuck on a finalizer"
                 # are three different operator actions and rendered as one.
+                # Logged as well as rendered: the report reaches the caller,
+                # the log reaches whoever reads CI afterwards.
+                _LOG.warning(
+                    "stale test pod delete failed: ns=%s pod=%s release=%s: %s",
+                    ns,
+                    name,
+                    ctx.ref.name,
+                    report.failure_detail(exc),
+                )
                 residual.append(f"{ns}/{name}: {report.failure_detail(exc)}")
         if residual:
             return self._finalize(
@@ -499,7 +554,23 @@ class TestService:
                     if self._clock() >= ctx.total_deadline
                     else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
+                # Which budget tripped decides whether the operator raises
+                # --per-hr-timeout or accepts the run was too big.
+                _LOG.warning(
+                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%s total=%s",
+                    ctx.ref.namespace,
+                    ctx.ref.name,
+                    reason,
+                    ctx.request.per_hr_timeout,
+                    ctx.request.total_timeout,
+                )
                 return self._finalize_timed_out(ctx, reason)
+            _LOG.error(
+                "helm test invocation failed outside a verdict: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                msg,
+            )
             # Defensive: with check=False the runner shouldn't raise on
             # rc != 0, but propagate any other surprise as HelmUnavailable
             # so we still produce a structured outcome.
@@ -624,6 +695,20 @@ class TestService:
                 "run `chart-manager helmrelease monitor` first."
             )
         else:
+            # One line per non-passing release, carrying the pair (verdict,
+            # reason) the rendered report leads with. The report itself stays
+            # out of the log: it is multi-kilobyte markdown and the caller
+            # already holds it.
+            _LOG.warning(
+                "helm test outcome failed: ns=%s name=%s verdict=%s reason=%s "
+                "rc=%s elapsed=%.1fs",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                verdict,
+                reason,
+                rc,
+                duration_seconds,
+            )
             # Every caller hands us ctx.initial_status -- the status as it
             # was *before* `helm test` ran -- so the report's TestSuccess
             # row showed the previous reconcile's value, which is actively
@@ -674,7 +759,15 @@ class TestService:
         try:
             return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec), None
         except ExternalCommandError as exc:
-            return None, report.failure_detail(exc)
+            detail = report.failure_detail(exc)
+            _LOG.warning(
+                "HelmRelease status refresh failed; report keeps the pre-run status: "
+                "ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                detail,
+            )
+            return None, detail
 
     def _compose_diagnostics(
         self,
@@ -772,7 +865,16 @@ class TestService:
         try:
             pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
         except ExternalCommandError as exc:
-            return (), report.failure_detail(exc)
+            detail = report.failure_detail(exc)
+            # "we never got to look" vs "the chart left nothing behind": the
+            # report distinguishes them and so must the log.
+            _LOG.warning(
+                "test pod listing failed while composing diagnostics: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                detail,
+            )
+            return (), detail
         snapshots: list[TestPodSnapshot] = []
         for pod_ns, pod_name, phase in pods[: ctx.request.diagnostics_pod_cap]:
             log_error: str | None = None
@@ -787,6 +889,14 @@ class TestService:
                 )
             except ExternalCommandError as exc:
                 log_error = report.failure_detail(exc)
+                _LOG.warning(
+                    "test pod logs unavailable: ns=%s pod=%s phase=%s release=%s: %s",
+                    pod_ns,
+                    pod_name,
+                    phase,
+                    ctx.ref.name,
+                    log_error,
+                )
             previous: str | None = None
             # Only retry with --previous for terminal-phase pods where the
             # current container is gone; for Running/Pending the empty
@@ -794,6 +904,12 @@ class TestService:
             # A failed fetch is neither, and retrying it just spends another
             # round trip to record the same failure twice.
             if log_error is None and not logs and phase in _STALE_PHASES:
+                _LOG.debug(
+                    "retrying test pod logs with --previous: ns=%s pod=%s phase=%s",
+                    pod_ns,
+                    pod_name,
+                    phase,
+                )
                 try:
                     previous = self._kubectl.pod_logs(
                         pod_ns,
@@ -802,7 +918,16 @@ class TestService:
                         previous=True,
                         timeout=ctx.parsed.per_poll_sec,
                     )
-                except ExternalCommandError:
+                except ExternalCommandError as exc:
+                    # The only capture site with nowhere to render: a failed
+                    # --previous fetch produces `previous_logs=None`, which is
+                    # exactly what "the container never restarted" produces.
+                    _LOG.warning(
+                        "previous test pod logs unavailable: ns=%s pod=%s: %s",
+                        pod_ns,
+                        pod_name,
+                        report.failure_detail(exc),
+                    )
                     previous = None
             snapshots.append(
                 TestPodSnapshot(

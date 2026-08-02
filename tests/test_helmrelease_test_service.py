@@ -1040,3 +1040,48 @@ def test_an_unreadable_pod_log_says_so_and_skips_the_previous_retry() -> None:
     # nothing this time round; a read we never completed is not that, and
     # retrying it just spends a round trip to record the same failure.
     assert [c for c in cluster.calls if c[0] == "pod_logs" and c[2]["previous"]] == []
+
+
+# ----- the diagnostic log channel -------------------------------------------
+
+
+def test_a_swallowed_pod_log_failure_reaches_the_log_with_its_stderr(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The report is one sink for a swallowed read; the log is the other.
+
+    `TestOutcome.diagnostics` only reaches whoever holds the result object. A
+    CI run that dies, or one whose render dir is cleaned up, leaves the log as
+    the only surviving record -- so the stderr that distinguishes "RBAC denied"
+    from "apiserver unreachable" has to be in both.
+    """
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _released_status(ref)},
+        test_pods={("loki", "loki"): [("loki", "loki-test", "Failed")]},
+    )
+
+    def pod_logs(*args: Any, **kwargs: Any) -> str:
+        cluster.calls.append(("pod_logs", args, kwargs))
+        raise ExternalCommandError("logs boom", stderr="logs forbidden")
+
+    cluster.pod_logs = pod_logs  # type: ignore[assignment]
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+
+    with caplog.at_level("WARNING"):
+        _make_service(cluster, helm).test(_req())
+
+    unavailable = [
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING" and "test pod logs unavailable" in record.message
+    ]
+    assert len(unavailable) == 1
+    rendered = unavailable[0].getMessage()
+    assert "logs forbidden" in rendered
+    # The coordinates a grep needs: which pod, in which namespace, for which
+    # release.
+    assert "pod=loki-test" in rendered
+    assert "ns=loki" in rendered
+    assert "release=loki" in rendered

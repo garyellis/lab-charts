@@ -6,6 +6,8 @@ cluster package docstring for the full contrast.
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -44,6 +46,11 @@ from chart_manager.services.lifecycle.plan_projection import (
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
+
+#: Diagnostic channel. This service is the CI-shaped one, where the process
+#: that failed is frequently no longer around to be asked and its terminal
+#: narration is gone with it.
+_LOG = logging.getLogger(__name__)
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 
@@ -261,7 +268,20 @@ class EphemeralTestClusterService:
         accounting of what was installed and tested; narration goes to the
         injected progress callback.
         """
+        started = time.monotonic()
         local_cluster, plan = self._load_and_compile(options, lint=options.lint)
+        _LOG.info(
+            "chart test run started: chart=%s profile=%s cluster=%s namespace=%s "
+            "actions=%d ensure_cluster=%s include_dependent_tests=%s lint=%s",
+            options.chart,
+            options.profile,
+            options.cluster_name,
+            options.namespace or DEFAULT_NAMESPACE,
+            len(plan.actions),
+            options.ensure_cluster,
+            options.include_dependent_tests,
+            options.lint,
+        )
         if options.ensure_cluster:
             handle = self._ensure_environment(options.cluster_name, local_cluster)
             # ensure_cluster may have started stopped node containers
@@ -302,6 +322,18 @@ class EphemeralTestClusterService:
             namespaces_created=namespaces_created,
         )
 
+        # Only reached on success: `_execute_lifecycle_plan` raises on the first
+        # failed action, and that path logs its own ERROR before raising.
+        _LOG.info(
+            "chart test run finished: chart=%s cluster=%s installed=%d tested=%d "
+            "namespaces=%d elapsed=%.1fs",
+            options.chart,
+            options.cluster_name,
+            len(installed),
+            len(tested),
+            len(namespaces_created),
+            time.monotonic() - started,
+        )
         return EphemeralTestResult(
             chart=options.chart,
             profile=options.profile,
@@ -348,10 +380,28 @@ class EphemeralTestClusterService:
             return
         failed_action = plan.action(failure.action_id)
         namespace = failed_action.target.namespace
+        # Logged before the diagnostics attempt: collecting them is itself a
+        # cluster round trip that can fail or hang, and the identity of the
+        # action that failed must not depend on it succeeding.
+        _LOG.error(
+            "cluster action failed: chart=%s action=%s kind=%s namespace=%s: %s",
+            failed_action.target.chart,
+            failure.action_id,
+            failed_action.kind.value,
+            namespace or "(none)",
+            failure.detail,
+        )
         if namespace is not None:
             try:
                 diagnostics = self.kubectl.diagnostics(namespace)
             except Exception as exc:
+                _LOG.warning(
+                    "namespace diagnostics unavailable for the failing action: "
+                    "namespace=%s: %s: %s",
+                    namespace,
+                    type(exc).__name__,
+                    exc,
+                )
                 self._progress(
                     warn(
                         f"failed to collect diagnostics for namespace "

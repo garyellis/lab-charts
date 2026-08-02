@@ -14,6 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
 from chart_manager.domain.charts import (
     ChartMetadata,
@@ -263,3 +265,55 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
     # The next chart still converged, on its own namespace.
     assert [(o.chart, o.namespace) for o in summary.applied] == [("grafana", "monitoring")]
     assert calls == [("kind-lab", "grafana")]
+
+
+def test_a_continue_on_error_failure_names_the_chart_in_the_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The failed row is a `RunSummary` entry; the log is the parallel channel.
+
+    Continue-on-error means the process exits 0 for a converge that only half
+    happened, and the narration that reported it is presentation -- optional,
+    unlevelled, and gone under `-o json`. An ERROR naming the chart is what
+    makes the partial converge findable afterwards.
+    """
+    kubectl = _Kubectl(
+        namespace_raises={"observability": ExternalCommandError("timed out")}
+    )
+    service = DevelopmentClusterService(
+        tmp_path,
+        helm=_Helm("kind-lab", []),  # type: ignore[arg-type]
+        kind=_Kind(),  # type: ignore[arg-type]
+        kubectl=kubectl,  # type: ignore[arg-type]
+        expose=_Expose(),  # type: ignore[arg-type]
+    )
+    charts = {"loki": _stub_chart("loki", namespace="observability")}
+
+    class _Catalog:
+        def get(self, name: str) -> Any:
+            return charts[name]
+
+        def value_paths(self, _chart: Any, _profile: str) -> list[Path]:
+            return []
+
+    summary = RunSummary()
+    with caplog.at_level("ERROR"):
+        service._install_plan(
+            [InstallPlanEntry(chart="loki", profile="minimal")],
+            default_namespace="default",
+            installed_keys=set(),
+            namespaces_created=set(),
+            summary=summary,
+            skip_installed=False,
+            cluster_tests=_Catalog(),  # type: ignore[arg-type]
+        )
+
+    assert [f.chart for f in summary.failed] == ["loki"]
+    [record] = [r for r in caplog.records if r.levelname == "ERROR"]
+    rendered = record.getMessage()
+    assert "chart apply failed" in rendered
+    assert "chart=loki" in rendered
+    assert "namespace=observability" in rendered
+    # The exception detail, not just the fact of a failure.
+    assert "timed out" in rendered

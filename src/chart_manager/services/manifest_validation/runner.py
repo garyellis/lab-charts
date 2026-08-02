@@ -31,6 +31,7 @@ caller, and the tree it writes is the input every gate reads.
 
 from __future__ import annotations
 
+import logging
 import time
 import traceback
 from collections.abc import Callable
@@ -60,6 +61,14 @@ from chart_manager.services.manifest_validation.validators import (
     ValidatorCategory,
     ValidatorInvocation,
 )
+
+#: The run's diagnostic channel, parallel to `on_event`. `on_event` is
+#: presentation -- optional, suppressed by `-o json`, and carrying neither a
+#: level nor a timestamp -- so it cannot answer "what happened?" after a CI
+#: run failed. Everything this module converts into a row (a crashed worker, an
+#: unusable helm binding, a failed prefetch, a helm render that died) is
+#: recorded here as well, with the exception detail the row has no room for.
+_LOG = logging.getLogger(__name__)
 
 EventCallback = Callable[[WorklistRow, str, str, float | None], None]
 
@@ -249,6 +258,22 @@ class ManifestValidationRunner:
             return RunResult(rows=(), rendered_root=self.output_root)
 
         active = enabled_phases if enabled_phases is not None else ALL_PHASES
+        started = time.monotonic()
+        # The resolved parameters, not the requested ones: `max_workers` has
+        # already been floored at 1 and fail-fast overrides it to serial below,
+        # so an operator reading "workers=8" in a log next to a serial timeline
+        # would be reading the request rather than the run.
+        _LOG.info(
+            "validate run started: rows=%d workers=%d fail_fast=%s phases=%s "
+            "tool_timeout=%s dep_update_timeout=%s output_root=%s",
+            len(configs),
+            1 if fail_fast else self.max_workers,
+            fail_fast,
+            ",".join(sorted(active)),
+            self.tool_timeout,
+            self.dep_update_timeout,
+            self.output_root,
+        )
 
         # Validate the complete batch before dependency prefetch or any
         # filesystem mutation. Re-check immediately before each reset to
@@ -292,6 +317,11 @@ class ManifestValidationRunner:
                 try:
                     row_result = self._run_row(cfg, active)
                 except Exception as exc:
+                    _LOG.exception(
+                        "validate worker crashed: chart=%s env=%s",
+                        cfg.row.chart,
+                        cfg.row.env,
+                    )
                     row_result = crash_row(cfg, exc, active=active)
                 results.append(row_result)
                 if fail_fast and self._row_failed(row_result):
@@ -317,6 +347,11 @@ class ManifestValidationRunner:
                         # SystemExit must propagate so Ctrl-C terminates a
                         # long parallel run instead of being absorbed into
                         # a per-row "FAIL".
+                        _LOG.exception(
+                            "validate worker crashed: chart=%s env=%s",
+                            cfg.row.chart,
+                            cfg.row.env,
+                        )
                         results.append(crash_row(cfg, exc, active=active))
 
         for result in results:
@@ -324,6 +359,18 @@ class ManifestValidationRunner:
 
         # Deterministic output order regardless of completion order.
         results.sort(key=lambda r: (r.row.chart, r.row.env))
+        failed = sum(1 for result in results if self._row_failed(result))
+        _LOG.info(
+            "validate run finished: rows=%d failed=%d not_run=%d elapsed=%.2fs",
+            len(results),
+            failed,
+            sum(
+                1
+                for result in results
+                if all(phase.status == "NOT_RUN" for phase in result.phases.values())
+            ),
+            time.monotonic() - started,
+        )
         return RunResult(rows=tuple(results), rendered_root=self.output_root)
 
     # --- helm bindings -----------------------------------------------------
@@ -367,6 +414,14 @@ class ManifestValidationRunner:
             try:
                 self._helm_for(binding)
             except Exception as exc:
+                version, binary = binding
+                _LOG.error(
+                    "helm binding unavailable: version=%s binary=%s: %s: %s",
+                    version or "(ambient)",
+                    binary or "(ambient)",
+                    type(exc).__name__,
+                    exc,
+                )
                 unusable.add(binding)
                 for cfg in configs:
                     if cfg.helm_binding == binding:
@@ -386,6 +441,12 @@ class ManifestValidationRunner:
                 unusable=frozenset(unusable),
             )
             for key, failure in prefetched.items():
+                _LOG.error(
+                    "dependency prefetch failed: chart_path=%s: %s: %s",
+                    key[1],
+                    type(failure).__name__,
+                    failure,
+                )
                 blockers[key] = (failure, "dependency prefetch failed")
         return blockers
 
@@ -548,6 +609,17 @@ class ManifestValidationRunner:
             "schema": schema_result,
             "policy": policy_result,
         }
+        # DEBUG, not INFO: one line per row per phase would bury the run
+        # boundaries in a 200-row repository scan. The failing rows already
+        # logged at ERROR from the phase that failed them.
+        _LOG.debug(
+            "validate row finished: chart=%s env=%s render=%s schema=%s policy=%s",
+            cfg.row.chart,
+            cfg.row.env,
+            render_result.status,
+            schema_result.status,
+            policy_result.status,
+        )
         return RowResult(
             row=cfg.row,
             phases=phase_map,
@@ -575,6 +647,17 @@ class ManifestValidationRunner:
                 values=cfg.values,
             )
         except ExternalCommandError as exc:
+            # Logged as well as returned: the PhaseResult reaches the summary
+            # artifact, which a `--keep`-less failed run deletes, and reaches
+            # nothing at all when the process dies before aggregating.
+            _LOG.error(
+                "helm template failed: chart=%s env=%s release=%s namespace=%s: %s",
+                cfg.row.chart,
+                cfg.row.env,
+                cfg.row.release,
+                cfg.row.namespace,
+                exc,
+            )
             # error_type="tool" promotes the row to `Outcome.TOOL` — the
             # underlying issue is a helm crash, not a chart-author problem.
             return PhaseResult(
@@ -630,6 +713,15 @@ class ManifestValidationRunner:
         for invocation in enabled:
             executor = self.validators.get(invocation.validator_id)
             if executor is None:
+                # A configuration fault, not a chart fault: the row fails for a
+                # reason nothing in the chart can fix, so it needs to be
+                # findable without reading the summary.
+                _LOG.error(
+                    "validator executor unavailable: validator=%s chart=%s env=%s",
+                    invocation.validator_id,
+                    cfg.row.chart,
+                    cfg.row.env,
+                )
                 results[invocation.validator_id] = PhaseResult(
                     phase=phase,
                     status="FAIL",

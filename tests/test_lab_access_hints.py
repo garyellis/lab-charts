@@ -692,6 +692,38 @@ def test_port_mapping_drift_silent_when_kind_config_absent(
     assert "kind cluster port mappings" not in progress.text
 
 
+def test_an_unrunnable_drift_check_says_so_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """"Could not compare" and "no drift" are the same `PortMappingDrift` value.
+
+    With no host ports to compare against, the check returns `PortMappingDrift()`
+    -- `missing=()` and `error=None` -- which is byte-for-byte what a clean
+    cluster returns. Narration is deliberately silent (there is nothing to tell
+    a developer to do), so the log is the only place the distinction survives,
+    and it is what keeps a typo'd `spec.cluster.config` from disabling the
+    check permanently with no signal at all.
+    """
+    kind = _Kind(host_ports=set())
+    svc = _service(
+        tmp_path,
+        helm=_Helm(status="applied"),
+        kind=kind,
+        kubectl=_RecordingKubectl(),
+        progress=_Recorder(),
+    )
+
+    with caplog.at_level("WARNING"):
+        svc._warn_on_port_mapping_drift(
+            "chart-manager",
+            config=tmp_path / "kind-config.yaml",
+        )
+
+    [record] = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert "port-mapping drift check skipped" in record.getMessage()
+    assert "cluster=chart-manager" in record.getMessage()
+
+
 def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     tmp_path: Path,
 ) -> None:

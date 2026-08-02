@@ -16,7 +16,8 @@ docstring for why there is exactly one of it.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import logging
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -68,6 +69,32 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     # Unit and integration tests must never inherit a developer's external
     # event sink configuration and persist records in Cosmos DB.
     monkeypatch.setenv("EVENTS_BACKEND", "none")
+
+
+@pytest.fixture(autouse=True)
+def hermetic_logging() -> Iterator[None]:
+    """Undo any process-wide logging configuration a test installs.
+
+    `setup_logging` is deliberately process-wide (`logging.basicConfig(
+    force=True)`), so a single CLI test that exercises `-v` for real leaves a
+    `RichLogHandler` on the *root* logger, bound to the `CliRunner` stderr
+    buffer that is closed the moment that test returns. Every later test that
+    logs anything then writes into a closed stream, and `logging` swallows the
+    result as "--- Logging error ---" on stderr.
+
+    That was invisible while `services/` emitted no log records. It is not
+    invisible now, and the fix belongs here rather than in each test: the
+    leaked state is global, and no test should have to know which earlier one
+    configured logging.
+    """
+    root = logging.getLogger()
+    handlers = root.handlers[:]
+    level = root.level
+    try:
+        yield
+    finally:
+        root.handlers = handlers
+        root.setLevel(level)
 
 
 @pytest.fixture

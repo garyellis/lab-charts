@@ -8,6 +8,8 @@ repository, live in `drift.py` / `access.py`.
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -72,6 +74,12 @@ from chart_manager.services.progress import (
     warn,
 )
 from chart_manager.settings import DEFAULT_LOCAL_CONFIG
+
+#: Diagnostic channel, parallel to `self._progress`. Every `failure(...)` /
+#: `warn(...)` narration below records an outcome the converge then *continues
+#: past*; the narration is optional and unlevelled, so the same fact is logged
+#: here for whoever reads the run afterwards.
+_LOG = logging.getLogger(__name__)
 
 # cert-manager webhook deployment. Must be Available before the
 # istio-gateway chart installs (its Certificate / ClusterIssuer CRs go
@@ -153,6 +161,7 @@ class DevelopmentClusterService:
         Kind is mutated. Bootstrap is fail-fast; workload convergence retains
         the development-friendly continue-on-error accounting.
         """
+        started = time.monotonic()
         local_cluster = self.local_resources.load_cluster()
         releases = self._target_releases(target, profile=profile)
         steps = self._preflight_target(
@@ -160,6 +169,16 @@ class DevelopmentClusterService:
             excluded_lifecycle_identities=self._bootstrap_executor().preflight(local_cluster),
         )
         config = kind_config_path(self.root, local_cluster)
+        _LOG.info(
+            "local converge started: cluster=%s target=%s kind=%s profile=%s "
+            "steps=%d skip_installed=%s",
+            cluster_name,
+            target.name,
+            target.kind,
+            profile or "(chart default)",
+            len(steps),
+            skip_installed,
+        )
         self._progress(step("Ensuring local cluster", cluster_name))
         environment = self._ensure_environment(cluster_name, config=config)
         self._progress(step("Waiting for kube-apiserver"))
@@ -219,6 +238,17 @@ class DevelopmentClusterService:
             ),
             DEFAULT_NAMESPACE,
         )
+        # `failed` is a count, not a raise: this path is continue-on-error, so
+        # the run's exit status alone does not say how much of it converged.
+        _LOG.info(
+            "local converge finished: cluster=%s applied=%d no_change=%d failed=%d "
+            "elapsed=%.1fs",
+            cluster_name,
+            len(summary.applied),
+            len(summary.no_change),
+            len(summary.failed),
+            time.monotonic() - started,
+        )
         return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
 
     def status(self, cluster_name: str) -> DevelopmentClusterStatus:
@@ -263,7 +293,16 @@ class DevelopmentClusterService:
         """
         try:
             local_cluster = self.local_resources.load_cluster()
-        except (ChartManagerError, OSError):
+        except (ChartManagerError, OSError) as exc:
+            # Swallowed on purpose (see above), but not silently: with no
+            # authored config the drift check downstream compares against a
+            # default path that may not exist, and a typo'd `spec.cluster.config`
+            # would otherwise disable that check permanently with no signal.
+            _LOG.warning(
+                "LocalCluster unreadable; port-mapping drift has no baseline: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             return None
         return kind_config_path(self.root, local_cluster)
 
@@ -367,6 +406,7 @@ class DevelopmentClusterService:
         """
         self._progress(step("Stopping local cluster", cluster_name))
         stopped = self.environment_provider.stop(self._handle(cluster_name))
+        _LOG.info("local cluster stopped: cluster=%s changed=%s", cluster_name, stopped)
         return DevelopmentClusterActionResult(
             cluster_name=cluster_name,
             changed=stopped,
@@ -382,6 +422,7 @@ class DevelopmentClusterService:
         """
         self._progress(step("Deleting local cluster", cluster_name))
         deleted = self.environment_provider.destroy(self._handle(cluster_name))
+        _LOG.info("local cluster destroyed: cluster=%s changed=%s", cluster_name, deleted)
         return DevelopmentClusterActionResult(
             cluster_name=cluster_name,
             changed=deleted,
@@ -549,6 +590,10 @@ class DevelopmentClusterService:
         try:
             releases = self.helm.list_releases(all_namespaces=True)
         except ChartManagerError as exc:
+            _LOG.warning(
+                "helm release listing failed; treating every release as uninstalled: %s",
+                exc,
+            )
             self._progress(
                 warn(f"could not list helm releases ({exc}); proceeding as if no releases exist")
             )
@@ -580,6 +625,12 @@ class DevelopmentClusterService:
             try:
                 chart = catalog.get(entry.chart)
             except ChartManagerError as exc:
+                _LOG.error(
+                    "chart resolution failed; recorded as a failed row: chart=%s profile=%s: %s",
+                    entry.chart,
+                    entry.profile,
+                    exc,
+                )
                 self._progress(failure("chart resolution failed:", f"{entry.chart}: {exc}"))
                 summary.failed.append(
                     DevelopmentClusterEntryFailure(
@@ -601,6 +652,13 @@ class DevelopmentClusterService:
             try:
                 profile = require_cluster_test_profile(chart.spec, entry.profile)
             except ChartManagerError as exc:
+                _LOG.error(
+                    "profile resolution failed; recorded as a failed row: "
+                    "chart=%s profile=%s: %s",
+                    entry.chart,
+                    entry.profile,
+                    exc,
+                )
                 self._progress(failure("profile resolution failed:", f"{entry.chart}: {exc}"))
                 summary.failed.append(
                     DevelopmentClusterEntryFailure(
@@ -693,6 +751,14 @@ class DevelopmentClusterService:
                 bucket.append(DevelopmentClusterEntryOutcome(entry.chart, entry.profile, namespace))
                 installed_keys.add(key)
             except ChartManagerError as exc:
+                _LOG.error(
+                    "chart apply failed; converge continues: chart=%s profile=%s "
+                    "namespace=%s: %s",
+                    entry.chart,
+                    entry.profile,
+                    namespace,
+                    exc,
+                )
                 self._progress(failure("apply failed:", f"{entry.chart}:{entry.profile} -> {exc}"))
                 summary.failed.append(
                     DevelopmentClusterEntryFailure(
@@ -729,6 +795,14 @@ class DevelopmentClusterService:
         missing_values = [path for path in values if not path.is_file()]
         if missing_values:
             message = "OCI values file(s) not found: " + ", ".join(map(str, missing_values))
+            _LOG.error(
+                "OCI release skipped; converge continues: release=%s identity=%s "
+                "namespace=%s: %s",
+                release,
+                identity,
+                namespace,
+                message,
+            )
             self._progress(failure("apply failed:", f"{release} -> {message}"))
             summary.failed.append(
                 DevelopmentClusterEntryFailure(
@@ -755,6 +829,14 @@ class DevelopmentClusterService:
             bucket.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
             installed_keys.add(key)
         except ChartManagerError as exc:
+            _LOG.error(
+                "OCI release apply failed; converge continues: release=%s identity=%s "
+                "namespace=%s: %s",
+                release,
+                identity,
+                namespace,
+                exc,
+            )
             self._progress(failure("apply failed:", f"{release}@{identity} -> {exc}"))
             summary.failed.append(
                 DevelopmentClusterEntryFailure(
@@ -796,6 +878,13 @@ class DevelopmentClusterService:
                     timeout=CERT_MANAGER_WEBHOOK_TIMEOUT,
                 )
             except ChartManagerError as exc:
+                _LOG.warning(
+                    "cert-manager webhook not Available; later CR submissions may fail: "
+                    "deployment=%s namespace=%s: %s",
+                    CERT_MANAGER_WEBHOOK_DEPLOYMENT,
+                    CERT_MANAGER_WEBHOOK_NAMESPACE,
+                    exc,
+                )
                 self._progress(
                     warn(
                         f"cert-manager webhook not Available "

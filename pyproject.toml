@@ -66,7 +66,18 @@ extend-exclude = ["tests/fixtures"]
 # TID251 (flake8-tidy-imports banned-api) is selected by code rather than as
 # the whole TID family: TID252/TID253 are unrelated to the layering contract
 # below and would add unowned findings to the existing lint backlog.
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG"]
+#
+# G (flake8-logging-format) and LOG are selected at zero findings and enforce
+# lazy %-formatting in log calls. Read the coverage honestly before relying on
+# it: ruff recognizes a logger by the *name* it is called through, matching
+# `logging`, `log`, `logger` and `LOG` but NOT the `_LOG` this repository binds
+# in every module (verified against ruff 0.15). `logger-objects` does not close
+# the gap either -- it resolves imported objects, and a logger bound in the
+# module that uses it is a local binding with no qualified name to match. So G
+# catches a bare `logging.info(f"...")` and any future `log`/`logger` binding,
+# while the `_LOG.` call sites stay a convention this comment records rather
+# than a rule the linter checks.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG", "G", "LOG"]
 
 # --- layer contract: cli/ must not import integrations/ ------------------
 #

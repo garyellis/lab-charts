@@ -1,6 +1,7 @@
 """Promote a chart to an environment: clone the flux repo, edit version drift, open a PR."""
 from __future__ import annotations
 
+import logging
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ from chart_manager.services.events.writer import EventWriter
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
 from .state import PROMOTE_PHASE, PromoteStatus
+
+_LOG = logging.getLogger(__name__)
 
 CloneFn = Callable[[str, Path, str], None]
 DowngradeConfirmFn = Callable[[list[HelmReleaseMatch], str], bool]
@@ -82,6 +85,22 @@ class PromoteResult:
         return self.status is PromoteStatus.ABORTED
 
 
+def _loggable_repo(url: str) -> str:
+    """`url` with any `user:password@` userinfo removed.
+
+    Every documented invocation passes an SSH remote (`git@github.com:org/repo`),
+    which carries no credential -- but the HTTPS form
+    `https://x-access-token:<PAT>@github.com/org/repo` is the standard way to
+    hand a token to `git clone` in CI, and this value is logged. Split on the
+    last `@` so an SSH remote's `git@` prefix is what survives, not what gets
+    mistaken for a credential.
+    """
+    scheme, separator, rest = url.partition("://")
+    if not separator or "@" not in rest:
+        return url
+    return f"{scheme}://{rest.rsplit('@', 1)[1]}"
+
+
 def _default_clone(url: str, target: Path, branch: str) -> None:
     """Default clone strategy: shallow `git clone` of one branch."""
     Git.clone(url, target, branch=branch)
@@ -120,10 +139,38 @@ class PromoteService:
 
     def promote(self, request: PromoteRequest) -> PromoteResult:
         """Clone into a temp dir, promote in-tree, emit the lifecycle event, and return."""
+        # The clone target is a temp dir that is gone by the time anyone reads
+        # this, so the coordinates that matter are the repo and the path within
+        # it -- the two inputs that decide which HelmReleases get edited.
+        _LOG.info(
+            "promotion started: chart=%s version=%s environment=%s repo=%s path=%s "
+            "base=%s dry_run=%s",
+            request.chart_name,
+            request.version,
+            request.environment,
+            _loggable_repo(request.flux_repo),
+            request.path,
+            request.base_branch,
+            request.dry_run,
+        )
         with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
             workdir = Path(tmp) / "flux"
             self._clone_fn(request.flux_repo, workdir, request.base_branch)
             result = self._promote_in_workdir(request, workdir)
+        # `pr_url` doubles as the promotion correlation id (see
+        # `_emit_promotion`), which is what ties this line to the events store.
+        _LOG.info(
+            "promotion finished: chart=%s version=%s environment=%s status=%s "
+            "matched=%d changed_files=%d branch=%s pr=%s",
+            request.chart_name,
+            request.version,
+            request.environment,
+            result.status,
+            len(result.matches),
+            len(result.changed_files),
+            result.branch or "(none)",
+            result.pull_request.url if result.pull_request else "(none)",
+        )
         self._emit_promotion(request, result)
         return result
 
@@ -211,6 +258,14 @@ class PromoteService:
                     "Inject a confirm_downgrade callback (or pass --allow-downgrade)."
                 )
             if not self._confirm_downgrade(downgrades, request.version):
+                _LOG.warning(
+                    "promotion aborted, downgrade declined: chart=%s version=%s "
+                    "environment=%s downgrades=%d",
+                    request.chart_name,
+                    request.version,
+                    request.environment,
+                    len(downgrades),
+                )
                 return PromoteResult(
                     status=PromoteStatus.ABORTED,
                     matches=matches,
@@ -252,6 +307,19 @@ class PromoteService:
         except ExternalCommandError as exc:
             # Push has already succeeded; surface the branch so the operator
             # can retry the PR step manually rather than guessing the state.
+            # Logged too, because this is the one promotion failure that leaves
+            # a real mutation behind and the exception text alone does not say
+            # which repo the orphan branch is on.
+            _LOG.error(
+                "promotion pushed but PR creation failed: chart=%s version=%s "
+                "environment=%s repo=%s branch=%s: %s",
+                request.chart_name,
+                request.version,
+                request.environment,
+                _loggable_repo(request.flux_repo),
+                branch,
+                exc,
+            )
             raise ChartManagerError(
                 f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
             ) from exc

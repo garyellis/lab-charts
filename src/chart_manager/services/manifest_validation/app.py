@@ -31,8 +31,10 @@ dragging a TUI library into the process. A guard test in
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -99,6 +101,12 @@ __all__ = [
     "resolve_phases",
     "resolve_workers",
 ]
+
+#: Service-level decisions (what the worklist resolved to, which fallbacks
+#: fired, whether the run could be executed at all) go here; `runner.py` logs
+#: the execution itself. Both are parallel to `ProgressDisplay`, which is
+#: presentation and is silent under `-o json`.
+_LOG = logging.getLogger(__name__)
 
 WarnCallback = Callable[[str], None]
 
@@ -362,6 +370,22 @@ class ManifestValidationService:
             ),
         )
 
+        # The run id is `out_dir`'s last path component (see `_resolve_out_dir`)
+        # and is the only identifier that ties these lines, the render tree and
+        # `summary.json` together.
+        _LOG.info(
+            "validate service run started: run_id=%s rows=%d charts=%d workers=%d "
+            "fail_fast=%s phases=%s changed_files=%s out_dir=%s",
+            out_dir.name,
+            len(configs),
+            len(compiled_by_chart),
+            workers,
+            request.fail_fast,
+            ",".join(sorted(request.phases)),
+            "all" if changed is None else len(changed),
+            out_dir,
+        )
+        started = time.monotonic()
         self._progress.start([cfg.row for cfg in configs])
         try:
             executed = self._runner_factory(spec).run(
@@ -375,6 +399,11 @@ class ManifestValidationService:
             # helm binding, a failed prefetch, a crashed worker -- belongs to
             # the runner, which reports those as rows itself. Progress is
             # narrated here for the same reason: nothing else saw these rows.
+            _LOG.exception(
+                "validate execution failed before any row ran: run_id=%s rows=%d",
+                out_dir.name,
+                len(configs),
+            )
             executed = tuple(
                 crash_row(cfg, exc, active=request.phases, context="execution failed")
                 for cfg in configs
@@ -390,6 +419,19 @@ class ManifestValidationService:
         finally:
             self._progress.stop()
 
+        _LOG.info(
+            "validate service run finished: run_id=%s rows=%d failed=%d "
+            "spec_errors=%d elapsed=%.2fs",
+            out_dir.name,
+            len(executed),
+            sum(
+                1
+                for row_result in executed
+                if any(phase.status == "FAIL" for phase in row_result.phases.values())
+            ),
+            len(build.spec_errors) + len(explicit_spec_errors),
+            time.monotonic() - started,
+        )
         return RunOutcome(
             result=RunResult(
                 rows=executed,
@@ -458,6 +500,7 @@ class ManifestValidationService:
                 sidecar.parent.mkdir(parents=True, exist_ok=True)
                 sidecar.write_text(text)
             except OSError as exc:
+                _LOG.warning("could not write validate summary %s: %s", sidecar, exc)
                 self._on_warn(f"warning: could not write {sidecar}: {exc}")
         return markdown
 
@@ -480,6 +523,7 @@ class ManifestValidationService:
         try:
             shutil.rmtree(outcome.out_dir)
         except OSError as exc:
+            _LOG.warning("validate render dir cleanup failed: %s: %s", outcome.out_dir, exc)
             self._on_warn(f"warning: cleanup failed: {exc}")
 
     # --- internals ---------------------------------------------------------
@@ -520,6 +564,15 @@ class ManifestValidationService:
         try:
             return self._git_factory(repo_root).changed_files(base=request.base)
         except ChartManagerError as exc:
+            # This fallback silently widens the run from "what changed" to
+            # "everything", which is the safe direction but changes the run's
+            # duration by an order of magnitude. An operator wondering why CI
+            # took 20 minutes needs this line.
+            _LOG.warning(
+                "git diff failed against base=%s (%s); validating every chart instead",
+                request.base,
+                exc,
+            )
             self._on_warn(f"warn: git diff failed ({exc}); falling back to --all")
             return None
 

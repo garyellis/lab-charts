@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
@@ -10,6 +11,8 @@ from chart_manager.integrations.kind import Kind
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.models import PortMappingDrift
 from chart_manager.services.progress import ProgressCallback, warn
+
+_LOG = logging.getLogger(__name__)
 
 KIND_CONFIG_FILENAME = "kind-config.yaml"
 
@@ -61,14 +64,39 @@ def port_mapping_drift(
     un-runnable check (no config to compare against, or an inspection that
     failed) is distinguishable from a clean one -- see `PortMappingDrift`.
     """
-    expected = kind_config_host_ports(config or root / KIND_CONFIG_FILENAME)
+    baseline = config or root / KIND_CONFIG_FILENAME
+    expected = kind_config_host_ports(baseline)
     if not expected:
+        # `PortMappingDrift()` with no `missing` and no `error` is the same
+        # value a genuinely clean cluster produces, so the *only* place the
+        # difference survives is here. A typo'd `spec.cluster.config` disables
+        # this check permanently and looks exactly like passing it.
+        _LOG.warning(
+            "port-mapping drift check skipped, no host ports to compare: "
+            "cluster=%s baseline=%s",
+            cluster_name,
+            baseline,
+        )
         return PortMappingDrift()
     try:
         live = kind.container_host_ports(cluster_name)
     except ChartManagerError as exc:
+        _LOG.warning(
+            "port-mapping inspection failed: cluster=%s baseline=%s: %s",
+            cluster_name,
+            baseline,
+            exc,
+        )
         return PortMappingDrift(error=str(exc))
-    return PortMappingDrift(missing=tuple(sorted(expected - live)))
+    missing = tuple(sorted(expected - live))
+    if missing:
+        _LOG.warning(
+            "port-mapping drift detected; `local reset` is required: "
+            "cluster=%s missing_host_ports=%s",
+            cluster_name,
+            list(missing),
+        )
+    return PortMappingDrift(missing=missing)
 
 
 def warn_on_port_mapping_drift(

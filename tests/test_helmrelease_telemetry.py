@@ -14,6 +14,7 @@ telemetry.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +28,7 @@ from chart_manager.integrations.helmrelease import (
 )
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import PromotionPhase
 from chart_manager.services.helmrelease.helm_test import TestRequest, TestService
 from chart_manager.services.helmrelease.monitor import MonitorRequest, MonitorService
@@ -433,6 +435,37 @@ def test_event_emission_failure_does_not_break_the_run(
     assert result.ok is True
     assert len(events.events) == 2  # both attempted, both swallowed
     assert "non-fatal" in caplog.text
+
+
+def test_the_swallow_records_the_exception_type_not_only_its_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A dropped event is only debuggable if the log says what dropped it.
+
+    Transport exceptions from the store adapters frequently stringify to the
+    empty string, which turned this line into "... (non-fatal): " -- a message
+    that reads like a bug in the logging rather than a report about the
+    backend. The type is what stays informative when the text does not.
+    """
+    with caplog.at_level("WARNING"):
+        error = emit_non_fatal(
+            _raise(KeyError("COSMOS_ENDPOINT")), strict=False, what="promotion"
+        )
+
+    assert isinstance(error, KeyError)
+    [record] = [r for r in caplog.records if "non-fatal" in r.message]
+    assert record.levelname == "WARNING"
+    assert "promotion event emission failed (non-fatal)" in record.getMessage()
+    assert "KeyError" in record.getMessage()
+
+
+def _raise(exc: Exception) -> Callable[[], None]:
+    """An emitter that always fails with `exc`."""
+
+    def emit() -> None:
+        raise exc
+
+    return emit
 
 
 def test_strict_events_surfaces_the_emission_failure() -> None:
