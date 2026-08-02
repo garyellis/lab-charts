@@ -8,7 +8,7 @@ repository, live in `drift.py` / `access.py`.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +18,14 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.clusters._shared import (
+    DEFAULT_NAMESPACE,
+    kind_config_path,
+    lifecycle_install_plan,
+    oci_chart_ref,
+    oci_identity,
+)
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.development.access import (
     access_hints,
@@ -41,13 +47,15 @@ from chart_manager.services.clusters.development.models import (
 )
 from chart_manager.services.clusters.development.status import cluster_status
 from chart_manager.services.clusters.environment import (
+    BoundClients,
+    ClientFactory,
     EnvironmentHandle,
     EnvironmentSpec,
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
+from chart_manager.services.domain.install_plan import InstallPlanEntry
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.local_resources import (
@@ -106,8 +114,7 @@ class DevelopmentClusterService:
         progress: ProgressCallback | None = None,
         local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
-        client_factory: Callable[[EnvironmentHandle], tuple[Helm, Kubectl, ExposeService]]
-        | None = None,
+        client_factory: ClientFactory | None = None,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -152,7 +159,7 @@ class DevelopmentClusterService:
             releases,
             excluded_lifecycle_identities=self._bootstrap_executor().preflight(local_cluster),
         )
-        config = (self.root / local_cluster.spec.cluster.config).resolve()
+        config = kind_config_path(self.root, local_cluster)
         self._progress(step("Ensuring local cluster", cluster_name))
         environment = self._ensure_environment(cluster_name, config=config)
         self._progress(step("Waiting for kube-apiserver"))
@@ -182,7 +189,7 @@ class DevelopmentClusterService:
             if isinstance(target_step, _TargetLocalExecution):
                 self._install_plan(
                     list(target_step.plan),
-                    default_namespace="default",
+                    default_namespace=DEFAULT_NAMESPACE,
                     installed_keys=installed_keys,
                     namespaces_created=namespaces_created,
                     summary=summary,
@@ -210,7 +217,7 @@ class DevelopmentClusterService:
                 for entry in (*summary.applied, *summary.no_change)
                 if entry.chart != local_cluster.metadata.name
             ),
-            "default",
+            DEFAULT_NAMESPACE,
         )
         return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
 
@@ -238,15 +245,13 @@ class DevelopmentClusterService:
             config=self._authored_kind_config(),
         )
 
-    def _current_clients(
-        self, _handle: EnvironmentHandle
-    ) -> tuple[Helm, Kubectl, ExposeService]:
+    def _current_clients(self, _handle: EnvironmentHandle) -> BoundClients:
         """Fall back to the injected clients when no factory was wired.
 
         Only tests construct the service without a factory; the composition
         root always supplies one.
         """
-        return self.helm, self.kubectl, self.expose
+        return BoundClients(helm=self.helm, kubectl=self.kubectl, expose=self.expose)
 
     def _authored_kind_config(self) -> Path | None:
         """The LocalCluster's kind config, or None when it cannot be read.
@@ -260,7 +265,7 @@ class DevelopmentClusterService:
             local_cluster = self.local_resources.load_cluster()
         except (ChartManagerError, OSError):
             return None
-        return (self.root / local_cluster.spec.cluster.config).resolve()
+        return kind_config_path(self.root, local_cluster)
 
     def plan_target(
         self,
@@ -310,7 +315,7 @@ class DevelopmentClusterService:
                 entries.append(
                     DevelopmentClusterPlanEntry(
                         chart=target_step.name,
-                        profile=target_step.version or target_step.digest or "pinned",
+                        profile=oci_identity(target_step),
                         namespace=target_step.namespace,
                         source="target",
                     )
@@ -325,7 +330,7 @@ class DevelopmentClusterService:
                         namespace=require_cluster_test_profile(
                             chart.spec, entry.profile
                         ).namespace
-                        or "default",
+                        or DEFAULT_NAMESPACE,
                         source="target",
                     )
                 )
@@ -446,7 +451,8 @@ class DevelopmentClusterService:
         )
         handle = self.environment_provider.ensure(spec)
         if self._client_factory is not None:
-            self.helm, self.kubectl, self.expose = self._client_factory(handle)
+            bound = self._client_factory(handle)
+            self.helm, self.kubectl, self.expose = bound.helm, bound.kubectl, bound.expose
         return handle
 
     def _target_releases(
@@ -490,32 +496,15 @@ class DevelopmentClusterService:
             if isinstance(release, OciChartRelease):
                 steps.append(release)
                 continue
-            chart_document = load_yaml_file(self.root / release.chart / "Chart.yaml")
-            release_name = chart_document.get("name")
-            if not isinstance(release_name, str):
-                raise ChartManagerError(
-                    f"{release.chart}/Chart.yaml must define a string name"
-                )
-            catalog = ClusterTestCatalog(
-                self.root,
-                charts_dir=release.chart.parent,
-            )
-            root_chart = catalog.get(release_name)
-            if root_chart.path.resolve() != (self.root / release.chart).resolve():
-                raise ChartManagerError(
-                    f"local release {release_name!r} does not match "
-                    f"its chart-lifecycle chart: {release.chart}"
-                )
-            plan = DependencyResolver(catalog.get).install_plan(
-                release_name,
-                release.profile,
+            catalog, plan = lifecycle_install_plan(
+                self.root, release, source="local release"
             )
             deduped: list[InstallPlanEntry] = []
             for entry in plan:
                 chart = catalog.get(entry.chart)
                 chart_path = chart.path.resolve()
                 entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
-                effective_namespace = entry_profile.namespace or "default"
+                effective_namespace = entry_profile.namespace or DEFAULT_NAMESPACE
                 external_identity = ExternallySatisfiedLifecycle(
                     chart_path=chart_path,
                     chart=entry.chart,
@@ -729,7 +718,7 @@ class DevelopmentClusterService:
     ) -> None:
         """Converge one immutable OCI Helm source with Helm-owned readiness."""
         key = (namespace, release)
-        identity = source.version or source.digest or "pinned"
+        identity = oci_identity(source)
         if key in installed_keys and skip_installed:
             self._progress(detail("skip", f"{release} (already installed in {namespace})"))
             summary.no_change.append(
@@ -751,16 +740,11 @@ class DevelopmentClusterService:
             )
             return
 
-        chart_ref = (
-            f"{source.chart}@{source.digest}"
-            if source.digest is not None
-            else source.chart
-        )
         try:
             self._progress(step("Converging OCI release", f"{release}@{identity}"))
             result = self.helm.upgrade_install(
                 release,
-                chart_ref,
+                oci_chart_ref(source),
                 namespace=namespace,
                 values=values,
                 timeout=timeout,

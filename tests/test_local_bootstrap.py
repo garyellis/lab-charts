@@ -283,6 +283,43 @@ spec:
     )
 
 
+def test_a_lifecycle_release_pointing_at_a_foreign_chart_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """The path-identity check that makes a per-release catalog safe.
+
+    `charts/network/Chart.yaml` declaring someone else's name means the
+    catalog resolves that name to the other tree, and bootstrap would install
+    a chart the LocalCluster never named. Shared with the development
+    service's `_preflight_target`, so this covers both.
+    """
+    chart = tmp_path / "charts/network"
+    other = tmp_path / "charts/other"
+    for path, name in ((chart, "other"), (other, "other")):
+        path.mkdir(parents=True)
+        (path / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
+            encoding="utf-8",
+        )
+    (other / "chart-lifecycle.yaml").write_text(
+        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+        "kind: ChartLifecycle\n"
+        "metadata: {name: other}\n"
+        "spec:\n"
+        "  clusterTest:\n"
+        "    profiles:\n"
+        "      minimal: {namespace: kube-system, values: []}\n",
+        encoding="utf-8",
+    )
+    cluster = _cluster(
+        [{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}]
+    )
+    executor, _, _ = _executor(tmp_path, helm=_Helm())
+
+    with pytest.raises(ChartManagerError, match="bootstrap chart 'other' does not match"):
+        executor.preflight(cluster)
+
+
 def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:
     chart = tmp_path / "charts/network"
     chart.mkdir(parents=True)

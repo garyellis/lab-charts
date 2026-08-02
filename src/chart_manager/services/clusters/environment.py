@@ -7,11 +7,15 @@ cluster-facing client must use.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind, kind_context
+from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.services.expose import ExposeService
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,33 @@ class EnvironmentHandle:
     identity: str
     context: str
     provider_type: str
+
+
+@dataclass(frozen=True)
+class BoundClients:
+    """Every cluster-facing client, addressed at one resolved environment.
+
+    This used to be two structurally different tuples -- a 3-tuple for the
+    development service, a 2-tuple for the ephemeral one -- returned by two
+    closures in the composition root doing the same job. A service that
+    unpacks a tuple has to agree with its factory on arity *and* order, which
+    is exactly the kind of agreement that quietly rots: rebinding two of three
+    clients from a 3-tuple is a silent bug, and adding a fourth client meant
+    editing four sites. Attribute access makes the first unrepresentable and
+    the second one edit.
+
+    A consumer that does not need a client simply does not read it; that is
+    cheaper than a second factory shape.
+    """
+
+    helm: Helm
+    kubectl: Kubectl
+    expose: ExposeService
+
+
+#: Bind the cluster-facing clients to a resolved environment. Both cluster
+#: services take one of these, and the composition root supplies one factory.
+type ClientFactory = Callable[[EnvironmentHandle], BoundClients]
 
 
 @runtime_checkable
@@ -88,6 +119,8 @@ class KindEnvironmentProvider:
 
 
 __all__ = [
+    "BoundClients",
+    "ClientFactory",
     "EnvironmentHandle",
     "EnvironmentSpec",
     "KindEnvironmentProvider",

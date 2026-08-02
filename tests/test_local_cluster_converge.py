@@ -21,6 +21,7 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
     RunSummary,
 )
+from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -181,8 +182,12 @@ def test_bootstrap_installs_through_the_context_bound_clients(tmp_path: Path) ->
     calls: list[tuple[str, str]] = []
     kubectl = _Kubectl()
 
-    def clients(handle: Any) -> tuple[Any, Any, Any]:
-        return _Helm(handle.context, calls), kubectl, _Expose()
+    def clients(handle: Any) -> BoundClients:
+        return BoundClients(
+            helm=_Helm(handle.context, calls),  # type: ignore[arg-type]
+            kubectl=kubectl,  # type: ignore[arg-type]
+            expose=_Expose(),  # type: ignore[arg-type]
+        )
 
     service = DevelopmentClusterService(
         tmp_path,

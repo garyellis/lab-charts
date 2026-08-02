@@ -65,6 +65,7 @@ from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.ci import CiService
 from chart_manager.services.clusters.development import DevelopmentClusterService
 from chart_manager.services.clusters.environment import (
+    BoundClients,
     EnvironmentHandle,
     KindEnvironmentProvider,
 )
@@ -275,6 +276,27 @@ class Container:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
         return GrafanaExporter(kubectl=self.kubectl())
 
+    def cluster_clients(self, handle: EnvironmentHandle) -> BoundClients:
+        """Every cluster-facing client, addressed at one resolved environment.
+
+        Both cluster services take this same factory. They used to get two
+        closures defined here that differed only in arity -- three clients for
+        the development service, two for the ephemeral one -- which meant the
+        composition root described "bind the clients to the resolved context"
+        twice, in two shapes, for one job. A service that needs fewer clients
+        reads fewer attributes off the result; that is cheaper than a second
+        factory.
+
+        Passed as a bound method rather than a closure so there is exactly one
+        of it per container, and so the shape is checkable without reading
+        either service's constructor.
+        """
+        return BoundClients(
+            helm=self.helm(context=handle.context),
+            kubectl=self.kubectl(context=handle.context),
+            expose=self.expose_service(context=handle.context),
+        )
+
     def development_cluster_service(
         self, root: Path, *, progress: ProgressCallback | None = None
     ) -> DevelopmentClusterService:
@@ -285,14 +307,6 @@ class Container:
         no path by which the service can fall back to an unconfigured one.
         """
         kind = self.kind()
-
-        def clients(handle: EnvironmentHandle) -> tuple[Helm, Kubectl, ExposeService]:
-            return (
-                self.helm(context=handle.context),
-                self.kubectl(context=handle.context),
-                self.expose_service(context=handle.context),
-            )
-
         return DevelopmentClusterService(
             root,
             helm=self.helm(),
@@ -302,7 +316,7 @@ class Container:
             progress=progress,
             local_config=self._settings.local_config,
             environment_provider=KindEnvironmentProvider(kind),
-            client_factory=clients,
+            client_factory=self.cluster_clients,
         )
 
     def ephemeral_test_cluster_service(
@@ -314,13 +328,6 @@ class Container:
     ) -> EphemeralTestClusterService:
         """Build the local chart-test installer for the repository at `root`."""
         kind = self.kind()
-
-        def clients(handle: EnvironmentHandle) -> tuple[Helm, Kubectl]:
-            return (
-                self.helm(context=handle.context),
-                self.kubectl(context=handle.context),
-            )
-
         return EphemeralTestClusterService(
             root,
             helm=self.helm(),
@@ -330,7 +337,7 @@ class Container:
             charts_dir=charts_dir or self._settings.charts_dir,
             local_config=self._settings.local_config,
             environment_provider=KindEnvironmentProvider(kind),
-            client_factory=clients,
+            client_factory=self.cluster_clients,
         )
 
     def ci_service(self, root: Path) -> CiService:
