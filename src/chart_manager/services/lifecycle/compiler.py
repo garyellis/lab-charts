@@ -32,12 +32,20 @@ class ClusterTestCompiler:
         root: Path,
         *,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        cluster_tests: ClusterTestCatalog | None = None,
+        resolver: DependencyResolver | None = None,
     ) -> None:
-        """Anchor all chart and value resolution at the repository root."""
+        """Anchor all chart and value resolution at the repository root.
+
+        `cluster_tests` and `resolver` are constructor seams so a caller that
+        already owns those repository seams shares them instead of reaching in
+        and reassigning the attributes afterwards -- a fourth seam added here
+        would then leave such a call site silently holding a stale one.
+        """
         self.root = root.resolve()
         self.charts_dir = charts_dir
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
-        self.resolver = DependencyResolver(self.cluster_tests.get)
+        self.cluster_tests = cluster_tests or ClusterTestCatalog(self.root, charts_dir=charts_dir)
+        self.resolver = resolver or DependencyResolver(self.cluster_tests.get)
 
     def compile_cluster_test(
         self,

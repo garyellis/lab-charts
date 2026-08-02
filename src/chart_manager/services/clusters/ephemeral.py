@@ -134,9 +134,12 @@ class EphemeralTestClusterService:
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
         # repository seams once rather than patching two independent graphs.
-        self.cluster_test_compiler = ClusterTestCompiler(self.root, charts_dir=charts_dir)
-        self.cluster_test_compiler.cluster_tests = self.cluster_tests
-        self.cluster_test_compiler.resolver = self.resolver
+        self.cluster_test_compiler = ClusterTestCompiler(
+            self.root,
+            charts_dir=charts_dir,
+            cluster_tests=self.cluster_tests,
+            resolver=self.resolver,
+        )
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
