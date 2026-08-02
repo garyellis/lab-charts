@@ -21,10 +21,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import ClusterNameOption, RootOption
-from chart_manager.cli._wiring import container as _container
 from chart_manager.cli.streams import console, narration
-from chart_manager.composition import Settings
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME, DEFAULT_NAMESPACE
 
@@ -189,10 +188,18 @@ def grafana_dashboard_lint(
     from chart_manager.services.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
+    # `discover_dashboards` reads the container's `charts_dir` rather than a
+    # `Settings()` of its own. Lint's three entry points are free functions
+    # over paths -- no adapter, no state, nothing to memoize -- so there is
+    # no object for the container to build and wrapping them in a class
+    # purely to have one would add an abstraction to satisfy a rule. What the
+    # bypass actually broke was the configuration seam, and reading
+    # `container().settings` closes exactly that: a caller that injected a
+    # Settings discovers dashboards under the chart directory it named.
     targets = (
         expand_targets(path)
         if path
-        else discover_dashboards(root, charts_dir=Settings().charts_dir)
+        else discover_dashboards(root, charts_dir=_container().settings.charts_dir)
     )
     if not targets:
         # Linting nothing is not the same as linting clean. A wrong --root, a

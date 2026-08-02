@@ -29,6 +29,11 @@ a cache is memoized on the container:
                           built at most once per container rather than once
                           per emitted event.
 
+Everything addressed by a `root` stays per-call and unmemoized on purpose:
+`root` is a per-invocation argument rather than configuration, so a memo
+would need it as a key, and each of these constructions is path arithmetic
+with no I/O behind it.
+
 Note that store resolution stays *lazy* inside `EventWriter`: `EVENTS_BACKEND`
 is still read on first write, not at container construction. Building the
 store eagerly would move a failure that `cli/events.py` currently swallows as
@@ -52,6 +57,7 @@ from pathlib import Path
 from typing import cast
 
 from chart_manager.domain import chart_deps
+from chart_manager.domain.local_resources import LocalTargetResolver
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -63,6 +69,7 @@ from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.ci import CiService
 from chart_manager.services.clusters.development import DevelopmentClusterService
 from chart_manager.services.clusters.environment import (
@@ -84,7 +91,9 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
+from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.manifest_validation.app import ManifestValidationService
+from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
 from chart_manager.services.publish import PublishService
@@ -275,6 +284,50 @@ class Container:
     def grafana_exporter(self) -> GrafanaExporter:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
         return GrafanaExporter(kubectl=self.kubectl())
+
+    def chart_catalog_service(self, root: Path) -> ChartCatalogService:
+        """Build the read-only chart/lifecycle catalog for the repo at `root`.
+
+        Built here rather than at the surface for the same reason `ci_service`
+        is: `charts_dir` is the one setting that decides which directories are
+        charts at all, and a surface that supplies it itself can answer
+        `chart list` from a different directory than `plan` selected against.
+        """
+        return ChartCatalogService(root, charts_dir=self._settings.charts_dir)
+
+    def render_output_service(self, root: Path) -> RenderOutputService:
+        """Build the render-tree describer/remover for the repo at `root`.
+
+        No configuration reaches it today -- the output directory is a fixed
+        constant under `root`. It is a factory anyway because `chart cache
+        clean` deletes a directory tree, and "which tree" must be decided in
+        the same place as every other repository path, not at the surface that
+        calls `rmtree`.
+        """
+        return RenderOutputService(root)
+
+    def impact_service(self, root: Path) -> LifecycleImpactService:
+        """Build the changed-file impact analyzer for the repo at `root`.
+
+        `plan` asks this and `CiService` the same question through two
+        engines, so both have to be configured identically; that is exactly
+        what a surface building one of them inline cannot guarantee.
+        """
+        return LifecycleImpactService(
+            root,
+            charts_dir=self._settings.charts_dir,
+            local_config=self._settings.local_config,
+        )
+
+    def local_target_resolver(self, root: Path) -> LocalTargetResolver:
+        """Resolve `--chart`/`--stack` tokens against the configured layout.
+
+        A domain object rather than a service, and still built here: it reads
+        `local_config`, so a surface constructing its own would resolve stack
+        names against a different file than the cluster service then converges
+        from.
+        """
+        return LocalTargetResolver(root, local_config=self._settings.local_config)
 
     def cluster_clients(self, handle: EnvironmentHandle) -> BoundClients:
         """Every cluster-facing client, addressed at one resolved environment.

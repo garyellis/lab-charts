@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from chart_manager.composition import Container
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.integrations.git import Git
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
@@ -168,3 +169,30 @@ spec:
 
     assert [(row.chart, row.env) for row in result.rows] == [("demo", "dev")]
     assert result.spec_errors == ()
+
+
+def test_an_injected_settings_reaches_the_services_the_cli_used_to_build(
+    tmp_path: Path,
+) -> None:
+    """`Container(settings=...)` is the seam the CLI bypass made unreachable.
+
+    Each of these four was constructed at the surface from a `Settings()` of
+    its own, so the container's configuration was not what answered the
+    question -- the surface's was, and nothing could change it. The point of
+    the check is that one injected value now decides all of them: pass a
+    chart directory here and `chart list`, `plan`, `local up` and
+    `chart cache clean` all address it.
+    """
+    _write_chart(tmp_path, "demo")
+    container = Container(Settings(charts_dir=CUSTOM_CHARTS_DIR))
+
+    catalog = container.chart_catalog_service(tmp_path).list_entries()
+    assert [entry.name for entry in catalog] == ["demo"]
+
+    impact = container.impact_service(tmp_path)
+    assert impact.layout.charts_dir == CUSTOM_CHARTS_DIR
+
+    resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
+    assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()
+
+    assert container.render_output_service(tmp_path).state().path.is_relative_to(tmp_path)

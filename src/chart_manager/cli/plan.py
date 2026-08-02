@@ -22,10 +22,9 @@ from typing import Annotated, Any
 import typer
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import RootOption
-from chart_manager.cli._wiring import container as _container
 from chart_manager.cli.streams import console
-from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.ci import MatrixSelection
@@ -69,12 +68,7 @@ def register(app: typer.Typer) -> None:
 
 def _impact_service(root: Path) -> LifecycleImpactService:
     """Build the impact service at a seam tests can replace."""
-    settings = Settings()
-    return LifecycleImpactService(
-        root,
-        charts_dir=settings.charts_dir,
-        local_config=settings.local_config,
-    )
+    return _container().impact_service(root)
 
 
 def _changed_paths(

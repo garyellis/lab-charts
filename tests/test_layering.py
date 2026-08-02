@@ -17,7 +17,7 @@ Membership is decided by what a module *is* -- policy and algorithms over
 `api/` models plus the schemas this project does not own (`Chart.yaml`,
 `Chart.lock`) -- not by who imports it.
 
-Five invariants keep `cli/` a thin surface, so the same capabilities can be
+Six invariants keep `cli/` a thin surface, so the same capabilities can be
 fronted by a REST API, a GraphQL resolver, an RPC handler, or a Slack Bolt
 app without re-implementing the CLI:
 
@@ -48,6 +48,17 @@ app without re-implementing the CLI:
       `test_domain_imports_only_api_plumbing_and_the_standard_library` below,
       plus the TID251 table in `src/chart_manager/domain/.ruff.toml`.
 
+  (f) A surface *obtains* a service from the composition root; it never
+      constructs one, and it never reads `Settings` to do so. This is the
+      one rule no import check can see: `ChartCatalogService` is imported
+      legitimately in three layers, and the bypass was a call, not an
+      import. It went unnoticed for exactly that reason, and the predictor
+      was mechanical -- every service whose only dependency was
+      `Settings` + `root` got built inline, every service needing an adapter
+      went through `Container` -- so each bypass also built a second
+      `Settings`, which is what made `Container(settings=...)` unreachable
+      from the only surface that exists. Two checks under "(f)" below.
+
 Why (c), (d) and (e) are tests and not just banned-api entries: ruff reports
 every banned-api violation under the single code TID251, and per-file-ignores
 are per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
@@ -63,7 +74,7 @@ on ruff's config discovery. The one arrow TID251 carries for free everywhere
 is `-/-> integrations`: that ban is global, and `api/`, `domain/` and `cli/`
 are all deliberately absent from the lift table in pyproject.toml.
 
-A sixth invariant -- versioned wire contracts live in `services/*/wire.py`,
+One more invariant -- versioned wire contracts live in `services/*/wire.py`,
 never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
 because it is about dict literals rather than imports and so is invisible to
 both TID251 and the scans here.
@@ -87,9 +98,10 @@ _DOMAIN = _PKG / "domain"
 _SERVICES = _PKG / "services"
 _PLUMBING = _PKG / "plumbing"
 _INTEGRATIONS = _PKG / "integrations"
+_CLI = _PKG / "cli"
 
 #: Only the surface layer may terminate the process.
-_EXIT_ALLOWED_DIRS = (_PKG / "cli",)
+_EXIT_ALLOWED_DIRS = (_CLI,)
 
 #: Import either of these and a headless surface has a TUI in its address space.
 _FORBIDDEN_ROOTS = ("rich", "typer")
@@ -518,6 +530,208 @@ def test_no_process_exit_outside_cli() -> None:
         + "\n\nRaise a ChartManagerError (or return a result carrying an "
         "exit code) and let the surface decide how to terminate."
     )
+
+
+# --------------------------------------------------------------------------
+# (f) a surface obtains services from the composition root
+# --------------------------------------------------------------------------
+
+#: Class-name suffixes that mean "this is a service-layer collaborator".
+#: Deliberately a naming rule rather than an import graph: the check has to
+#: fire on `SomeService(...)` written in `cli/` whichever module it came from,
+#: and has to stay quiet on `_container().some_service(...)`, which differs
+#: only in case. Both properties fall out of matching the *called* name.
+_CONSTRUCTION_SUFFIXES = ("Service", "Resolver", "Exporter")
+
+#: `module.py::ClassName` pairs `cli/` may construct anyway.
+#:
+#: Empty, and the intent is that it stays empty -- there is no service a
+#: surface can build better than the composition root can. If one ever earns
+#: an entry, write the reason on the line above it: an allowlist whose
+#: members carry no justification is indistinguishable from a suppressed
+#: failure, and the next reader cannot tell which it is.
+_CONSTRUCTION_ALLOWLIST: frozenset[str] = frozenset()
+
+#: `cli/` modules permitted to call `Settings()` directly.
+#:
+#: Exactly one, and it is not service construction. `main.py`'s root callback
+#: has to read `--config` into `settings.set_config_file` and then resolve
+#: `--root`'s fallback and the logging configuration *before* any command
+#: body -- and therefore before any `Container` -- exists. That is process
+#: bootstrap, which is the surface's own job; every other former caller was
+#: building a service and has been routed through `container().settings`.
+_SETTINGS_ALLOWED_MODULES = frozenset({"main.py"})
+
+
+def _called_names(source: str, label: str) -> list[tuple[int, str]]:
+    """Every call in `source` as (line, called name).
+
+    `Name(...)` reports `Name` and `mod.Name(...)` reports `Name`, so the
+    rules below read the same whether a module imported a symbol or reached
+    it through its package. Anything not called through a name (a subscript,
+    a lambda) is not a construction site and is skipped.
+    """
+    called: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            called.append((node.lineno, node.func.id))
+        elif isinstance(node.func, ast.Attribute):
+            called.append((node.lineno, node.func.attr))
+    return called
+
+
+def _construction_offenders(
+    source: str,
+    label: str,
+    allowlist: frozenset[str] = _CONSTRUCTION_ALLOWLIST,
+) -> list[str]:
+    """Service-layer objects constructed in `source`, as reportable strings."""
+    return [
+        f"  {label}:{line}: {name}(...)"
+        for line, name in _called_names(source, label)
+        if name.endswith(_CONSTRUCTION_SUFFIXES) and f"{label}::{name}" not in allowlist
+    ]
+
+
+def _settings_offenders(source: str, label: str) -> list[str]:
+    """Direct `Settings()` constructions in `source`."""
+    return [
+        f"  {label}:{line}: Settings()"
+        for line, name in _called_names(source, label)
+        if name == "Settings"
+    ]
+
+
+def _cli_modules() -> list[Path]:
+    """Every .py file under `cli/`."""
+    return sorted(_CLI.rglob("*.py"))
+
+
+def test_cli_modules_are_discoverable() -> None:
+    """Guard the guard: an empty sweep would make both (f) checks vacuous."""
+    paths = _cli_modules()
+    assert len(paths) > 10, f"suspiciously few cli modules: {len(paths)}"
+    assert _CLI / "_container.py" in paths
+    # The four modules that used to construct services inline. If one is
+    # renamed away, the scan must be updated deliberately rather than
+    # quietly losing coverage of the exact files this rule was written for.
+    for name in ("chart.py", "local.py", "plan.py", "validate.py"):
+        assert _CLI / name in paths
+
+
+def test_no_cli_module_constructs_a_service() -> None:
+    """A surface asks the composition root for a capability; it never builds one.
+
+    This is the container-bypass equivalent of TID251, and it exists because
+    TID251 cannot see it. Importing `ChartCatalogService` into `cli/` is a
+    legal import from a legal layer; calling it is what puts the decision
+    "which chart directory is this repository's" at the surface, where every
+    surface then has to make it again -- and where it silently disagreed with
+    what `Container` was configured with.
+
+    The fix is always the same shape: add a factory to `Container` and call
+    `_container().the_factory(root)`. The lowercase factory name is why the
+    match is on the exact capitalized suffix.
+    """
+    offenders: list[str] = []
+    for path in _cli_modules():
+        offenders += _construction_offenders(path.read_text(encoding="utf-8"), path.name)
+
+    assert not offenders, (
+        "cli/ must obtain services from the composition root, but found "
+        "direct constructions:\n" + "\n".join(offenders) + "\n\n"
+        "Add a factory to composition.Container and call "
+        "_container().<factory>(...) instead."
+    )
+
+
+def test_only_the_cli_entry_point_constructs_settings() -> None:
+    """Configuration enters through the container, not through each call site.
+
+    `Container` has taken a `Settings` since it was written, but the seam was
+    dead while every command built its own: injecting one changed nothing for
+    the services a surface constructed itself. Reading `container().settings`
+    -- which is what the two remaining settings-only free functions
+    (`resolve_chart_target`, `discover_dashboards`) do -- keeps one
+    configuration per invocation instead of one per call site.
+    """
+    offenders: list[str] = []
+    for path in _cli_modules():
+        if path.name in _SETTINGS_ALLOWED_MODULES:
+            continue
+        offenders += _settings_offenders(path.read_text(encoding="utf-8"), path.name)
+
+    assert not offenders, (
+        "only cli/main.py may construct Settings (process bootstrap), but "
+        "found:\n" + "\n".join(offenders) + "\n\n"
+        "Read container().settings instead, so an injected Settings reaches "
+        "this call site too."
+    )
+
+
+_CONSTRUCTION_LEAKS = {
+    "the-catalog-bypass-this-rule-was-written-for": (
+        "entries = ChartCatalogService(root, charts_dir=Settings().charts_dir).list_entries()"
+    ),
+    "a-domain-resolver-built-from-a-setting": (
+        "return LocalTargetResolver(root, local_config=Settings().local_config).resolve(target)"
+    ),
+    "an-adapter-facing-exporter": "exporter = GrafanaExporter(kubectl=Kubectl(runner))",
+    "the-same-thing-reached-through-its-package": "svc = impact.LifecycleImpactService(root)",
+}
+
+_CONSTRUCTION_NON_LEAKS = {
+    "the-container-factory-that-replaced-it": "entries = _container().chart_catalog_service(root)",
+    "a-container-factory-spelled-bare": "svc = container().impact_service(root)",
+    "a-type-annotation-naming-the-same-class": "def f(root: Path) -> LifecycleImpactService: ...",
+    "an-import-of-the-class-for-that-annotation": (
+        "from chart_manager.services.chart_catalog import ChartCatalogService"
+    ),
+    "a-request-object-the-surface-does-own": "req = ExportRequest(uid=uid, release=release)",
+}
+
+
+def test_the_construction_rule_fires_on_each_synthetic_leak() -> None:
+    """Positive control: every bypass shape this rule replaced, caught."""
+    missed = [
+        name
+        for name, source in _CONSTRUCTION_LEAKS.items()
+        if not _construction_offenders(source, name)
+    ]
+    assert not missed, f"the container-bypass rule silently allows: {missed}"
+
+
+def test_the_construction_rule_stays_quiet_on_going_through_the_container() -> None:
+    """Negative control: the fixed spelling differs from the broken one by case."""
+    noisy = {
+        name: found
+        for name, source in _CONSTRUCTION_NON_LEAKS.items()
+        if (found := _construction_offenders(source, name))
+    }
+    assert not noisy, f"the container-bypass rule flags correct surface code: {noisy}"
+
+
+def test_the_construction_allowlist_exempts_exactly_what_it_names() -> None:
+    """The allowlist is empty today; prove the mechanism still works.
+
+    An allowlist nothing exercises is an allowlist that silently stops
+    filtering, and the next person to need one finds out the hard way.
+    """
+    source = _CONSTRUCTION_LEAKS["an-adapter-facing-exporter"]
+    assert _construction_offenders(source, "grafana.py", frozenset({"grafana.py::Other"}))
+    assert not _construction_offenders(
+        source, "grafana.py", frozenset({"grafana.py::GrafanaExporter"})
+    )
+
+
+def test_the_settings_rule_fires_on_a_direct_construction() -> None:
+    """Positive control, plus the negative one: reading the container is fine."""
+    assert _settings_offenders("settings = Settings()", "chart.py")
+    assert _settings_offenders("x = Settings().charts_dir", "grafana.py")
+    assert not _settings_offenders("x = container().settings.charts_dir", "grafana.py")
+    assert not _settings_offenders("def f(settings: Settings | None = None): ...", "_container.py")
 
 
 # --------------------------------------------------------------------------

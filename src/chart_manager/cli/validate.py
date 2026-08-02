@@ -48,7 +48,8 @@ from typing import Annotated
 import typer
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli._wiring import container as _container
+from chart_manager.cli._container import container as _container
+from chart_manager.cli._container import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
@@ -60,8 +61,7 @@ from chart_manager.cli.validate_render import (
     render_output_table,
     to_text_table,
 )
-from chart_manager.composition import Settings
-from chart_manager.domain.local_resources import ResolvedChartTarget, resolve_chart_target
+from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.manifest_validation.app import (
@@ -73,10 +73,7 @@ from chart_manager.services.manifest_validation.app import (
 )
 from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import RunResult
-from chart_manager.services.manifest_validation.paths import (
-    RenderOutputService,
-    RenderOutputState,
-)
+from chart_manager.services.manifest_validation.paths import RenderOutputState
 from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
 from chart_manager.services.manifest_validation.wire import to_json
 
@@ -393,14 +390,8 @@ def _chart_target(selected: tuple[str, ...], *, root: Path) -> ResolvedChartTarg
     """
     if len(selected) != 1:
         return None
-    settings = Settings()
     try:
-        return resolve_chart_target(
-            root,
-            selected[0],
-            charts_dir=settings.charts_dir,
-            local_config=settings.local_config,
-        )
+        return resolve_chart(root, selected[0])
     except SpecError:
         return None
 
@@ -686,7 +677,7 @@ def clean(
     command runs.
     """
     output_mod.require_dry_run(output, dry_run=dry_run)
-    service = RenderOutputService(root)
+    service = _container().render_output_service(root)
     if dry_run:
         _render_output_plan(service.state(), ctx=ctx, output=output)
         return

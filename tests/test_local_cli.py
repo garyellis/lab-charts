@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from chart_manager.cli import _wiring
+from chart_manager.cli import _container
 from chart_manager.cli import chart as chart_cli
 from chart_manager.cli import local as local_cli
+from chart_manager.composition import Container
 from chart_manager.domain.local_resources import ResolvedStackTarget
 from chart_manager.services.clusters.development import (
     DevelopmentClusterActionResult,
@@ -178,11 +179,17 @@ def test_named_stack_up_loads_the_authored_composition(
             calls.append(target)
             return DevelopmentClusterResult()
 
-    class Container:
-        def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
+    # Subclassed rather than duck-typed: `--stack` also asks the container
+    # for the LocalTargetResolver that reads the authored stack file, and
+    # this test is about what that resolution produces. A hand-rolled stand-in
+    # would have to reimplement it to keep the assertions below meaningful.
+    class FakeContainer(Container):
+        def development_cluster_service(  # type: ignore[override]
+            self, _root: Path, *, progress: object
+        ) -> Service:
             return Service()
 
-    monkeypatch.setattr(local_cli, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", FakeContainer)
     result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
@@ -237,11 +244,16 @@ def test_down_and_reset_address_the_same_cluster(
             reset_calls.append(cluster_name)
             return DevelopmentClusterResult()
 
-    class Container:
-        def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
+    # Subclassed for the same reason as the named-stack test above: `reset
+    # --stack` resolves the stack through the container before it reaches the
+    # service being recorded here.
+    class FakeContainer(Container):
+        def development_cluster_service(  # type: ignore[override]
+            self, _root: Path, *, progress: object
+        ) -> Service:
             return Service()
 
-    monkeypatch.setattr(local_cli, "_container", Container)
+    monkeypatch.setattr(local_cli, "_container", FakeContainer)
     down = cli("local", "down", "--root", str(tmp_path))
     reset = cli("local", "reset", "--stack", "platform", "--root", str(tmp_path))
     assert down.exit_code == reset.exit_code == 0
@@ -508,8 +520,8 @@ def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
 def test_chart_name_and_directory_resolve_to_the_same_target(tmp_path: Path) -> None:
     chart = _chart(tmp_path, "cert-manager")
 
-    by_name = _wiring.resolve_chart(tmp_path, "cert-manager")
-    by_path = _wiring.resolve_chart(tmp_path, "./charts/cert-manager")
+    by_name = _container.resolve_chart(tmp_path, "cert-manager")
+    by_path = _container.resolve_chart(tmp_path, "./charts/cert-manager")
 
     assert by_name.path == by_path.path == chart.resolve()
 
