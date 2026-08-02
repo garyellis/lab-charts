@@ -43,7 +43,7 @@ def test_unbounded_timeout_passes_through() -> None:
 
 def test_timeout_zero_does_not_mean_disabled() -> None:
     # 0 is a valid subprocess timeout value (effectively immediate); the
-    # CLI translates --row-timeout 0 to None at the CLI boundary, but at
+    # CLI translates --tool-timeout 0 to None at the CLI boundary, but at
     # the runner layer 0 must mean what subprocess.run says it means.
     runner = SubprocessRunner()
     with pytest.raises(ExternalCommandError):

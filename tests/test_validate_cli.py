@@ -667,7 +667,7 @@ def test_run_delegates_to_shared_execution_boundary(
         "none",
         "--timings",
         "--verbose",
-        "--row-timeout",
+        "--tool-timeout",
         "12",
         "--dep-update-timeout",
         "42",
@@ -692,7 +692,7 @@ def test_run_delegates_to_shared_execution_boundary(
     assert request.keep is True
     assert request.workers == 3
     assert request.verbose is True
-    assert request.row_timeout == 12.0
+    assert request.tool_timeout == 12.0
     assert request.dep_update_timeout == 42.0
     assert request.fail_fast is True
     assert request.root == tmp_path
@@ -729,7 +729,7 @@ def test_run_builds_a_request_from_its_flags(
         "schema",
         "--workers",
         "3",
-        "--row-timeout",
+        "--tool-timeout",
         "12",
         "--fail-fast",
         "--root",
@@ -745,7 +745,7 @@ def test_run_builds_a_request_from_its_flags(
     assert request.envs == ("dev",)
     assert request.phases == frozenset({"render", "schema"})
     assert request.workers == 3
-    assert request.row_timeout == 12.0
+    assert request.tool_timeout == 12.0
     assert request.fail_fast is True
     assert request.root == tmp_path
 

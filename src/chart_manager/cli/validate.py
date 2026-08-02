@@ -283,15 +283,17 @@ def validate(
             ),
         ),
     ] = False,
-    row_timeout: Annotated[
+    tool_timeout: Annotated[
         float,
         typer.Option(
-            "--row-timeout",
+            "--tool-timeout",
             help=(
-                "Per-subprocess wall-clock cap in seconds for each phase "
-                "invocation (helm template / kubeconform / kyverno). Applies "
-                "per phase, NOT per row total; a 3-phase row can take up to "
-                "3x this value. 0 = unbounded (default)."
+                "Wall-clock cap in seconds on each individual tool "
+                "invocation (helm template, kubeconform, kyverno). This is a "
+                "per-subprocess cap, NOT a per-row budget: a row that renders "
+                "and runs both gates can take up to 3x this value, and each "
+                "additional validator raises that ceiling again. "
+                "0 = unbounded (default)."
             ),
         ),
     ] = 0.0,
@@ -359,7 +361,7 @@ def validate(
         keep=keep,
         workers=workers,
         verbose=verbose,
-        row_timeout=row_timeout,
+        tool_timeout=tool_timeout,
         dep_update_timeout=dep_update_timeout,
         fail_fast=fail_fast,
     )

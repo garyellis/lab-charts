@@ -4,11 +4,14 @@
 validate`. It owns the *sequencing* of a run:
 
   * where the changed-files list comes from (--all > explicit list > git),
-  * which helm binding each row runs under (specs may pin a version),
   * how many workers a run gets,
-  * how N per-binding sub-runs are stitched into one ordered `RunResult`,
   * the identity (run id), contents (`summary.md`/`summary.json`) and
     lifetime (retention rule) of the render dir.
+
+It does NOT own execution. One `ManifestValidationRunner` receives the whole
+worklist and owns fan-out, fail-fast, row ordering and progress dedupe. This
+module used to partition rows by helm binding and reimplement all four on top
+of it, because a runner bound one `Helm`; the binding now travels on the row.
 
 It does NOT own what a row *is*. ``planner.py`` selects the chart/environment
 rows, while ``resolver.py`` resolves each target's runtime paths and options.
@@ -30,10 +33,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import traceback
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,8 +48,6 @@ from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
     PHASE_ORDER,
-    PhaseResult,
-    RowResult,
     RunOutcome,
     RunRequest,
     RunResult,
@@ -58,7 +58,6 @@ from chart_manager.services.manifest_validation.planner import build_worklist, s
 from chart_manager.services.manifest_validation.progress import (
     NullDisplay,
     ProgressDisplay,
-    ProgressFinalizer,
 )
 from chart_manager.services.manifest_validation.resolver import (
     ResolvedManifestValidation,
@@ -69,7 +68,7 @@ from chart_manager.services.manifest_validation.runner import (
     EventCallback,
     ManifestValidationRunner,
     RowConfig,
-    blocked_phase_result,
+    crash_row,
 )
 from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
@@ -177,19 +176,18 @@ def new_run_id() -> str:
 
 @dataclass(frozen=True)
 class RunnerSpec:
-    """Everything needed to build one `ManifestValidationRunner`.
+    """Everything needed to build the one `ManifestValidationRunner` a run uses.
 
-    One spec per distinct helm binding: specs may pin `helm_version` (or an
-    explicit binary) per chart, and each binding needs its own `Helm` (the
-    per-chart `dependency update` dedupe lives on the instance).
+    One spec per run, not per helm binding. The binding travels on each
+    `RowConfig` and the runner builds a `Helm` per distinct binding, so a
+    heterogeneous batch needs exactly one runner -- which is what keeps
+    fan-out, fail-fast and ordering from being reimplemented above it.
     """
 
     output_root: Path
-    helm_version: str | None = None
-    helm_bin: str | Path | None = None
     max_workers: int = 1
     on_event: EventCallback | None = None
-    row_timeout: float | None = None
+    tool_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
     validator_ids: frozenset[str] = frozenset(
@@ -310,12 +308,9 @@ class ManifestValidationService:
 
         out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
 
-        # Specs may pin a helm version per chart; group rows by their helm
-        # binding so we build one runner (and one Helm) per distinct
-        # binding rather than one per row.
-        grouped: dict[tuple[str | None, str | None], list[RowConfig]] = {}
         compiled_by_chart: dict[str, ResolvedManifestValidation] = {}
         compile_warnings: list[str] = []
+        configs: list[RowConfig] = []
         for row in rows:
             # Indexed, not `.get(...) or continue`: `build_worklist` only
             # materializes rows for charts in `build.targets`, and selection
@@ -323,7 +318,6 @@ class ManifestValidationService:
             # invariant broke, and a silent `continue` would drop the row
             # from the run without it appearing anywhere in the result.
             target = build.targets[row.chart]
-            spec = target.spec
             if row.chart not in compiled_by_chart:
                 compiled = resolve_manifest_validation(
                     target,
@@ -334,9 +328,7 @@ class ManifestValidationService:
                 compile_warnings.extend(compiled.warnings)
                 for warning in compiled.warnings:
                     self._on_warn(warning)
-            grouped.setdefault((spec.helm_version, spec.helm_binary), []).append(
-                row_config_for(compiled_by_chart[row.chart], row)
-            )
+            configs.append(row_config_for(compiled_by_chart[row.chart], row))
 
         workers = resolve_workers(request.workers)
         # Streamed subprocess output from >1 worker interleaves into
@@ -345,74 +337,62 @@ class ManifestValidationService:
         if request.verbose:
             workers = 1
 
-        base_spec = RunnerSpec(
+        # ONE runner for the whole batch. Specs may pin a helm version per
+        # chart, but each row carries its own binding and the runner memoizes
+        # a Helm per binding, so fan-out, fail-fast, ordering and event dedupe
+        # all stay in the one place that already implements them. Grouping
+        # rows by binding here used to force a second copy of each of those,
+        # and made a pinned chart wait for every unpinned one to finish.
+        spec = RunnerSpec(
             output_root=out_dir,
             max_workers=workers,
+            on_event=self._progress.on_event,
             # 0 means unbounded at the request boundary; the runner and the
             # integrations below it want None as that sentinel.
-            row_timeout=request.row_timeout if request.row_timeout > 0 else None,
+            tool_timeout=request.tool_timeout if request.tool_timeout > 0 else None,
             dep_update_timeout=(
                 request.dep_update_timeout if request.dep_update_timeout > 0 else None
             ),
             verbose=request.verbose,
+            validator_ids=frozenset(
+                invocation.validator_id
+                for cfg in configs
+                for invocation in cfg.validator_invocations
+                if invocation.enabled and invocation.category.value in request.phases
+            ),
         )
 
-        all_cfgs = [cfg for cfgs in grouped.values() for cfg in cfgs]
-        progress = ProgressFinalizer(self._progress)
-        base_spec = replace(base_spec, on_event=progress.on_event)
-        self._progress.start([cfg.row for cfg in all_cfgs])
-        aggregated: list[RowResult] = []
-        stopped = False
+        self._progress.start([cfg.row for cfg in configs])
         try:
-            for (helm_version, helm_bin), cfgs in grouped.items():
-                if stopped:
-                    group_rows = tuple(self._not_run(cfg) for cfg in cfgs)
-                else:
-                    try:
-                        runner = self._runner_factory(
-                            replace(
-                                base_spec,
-                                helm_version=helm_version,
-                                helm_bin=helm_bin,
-                                validator_ids=frozenset(
-                                    invocation.validator_id
-                                    for cfg in cfgs
-                                    for invocation in cfg.validator_invocations
-                                    if invocation.enabled
-                                    and invocation.category.value
-                                    in request.phases
-                                ),
-                            )
-                        )
-                        group_rows = runner.run(
-                            cfgs,
-                            enabled_phases=request.phases,
-                            fail_fast=request.fail_fast,
-                        ).rows
-                    except Exception as exc:
-                        group_rows = tuple(
-                            self._execution_failure(cfg, exc, request.phases)
-                            for cfg in cfgs
-                        )
-                aggregated.extend(group_rows)
-                for row_result in group_rows:
-                    progress.finalize(row_result)
-                if request.fail_fast and any(
-                    phase.status == "FAIL"
-                    for row_result in group_rows
-                    for phase in row_result.phases.values()
-                ):
-                    stopped = True
+            executed = self._runner_factory(spec).run(
+                configs,
+                enabled_phases=request.phases,
+                fail_fast=request.fail_fast,
+            ).rows
+        except Exception as exc:
+            # The runner could not be built, or died before it could turn
+            # anything into a row. Every other failure boundary -- an unusable
+            # helm binding, a failed prefetch, a crashed worker -- belongs to
+            # the runner, which reports those as rows itself. Progress is
+            # narrated here for the same reason: nothing else saw these rows.
+            executed = tuple(
+                crash_row(cfg, exc, active=request.phases, context="execution failed")
+                for cfg in configs
+            )
+            for row_result in executed:
+                for phase in row_result.phases.values():
+                    self._progress.on_event(
+                        row_result.row,
+                        phase.phase,
+                        phase.status,
+                        phase.elapsed_seconds,
+                    )
         finally:
             self._progress.stop()
 
-        # Each sub-run is internally sorted; re-sort the union so output is
-        # deterministic across helm-binding groups too.
-        aggregated.sort(key=lambda r: (r.row.chart, r.row.env))
-
         return RunOutcome(
             result=RunResult(
-                rows=tuple(aggregated),
+                rows=executed,
                 rendered_root=out_dir,
                 spec_errors=tuple(dict.fromkeys((*build.spec_errors, *explicit_spec_errors))),
             ),
@@ -544,85 +524,32 @@ class ManifestValidationService:
             return None
 
     def _build_runner(self, spec: RunnerSpec) -> ManifestValidationRunner:
-        """Default runner factory: one Helm per binding, shared command runner."""
+        """Default runner factory: one memoized Helm per binding, shared command runner.
+
+        The validator executors are built for the union of every enabled
+        validator in the batch. That is a superset for any single row, which
+        is the safe direction: the runner only invokes a validator a row's own
+        invocations enable, and a missing executor is a row FAIL.
+        """
         validators = {
             provider.validator_id: provider.build(
                 command_runner=self._command_runner,
-                timeout=spec.row_timeout,
+                timeout=spec.tool_timeout,
             )
             for provider in self._validator_providers
             if provider.validator_id in spec.validator_ids
         }
         return ManifestValidationRunner(
-            helm=Helm(
+            helm_factory=lambda version, binary: Helm(
                 runner=self._command_runner,
-                version=spec.helm_version,
-                binary=spec.helm_bin,
+                version=version,
+                binary=binary,
                 verbose=spec.verbose,
             ),
             output_root=spec.output_root,
             validators=validators,
             max_workers=spec.max_workers,
             on_event=spec.on_event,
-            row_timeout=spec.row_timeout,
+            tool_timeout=spec.tool_timeout,
             dep_update_timeout=spec.dep_update_timeout,
-        )
-
-    @staticmethod
-    def _execution_failure(
-        cfg: RowConfig,
-        exc: Exception,
-        active: frozenset[str],
-    ) -> RowResult:
-        """Convert a runner-level failure into a complete terminal row.
-
-        This is the boundary for failures outside an individual validation
-        phase: runner/Helm construction, dependency prefetch, and unexpected
-        serial runner crashes. A failure in one Helm-binding group therefore
-        remains visible without preventing later independent groups from
-        running.
-        """
-        rendered = traceback.format_exception_only(type(exc), exc)
-        detail = (rendered[-1] if rendered else repr(exc)).strip()
-
-        return RowResult(
-            row=cfg.row,
-            phases={
-                "render": PhaseResult(
-                    phase="render",
-                    status="FAIL",
-                    detail=f"execution failed: {detail}",
-                    error_type="tool",
-                ),
-                "schema": blocked_phase_result(
-                    cfg, active, "schema", upstream="render"
-                ),
-                "policy": blocked_phase_result(
-                    cfg, active, "policy", upstream="render"
-                ),
-            },
-        )
-
-    @staticmethod
-    def _not_run(cfg: RowConfig) -> RowResult:
-        """Represent a row omitted after an earlier fail-fast failure."""
-        return RowResult(
-            row=cfg.row,
-            phases={
-                "render": PhaseResult(
-                    phase="render",
-                    status="NOT_RUN",
-                    detail="fail-fast: earlier row failed",
-                ),
-                "schema": PhaseResult(
-                    phase="schema",
-                    status="NOT_RUN",
-                    detail="fail-fast: earlier row failed",
-                ),
-                "policy": PhaseResult(
-                    phase="policy",
-                    status="NOT_RUN",
-                    detail="fail-fast: earlier row failed",
-                ),
-            },
         )

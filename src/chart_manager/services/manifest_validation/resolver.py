@@ -109,6 +109,10 @@ def row_config_for(resolved: ResolvedManifestValidation, row: WorklistRow) -> Ro
         chart_path=resolved.target.path,
         values=list(environment.values),
         validator_invocations=resolved.validator_invocations,
+        # The authored helm selection rides on the row so one runner can
+        # execute a batch spanning several bindings.
+        helm_version=resolved.target.spec.helm_version,
+        helm_binary=resolved.target.spec.helm_binary,
     )
 
 

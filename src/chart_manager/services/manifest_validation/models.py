@@ -270,7 +270,7 @@ class RunRequest:
     keep: bool = False
     workers: int = 0
     verbose: bool = False
-    row_timeout: float = 0.0
+    tool_timeout: float = 0.0
     dep_update_timeout: float = 300.0
     fail_fast: bool = False
 

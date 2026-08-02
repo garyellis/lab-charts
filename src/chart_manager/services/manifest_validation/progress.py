@@ -38,14 +38,11 @@ runner, so a surface only has to choose an implementation.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from threading import Lock
 from typing import Protocol, runtime_checkable
 
-from chart_manager.services.manifest_validation.models import RowResult, WorklistRow
+from chart_manager.services.manifest_validation.models import WorklistRow
 
-__all__ = ["NullDisplay", "ProgressDisplay", "ProgressFinalizer"]
-
-_TERMINAL_STATUSES = frozenset({"PASS", "FAIL", "SKIP", "NOT_RUN"})
+__all__ = ["NullDisplay", "ProgressDisplay"]
 
 
 @runtime_checkable
@@ -100,49 +97,10 @@ class NullDisplay(ProgressDisplay):
         return
 
 
-class ProgressFinalizer:
-    """Forward progress while guaranteeing one terminal event per result.
-
-    Runners emit ordinary events through :meth:`on_event`. Once a runner
-    returns, the app passes each result through :meth:`finalize`; terminal
-    results that the runner did not narrate (for example an upstream SKIP or
-    disabled NOT_RUN) are emitted there. Duplicate terminal events are
-    suppressed in either direction.
-
-    The lock is required because runner workers may call ``on_event``
-    concurrently. The display callback is deliberately invoked outside the
-    lock: displays own their thread safety, and one slow display must not block
-    another worker from recording its terminal state.
-    """
-
-    def __init__(self, display: ProgressDisplay) -> None:
-        """Wrap one display for one app run."""
-        self._display = display
-        self._terminal: set[tuple[WorklistRow, str]] = set()
-        self._lock = Lock()
-
-    def on_event(
-        self,
-        row: WorklistRow,
-        phase: str,
-        status: str,
-        elapsed_s: float | None = None,
-    ) -> None:
-        """Forward an event unless its terminal result was already emitted."""
-        if status in _TERMINAL_STATUSES:
-            key = (row, phase)
-            with self._lock:
-                if key in self._terminal:
-                    return
-                self._terminal.add(key)
-        self._display.on_event(row, phase, status, elapsed_s)
-
-    def finalize(self, result: RowResult) -> None:
-        """Emit terminal events missing for the phases present in ``result``."""
-        for phase in result.phases.values():
-            self.on_event(
-                result.row,
-                phase.phase,
-                phase.status,
-                phase.elapsed_seconds,
-            )
+# A `ProgressFinalizer` used to wrap the display here, deduping terminal
+# events a second time and re-emitting each finished row. It existed because
+# the service drove N per-binding runners and had to stitch their event
+# streams together. One runner now sees the whole worklist and already
+# guarantees exactly one terminal event per (row, phase) -- including for
+# phases nothing executed -- so a second dedupe over the same stream could
+# only ever hide a runner-side regression.

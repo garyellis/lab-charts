@@ -162,7 +162,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
             validator_ids=frozenset({"third"}),
         )
     )
-    runner.helm = _HelmStub()  # type: ignore[assignment]
+    runner.helm_factory = lambda _version, _binary: _HelmStub()  # type: ignore[assignment]
 
     result = runner.run([config])
 
@@ -193,7 +193,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
             validator_ids=frozenset({"kyverno", "third"}),
         )
     )
-    runner.helm = _HelmStub()  # type: ignore[assignment]
+    runner.helm_factory = lambda _version, _binary: _HelmStub()  # type: ignore[assignment]
 
     result = runner.run([row_config_for(compiled, row)])
 
@@ -220,7 +220,7 @@ def test_disabled_validator_needs_no_executor_but_enabled_missing_executor_fails
         config=object(),
     )
     runner = ManifestValidationRunner(
-        helm=_HelmStub(),  # type: ignore[arg-type]
+        helm_factory=lambda _version, _binary: _HelmStub(),  # type: ignore[arg-type]
         output_root=tmp_path / "out",
         validators={},
     )
