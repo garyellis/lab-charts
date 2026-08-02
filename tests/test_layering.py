@@ -3,7 +3,7 @@
 The diagram this file encodes:
 
     cli/surfaces -> services -> api + domain + integrations
-                             domain -> plumbing
+                             domain -> api + plumbing
                                 api -> plumbing (pure helpers only)
 
 Read the arrows as guidance, not as permission. `integrations/` sits on the
@@ -12,7 +12,12 @@ because an adapter should reach for an authored API type: adapters are handed
 resolved service inputs, which is what keeps `Helm` ignorant of how a
 `ChartLifecycle` is spelled.
 
-Four invariants keep `cli/` a thin surface, so the same capabilities can be
+`domain/` is a top-level package, so the diagram and the directory tree agree.
+Membership is decided by what a module *is* -- policy and algorithms over
+`api/` models plus the schemas this project does not own (`Chart.yaml`,
+`Chart.lock`) -- not by who imports it.
+
+Six invariants keep `cli/` a thin surface, so the same capabilities can be
 fronted by a REST API, a GraphQL resolver, an RPC handler, or a Slack Bolt
 app without re-implementing the CLI:
 
@@ -36,19 +41,40 @@ app without re-implementing the CLI:
       done; nothing about loading, resolution, execution or display can hide
       in there. Six checks under "(d)" below.
 
-Why (c) and (d) are tests and not more banned-api entries: ruff reports every
-banned-api violation under the single code TID251, and per-file-ignores are
-per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
+  (e) `chart_manager.domain` may not import `services/`, `integrations/` or
+      `cli/`. Services compose domain policy; the reverse is a cycle waiting
+      to happen, and it is how `domain/` acquired its previous
+      "lives here because of who calls it" membership rule.
+      `test_domain_imports_only_api_plumbing_and_the_standard_library` below,
+      plus the TID251 table in `src/chart_manager/domain/.ruff.toml`.
+
+  (f) A surface *obtains* a service from the composition root; it never
+      constructs one, and it never reads `Settings` to do so. This is the
+      one rule no import check can see: `ChartCatalogService` is imported
+      legitimately in three layers, and the bypass was a call, not an
+      import. It went unnoticed for exactly that reason, and the predictor
+      was mechanical -- every service whose only dependency was
+      `Settings` + `root` got built inline, every service needing an adapter
+      went through `Container` -- so each bypass also built a second
+      `Settings`, which is what made `Container(settings=...)` unreachable
+      from the only surface that exists. Two checks under "(f)" below.
+
+Why (c), (d) and (e) are tests and not just banned-api entries: ruff reports
+every banned-api violation under the single code TID251, and per-file-ignores
+are per-code. Rule (a) needs TID251 *lifted* inside `services/` (services are
 supposed to wrap adapters), while rule (c) needs it *enforced* there -- that
 is exactly where a stray `sys.exit` would do the most damage. One code cannot
 be both, so (c) is checked here instead of weakening (a). Rule (d) hits the
 same wall from the other side: banned-api is declared globally, so banning
 `chart_manager.services` to protect `api/` also bans it for `cli/`, where it
-is the whole point -- 92 legitimate imports, measured. The one arrow TID251
-does carry for free is `api -/-> integrations`: that ban is already global and
-`api/` is deliberately absent from the lift table in pyproject.toml.
+is the whole point -- 92 legitimate imports, measured. Rule (e) needs the same
+ban, but only under one directory, so it is declared in a nested `.ruff.toml`
+that ruff resolves per file; the scan below is the copy that does not depend
+on ruff's config discovery. The one arrow TID251 carries for free everywhere
+is `-/-> integrations`: that ban is global, and `api/`, `domain/` and `cli/`
+are all deliberately absent from the lift table in pyproject.toml.
 
-A fifth invariant -- versioned wire contracts live in `services/*/wire.py`,
+One more invariant -- versioned wire contracts live in `services/*/wire.py`,
 never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
 because it is about dict literals rather than imports and so is invisible to
 both TID251 and the scans here.
@@ -68,19 +94,21 @@ import pytest
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _PKG = _SRC / "chart_manager"
 _API = _PKG / "api"
+_DOMAIN = _PKG / "domain"
 _SERVICES = _PKG / "services"
 _PLUMBING = _PKG / "plumbing"
 _INTEGRATIONS = _PKG / "integrations"
+_CLI = _PKG / "cli"
 
 #: Only the surface layer may terminate the process.
-_EXIT_ALLOWED_DIRS = (_PKG / "cli",)
+_EXIT_ALLOWED_DIRS = (_CLI,)
 
 #: Import either of these and a headless surface has a TUI in its address space.
 _FORBIDDEN_ROOTS = ("rich", "typer")
 
-# Chart concepts are service-domain policy, not generic plumbing.
-# `cluster_tests.py` and `spec.py` no longer exist anywhere -- their contents
-# split across `api/lifecycle/v1alpha1.py`, `domain/cluster_test_policy.py` and
+# Chart concepts are domain policy, not generic plumbing.
+# `graph.py` and `spec.py` no longer exist anywhere -- their contents split
+# across `api/lifecycle/v1alpha1.py`, `domain/lifecycle_policy.py` and
 # `manifest_validation/namespaces.py`. They stay on this ban list regardless:
 # it names spellings that may not appear under `plumbing/`, and a future
 # `plumbing/spec.py` would be exactly the violation it always was.
@@ -90,6 +118,8 @@ _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
     "cluster_tests.py",
     "graph.py",
     "install_plan.py",
+    "lifecycle_policy.py",
+    "local_resources.py",
     "spec.py",
 }
 
@@ -136,32 +166,35 @@ def _imports_matching(directory: Path, prefixes: tuple[str, ...]) -> list[str]:
 
 
 def test_chart_domain_modules_stay_out_of_plumbing() -> None:
-    """Keep chart models and policy in services/domain, not generic utilities."""
+    """Keep chart models and policy in domain, not generic utilities."""
     misplaced = sorted(
         path.name
         for path in _PLUMBING.glob("*.py")
         if path.name in _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING
     )
     assert not misplaced, (
-        "chart-domain modules belong in chart_manager/services/domain, "
+        "chart-domain modules belong in chart_manager/domain, "
         f"not plumbing: {', '.join(misplaced)}"
     )
 
-    # `cluster_test_policy.py` is here because the profile lookup and its error
-    # wording were split out of the authored `ClusterTestSpec` when that model
-    # moved to `api/lifecycle/v1alpha1.py`: the shape is a contract, choosing a
-    # profile and phrasing the failure is policy. It must not drift back.
+    # `lifecycle_policy.py` is here because the capability gate and the profile
+    # lookup were split out of the authored models when they moved to
+    # `api/lifecycle/v1alpha1.py`: the shape is a contract, deciding whether a
+    # capability is usable and phrasing the failure is policy. It must not
+    # drift back -- and it must not drift *up* into `services/` either, which
+    # is where `require_validation` and `require_cluster_test` used to sit
+    # while their sibling `require_cluster_test_profile` sat down here.
     expected = {
         "chart_deps.py",
         "charts.py",
-        "cluster_test_policy.py",
+        "cluster_tests.py",
         "install_plan.py",
+        "lifecycle_policy.py",
+        "local_resources.py",
     }
-    actual = {
-        path.name for path in (_SERVICES / "domain").glob("*.py") if path.name != "__init__.py"
-    }
+    actual = {path.name for path in _DOMAIN.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual, (
-        f"missing from services/domain: {sorted(expected - actual)} -- these are "
+        f"missing from domain: {sorted(expected - actual)} -- these are "
         "chart policy, not authored contract and not generic plumbing"
     )
 
@@ -187,7 +220,7 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     # leaf on purpose: putting it on the compiler would make `planner.py`
     # drag in the helm/kubeconform/kyverno adapters.
     validation_domain = _SERVICES / "manifest_validation"
-    expected = {"models.py", "namespaces.py", "output_paths.py"}
+    expected = {"models.py", "namespaces.py", "paths.py"}
     actual = {path.name for path in validation_domain.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual, (
         f"missing from services/manifest_validation: {sorted(expected - actual)} -- "
@@ -195,18 +228,90 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     )
 
 
-def test_plumbing_does_not_import_service_domains() -> None:
-    """Generic plumbing may not depend on chart or validation service policy."""
+def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
+    """Generic plumbing may not depend on chart or validation policy."""
     offenders = _imports_matching(
         _PLUMBING,
         (
-            "chart_manager.services.domain",
+            "chart_manager.domain",
             "chart_manager.services.manifest_validation",
         ),
     )
 
     assert not offenders, (
-        "generic plumbing must not import service-domain modules:\n  " + "\n  ".join(offenders)
+        "generic plumbing must not import domain or service policy:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_domain_modules_are_discoverable() -> None:
+    """Guard the guard: an empty sweep would make the next test vacuously pass."""
+    paths = sorted(_DOMAIN.rglob("*.py"))
+    assert len(paths) > 5, f"suspiciously few domain modules found: {paths}"
+    assert _DOMAIN / "install_plan.py" in paths
+    assert _DOMAIN / "lifecycle_policy.py" in paths
+
+
+#: What `chart_manager.domain` may import, beyond the standard library.
+#: An allowlist rather than a ban list, so a *new* top-level package is out of
+#: bounds for `domain/` on the day it is created, the same way the TID251 lift
+#: table in pyproject.toml defaults a new package to "no adapters".
+#:
+#: `chart_manager.settings` is on the list and `api/` is denied it, and the
+#: asymmetry is the point: a contract must describe what a YAML file may say
+#: without knowing which repository it was found in, while resolving
+#: `charts/<name>/Chart.yaml` is most of what domain does. `yaml` and
+#: `pydantic` are here for the same reason -- turning bytes into a validated
+#: document is the loading boundary domain owns, which is exactly the work
+#: `api/` is forbidden from doing.
+_DOMAIN_ALLOWED_IMPORTS = frozenset(
+    {
+        "chart_manager.api",
+        "chart_manager.domain",
+        "chart_manager.plumbing",
+        "chart_manager.settings",
+        "pydantic",
+        "yaml",
+    }
+)
+
+
+def test_domain_imports_only_api_plumbing_and_the_standard_library() -> None:
+    """Domain is below services: nothing above it may be imported from here.
+
+    This is the rule whose absence produced the previous membership criterion,
+    where a policy function lived in `domain/` because a domain algorithm
+    happened to call it, while its two siblings lived in `services/` because
+    only services called them. With the direction enforced, "what is it?" is
+    the only question left to answer, and the answer is stable.
+
+    `src/chart_manager/domain/.ruff.toml` bans `chart_manager.services` and
+    `chart_manager.integrations` under TID251, which reports them at lint
+    time. This scan is the copy that does not depend on ruff's nested-config
+    discovery, and being an allowlist it also covers `cli/`, the composition
+    root, and whatever gets added next.
+    """
+    offenders: list[str] = []
+    for path in sorted(_DOMAIN.rglob("*.py")):
+        label = str(path.relative_to(_SRC))
+        for lineno, module in _imports_in(
+            path.read_text(encoding="utf-8"), label, _package_of(path)
+        ):
+            root = module.split(".")[0]
+            if root in sys.stdlib_module_names:
+                continue
+            if any(
+                module == allowed or module.startswith(allowed + ".")
+                for allowed in _DOMAIN_ALLOWED_IMPORTS
+            ):
+                continue
+            offenders.append(f"{label}:{lineno}: {module}")
+
+    assert not offenders, (
+        "domain/ sits below services/ and may import only api/, plumbing/, "
+        "settings and the standard library:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nTake what the algorithm needs as a parameter instead -- "
+        "DependencyResolver's ClusterTestLoader callable is the pattern."
     )
 
 
@@ -228,7 +333,7 @@ def test_integrations_do_not_import_services() -> None:
 
     Whatever an adapter needs from a service is passed in by the caller:
     `Helm` takes its dependency-freshness predicates as constructor
-    arguments, wired from `services/domain/chart_deps` in
+    arguments, wired from `domain/chart_deps` in
     `chart_manager.composition`, so the helm wrapper never has to know how a
     Chart.lock is parsed.
     """
@@ -307,10 +412,11 @@ def _probe(modules: list[str], forbidden: tuple[str, ...] = _FORBIDDEN_ROOTS) ->
 
 def test_service_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
-    modules = _modules_under(_SERVICES)
+    modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
     assert "chart_manager.services.manifest_validation.app" in modules
+    assert "chart_manager.domain.lifecycle_policy" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -323,12 +429,15 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     plain result objects plus versioned wire projections
     (`services/*/wire.py`).
 
+    `domain/` is swept alongside `services/`: it is further from the terminal,
+    not closer, so the same rule applies with more force.
+
     Strategy: one subprocess importing every service module (~0.5s), which is
     all the passing case needs. Only on failure do we pay for a per-module
     re-probe, so the report still names the exact file that regressed rather
     than the whole layer.
     """
-    modules = _modules_under(_SERVICES)
+    modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     leaked = _probe(modules)
     if not leaked:
         return
@@ -336,7 +445,7 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     culprits = {m: found for m in modules if (found := _probe([m]))}
     detail = "\n".join(f"  {m} -> {found}" for m, found in sorted(culprits.items()))
     pytest.fail(
-        f"services/ leaked {leaked} into sys.modules.\n"
+        f"services/ + domain/ leaked {leaked} into sys.modules.\n"
         f"Modules responsible:\n{detail}\n\n"
         "Move the terminal rendering into cli/ and hand the service a "
         "callback or a plain result object instead."
@@ -424,6 +533,208 @@ def test_no_process_exit_outside_cli() -> None:
 
 
 # --------------------------------------------------------------------------
+# (f) a surface obtains services from the composition root
+# --------------------------------------------------------------------------
+
+#: Class-name suffixes that mean "this is a service-layer collaborator".
+#: Deliberately a naming rule rather than an import graph: the check has to
+#: fire on `SomeService(...)` written in `cli/` whichever module it came from,
+#: and has to stay quiet on `_container().some_service(...)`, which differs
+#: only in case. Both properties fall out of matching the *called* name.
+_CONSTRUCTION_SUFFIXES = ("Service", "Resolver", "Exporter")
+
+#: `module.py::ClassName` pairs `cli/` may construct anyway.
+#:
+#: Empty, and the intent is that it stays empty -- there is no service a
+#: surface can build better than the composition root can. If one ever earns
+#: an entry, write the reason on the line above it: an allowlist whose
+#: members carry no justification is indistinguishable from a suppressed
+#: failure, and the next reader cannot tell which it is.
+_CONSTRUCTION_ALLOWLIST: frozenset[str] = frozenset()
+
+#: `cli/` modules permitted to call `Settings()` directly.
+#:
+#: Exactly one, and it is not service construction. `main.py`'s root callback
+#: has to read `--config` into `settings.set_config_file` and then resolve
+#: `--root`'s fallback and the logging configuration *before* any command
+#: body -- and therefore before any `Container` -- exists. That is process
+#: bootstrap, which is the surface's own job; every other former caller was
+#: building a service and has been routed through `container().settings`.
+_SETTINGS_ALLOWED_MODULES = frozenset({"main.py"})
+
+
+def _called_names(source: str, label: str) -> list[tuple[int, str]]:
+    """Every call in `source` as (line, called name).
+
+    `Name(...)` reports `Name` and `mod.Name(...)` reports `Name`, so the
+    rules below read the same whether a module imported a symbol or reached
+    it through its package. Anything not called through a name (a subscript,
+    a lambda) is not a construction site and is skipped.
+    """
+    called: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            called.append((node.lineno, node.func.id))
+        elif isinstance(node.func, ast.Attribute):
+            called.append((node.lineno, node.func.attr))
+    return called
+
+
+def _construction_offenders(
+    source: str,
+    label: str,
+    allowlist: frozenset[str] = _CONSTRUCTION_ALLOWLIST,
+) -> list[str]:
+    """Service-layer objects constructed in `source`, as reportable strings."""
+    return [
+        f"  {label}:{line}: {name}(...)"
+        for line, name in _called_names(source, label)
+        if name.endswith(_CONSTRUCTION_SUFFIXES) and f"{label}::{name}" not in allowlist
+    ]
+
+
+def _settings_offenders(source: str, label: str) -> list[str]:
+    """Direct `Settings()` constructions in `source`."""
+    return [
+        f"  {label}:{line}: Settings()"
+        for line, name in _called_names(source, label)
+        if name == "Settings"
+    ]
+
+
+def _cli_modules() -> list[Path]:
+    """Every .py file under `cli/`."""
+    return sorted(_CLI.rglob("*.py"))
+
+
+def test_cli_modules_are_discoverable() -> None:
+    """Guard the guard: an empty sweep would make both (f) checks vacuous."""
+    paths = _cli_modules()
+    assert len(paths) > 10, f"suspiciously few cli modules: {len(paths)}"
+    assert _CLI / "_container.py" in paths
+    # The four modules that used to construct services inline. If one is
+    # renamed away, the scan must be updated deliberately rather than
+    # quietly losing coverage of the exact files this rule was written for.
+    for name in ("chart.py", "local.py", "plan.py", "validate.py"):
+        assert _CLI / name in paths
+
+
+def test_no_cli_module_constructs_a_service() -> None:
+    """A surface asks the composition root for a capability; it never builds one.
+
+    This is the container-bypass equivalent of TID251, and it exists because
+    TID251 cannot see it. Importing `ChartCatalogService` into `cli/` is a
+    legal import from a legal layer; calling it is what puts the decision
+    "which chart directory is this repository's" at the surface, where every
+    surface then has to make it again -- and where it silently disagreed with
+    what `Container` was configured with.
+
+    The fix is always the same shape: add a factory to `Container` and call
+    `_container().the_factory(root)`. The lowercase factory name is why the
+    match is on the exact capitalized suffix.
+    """
+    offenders: list[str] = []
+    for path in _cli_modules():
+        offenders += _construction_offenders(path.read_text(encoding="utf-8"), path.name)
+
+    assert not offenders, (
+        "cli/ must obtain services from the composition root, but found "
+        "direct constructions:\n" + "\n".join(offenders) + "\n\n"
+        "Add a factory to composition.Container and call "
+        "_container().<factory>(...) instead."
+    )
+
+
+def test_only_the_cli_entry_point_constructs_settings() -> None:
+    """Configuration enters through the container, not through each call site.
+
+    `Container` has taken a `Settings` since it was written, but the seam was
+    dead while every command built its own: injecting one changed nothing for
+    the services a surface constructed itself. Reading `container().settings`
+    -- which is what the two remaining settings-only free functions
+    (`resolve_chart_target`, `discover_dashboards`) do -- keeps one
+    configuration per invocation instead of one per call site.
+    """
+    offenders: list[str] = []
+    for path in _cli_modules():
+        if path.name in _SETTINGS_ALLOWED_MODULES:
+            continue
+        offenders += _settings_offenders(path.read_text(encoding="utf-8"), path.name)
+
+    assert not offenders, (
+        "only cli/main.py may construct Settings (process bootstrap), but "
+        "found:\n" + "\n".join(offenders) + "\n\n"
+        "Read container().settings instead, so an injected Settings reaches "
+        "this call site too."
+    )
+
+
+_CONSTRUCTION_LEAKS = {
+    "the-catalog-bypass-this-rule-was-written-for": (
+        "entries = ChartCatalogService(root, charts_dir=Settings().charts_dir).list_entries()"
+    ),
+    "a-domain-resolver-built-from-a-setting": (
+        "return LocalTargetResolver(root, local_config=Settings().local_config).resolve(target)"
+    ),
+    "an-adapter-facing-exporter": "exporter = GrafanaExporter(kubectl=Kubectl(runner))",
+    "the-same-thing-reached-through-its-package": "svc = impact.LifecycleImpactService(root)",
+}
+
+_CONSTRUCTION_NON_LEAKS = {
+    "the-container-factory-that-replaced-it": "entries = _container().chart_catalog_service(root)",
+    "a-container-factory-spelled-bare": "svc = container().impact_service(root)",
+    "a-type-annotation-naming-the-same-class": "def f(root: Path) -> LifecycleImpactService: ...",
+    "an-import-of-the-class-for-that-annotation": (
+        "from chart_manager.services.chart_catalog import ChartCatalogService"
+    ),
+    "a-request-object-the-surface-does-own": "req = ExportRequest(uid=uid, release=release)",
+}
+
+
+def test_the_construction_rule_fires_on_each_synthetic_leak() -> None:
+    """Positive control: every bypass shape this rule replaced, caught."""
+    missed = [
+        name
+        for name, source in _CONSTRUCTION_LEAKS.items()
+        if not _construction_offenders(source, name)
+    ]
+    assert not missed, f"the container-bypass rule silently allows: {missed}"
+
+
+def test_the_construction_rule_stays_quiet_on_going_through_the_container() -> None:
+    """Negative control: the fixed spelling differs from the broken one by case."""
+    noisy = {
+        name: found
+        for name, source in _CONSTRUCTION_NON_LEAKS.items()
+        if (found := _construction_offenders(source, name))
+    }
+    assert not noisy, f"the container-bypass rule flags correct surface code: {noisy}"
+
+
+def test_the_construction_allowlist_exempts_exactly_what_it_names() -> None:
+    """The allowlist is empty today; prove the mechanism still works.
+
+    An allowlist nothing exercises is an allowlist that silently stops
+    filtering, and the next person to need one finds out the hard way.
+    """
+    source = _CONSTRUCTION_LEAKS["an-adapter-facing-exporter"]
+    assert _construction_offenders(source, "grafana.py", frozenset({"grafana.py::Other"}))
+    assert not _construction_offenders(
+        source, "grafana.py", frozenset({"grafana.py::GrafanaExporter"})
+    )
+
+
+def test_the_settings_rule_fires_on_a_direct_construction() -> None:
+    """Positive control, plus the negative one: reading the container is fine."""
+    assert _settings_offenders("settings = Settings()", "chart.py")
+    assert _settings_offenders("x = Settings().charts_dir", "grafana.py")
+    assert not _settings_offenders("x = container().settings.charts_dir", "grafana.py")
+    assert not _settings_offenders("def f(settings: Settings | None = None): ...", "_container.py")
+
+
+# --------------------------------------------------------------------------
 # (d) the configuration API boundary
 # --------------------------------------------------------------------------
 
@@ -440,6 +751,7 @@ _API_ROOT_MODELS = {
 #: Used twice: statically, against the imports written in `api/`, and at
 #: runtime, against what importing `api/` actually loads.
 _API_FORBIDDEN_IMPORTS = {
+    "chart_manager.domain": "interpreting a decoded document is the layer above",
     "chart_manager.services": "loading and interpretation happen after decode",
     "chart_manager.integrations": "adapters run commands; a contract describes text",
     "chart_manager.cli": "a contract must not know how it is rendered",
@@ -653,12 +965,11 @@ _ENVELOPE_API_VERSION = frozenset({"apiVersion", "api_version"})
 
 #: Classes outside `api/` that legitimately declare the header as fields.
 #: Empty, and the emptiness is the finding: `services/lifecycle/models.py`'s
-#: `LifecyclePlan` is the projection the refactor plan calls out as an
-#: execution-domain concept rather than part of the configuration API, and it
-#: does not appear here because it does not declare `apiVersion`/`kind` at all
-#: -- it emits them from `to_dict()`, which is `tests/test_wire_contracts.py`'s
-#: subject. Anything added here is keyed `path::ClassName` and needs a comment
-#: saying which external consumer parses it and why it is not authored YAML.
+#: `LifecyclePlan` is an execution-domain projection, not configuration API,
+#: and since `services/lifecycle/wire.py` took over its emission it neither
+#: declares nor emits `apiVersion`/`kind` at all. Anything added here is
+#: keyed `path::ClassName` and needs a comment saying which external consumer
+#: parses it and why it is not authored YAML.
 _ENVELOPE_ALLOWLIST: frozenset[str] = frozenset()
 
 
@@ -745,7 +1056,7 @@ def test_authored_resource_envelopes_live_under_the_api_package() -> None:
 # --------------------------------------------------------------------------
 
 _API_LEAKS = {
-    "reaching-for-the-loader": "from chart_manager.services.chart_config import load",
+    "reaching-for-the-loader": "from chart_manager.domain.lifecycle_policy import load",
     "reaching-for-an-adapter": "from chart_manager.integrations.helm import Helm",
     "reaching-for-the-surface": "import chart_manager.cli.output",
     "reaching-for-settings": "from chart_manager.settings import Settings",
@@ -754,7 +1065,7 @@ _API_LEAKS = {
     "a-plumbing-module-that-is-not-a-pure-rule": (
         "from chart_manager.plumbing.errors import SpecError"
     ),
-    "an-escape-hatch-spelled-relatively": "from ...services.chart_config import load",
+    "an-escape-hatch-spelled-relatively": "from ...domain.lifecycle_policy import load",
 }
 
 _API_ALLOWED_SOURCES = {

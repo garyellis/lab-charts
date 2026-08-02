@@ -19,24 +19,26 @@ import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
-from chart_manager.api.local.v1alpha1 import LifecycleRelease
-from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.clusters import development as lab_module
-from chart_manager.services.clusters.development import (
-    DevelopmentClusterEntryOutcome,
-    DevelopmentClusterService,
-)
-from chart_manager.services.domain.charts import (
+from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalCluster
+from chart_manager.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
     HelmChart,
 )
-from chart_manager.services.domain.install_plan import InstallPlanEntry
+from chart_manager.domain.install_plan import InstallPlanEntry
+from chart_manager.domain.local_resources import ResolvedChartTarget
+from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.clusters import development as lab_module
+from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
+from chart_manager.services.clusters.development import (
+    DevelopmentClusterEntryOutcome,
+    DevelopmentClusterService,
+)
+from chart_manager.services.clusters.development.service import _TargetLocalExecution
 from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
 )
-from chart_manager.services.local_resources import ResolvedChartTarget
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
@@ -210,24 +212,25 @@ def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestCh
     )
 
 
-def _wire_repo(
-    monkeypatch: pytest.MonkeyPatch,
-    service: DevelopmentClusterService,
-    *,
-    charts: dict[str, ClusterTestChart],
-) -> None:
-    def _get(name: str) -> ClusterTestChart:
-        return charts[name]
+class _StubCatalog:
+    """The two-method slice of ClusterTestCatalog that _install_plan reads."""
 
-    monkeypatch.setattr(service.cluster_tests, "get", _get)
-    monkeypatch.setattr(service.cluster_tests, "value_paths", lambda _c, _p: [])
+    def __init__(self, charts: dict[str, ClusterTestChart]) -> None:
+        self._charts = charts
+
+    def get(self, name: str) -> ClusterTestChart:
+        return self._charts[name]
+
+    def value_paths(self, _chart: ClusterTestChart, _profile: str) -> list[Path]:
+        return []
 
 
 def _install_plan(
     service: DevelopmentClusterService,
     plan: list[InstallPlanEntry],
-) -> lab_module._DevelopmentClusterRunSummary:
-    summary = lab_module._DevelopmentClusterRunSummary()
+    charts: dict[str, ClusterTestChart],
+) -> lab_module.RunSummary:
+    summary = lab_module.RunSummary()
     service._install_plan(
         plan,
         default_namespace="observability",
@@ -235,6 +238,7 @@ def _install_plan(
         namespaces_created=set(),
         summary=summary,
         skip_installed=False,
+        cluster_tests=_StubCatalog(charts),  # type: ignore[arg-type]
     )
     return summary
 
@@ -251,7 +255,7 @@ def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=[])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -265,7 +269,7 @@ def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) ->
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -281,7 +285,7 @@ def test_many_virtualservices_yield_sorted_urls(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -301,7 +305,7 @@ def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(
+        lab_module.RunSummary(
             applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
         ),
         namespace="observability",
@@ -317,7 +321,7 @@ def test_virtualservice_listing_failure_is_captured_not_raised(tmp_path: Path) -
     kubectl = _RecordingKubectl(vs_raise=ExternalCommandError("no such CRD"))
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -334,7 +338,7 @@ def test_grafana_secret_failure_is_captured_not_raised(tmp_path: Path) -> None:
     )
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 
@@ -351,7 +355,7 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._DevelopmentClusterRunSummary(no_change=list(_GATEWAY_SYNCED))
+    summary = lab_module.RunSummary(no_change=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
 
     assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
@@ -362,7 +366,7 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
 ) -> None:
     kubectl = _RecordingKubectl()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module._DevelopmentClusterRunSummary(
+    summary = lab_module.RunSummary(
         applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
     )
     svc._wait_apps_wildcard_ready(summary)
@@ -378,7 +382,7 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
     )
     progress = _Recorder()
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress)
-    summary = lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED))
+    summary = lab_module.RunSummary(applied=list(_GATEWAY_SYNCED))
     svc._wait_apps_wildcard_ready(summary)
     assert "warn:" in progress.text
     assert "apps-wildcard cert not Ready" in progress.text
@@ -398,8 +402,7 @@ def test_webhook_wait_runs_after_cert_manager_apply(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
 
     assert kubectl.webhook_waits == [("cert-manager-webhook", "cert-manager", "120s")]
 
@@ -413,8 +416,7 @@ def test_webhook_wait_skipped_for_other_charts(
 
     plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
     charts = {"grafana": _stub_chart("grafana")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
     assert kubectl.webhook_waits == []
 
 
@@ -429,15 +431,10 @@ def test_local_install_uses_the_chart_lifecycle_profile_namespace(
         kind=_Kind(),
         kubectl=_RecordingKubectl(),
     )
-    _wire_repo(
-        monkeypatch,
-        svc,
-        charts={"grafana": _stub_chart("grafana", namespace="monitoring")},
-    )
-
     summary = _install_plan(
         svc,
         [InstallPlanEntry(chart="grafana", profile="minimal")],
+        {"grafana": _stub_chart("grafana", namespace="monitoring")},
     )
 
     assert helm.upgrade_calls == [("grafana", "monitoring")]
@@ -476,7 +473,7 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         kubectl=_RecordingKubectl(),
     )
 
-    executions = svc._preflight_target(
+    steps = svc._preflight_target(
         (
             LifecycleRelease(
                 type="lifecycle",
@@ -496,8 +493,87 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         ),
     )
 
-    assert executions[0] is not None
-    assert [entry.chart for entry in executions[0].plan] == ["app"]
+    assert isinstance(steps[0], _TargetLocalExecution)
+    assert [entry.chart for entry in steps[0].plan] == ["app"]
+
+
+def test_bootstrap_exclusion_survives_a_profile_that_declares_no_namespace(
+    tmp_path: Path,
+) -> None:
+    """Both sides of the exclusion must fill an absent `namespace:` the same way.
+
+    `LocalBootstrapExecutor.preflight` publishes ownership as an identity that
+    *includes* the namespace, and `_preflight_target` excludes by exact
+    identity. Those two used to spell the fallback as separate `"default"`
+    literals, one per module; they now share `_shared.DEFAULT_NAMESPACE`. Fork
+    them again and a bootstrap-owned chart is converged a second time -- with
+    no error, because both installs succeed.
+    """
+    for name, requires in (
+        ("network", ""),
+        ("app", "        requires:\n          - chart: network\n            profile: minimal\n"),
+    ):
+        chart = tmp_path / "charts" / name
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
+            encoding="utf-8",
+        )
+        (chart / "chart-lifecycle.yaml").write_text(
+            (
+                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+                "kind: ChartLifecycle\n"
+                f"metadata: {{name: {name}}}\n"
+                "spec:\n"
+                "  clusterTest:\n"
+                "    profiles:\n"
+                "      minimal:\n"
+                f"{requires}"
+                "        values: []\n"
+            ),
+            encoding="utf-8",
+        )
+    bootstrap = LocalBootstrapExecutor(
+        tmp_path,
+        helm=_Helm(),  # type: ignore[arg-type]
+        kind=_Kind(),  # type: ignore[arg-type]
+        kubectl=_RecordingKubectl(),  # type: ignore[arg-type]
+    )
+    owned = bootstrap.preflight(
+        LocalCluster.model_validate(
+            {
+                "apiVersion": "local.chartmanager.io/v1alpha1",
+                "kind": "LocalCluster",
+                "metadata": {"name": "default"},
+                "spec": {
+                    "cluster": {"config": "kind-config.yaml"},
+                    "bootstrap": {
+                        "releases": [
+                            {
+                                "type": "lifecycle",
+                                "chart": "charts/network",
+                                "profile": "minimal",
+                            }
+                        ]
+                    },
+                },
+            }
+        )
+    )
+
+    steps = _service(
+        tmp_path,
+        helm=_Helm(),
+        kind=_Kind(),
+        kubectl=_RecordingKubectl(),
+    )._preflight_target(
+        (LifecycleRelease(type="lifecycle", chart=Path("charts/app"), profile="minimal"),),
+        excluded_lifecycle_identities=owned,
+    )
+
+    assert {identity.namespace for identity in owned} == {"default"}
+    assert isinstance(steps[0], _TargetLocalExecution)
+    assert [entry.chart for entry in steps[0].plan] == ["app"]
 
 
 def test_relative_repository_root_accepts_an_absolute_resolved_chart(
@@ -536,8 +612,7 @@ def test_webhook_wait_warning_does_not_abort_run(
 
     plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
     charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _wire_repo(monkeypatch, svc, charts=charts)
-    _install_plan(svc, plan)
+    _install_plan(svc, plan, charts)
     assert "cert-manager webhook not Available" in progress.text
 
 
@@ -617,6 +692,38 @@ def test_port_mapping_drift_silent_when_kind_config_absent(
     assert "kind cluster port mappings" not in progress.text
 
 
+def test_an_unrunnable_drift_check_says_so_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """"Could not compare" and "no drift" are the same `PortMappingDrift` value.
+
+    With no host ports to compare against, the check returns `PortMappingDrift()`
+    -- `missing=()` and `error=None` -- which is byte-for-byte what a clean
+    cluster returns. Narration is deliberately silent (there is nothing to tell
+    a developer to do), so the log is the only place the distinction survives,
+    and it is what keeps a typo'd `spec.cluster.config` from disabling the
+    check permanently with no signal at all.
+    """
+    kind = _Kind(host_ports=set())
+    svc = _service(
+        tmp_path,
+        helm=_Helm(status="applied"),
+        kind=kind,
+        kubectl=_RecordingKubectl(),
+        progress=_Recorder(),
+    )
+
+    with caplog.at_level("WARNING"):
+        svc._warn_on_port_mapping_drift(
+            "chart-manager",
+            config=tmp_path / "kind-config.yaml",
+        )
+
+    [record] = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert "port-mapping drift check skipped" in record.getMessage()
+    assert "cluster=chart-manager" in record.getMessage()
+
+
 def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     tmp_path: Path,
 ) -> None:
@@ -632,7 +739,7 @@ def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     hints = svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(
+        lab_module.RunSummary(
             applied=[
                 *_GATEWAY_SYNCED,
                 # Grafana installed into its own namespace, not the default.
@@ -654,7 +761,7 @@ def test_grafana_secret_falls_back_to_the_run_namespace_when_absent(
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
 
     svc._access_hints(
-        lab_module._DevelopmentClusterRunSummary(applied=list(_GATEWAY_SYNCED)),
+        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
         namespace="observability",
     )
 

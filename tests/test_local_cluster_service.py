@@ -9,6 +9,12 @@ import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
+from chart_manager.domain.charts import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
+from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
@@ -16,12 +22,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
 )
-from chart_manager.services.domain.charts import (
-    ChartMetadata,
-    ClusterTestChart,
-    HelmChart,
-)
-from chart_manager.services.domain.install_plan import InstallPlanEntry
+from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.progress import ProgressEvent
 
 
@@ -231,7 +232,12 @@ def test_run_ensures_the_cluster_and_narrates_it(
     kind = _Kind()
     progress = _Recorder()
     svc = _service(tmp_path, kind=kind, helm=_Helm(), progress=progress)
-    monkeypatch.setattr(svc, "_compile_lifecycle_plan", lambda *_args, **_kwargs: None)
+    # An empty plan rather than `None`: `run` reports the compiled action count
+    # on its run-started log line, and a double that returns something the
+    # method's own type forbids makes this test fail for a reason that has
+    # nothing to do with what it asserts.
+    empty_plan = LifecyclePlan(chart="grafana", actions=())
+    monkeypatch.setattr(svc, "_compile_lifecycle_plan", lambda *_a, **_kw: empty_plan)
     monkeypatch.setattr(svc, "_execute_lifecycle_plan", lambda *_args, **_kwargs: None)
 
     # Chart execution is covered separately; this test isolates environment

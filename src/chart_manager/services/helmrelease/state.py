@@ -73,7 +73,7 @@ class Verdict(StrEnum):
         """True when this verdict counts toward a successful run.
 
         The single home for the rule that used to be six hardcoded tuples --
-        three in `monitor.py`, one in `test.py`, and two more in
+        three in `monitor.py`, one in `helm_test.py`, and two more in
         `cli/helmrelease_render.py` where `ok_count` re-implemented
         `MonitorResult.ok`'s predicate. A seventh verdict added to only some
         of them made the headline count and the process exit code disagree.
@@ -242,14 +242,21 @@ def run_verdict(verdicts: Iterable[Verdict], *, success: Verdict) -> Verdict:
     """Fold per-HelmRelease verdicts into the one verdict describing the run.
 
     A run is only as good as its worst release, so any non-passing verdict
-    wins over `success`. An all-passing run reports `success` even when some
-    releases were skipped: reporting SKIPPED_SUSPENDED for the run would make
-    a healthy promotion look stalled on the timeline.
+    wins over `success`. A run that mixes skips with real successes reports
+    `success`: reporting SKIPPED_SUSPENDED there would make a healthy
+    promotion look stalled on the timeline.
+
+    A run where *every* release was suspended is the exception, and reports
+    SKIPPED_SUSPENDED. Folding it to `success` claimed a green rollout and a
+    verified-live PROMOTED from zero executed tests -- see `TERMINAL_PHASES`,
+    which has no SKIPPED_SUSPENDED row precisely so this emits nothing.
     """
     seen = set(verdicts)
     for verdict in _SEVERITY:
         if verdict in seen:
             return verdict
+    if seen and seen <= {Verdict.SKIPPED_SUSPENDED}:
+        return Verdict.SKIPPED_SUSPENDED
     return success
 
 

@@ -15,12 +15,12 @@ from typing import Any
 
 import yaml
 
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.domain.charts import (
+from chart_manager.domain.charts import (
     ChartDependency,
     ChartRepository,
     load_chart_metadata,
 )
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml

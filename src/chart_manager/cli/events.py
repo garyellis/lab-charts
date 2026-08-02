@@ -19,7 +19,7 @@ from typing import Annotated
 
 import typer
 
-from chart_manager.cli._wiring import container
+from chart_manager.cli._container import container
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.ref import (

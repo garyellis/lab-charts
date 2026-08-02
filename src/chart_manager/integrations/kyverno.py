@@ -92,7 +92,7 @@ class Kyverno:
         self.runner = runner or SubprocessRunner()
         self._bin = str(binary) if binary is not None else "kyverno"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
-        # this from --row-timeout so a hung kyverno doesn't pin a worker.
+        # this from --tool-timeout so a hung kyverno doesn't pin a worker.
         self.timeout = timeout
 
     def preflight(self) -> tuple[Check, ...]:
@@ -172,7 +172,7 @@ class Kyverno:
 def _discover_manifests(root: Path) -> list[Path]:
     """Walk `root` and return every .yaml/.yml regular file.
 
-    `followlinks=False` matches the schema phase's `_has_manifests` policy
+    `followlinks=False` matches `services/manifest_validation/paths.has_manifests`
     so a cyclic symlink in the rendered tree can't hang us.
     """
     found: list[Path] = []

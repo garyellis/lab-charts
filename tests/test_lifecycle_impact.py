@@ -8,9 +8,10 @@ from pathlib import Path
 import yaml
 
 from chart_manager.services.lifecycle import (
+    SCHEMA_VERSION,
     ImpactReasonCode,
     LifecycleImpactService,
-    analyze_lifecycle_impact,
+    impact_to_dict,
 )
 
 from .conftest import MakeChart
@@ -89,8 +90,7 @@ def test_chart_lifecycle_change_selects_all_validation_environments_and_cluster_
     chart = make_chart("app")
     _with_validation(chart, environments=("dev", "prod"))
 
-    impact = analyze_lifecycle_impact(
-        chart_root,
+    impact = LifecycleImpactService(chart_root).analyze(
         ["charts/app/chart-lifecycle.yaml"],
     )
 
@@ -110,8 +110,7 @@ def test_shared_runtime_change_fans_out_every_enabled_cluster_test_with_reasons(
     make_chart("alpha")
     make_chart("beta")
 
-    impact = analyze_lifecycle_impact(
-        chart_root,
+    impact = LifecycleImpactService(chart_root).analyze(
         ["charts/istio-base/templates/crd.yaml"],
     )
 
@@ -159,8 +158,7 @@ spec:
         encoding="utf-8",
     )
 
-    impact = analyze_lifecycle_impact(
-        chart_root,
+    impact = LifecycleImpactService(chart_root).analyze(
         ["platform/network/templates/daemonset.yaml"],
     )
 
@@ -186,8 +184,7 @@ def test_safety_fanout_unions_declared_dependent_profiles_from_chart_changes(
         dependent_profile="full",
     )
 
-    impact = analyze_lifecycle_impact(
-        chart_root,
+    impact = LifecycleImpactService(chart_root).analyze(
         ["kind-config.yaml", "charts/source/values.yaml"],
     )
 
@@ -222,7 +219,7 @@ def test_tool_workflow_and_chart_manager_rules_are_typed_safety_fanout(
             ".github/workflows/ci.yaml",
             ".chart-manager/local-cluster.yaml",
         ):
-        impact = analyze_lifecycle_impact(chart_root, [changed_file])
+        impact = LifecycleImpactService(chart_root).analyze([changed_file])
         assert [(case.chart, case.profile) for case in impact.cluster_tests] == [
             ("app", "minimal")
         ]
@@ -240,8 +237,7 @@ def test_repository_policy_change_uses_existing_validation_safety_fanout(
     _with_validation(alpha, environments=("dev", "prod"))
     _with_validation(beta)
 
-    impact = analyze_lifecycle_impact(
-        chart_root,
+    impact = LifecycleImpactService(chart_root).analyze(
         ["policies/require-resources.yaml"],
     )
 
@@ -268,17 +264,16 @@ def test_impact_is_deterministic_deduplicated_and_json_serializable(
         "README.md",
     ]
 
-    impact = analyze_lifecycle_impact(chart_root, changes)
-    projected = impact.to_dict()
+    impact = LifecycleImpactService(chart_root).analyze(changes)
+    projected = impact_to_dict(impact)
 
-    assert projected["changedFiles"] == [
+    assert projected["changed_files"] == [
         "README.md",
         "charts/app/values.yaml",
     ]
-    assert len(projected["validationSelection"]) == 1
-    assert len(projected["clusterTestMatrix"]) == 1
-    assert projected["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
-    assert projected["kind"] == "LifecycleImpact"
+    assert len(projected["validation_selection"]) == 1
+    assert len(projected["cluster_test_matrix"]) == 1
+    assert projected["schema_version"] == SCHEMA_VERSION
     assert json.loads(json.dumps(projected)) == projected
 
 
@@ -289,7 +284,7 @@ def test_unrelated_non_chart_change_selects_no_lifecycle_work(
     app = make_chart("app")
     _with_validation(app)
 
-    impact = analyze_lifecycle_impact(chart_root, ["docs/architecture.md"])
+    impact = LifecycleImpactService(chart_root).analyze(["docs/architecture.md"])
 
     assert impact.validation == ()
     assert impact.cluster_tests == ()

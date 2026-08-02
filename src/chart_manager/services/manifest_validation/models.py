@@ -3,18 +3,32 @@
 These cross integration/service/CLI seams, so we use stdlib dataclasses
 rather than pydantic. Pydantic models live at IO boundaries (spec parsing,
 JSON output). Internal state transfer stays plain.
+
+This is also the caller-facing vocabulary of the capability: what a surface
+hands in (`RunRequest`), what it gets back (`RunOutcome`), and the one error
+that says "your input was bad, and here is which input"
+(`ValidateInputError`). They were a separate `requests.py` on the theory that
+a REST handler wants the contract without the orchestrator -- but that module
+already imported this one, so the split bought a second import line and
+nothing else.
+
+Folds that more than one projection needs (`RunResult.tally`,
+`row_elapsed_text`, `no_work_reason`) live here for the same reason: JSON,
+markdown and the terminal table each used to compute them independently, and
+the wire module's docstring promises surfaces "cannot diverge".
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
 from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
+from chart_manager.domain.charts import HelmChart
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.domain.charts import HelmChart
 
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]
@@ -107,6 +121,16 @@ class RowResult:
 
 
 @dataclass(frozen=True)
+class RowTally:
+    """How many rows passed, failed and were skipped in one run."""
+
+    rows: int
+    passing: int
+    failing: int
+    skipped: int
+
+
+@dataclass(frozen=True)
 class RunResult:
     """Aggregate result of a validate run across all rows."""
 
@@ -148,3 +172,176 @@ class RunResult:
         if has_fail:
             return Outcome.FAILED
         return Outcome.SUCCESS
+
+    def tally(self) -> RowTally:
+        """Count rows by verdict: any FAIL fails the row, all-quiet skips it.
+
+        One fold, because the JSON payload's `summary` and the markdown
+        tally line are the same claim about the same run and used to be
+        written out twice.
+        """
+        passing = 0
+        failing = 0
+        skipped = 0
+        for row in self.rows:
+            statuses = {phase.status for phase in row.phases.values()}
+            if "FAIL" in statuses:
+                failing += 1
+            elif statuses and statuses <= {"SKIP", "NOT_RUN"}:
+                skipped += 1
+            elif "PASS" in statuses:
+                passing += 1
+        return RowTally(
+            rows=len(self.rows),
+            passing=passing,
+            failing=failing,
+            skipped=skipped,
+        )
+
+
+def row_elapsed_text(row_result: RowResult) -> str:
+    """Sum the row's phase timings; empty string when nothing was timed.
+
+    Shared by the markdown table and the terminal table so the "Elapsed"
+    column reads identically in both. It lives here rather than beside
+    either renderer because it belongs to neither: the wire module must not
+    export a helper the terminal needs, and the terminal must not be the
+    home of something markdown imports.
+    """
+    total = 0.0
+    any_timed = False
+    for phase in row_result.phases.values():
+        if phase.elapsed_seconds is not None:
+            total += phase.elapsed_seconds
+            any_timed = True
+    return f"{total:.1f}s" if any_timed else ""
+
+
+class ValidateInputError(ChartManagerError):
+    """A caller-supplied validate input could not be resolved.
+
+    `hint` names the offending input so a surface can point at the right
+    flag (or JSON field) without string-matching the message.
+    """
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        """Store the message plus the name of the input that was rejected."""
+        super().__init__(message)
+        self.hint = hint
+
+
+def _check_phases(phases: frozenset[str]) -> None:
+    """Reject an empty or unknown phase set."""
+    if not phases:
+        raise ValidateInputError("at least one phase must be enabled", hint="phases")
+    unknown = phases - ALL_PHASES
+    if unknown:
+        raise ValidateInputError(
+            f"unknown phase(s): {', '.join(sorted(unknown))}; "
+            f"valid: {', '.join(sorted(ALL_PHASES))}",
+            hint="phases",
+        )
+
+
+@dataclass(frozen=True)
+class RunRequest:
+    """Spec-driven multi-row run (`validate run`).
+
+    `charts`/`envs` narrow the built worklist. `changed_files` (a file of
+    newline-delimited paths) and `base` (a git ref) feed the changed-files
+    resolution; `skip_change_detection` short-circuits both. Timeouts use the
+    pipeline's 0-means-unbounded convention. ``fail_fast`` stops before
+    preparing later independent rows after the first failure.
+
+    Validates itself in `__post_init__`, so an ill-formed request cannot
+    reach `ManifestValidationService` -- the rule has one owner, and the
+    surface's job is only to map `hint` onto whatever it calls that input
+    (a flag, a JSON field).
+    """
+
+    root: Path = Path(".")
+    charts: tuple[str, ...] = ()
+    envs: tuple[str, ...] = ()
+    base: str = "origin/main"
+    changed_files: Path | None = None
+    skip_change_detection: bool = False
+    phases: frozenset[str] = ALL_PHASES
+    out: Path | None = None
+    keep: bool = False
+    workers: int = 0
+    verbose: bool = False
+    tool_timeout: float = 0.0
+    dep_update_timeout: float = 300.0
+    fail_fast: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject an unknown phase name."""
+        _check_phases(self.phases)
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    """Everything one validate run produced.
+
+    `result` is the wire-projectable payload (`services/manifest_validation/wire.py`);
+    the remaining fields are run metadata a surface may want to narrate --
+    non-fatal build warnings, how many charts carried no spec, how many
+    rows the chart/env filters dropped, how many workers the run actually
+    got -- plus the artifact lifetime inputs `cleanup()` needs.
+    """
+
+    result: RunResult
+    out_dir: Path
+    keep: bool = False
+    warnings: tuple[str, ...] = ()
+    ignored_changes: tuple[Path, ...] = ()
+    unmatched_changes: tuple[Path, ...] = ()
+    unmatched_charts: tuple[str, ...] = ()
+    unmatched_environments: tuple[str, ...] = ()
+    charts_unvalidated: int = 0
+    rows_filtered_out: int = 0
+    enabled_phases: frozenset[str] = ALL_PHASES
+    # The worker count the run *used*, not the one it was asked for: verbose
+    # runs are clamped to 1. A surface narrating "your --workers was ignored"
+    # reads this instead of re-deriving the clamp.
+    workers: int = 1
+
+    @property
+    def outcome(self) -> Outcome:
+        """The semantic outcome folded from the underlying RunResult.
+
+        The surface turns this into a number with `exit_code_for`; nothing
+        in this layer needs to know which number.
+        """
+        return self.result.outcome()
+
+    @property
+    def ok(self) -> bool:
+        """True when nothing failed."""
+        return self.outcome is Outcome.SUCCESS
+
+
+def no_work_reason(
+    outcome: RunOutcome,
+    *,
+    requested_charts: Sequence[str] = (),
+    requested_environments: Sequence[str] = (),
+) -> str | None:
+    """Explain an empty run, most specific cause first; None when rows ran.
+
+    Shared by the JSON diagnostics object and the markdown "nothing to
+    validate" line so an operator and a script are told the same story.
+    """
+    if outcome.result.rows:
+        return None
+    if outcome.unmatched_charts or outcome.unmatched_environments:
+        return "requested filters did not match"
+    if requested_charts or requested_environments:
+        return "requested filters selected no affected validation cases"
+    if outcome.unmatched_changes:
+        return "changed files matched no validation trigger"
+    if outcome.ignored_changes:
+        return "all relevant changed files were explicitly ignored"
+    if outcome.charts_unvalidated:
+        return "no chart with manifest-validation configuration was selected"
+    return "no affected validation cases"

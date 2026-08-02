@@ -73,7 +73,7 @@ class Kubeconform:
         self.runner = runner or SubprocessRunner()
         self._bin = str(binary) if binary is not None else "kubeconform"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
-        # this from --row-timeout so a hung kubeconform doesn't pin a worker.
+        # this from --tool-timeout so a hung kubeconform doesn't pin a worker.
         self.timeout = timeout
 
     def preflight(self) -> tuple[Check, ...]:

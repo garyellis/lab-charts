@@ -1,13 +1,10 @@
-"""Pure unit tests for manifest-validation catalog discovery."""
+"""Pure unit tests for manifest-validation policy-path discovery."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.services.manifest_validation.catalog import (
-    discover_chart_lifecycle,
-)
-from chart_manager.services.manifest_validation.validator_inputs import (
+from chart_manager.services.manifest_validation.validator_adapters import (
     discover_policy_paths,
 )
 
@@ -52,33 +49,3 @@ def test_discover_policies_ignores_files_named_policies(tmp_path: Path) -> None:
     result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
 
     assert result == ()
-
-
-def test_discover_chart_lifecycle_present(tmp_path: Path) -> None:
-    chart_dir = tmp_path / "charts" / "alpha"
-    chart_dir.mkdir(parents=True)
-    spec = chart_dir / "chart-lifecycle.yaml"
-    spec.write_text("apiVersion: lifecycle.chartmanager.io/v1alpha1\n")
-
-    result = discover_chart_lifecycle(chart_dir)
-
-    assert result == spec
-
-
-def test_discover_chart_lifecycle_absent(tmp_path: Path) -> None:
-    (tmp_path / "charts" / "alpha").mkdir(parents=True)
-
-    result = discover_chart_lifecycle(tmp_path / "charts" / "alpha")
-
-    assert result is None
-
-
-def test_discover_chart_lifecycle_is_dir_returns_none(tmp_path: Path) -> None:
-    # Defensive: if someone created chart-lifecycle.yaml as a directory by
-    # accident, the helper must not return it (is_file() filter).
-    spec_path = tmp_path / "charts" / "alpha" / "chart-lifecycle.yaml"
-    spec_path.mkdir(parents=True)
-
-    result = discover_chart_lifecycle(tmp_path / "charts" / "alpha")
-
-    assert result is None

@@ -2,10 +2,17 @@
 
 ``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  Its
 accepted shape is owned by ``chart_manager.api.lifecycle.v1alpha1``; this
-module owns the boundary around it -- where the file lives, how a decode
-failure becomes a ``SpecError``, and whether an authored capability is
-usable.  Catalogs compose the document with Helm metadata and enforce
-identity agreement.
+module owns everything decided *about* that shape -- where the file lives,
+how a decode failure becomes a ``SpecError``, whether an authored capability
+is usable, and which profile a name selects.  Catalogs compose the document
+with Helm metadata and enforce identity agreement.
+
+The three ``require_*`` functions are the whole capability gate and sit
+together deliberately: an API model that raised ``SpecError`` or listed the
+alternatives in a diagnostic would be a model that knows what a CLI exit code
+is, so representation stays in ``api/`` and every "you asked for something
+this chart does not offer" answer is phrased here, in one place, with one
+error idiom.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ import yaml
 
 from chart_manager.api.lifecycle.v1alpha1 import (
     ChartLifecycle,
+    ClusterTestProfile,
     ClusterTestSpec,
     ManifestValidationSpec,
 )
@@ -139,3 +147,12 @@ def require_cluster_test(
     if not lifecycle.spec.cluster_test.enabled:
         raise CapabilityUnavailableError(f"cluster tests are disabled for chart '{chart_name}'")
     return lifecycle.spec.cluster_test
+
+
+def require_cluster_test_profile(spec: ClusterTestSpec, name: str) -> ClusterTestProfile:
+    """Look up a profile by name; SpecError lists available names."""
+    try:
+        return spec.profiles[name]
+    except KeyError as exc:
+        profiles = ", ".join(sorted(spec.profiles))
+        raise SpecError(f"unknown profile '{name}'. available profiles: {profiles}") from exc

@@ -11,14 +11,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from chart_manager.services.lifecycle.models import (
-    LIFECYCLE_API_VERSION,
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.progress import (
     ProgressCallback,
@@ -117,18 +115,6 @@ class ClusterActionOutcome:
     def elapsed_seconds(self) -> float:
         return (self.finished_at - self.started_at).total_seconds()
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "actionId": self.action_id,
-            "kind": self.kind,
-            "verdict": self.verdict,
-            "reason": self.reason,
-            "detail": self.detail,
-            "startedAt": self.started_at.isoformat(),
-            "finishedAt": self.finished_at.isoformat(),
-            "elapsedSeconds": self.elapsed_seconds,
-        }
-
 
 @dataclass(frozen=True)
 class ClusterExecutionResult:
@@ -141,14 +127,6 @@ class ClusterExecutionResult:
         """Whether every planned action passed."""
 
         return all(outcome.verdict == "PASS" for outcome in self.outcomes)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "apiVersion": LIFECYCLE_API_VERSION,
-            "kind": "ClusterExecutionResult",
-            "ok": self.ok,
-            "outcomes": [outcome.to_dict() for outcome in self.outcomes],
-        }
 
 
 def _required(value: str | None, action: LifecycleAction, field: str) -> str:
@@ -176,11 +154,6 @@ class ClusterActionExecutor:
     def execute(self, plan: LifecyclePlan) -> ClusterExecutionResult:
         """Execute a cluster plan and return a terminal outcome for every action."""
 
-        if plan.workflow is not Workflow.CLUSTER_TEST:
-            raise ClusterPlanError(
-                f"cluster executor requires workflow {Workflow.CLUSTER_TEST.value!r}, "
-                f"got {plan.workflow.value!r}"
-            )
         if not plan.actions:
             raise ClusterPlanError("cluster plan contains no actions")
         action_ids: set[str] = set()
@@ -228,11 +201,6 @@ class ClusterActionExecutor:
         return ClusterExecutionResult(tuple(outcomes))
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
-        if action.target.workflow is not Workflow.CLUSTER_TEST:
-            raise ClusterPlanError(
-                f"action {action.action_id!r} targets workflow "
-                f"{action.target.workflow.value!r}, expected {Workflow.CLUSTER_TEST.value!r}"
-            )
         if action.kind is ActionKind.NAMESPACE_ENSURE:
             _required(action.target.namespace, action, "namespace")
         elif action.kind is ActionKind.HELM_UPGRADE_INSTALL:

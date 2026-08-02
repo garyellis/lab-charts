@@ -36,11 +36,21 @@ dev = [
 chart-manager = "chart_manager.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
+# src layout: hatchling walks the package, so `chart_manager/domain/` and any
+# future sibling are picked up without an entry of their own.
 packages = ["src/chart_manager"]
+# Lint configuration is not runtime code. `domain/.ruff.toml` scopes the
+# layer ban to that one package (the file explains why it cannot live in
+# this table) and has no business in an installed wheel.
+exclude = ["**/.ruff.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# No test module defines a Test*-named class; tests are plain functions.
+# Disabling class collection keeps pytest from probing production classes
+# (TestService, TestResult, ...) that test modules import.
+python_classes = []
 markers = ["integration: requires helm/kubeconform/kyverno on PATH"]
 addopts = "-m 'not integration'"
 
@@ -48,7 +58,7 @@ addopts = "-m 'not integration'"
 # lines in the 89-100 range that would be high-churn to rewrap during a
 # polish pass. Format-on-save can tighten this later if desired.
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 extend-exclude = ["tests/fixtures"]
 
@@ -56,20 +66,39 @@ extend-exclude = ["tests/fixtures"]
 # TID251 (flake8-tidy-imports banned-api) is selected by code rather than as
 # the whole TID family: TID252/TID253 are unrelated to the layering contract
 # below and would add unowned findings to the existing lint backlog.
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251"]
+#
+# G (flake8-logging-format) and LOG are selected at zero findings and enforce
+# lazy %-formatting in log calls. Read the coverage honestly before relying on
+# it: ruff recognizes a logger by the *name* it is called through, matching
+# `logging`, `log`, `logger` and `LOG` but NOT the `_LOG` this repository binds
+# in every module (verified against ruff 0.15). `logger-objects` does not close
+# the gap either -- it resolves imported objects, and a logger bound in the
+# module that uses it is a local binding with no qualified name to match. So G
+# catches a bare `logging.info(f"...")` and any future `log`/`logger` binding,
+# while the `_LOG.` call sites stay a convention this comment records rather
+# than a rule the linter checks.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG", "G", "LOG"]
 
 # --- layer contract: cli/ must not import integrations/ ------------------
 #
 # The shape being defended:
 #
 #     cli/surfaces -> services -> api + domain + integrations
-#                              domain -> plumbing
+#                              domain -> api + plumbing
 #                                 api -> plumbing (pure helpers only)
 #
 # Read the arrows as guidance, not permission. `integrations/` shares a rank
 # with `api/` and `domain/` because services depend on all three, not because
 # an adapter should reach for an authored API type -- adapters are handed
 # resolved service inputs.
+#
+# `src/chart_manager/domain/` is a real top-level package, not a subpackage of
+# `services/`, so the diagram and the tree now agree. Its own ban -- domain may
+# not import `chart_manager.services` or `chart_manager.integrations` -- is
+# declared in `src/chart_manager/domain/.ruff.toml`, because banned-api is
+# global and banning `chart_manager.services` here would ban it for `cli/` as
+# well (see the paragraph below on why rule (d) is a test). Ruff resolves that
+# nested config automatically for files under `domain/`; no extra flag needed.
 #
 # The surface layer (cli/, and any future REST/GraphQL/RPC/Slack surface)
 # talks to services/ and plumbing/ only. Adapters are assembled in the
@@ -122,7 +151,13 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # TID251: tests exercise adapters directly (fake CommandRunners against
 # Helm/Kubectl/HelmReleaseClient) and assert on integration-level types;
 # not a layer.
-"tests/**/*.py" = ["S101", "B011", "E501", "TID251"]
+# ARG: a test double only earns its keep by matching the real signature.
+# Fakes, stubs and `lambda plan, *, dry_run: plan` callbacks accept the
+# arguments the production caller passes and ignore the ones the assertion
+# doesn't care about -- 196 of the 210 ARG findings when the rule was
+# selected, none of them dead code. Renaming every one to `_arg` would make
+# the doubles *less* readable than the interfaces they stand in for.
+"tests/**/*.py" = ["S101", "B011", "E501", "TID251", "ARG"]
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
@@ -135,12 +170,23 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # deliberate and belongs with the data, not in a lint backlog. Revisit only
 # alongside a migration of the stored events.
 "src/chart_manager/services/events/lifecycle.py" = ["UP042"]
+# ARG on signatures that are not ours to shorten. `NullEventStore.write` is
+# the EventStore protocol's do-nothing implementation -- dropping the event
+# *is* the behavior, and the parameter name is part of the contract it
+# implements. `settings_customise_sources` is a pydantic-settings hook whose
+# full source list is mandated by the framework; deliberately omitting
+# `dotenv_settings` from the returned tuple is the documented decision at
+# settings.py:110. Both are structural, not dead code, so they are exempted
+# by code rather than left as a standing lint backlog.
+"src/chart_manager/services/events/store.py" = ["ARG002"]
+"src/chart_manager/settings.py" = ["ARG003"]
 # TID251 lift: the layers that are *supposed* to reach for adapters.
 # integrations/ is the adapter layer itself; services/ owns the ports that
 # wrap adapters; composition.py is the composition root, by definition the
 # one place outside those two that wires them. Note cli/ is deliberately
-# absent -- that is the whole point of the rule -- and so is api/, which
-# describes authored YAML and has no business running a command.
+# absent -- that is the whole point of the rule -- and so are api/, which
+# describes authored YAML, and domain/, which interprets it: neither has any
+# business running a command.
 "src/chart_manager/integrations/**/*.py" = ["TID251"]
 "src/chart_manager/services/**/*.py" = ["TID251"]
 "src/chart_manager/composition.py" = ["TID251"]
@@ -152,7 +198,7 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # Mypy: strict=false to start. Tightens are tracked separately;
 # this is the initial baseline.
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = false
 check_untyped_defs = true
 warn_unused_ignores = true

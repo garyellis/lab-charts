@@ -17,7 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from typing import ClassVar
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import (
@@ -67,9 +66,6 @@ _HELM_UNAVAILABLE_PATTERN = re.compile(
 @dataclass(frozen=True)
 class TestRequest:
     """Inputs and tunables for a `helm test` run over matching HelmReleases."""
-
-    # Tell pytest to skip collection of this Test*-named class.
-    __test__: ClassVar[bool] = False
 
     chart_name: str
     version: str
@@ -140,8 +136,6 @@ class TestRequest:
 class TestPodSnapshot:
     """Captured logs + phase for one test pod, gathered for failure diagnostics."""
 
-    __test__: ClassVar[bool] = False
-
     namespace: str
     name: str
     phase: str
@@ -152,8 +146,6 @@ class TestPodSnapshot:
 @dataclass(frozen=True)
 class TestOutcome:
     """Result of testing one HelmRelease: verdict, helm output, pods, and diagnostics."""
-
-    __test__: ClassVar[bool] = False
 
     ref: HelmReleaseRef
     verdict: Verdict
@@ -171,8 +163,6 @@ class TestOutcome:
 @dataclass(frozen=True)
 class TestResult:
     """Aggregate result across all tested HelmReleases."""
-
-    __test__: ClassVar[bool] = False
 
     outcomes: tuple[TestOutcome, ...]
     total_duration_seconds: float
@@ -224,8 +214,6 @@ class _RunContext:
 
 class TestService:
     """Run `helm test` across matching HelmReleases concurrently, with reaping + diagnostics."""
-
-    __test__ = False
 
     def __init__(
         self,
@@ -283,7 +271,30 @@ class TestService:
             per_poll=parsed.per_poll_sec,
         )
 
+        _LOG.info(
+            "helm test run started: chart=%s version=%s namespace=%s environment=%s "
+            "matched=%d concurrency=%d per_hr=%s total=%s per_poll=%s",
+            request.chart_name,
+            request.version,
+            request.namespace or "(all)",
+            request.environment or "(none)",
+            len(matched),
+            request.concurrency,
+            request.per_hr_timeout,
+            request.total_timeout,
+            request.per_poll_timeout,
+        )
+
         if not matched:
+            # `TestResult.ok` is False for a no-match run, but the single
+            # NO_MATCH outcome is easy to read as "nothing to do" -- say which
+            # selector found nothing.
+            _LOG.warning(
+                "helm test matched no HelmReleases: chart=%s version=%s namespace=%s",
+                request.chart_name,
+                request.version,
+                request.namespace or "(all)",
+            )
             elapsed = self._clock() - start
             return TestResult(
                 outcomes=(
@@ -338,6 +349,13 @@ class TestService:
                 # operator wants the whole matrix, not the first red cell.
             )
         except Exception:
+            _LOG.exception(
+                "helm test run crashed: chart=%s version=%s matched=%d completed=%d",
+                request.chart_name,
+                request.version,
+                len(matched),
+                len(outcomes),
+            )
             # An infrastructure failure still ends the interval opened above.
             # Without this the timeline keeps a HELM_TEST_RUN that nothing
             # ever closes -- the exact defect this wiring exists to remove.
@@ -365,6 +383,16 @@ class TestService:
             run_verdict((o.verdict for o in result.outcomes), success=Verdict.PASSED),
             total=len(result.outcomes),
             failures=len(result.failures),
+        )
+        _LOG.info(
+            "helm test run finished: chart=%s version=%s outcomes=%d failures=%d "
+            "cancelled=%s elapsed=%.1fs",
+            request.chart_name,
+            request.version,
+            len(result.outcomes),
+            len(result.failures),
+            result.total_timed_out,
+            elapsed,
         )
         return result
 
@@ -441,6 +469,12 @@ class TestService:
         try:
             pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
         except ExternalCommandError as exc:
+            _LOG.error(
+                "test pod listing failed during reap: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                report.failure_detail(exc),
+            )
             return self._finalize(
                 ctx,
                 verdict=Verdict.FAILED,
@@ -463,8 +497,20 @@ class TestService:
         for ns, name, _phase in [p for p in pods if p[2] in _STALE_PHASES]:
             try:
                 self._kubectl.delete_pod(ns, name, timeout=ctx.parsed.per_poll_sec)
-            except ExternalCommandError:
-                residual.append(f"{ns}/{name}")
+            except ExternalCommandError as exc:
+                # Carry the stderr, not just the pod name: "delete denied by
+                # RBAC", "apiserver unreachable" and "stuck on a finalizer"
+                # are three different operator actions and rendered as one.
+                # Logged as well as rendered: the report reaches the caller,
+                # the log reaches whoever reads CI afterwards.
+                _LOG.warning(
+                    "stale test pod delete failed: ns=%s pod=%s release=%s: %s",
+                    ns,
+                    name,
+                    ctx.ref.name,
+                    report.failure_detail(exc),
+                )
+                residual.append(f"{ns}/{name}: {report.failure_detail(exc)}")
         if residual:
             return self._finalize(
                 ctx,
@@ -508,7 +554,23 @@ class TestService:
                     if self._clock() >= ctx.total_deadline
                     else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
+                # Which budget tripped decides whether the operator raises
+                # --per-hr-timeout or accepts the run was too big.
+                _LOG.warning(
+                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%s total=%s",
+                    ctx.ref.namespace,
+                    ctx.ref.name,
+                    reason,
+                    ctx.request.per_hr_timeout,
+                    ctx.request.total_timeout,
+                )
                 return self._finalize_timed_out(ctx, reason)
+            _LOG.error(
+                "helm test invocation failed outside a verdict: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                msg,
+            )
             # Defensive: with check=False the runner shouldn't raise on
             # rc != 0, but propagate any other surprise as HelmUnavailable
             # so we still produce a structured outcome.
@@ -633,13 +695,30 @@ class TestService:
                 "run `chart-manager helmrelease monitor` first."
             )
         else:
+            # One line per non-passing release, carrying the pair (verdict,
+            # reason) the rendered report leads with. The report itself stays
+            # out of the log: it is multi-kilobyte markdown and the caller
+            # already holds it.
+            _LOG.warning(
+                "helm test outcome failed: ns=%s name=%s verdict=%s reason=%s "
+                "rc=%s elapsed=%.1fs",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                verdict,
+                reason,
+                rc,
+                duration_seconds,
+            )
             # Every caller hands us ctx.initial_status -- the status as it
             # was *before* `helm test` ran -- so the report's TestSuccess
             # row showed the previous reconcile's value, which is actively
             # misleading in the one artifact read after a failure. Refresh
             # once, on the failure path only, and keep the pre-run status if
-            # the cluster can no longer be reached.
-            last_status = self._refresh_status(ctx) or last_status
+            # the cluster can no longer be reached -- saying so in the report,
+            # because a silent fallback reads exactly like a fresh read.
+            refreshed, stale_status = self._refresh_status(ctx)
+            if refreshed is not None:
+                last_status = refreshed
             diagnostics, test_pods = self._compose_diagnostics(
                 ctx=ctx,
                 verdict=verdict,
@@ -649,6 +728,7 @@ class TestService:
                 in_flight=in_flight,
                 residual=residual,
                 inline=inline_diagnostics,
+                stale_status=stale_status,
             )
 
         return TestOutcome(
@@ -665,17 +745,29 @@ class TestService:
             duration_seconds=duration_seconds,
         )
 
-    def _refresh_status(self, ctx: _RunContext) -> HelmReleaseStatus | None:
-        """Re-read the HelmRelease status for failure reporting; None if unavailable.
+    def _refresh_status(
+        self, ctx: _RunContext
+    ) -> tuple[HelmReleaseStatus | None, str | None]:
+        """Re-read the HelmRelease status for failure reporting.
 
-        Best-effort by design: this runs while composing a failure report,
-        so a cluster that has become unreachable must not replace the
-        diagnostics with an exception.
+        Returns `(status, None)` on success and `(None, detail)` when the read
+        failed. Best-effort by design: this runs while composing a failure
+        report, so a cluster that has become unreachable must not replace the
+        diagnostics with an exception -- but the caller has to be able to mark
+        the pre-run status it falls back to, so the detail comes back with it.
         """
         try:
-            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec)
-        except ExternalCommandError:
-            return None
+            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec), None
+        except ExternalCommandError as exc:
+            detail = report.failure_detail(exc)
+            _LOG.warning(
+                "HelmRelease status refresh failed; report keeps the pre-run status: "
+                "ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                detail,
+            )
+            return None, detail
 
     def _compose_diagnostics(
         self,
@@ -688,6 +780,7 @@ class TestService:
         in_flight: tuple[tuple[str, str, str], ...],
         residual: tuple[str, ...],
         inline: str | None,
+        stale_status: str | None,
     ) -> tuple[str, tuple[TestPodSnapshot, ...]]:
         """Render a markdown failure report and (for test failures) snapshot pod logs."""
         parts: list[str] = [report.header(ctx.ref, verdict, reason)]
@@ -697,6 +790,10 @@ class TestService:
             # on it. A test verdict comes from helm's exit code, and Stalled
             # describes the reconciler that ran before helm was invoked.
             parts.extend(report.conditions(last_status, ("Ready", "Released", "TestSuccess")))
+        if stale_status is not None:
+            parts.append(
+                f"- (status not refreshed: {stale_status}; any rows above predate `helm test`)"
+            )
 
         if in_flight:
             parts.append("\n### In-flight test pods")
@@ -714,8 +811,13 @@ class TestService:
 
         test_pods: tuple[TestPodSnapshot, ...] = ()
         if reason in (Reason.TEST_FAILED, Reason.TEST_POD_CONFLICT):
-            test_pods = self._snapshot_test_pods(ctx)
-            if test_pods:
+            test_pods, pods_unavailable = self._snapshot_test_pods(ctx)
+            if pods_unavailable is not None:
+                # Not the same statement as "no test pods": one says the chart
+                # left nothing behind, the other says we never got to look.
+                parts.append("\n### Test pod logs")
+                parts.append(f"<test pods unavailable: {pods_unavailable}>")
+            elif test_pods:
                 parts.append("\n### Test pod logs")
                 for pod in test_pods:
                     parts.append(f"\n#### {pod.namespace}/{pod.name} (phase={pod.phase})")
@@ -751,14 +853,32 @@ class TestService:
 
         return "\n".join(parts), test_pods
 
-    def _snapshot_test_pods(self, ctx: _RunContext) -> tuple[TestPodSnapshot, ...]:
-        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs."""
+    def _snapshot_test_pods(
+        self, ctx: _RunContext
+    ) -> tuple[tuple[TestPodSnapshot, ...], str | None]:
+        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs.
+
+        Returns `(snapshots, None)`, or `((), detail)` when the pods could not
+        be listed at all -- which the caller must render differently from an
+        empty list.
+        """
         try:
             pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
-        except ExternalCommandError:
-            return ()
+        except ExternalCommandError as exc:
+            detail = report.failure_detail(exc)
+            # "we never got to look" vs "the chart left nothing behind": the
+            # report distinguishes them and so must the log.
+            _LOG.warning(
+                "test pod listing failed while composing diagnostics: ns=%s name=%s: %s",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                detail,
+            )
+            return (), detail
         snapshots: list[TestPodSnapshot] = []
         for pod_ns, pod_name, phase in pods[: ctx.request.diagnostics_pod_cap]:
+            log_error: str | None = None
+            logs = ""
             try:
                 logs = self._kubectl.pod_logs(
                     pod_ns,
@@ -767,13 +887,29 @@ class TestService:
                     previous=False,
                     timeout=ctx.parsed.per_poll_sec,
                 )
-            except ExternalCommandError:
-                logs = ""
+            except ExternalCommandError as exc:
+                log_error = report.failure_detail(exc)
+                _LOG.warning(
+                    "test pod logs unavailable: ns=%s pod=%s phase=%s release=%s: %s",
+                    pod_ns,
+                    pod_name,
+                    phase,
+                    ctx.ref.name,
+                    log_error,
+                )
             previous: str | None = None
             # Only retry with --previous for terminal-phase pods where the
             # current container is gone; for Running/Pending the empty
             # response just means "no logs yet", not a restarted container.
-            if not logs and phase in _STALE_PHASES:
+            # A failed fetch is neither, and retrying it just spends another
+            # round trip to record the same failure twice.
+            if log_error is None and not logs and phase in _STALE_PHASES:
+                _LOG.debug(
+                    "retrying test pod logs with --previous: ns=%s pod=%s phase=%s",
+                    pod_ns,
+                    pod_name,
+                    phase,
+                )
                 try:
                     previous = self._kubectl.pod_logs(
                         pod_ns,
@@ -782,14 +918,27 @@ class TestService:
                         previous=True,
                         timeout=ctx.parsed.per_poll_sec,
                     )
-                except ExternalCommandError:
+                except ExternalCommandError as exc:
+                    # The only capture site with nowhere to render: a failed
+                    # --previous fetch produces `previous_logs=None`, which is
+                    # exactly what "the container never restarted" produces.
+                    _LOG.warning(
+                        "previous test pod logs unavailable: ns=%s pod=%s: %s",
+                        pod_ns,
+                        pod_name,
+                        report.failure_detail(exc),
+                    )
                     previous = None
             snapshots.append(
                 TestPodSnapshot(
                     namespace=pod_ns,
                     name=pod_name,
                     phase=phase,
-                    logs=truncate_bytes(logs, ctx.request.pod_log_max_bytes),
+                    logs=(
+                        f"<logs unavailable: {log_error}>"
+                        if log_error is not None
+                        else truncate_bytes(logs, ctx.request.pod_log_max_bytes)
+                    ),
                     previous_logs=(
                         truncate_bytes(previous, ctx.request.pod_log_max_bytes)
                         if previous
@@ -797,7 +946,7 @@ class TestService:
                     ),
                 )
             )
-        return tuple(snapshots)
+        return tuple(snapshots), None
 
     # --- progress ---------------------------------------------------------
 

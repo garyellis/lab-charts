@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,7 @@ from chart_manager.integrations.kubeconform import (
     ResourceResult,
 )
 from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyResult
+from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.models import WorklistRow
@@ -36,20 +40,27 @@ from chart_manager.services.manifest_validation.validators import (
 
 def ManifestValidationRunner(
     *,
-    helm,
+    helm=None,
+    helm_factory=None,
     output_root,
     kubeconform=None,
     kyverno=None,
     validators=None,
     **kwargs,
 ) -> _ManifestValidationRunner:
-    """Keep test setup compact while production runner stays tool-neutral."""
+    """Keep test setup compact while production runner stays tool-neutral.
+
+    `helm=` binds one instance to every binding, which is what most tests
+    want; `helm_factory=` is for the tests that care about the binding.
+    """
     executors = validators or {
         "kubeconform": KubeconformValidator(kubeconform or Kubeconform()),
         "kyverno": KyvernoValidator(kyverno or Kyverno()),
     }
+    if helm_factory is None:
+        helm_factory = lambda _version, _binary: helm  # noqa: E731
     return _ManifestValidationRunner(
-        helm=helm,
+        helm_factory=helm_factory,
         output_root=output_root,
         validators=executors,
         **kwargs,
@@ -151,17 +162,18 @@ def _cfg(
     kubernetes_version: str | None = None,
     schema_locations: list[str] | None = None,
     enabled_validators: frozenset[str] = frozenset({"schema", "policy"}),
+    helm_version: str | None = None,
 ) -> RowConfig:
     return RowConfig(
         row=row,
         chart_path=chart_path,
         values=[],
+        helm_version=helm_version,
         validator_invocations=(
             ValidatorInvocation(
                 validator_id="kubeconform",
                 category=ValidatorCategory.SCHEMA,
                 order=100,
-                lifecycle_action_kind="schema-validate",
                 enabled="schema" in enabled_validators,
                 config=KubeconformConfig(
                     kubernetes_version=kubernetes_version,
@@ -172,7 +184,6 @@ def _cfg(
                 validator_id="kyverno",
                 category=ValidatorCategory.POLICY,
                 order=200,
-                lifecycle_action_kind="policy-validate",
                 enabled="policy" in enabled_validators,
                 config=KyvernoConfig(policy_paths=tuple(policy_paths or ())),
             ),
@@ -597,6 +608,199 @@ def test_dependency_prefetch_failure_isolated_by_chart(
     assert "dependency prefetch failed" in (bad.detail or "")
     assert "registry unavailable" in (bad.detail or "")
     assert by_chart["good"].phases["render"].status == "PASS"
+
+
+class _SleepingDependencyRunner:
+    """CommandRunner whose `helm dependency update` calls block; everything else is instant.
+
+    Structurally satisfies the `CommandRunner` protocol so a REAL `Helm` can
+    be driven through it -- the point of the timing test below is `Helm`'s own
+    locking, so stubbing `Helm` would assert nothing.
+    """
+
+    def __init__(self, *, delay: float) -> None:
+        self._delay = delay
+        self._lock = threading.Lock()
+        self.dep_updates: list[str] = []
+        self.peak_concurrent_updates = 0
+        self._in_flight = 0
+
+    def run(
+        self,
+        args,
+        *,
+        cwd=None,
+        check: bool = True,
+        capture: bool = True,
+        timeout: float | None = None,
+        env=None,
+    ):
+        _ = (cwd, check, capture, timeout, env)
+        argv = [str(arg) for arg in args]
+        if argv[1:3] == ["dependency", "update"]:
+            with self._lock:
+                self.dep_updates.append(argv[3])
+                self._in_flight += 1
+                self.peak_concurrent_updates = max(
+                    self.peak_concurrent_updates, self._in_flight
+                )
+            time.sleep(self._delay)
+            with self._lock:
+                self._in_flight -= 1
+        return CommandResult(args=argv, returncode=0, stdout="", stderr="")
+
+
+_PREFETCH_DELAY = 0.4
+
+
+def test_dependency_prefetch_overlaps_across_distinct_charts(tmp_path: Path) -> None:
+    """Three charts prefetch concurrently, not one-at-a-time behind a shared lock.
+
+    `Helm` used to hold a single per-instance mutex across the `helm dependency
+    update` subprocess, so the runner's prefetch pool advertised a concurrency
+    it could not deliver and `--workers` was sized against a lie. Wall-clock is
+    the only assertion that can tell the fix from the bug.
+    """
+    charts = ["alpha", "beta", "gamma"]
+    for chart in charts:
+        (tmp_path / chart).mkdir()
+    command_runner = _SleepingDependencyRunner(delay=_PREFETCH_DELAY)
+    runner = ManifestValidationRunner(
+        helm=Helm(runner=command_runner, verbose=False),
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=len(charts),
+    )
+
+    start = time.monotonic()
+    result = runner.run(
+        [_cfg(_row(chart), tmp_path / chart) for chart in charts],
+        enabled_phases=frozenset({"render"}),
+    )
+    elapsed = time.monotonic() - start
+
+    assert len(result.rows) == len(charts)
+    assert sorted(Path(path).name for path in command_runner.dep_updates) == charts
+    assert command_runner.peak_concurrent_updates == len(charts)
+    # Serial execution costs >= 3x the delay; generous margin so a loaded CI
+    # box cannot flake this into a false failure.
+    assert elapsed < 2 * _PREFETCH_DELAY
+
+
+def test_dependency_prefetch_fetches_one_chart_once_under_concurrency(
+    tmp_path: Path,
+) -> None:
+    """Narrowing the lock must not let two envs of one chart both fetch it."""
+    (tmp_path / "alpha").mkdir()
+    command_runner = _SleepingDependencyRunner(delay=_PREFETCH_DELAY)
+    helm = Helm(runner=command_runner, verbose=False)
+    chart_path = tmp_path / "alpha"
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for future in [pool.submit(helm.dependency_update, chart_path) for _ in range(4)]:
+            future.result()
+
+    assert command_runner.dep_updates == [str(chart_path)]
+    assert command_runner.peak_concurrent_updates == 1
+
+
+def test_rows_of_different_helm_bindings_run_in_one_pool(tmp_path: Path) -> None:
+    """Two bindings x two rows with workers=4 must all be in flight at once.
+
+    They used to run group-after-group -- one runner per binding, each pool
+    drained before the next was built -- so a pinned chart waited out every
+    unpinned one. The barrier is the assertion: it only clears if all four
+    rows are executing concurrently, and times out into a row failure if the
+    runner has serialized them by binding again.
+    """
+    gate = threading.Barrier(4, timeout=5)
+    built: list[tuple[str | None, str | None]] = []
+
+    class _BarrierHelm(_StubHelm):
+        def template(self, release, chart_ref, **kwargs):  # type: ignore[override]
+            gate.wait()
+            return super().template(release, chart_ref, **kwargs)
+
+    def helm_factory(version: str | None, binary: str | None) -> _BarrierHelm:
+        built.append((version, binary))
+        return _BarrierHelm(succeed=True)
+
+    runner = ManifestValidationRunner(
+        helm_factory=helm_factory,
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=4,
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("alpha"), tmp_path / "alpha"),
+            _cfg(_row("beta"), tmp_path / "beta"),
+            _cfg(_row("zulu"), tmp_path / "zulu", helm_version="3.20.0"),
+            _cfg(_row("yankee"), tmp_path / "yankee", helm_version="3.20.0"),
+        ],
+        enabled_phases=frozenset({"render"}),
+    )
+
+    assert [row.phases["render"].status for row in result.rows] == ["PASS"] * 4
+    # One Helm per distinct binding, built once each -- the per-chart
+    # dependency-update dedupe lives on the instance.
+    assert set(built) == {(None, None), ("3.20.0", None)}
+    assert len(built) == 2
+
+
+def test_one_helm_per_binding_is_reused_across_that_binding_rows(tmp_path: Path) -> None:
+    built: list[tuple[str | None, str | None]] = []
+
+    def helm_factory(version: str | None, binary: str | None) -> _StubHelm:
+        built.append((version, binary))
+        return _StubHelm(succeed=True)
+
+    runner = ManifestValidationRunner(
+        helm_factory=helm_factory,
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+    )
+
+    runner.run(
+        [
+            _cfg(_row("alpha"), tmp_path / "alpha"),
+            _cfg(_row("beta"), tmp_path / "beta"),
+        ],
+        enabled_phases=frozenset({"render"}),
+    )
+
+    assert built == [(None, None)]
+
+
+def test_unusable_helm_binding_fails_only_its_own_rows(tmp_path: Path) -> None:
+    """A binding that cannot be built is attributable to the rows that asked for it."""
+
+    def helm_factory(version: str | None, _binary: str | None) -> _StubHelm:
+        if version is None:
+            raise RuntimeError("helm binding unavailable")
+        return _StubHelm(succeed=True)
+
+    runner = ManifestValidationRunner(
+        helm_factory=helm_factory,
+        output_root=tmp_path / "out",
+        kubeconform=_StubKubeconform(_ok_report()),
+        max_workers=2,
+    )
+
+    result = runner.run(
+        [
+            _cfg(_row("alpha"), tmp_path / "alpha"),
+            _cfg(_row("zulu"), tmp_path / "zulu", helm_version="3.20.0"),
+        ]
+    )
+
+    by_chart = {row.row.chart: row for row in result.rows}
+    alpha = by_chart["alpha"].phases["render"]
+    assert alpha.status == "FAIL"
+    assert alpha.error_type == "tool"
+    assert "helm binding unavailable" in (alpha.detail or "")
+    assert by_chart["zulu"].phases["render"].status == "PASS"
 
 
 def test_fail_fast_stops_later_rows_and_marks_them_not_run(tmp_path: Path) -> None:

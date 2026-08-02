@@ -39,23 +39,6 @@ class UpgradeResult:
         """Whether an update proposal was produced."""
         return self.proposed_version is not None
 
-    def to_dict(self) -> dict[str, object]:
-        """Return the stable JSON-facing representation used by surfaces."""
-        return {
-            "repository": self.repository,
-            "base": self.base,
-            "chart": self.chart,
-            "chart_path": str(self.chart_path),
-            "current_version": self.current_version,
-            "proposed_version": self.proposed_version,
-            "branch": self.branch,
-            "group": self.group,
-            "outcome": self.outcome,
-            "pr_url": self.pr_url,
-            "pr_number": self.pr_number,
-            "diagnostics": list(self.diagnostics),
-        }
-
 
 @dataclass(frozen=True)
 class UpdateMetadata:

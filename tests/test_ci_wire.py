@@ -13,8 +13,12 @@ from pathlib import Path
 
 from chart_manager.services.ci import MatrixSelection, _select_cluster_tests
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
-from chart_manager.services.lifecycle import ClusterTestImpact
-from chart_manager.services.lifecycle.impact import ImpactReason, ImpactReasonCode
+from chart_manager.services.lifecycle import ClusterTestImpact, impact_to_dict
+from chart_manager.services.lifecycle.impact import (
+    ImpactReason,
+    ImpactReasonCode,
+    LifecycleImpact,
+)
 
 
 class _Source:
@@ -73,7 +77,12 @@ def test_payload_drops_selection_reasons() -> None:
     (rendered,) = cluster_test_matrix_to_dict([entry])["include"]
 
     assert rendered == {"chart": "consumer", "profile": "full"}
-    assert "reasons" in entry.to_dict()
+    # The impact document keeps what the matrix drops -- same entry, two
+    # audiences, which is the whole reason this projection is separate.
+    document = impact_to_dict(
+        LifecycleImpact(changed_files=(), validation=(), cluster_tests=(entry,))
+    )
+    assert "reasons" in document["cluster_test_matrix"][0]
 
 
 def test_empty_selection_is_an_empty_include_not_a_missing_key() -> None:

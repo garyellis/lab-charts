@@ -19,7 +19,11 @@ import pytest
 
 from chart_manager.cli import validate as validate_cli
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.manifest_validation.app import RunOutcome, ValidateInputError
+from chart_manager.services.manifest_validation.app import (
+    ManifestValidationService,
+    RunOutcome,
+    ValidateInputError,
+)
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
@@ -28,6 +32,21 @@ from chart_manager.services.manifest_validation.models import (
 )
 
 from .conftest import cli
+
+
+def _emit(source, **options) -> None:
+    """Drive the CLI emitter with the real service attached.
+
+    `_emit_result` takes the service that owns the `-o all` sidecars
+    (`write_summaries`). A bare, un-injected service is enough here: these
+    tests never run the pipeline, and the only thing they exercise on it is
+    the artifact write, which touches nothing but `out_dir`.
+    """
+    validate_cli._emit_result(
+        source,
+        app=ManifestValidationService(on_warn=validate_cli._warn),
+        **options,
+    )
 
 
 def _result() -> RunResult:
@@ -88,7 +107,7 @@ def _capture_stdout(fn) -> str:
 def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=out_dir)
+        lambda: _emit(_result(), mode="json", out_dir=out_dir)
     )
     payload = json.loads(output)
     assert payload["schema_version"] == 1
@@ -100,7 +119,7 @@ def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None
 
 def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), mode="md", out_dir=tmp_path / "out")
+        lambda: _emit(_result(), mode="md", out_dir=tmp_path / "out")
     )
     assert output.startswith("## validate")
     assert "| Chart |" in output
@@ -111,7 +130,7 @@ def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
 def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), mode="table", out_dir=out_dir)
+        lambda: _emit(_result(), mode="table", out_dir=out_dir)
     )
     assert "PASS" in output  # text-table cell text
     assert "Chart" in output
@@ -122,7 +141,7 @@ def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) ->
 def test_emit_all_prints_table_and_writes_summary_md_and_json(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), mode="all", out_dir=out_dir)
+        lambda: _emit(_result(), mode="all", out_dir=out_dir)
     )
     # Text table on stdout.
     assert "PASS" in output
@@ -147,7 +166,7 @@ def test_github_step_summary_written_when_flag_passed_and_env_set(
     step_summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -172,7 +191,7 @@ def test_github_step_summary_not_written_when_flag_not_passed(
     step_summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -189,7 +208,7 @@ def test_github_step_summary_warns_when_flag_passed_but_env_unset(
     """Flag asserts intent; missing env var should warn but not crash."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     narration = _capture(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -208,7 +227,7 @@ def test_github_step_summary_appends_across_calls(
     step_summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -217,7 +236,7 @@ def test_github_step_summary_appends_across_calls(
     )
     first_len = step_summary.stat().st_size
     _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -239,7 +258,7 @@ def test_github_step_summary_unwritable_does_not_crash(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(bad_target))
     # Must not raise.
     narration = _capture(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(),
             mode="table",
             out_dir=tmp_path / "out",
@@ -304,7 +323,7 @@ def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> 
         rendered_root=Path("/tmp/x"),
     )
     out = _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             result, mode="json", out_dir=tmp_path / "out", timings=True
         )
     )
@@ -318,7 +337,7 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     # can rely on the key. null when --timings is off or the phase didn't
     # record one.
     out = _capture_stdout(
-        lambda: validate_cli._emit_result(_result(), mode="json", out_dir=tmp_path / "out")
+        lambda: _emit(_result(), mode="json", out_dir=tmp_path / "out")
     )
     payload = json.loads(out)
     render = payload["rows"][0]["phases"]["render"]
@@ -338,7 +357,7 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
     )
 
     out = _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             outcome,
             mode="json",
             out_dir=outcome.out_dir,
@@ -357,7 +376,7 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
 
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
-        lambda: validate_cli._emit_result(
+        lambda: _emit(
             _result(), mode="table", out_dir=tmp_path / "out", timings=True
         )
     )
@@ -435,6 +454,10 @@ class _FakeApp:
 
     def run(self, request):
         return self._answer(request)
+
+    def write_summaries(self, source, **options) -> str:
+        """Delegate to the real writer: the ordering assertions read the files."""
+        return ManifestValidationService().write_summaries(source, **options)
 
     def cleanup(self, outcome: RunOutcome) -> None:
         self.cleanups.append(outcome)
@@ -644,7 +667,7 @@ def test_run_delegates_to_shared_execution_boundary(
         "none",
         "--timings",
         "--verbose",
-        "--row-timeout",
+        "--tool-timeout",
         "12",
         "--dep-update-timeout",
         "42",
@@ -669,7 +692,7 @@ def test_run_delegates_to_shared_execution_boundary(
     assert request.keep is True
     assert request.workers == 3
     assert request.verbose is True
-    assert request.row_timeout == 12.0
+    assert request.tool_timeout == 12.0
     assert request.dep_update_timeout == 42.0
     assert request.fail_fast is True
     assert request.root == tmp_path
@@ -706,7 +729,7 @@ def test_run_builds_a_request_from_its_flags(
         "schema",
         "--workers",
         "3",
-        "--row-timeout",
+        "--tool-timeout",
         "12",
         "--fail-fast",
         "--root",
@@ -722,7 +745,7 @@ def test_run_builds_a_request_from_its_flags(
     assert request.envs == ("dev",)
     assert request.phases == frozenset({"render", "schema"})
     assert request.workers == 3
-    assert request.row_timeout == 12.0
+    assert request.tool_timeout == 12.0
     assert request.fail_fast is True
     assert request.root == tmp_path
 
@@ -1169,8 +1192,8 @@ def test_run_rejects_an_empty_phase_list() -> None:
 # --- `chart cache clean --dry-run` -------------------------------------------
 
 
-def _render_cache(root: Path, runs: int = 2) -> Path:
-    """A render cache holding `runs` validate-run directories."""
+def _render_tree(root: Path, runs: int = 2) -> Path:
+    """A render output tree holding `runs` validate-run directories."""
     cache = root / ".chart-manager" / "rendered"
     for index in range(runs):
         (cache / f"run-{index}").mkdir(parents=True)
@@ -1179,7 +1202,7 @@ def _render_cache(root: Path, runs: int = 2) -> Path:
 
 def test_cache_clean_dry_run_removes_nothing(tmp_path: Path) -> None:
     """6.3: print the plan, exit 0, mutate nothing. The tree must survive."""
-    cache = _render_cache(tmp_path)
+    cache = _render_tree(tmp_path)
 
     result = cli("chart", "cache", "clean", "--dry-run", "--root", str(tmp_path))
 
@@ -1201,7 +1224,7 @@ def test_cache_clean_dry_run_describes_a_cache_that_is_not_there(
 
 
 def test_cache_clean_dry_run_renders_a_table(tmp_path: Path) -> None:
-    _render_cache(tmp_path, runs=3)
+    _render_tree(tmp_path, runs=3)
 
     result = cli(
         "chart", "cache", "clean", "--dry-run", "-o", "table", "--root", str(tmp_path)
@@ -1218,7 +1241,7 @@ def test_cache_clean_output_without_dry_run_is_a_usage_error(tmp_path: Path) -> 
     The tree is still there afterwards, which is the half that matters: the
     rejection has to happen *before* the rmtree, not after it.
     """
-    cache = _render_cache(tmp_path)
+    cache = _render_tree(tmp_path)
 
     result = cli("chart", "cache", "clean", "-o", "json", "--root", str(tmp_path))
 
@@ -1229,7 +1252,7 @@ def test_cache_clean_output_without_dry_run_is_a_usage_error(tmp_path: Path) -> 
 
 def test_cache_clean_still_removes_the_tree_without_dry_run(tmp_path: Path) -> None:
     """Guard the guard: the dry-run tests only mean something if this works."""
-    cache = _render_cache(tmp_path)
+    cache = _render_tree(tmp_path)
 
     result = cli("chart", "cache", "clean", "--root", str(tmp_path))
 

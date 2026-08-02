@@ -26,15 +26,14 @@ from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._container import container as _container
+from chart_manager.cli._container import resolve_chart
 from chart_manager.cli._options import ClusterNameOption, RootOption
-from chart_manager.cli._wiring import container as _container
-from chart_manager.cli._wiring import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
-from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.chart_catalog import ChartCatalogEntry, ChartCatalogService
+from chart_manager.services.chart_catalog import ChartCatalogEntry
 from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
 from chart_manager.services.clusters.ephemeral import (
     DEFAULT_CLUSTER_NAME,
@@ -42,6 +41,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestRequest,
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
+from chart_manager.services.lifecycle.wire import plan_to_dict
 
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
 NamespaceOverrideOption = Annotated[
@@ -100,7 +100,7 @@ def list_charts(
     question with the same bytes.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    entries = ChartCatalogService(root, charts_dir=Settings().charts_dir).list_entries()
+    entries = _container().chart_catalog_service(root).list_entries()
     output_mod.emit(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
     # A chart whose lifecycle document does not load is reported *in* the
     # projection (as `error`, in every format) and again as the exit code, so
@@ -244,7 +244,7 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
             action.target.namespace or "",
             action.target.release or "",
         )
-    output_mod.emit(plan.to_dict(), mode=mode, table=table)
+    output_mod.emit(plan_to_dict(plan), mode=mode, table=table)
     for warning in plan.warnings:
         narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
     narration.print(
@@ -341,9 +341,7 @@ def show_lifecycle(
     selects there.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    document = lifecycle_to_dict(
-        ChartCatalogService(root, charts_dir=Settings().charts_dir).get_lifecycle(chart)
-    )
+    document = lifecycle_to_dict(_container().chart_catalog_service(root).get_lifecycle(chart))
     output_mod.emit(
         document,
         mode=mode,

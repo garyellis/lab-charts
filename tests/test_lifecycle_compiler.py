@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.plumbing.errors import (
     ChartManagerError,
@@ -14,26 +13,13 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.services.lifecycle import (
+    SCHEMA_VERSION,
     ActionKind,
-    LifecycleCompiler,
-    Workflow,
+    ClusterTestCompiler,
+    plan_to_dict,
 )
 
 from .conftest import MakeChart
-
-
-def _add_validation(chart: Path) -> None:
-    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
-    lifecycle["spec"]["validation"] = {
-        "releaseName": chart.name,
-        "namespaceTemplate": "lab-${env}",
-        "environments": {
-            "dev": {"values": ["values.yaml", "values-dev.yaml"]},
-        },
-        "schemaLocations": ["default"],
-    }
-    (chart / "values-dev.yaml").write_text("replicas: 1\n")
-    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
 
 
 def _requires(*refs: str) -> dict[str, object]:
@@ -42,79 +28,6 @@ def _requires(*refs: str) -> dict[str, object]:
         chart, _, profile = ref.partition(":")
         parsed.append({"chart": chart, "profile": profile or "minimal"})
     return {"requires": parsed}
-
-
-def test_validation_compiles_the_authored_environment_to_an_ordered_plan(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    _add_validation(chart)
-
-    plan = LifecycleCompiler(chart_root).compile_validation("app", "dev")
-
-    assert plan.workflow is Workflow.VALIDATION
-    assert plan.environment == "dev"
-    assert [action.kind for action in plan.actions] == [
-        ActionKind.HELM_DEPENDENCY_UPDATE,
-        ActionKind.RENDER,
-        ActionKind.SCHEMA_VALIDATE,
-        ActionKind.POLICY_VALIDATE,
-    ]
-    assert plan.actions[1].target.to_dict() == {
-        "workflow": "validation",
-        "chart": "app",
-        "environment": "dev",
-        "release": "app",
-        "namespace": "lab-dev",
-    }
-    assert [path.name for path in plan.actions[1].values] == [
-        "values.yaml",
-        "values-dev.yaml",
-    ]
-    assert all(action.input_digest.startswith("sha256:") for action in plan.actions)
-
-
-@pytest.mark.parametrize(
-    ("validators", "expected_actions"),
-    [
-        (
-            {"kubeconform": False, "policy": True},
-            [
-                ActionKind.HELM_DEPENDENCY_UPDATE,
-                ActionKind.RENDER,
-                ActionKind.POLICY_VALIDATE,
-            ],
-        ),
-        (
-            {"kubeconform": True, "policy": False},
-            [
-                ActionKind.HELM_DEPENDENCY_UPDATE,
-                ActionKind.RENDER,
-                ActionKind.SCHEMA_VALIDATE,
-            ],
-        ),
-        (
-            {"kubeconform": False, "policy": False},
-            [ActionKind.HELM_DEPENDENCY_UPDATE, ActionKind.RENDER],
-        ),
-    ],
-)
-def test_validation_plan_omits_disabled_validators(
-    chart_root: Path,
-    make_chart: MakeChart,
-    validators: dict[str, bool],
-    expected_actions: list[ActionKind],
-) -> None:
-    chart = make_chart("app")
-    _add_validation(chart)
-    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
-    lifecycle["spec"]["validation"]["validators"] = validators
-    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
-
-    plan = LifecycleCompiler(chart_root).compile_validation("app", "dev")
-
-    assert [action.kind for action in plan.actions] == expected_actions
 
 
 def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
@@ -142,13 +55,12 @@ def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
         },
     )
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test(
         "app",
         "full",
         default_namespace="workloads",
     )
 
-    assert plan.workflow is Workflow.CLUSTER_TEST
     assert [action.target.chart for action in plan.actions] == [
         *(["base"] * 5),
         *(["app"] * 5),
@@ -175,9 +87,10 @@ def test_cluster_test_namespace_override_wins_over_authored_profile(
 ) -> None:
     make_chart("app", profiles={"minimal": {"namespace": "authored"}})
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test(
         "app",
         "minimal",
+        default_namespace="default",
         namespace_override="requested",
     )
 
@@ -203,9 +116,10 @@ def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
         },
     )
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test(
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test(
         "app",
         "minimal",
+        default_namespace="default",
         namespace_override="requested-app",
     )
 
@@ -223,7 +137,7 @@ def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
 ) -> None:
     make_chart("app", profiles={"minimal": {"helmTest": False}})
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test("app", "minimal")
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
 
     assert [action.kind for action in plan.actions] == [
         ActionKind.NAMESPACE_ENSURE,
@@ -239,8 +153,8 @@ def test_cluster_test_lint_is_typed_and_ordered_between_dependency_and_install(
 ) -> None:
     make_chart("app")
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test(
-        "app", "minimal", lint=True
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test(
+        "app", "minimal", default_namespace="default", lint=True
     )
 
     assert [action.kind for action in plan.actions] == [
@@ -260,28 +174,18 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     make_chart: MakeChart,
 ) -> None:
     make_chart("app")
-    compiler = LifecycleCompiler(chart_root)
+    compiler = ClusterTestCompiler(chart_root)
 
-    first = compiler.compile_cluster_test("app", "minimal").to_dict()
-    second = compiler.compile_cluster_test("app", "minimal").to_dict()
+    first = plan_to_dict(compiler.compile_cluster_test("app", "minimal", default_namespace="default"))
+    second = plan_to_dict(compiler.compile_cluster_test("app", "minimal", default_namespace="default"))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
-    assert first["kind"] == "LifecyclePlan"
-    assert first["actions"][0]["actionId"].startswith("cluster-test.app.minimal.")
-    assert first["actions"][0]["target"]["workflow"] == "cluster-test"
+    assert first["schema_version"] == SCHEMA_VERSION
+    assert first["chart"] == "app"
+    assert first["profile"] == "minimal"
+    assert first["actions"][0]["action_id"].startswith("cluster-test.app.minimal.")
+    assert first["actions"][0]["target"]["chart"] == "app"
     assert "edges" not in first
-
-
-def test_validation_rejects_unknown_environment_as_a_domain_error(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    _add_validation(chart)
-
-    with pytest.raises(SpecError, match="unknown environment 'missing'"):
-        LifecycleCompiler(chart_root).compile_validation("app", "missing")
 
 
 def test_generated_dependency_contents_do_not_change_compiled_input_digest(
@@ -289,13 +193,13 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("app")
-    compiler = LifecycleCompiler(chart_root)
-    before = compiler.compile_cluster_test("app", "minimal")
+    compiler = ClusterTestCompiler(chart_root)
+    before = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
 
     generated = chart / "charts"
     generated.mkdir()
     (generated / "dependency-1.2.3.tgz").write_bytes(b"downloaded later")
-    after = compiler.compile_cluster_test("app", "minimal")
+    after = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
 
     assert [action.input_digest for action in before.actions] == [
         action.input_digest for action in after.actions
@@ -304,74 +208,16 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
     templates = chart / "templates"
     templates.mkdir()
     (templates / "deployment.yaml").write_text("kind: Deployment\n")
-    source_changed = compiler.compile_cluster_test("app", "minimal")
+    source_changed = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
 
     assert [action.input_digest for action in after.actions] != [
         action.input_digest for action in source_changed.actions
     ]
 
     (chart / "Chart.lock").write_text("dependencies: []\n")
-    lock_changed = compiler.compile_cluster_test("app", "minimal")
+    lock_changed = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
     assert [action.input_digest for action in source_changed.actions] != [
         action.input_digest for action in lock_changed.actions
-    ]
-
-
-def test_repository_policy_source_is_part_of_policy_action_digest(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    _add_validation(chart)
-    policies = chart_root / "policies"
-    policies.mkdir()
-    policy = policies / "require-labels.yaml"
-    policy.write_text("apiVersion: kyverno.io/v1\n")
-    compiler = LifecycleCompiler(chart_root)
-    before = compiler.compile_validation("app", "dev")
-
-    policy.write_text("apiVersion: kyverno.io/v2\n")
-    after = compiler.compile_validation("app", "dev")
-
-    before_by_kind = {action.kind: action.input_digest for action in before.actions}
-    after_by_kind = {action.kind: action.input_digest for action in after.actions}
-    assert (
-        before_by_kind[ActionKind.POLICY_VALIDATE]
-        != after_by_kind[ActionKind.POLICY_VALIDATE]
-    )
-    assert (
-        before_by_kind[ActionKind.RENDER]
-        == after_by_kind[ActionKind.RENDER]
-    )
-
-
-def test_validation_digest_includes_toolchain_and_execution_engine_sources(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    _add_validation(chart)
-    compiler = LifecycleCompiler(chart_root)
-    before = compiler.compile_validation("app", "dev")
-
-    (chart_root / ".mise.toml").write_text('[tools]\nhelm = "3.20.0"\n')
-    pins_changed = compiler.compile_validation("app", "dev")
-    assert [action.input_digest for action in before.actions] != [
-        action.input_digest for action in pins_changed.actions
-    ]
-
-    engine = (
-        chart_root
-        / "src"
-        / "chart_manager"
-        / "services"
-        / "manifest_validation"
-    )
-    engine.mkdir(parents=True)
-    (engine / "engine.py").write_text("PHASES = ('render',)\n")
-    source_changed = compiler.compile_validation("app", "dev")
-    assert [action.input_digest for action in pins_changed.actions] != [
-        action.input_digest for action in source_changed.actions
     ]
 
 
@@ -387,7 +233,7 @@ def test_digest_rejects_value_symlink_that_escapes_repository_root(
     values.symlink_to(outside)
 
     with pytest.raises(SpecError, match="digest input escapes repository root"):
-        LifecycleCompiler(chart_root).compile_cluster_test("app", "minimal")
+        ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
 
 
 def test_compile_rejects_a_requires_cycle(
@@ -407,7 +253,7 @@ def test_compile_rejects_a_requires_cycle(
     make_chart("b", profiles={"minimal": _requires("a")})
 
     with pytest.raises(DependencyCycleError, match="dependency cycle detected"):
-        LifecycleCompiler(chart_root).compile_cluster_test("a", "minimal")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
 
 
 def test_compile_rejects_an_unknown_chart_reference(
@@ -417,7 +263,7 @@ def test_compile_rejects_an_unknown_chart_reference(
     make_chart("a", profiles={"minimal": _requires("missing")})
 
     with pytest.raises(ChartManagerError):
-        LifecycleCompiler(chart_root).compile_cluster_test("a", "minimal")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
 
 
 def test_compile_rejects_an_unknown_profile_reference(
@@ -428,7 +274,7 @@ def test_compile_rejects_an_unknown_profile_reference(
     make_chart("a", profiles={"minimal": _requires("base:nope")})
 
     with pytest.raises(SpecError, match="unknown profile 'nope'"):
-        LifecycleCompiler(chart_root).compile_cluster_test("a", "minimal")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
 
 
 def test_compile_accepts_a_valid_requires_graph(
@@ -438,6 +284,6 @@ def test_compile_accepts_a_valid_requires_graph(
     make_chart("base")
     make_chart("app", profiles={"minimal": _requires("base")})
 
-    plan = LifecycleCompiler(chart_root).compile_cluster_test("app", "minimal")
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
 
     assert [action.target.chart for action in plan.actions].count("base") >= 1

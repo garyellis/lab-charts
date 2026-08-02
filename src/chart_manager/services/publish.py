@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from chart_manager.domain.charts import ChartRepository
 from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.settings import DEFAULT_CHARTS_DIR
+
+#: Pushes cannot be rolled back, so this channel exists to answer "which
+#: artifacts actually reached the registry?" for a batch that half-succeeded.
+_LOG = logging.getLogger(__name__)
 
 _SEMVER = re.compile(
     r"^(?P<core>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
@@ -153,6 +158,21 @@ class PublishService:
         if resolved_kind is PublishKind.RELEASE and version_suffix is not None:
             raise SpecError("release publishing cannot use --version-suffix")
 
+        # `operation_id` is the caller's correlation handle and reaches the
+        # lifecycle event's `detail`, so it is what joins this line to the
+        # events store. No token or registry credential is in scope here.
+        _LOG.info(
+            "publish started: charts=%s repository=%s kind=%s version=%s "
+            "version_suffix=%s dry_run=%s operation_id=%s",
+            ",".join(selected),
+            repository,
+            resolved_kind.value,
+            version or "(chart version)",
+            version_suffix or "(none)",
+            dry_run,
+            operation_id or "(none)",
+        )
+
         with tempfile.TemporaryDirectory(prefix="chart-manager-publish-") as work:
             output_dir = Path(work)
             prepared: list[tuple[str, str, PackageResult]] = []
@@ -194,6 +214,17 @@ class PublishService:
                         expected_reference=reference,
                     )
                 except ChartManagerError as exc:
+                    # The batch continues so every prepared chart is attempted;
+                    # each failure is consolidated into the result and named
+                    # here, because a partially-published batch is the state an
+                    # operator has to reconcile by hand.
+                    _LOG.error(
+                        "chart push failed: chart=%s version=%s reference=%s: %s",
+                        name,
+                        target_version,
+                        reference,
+                        exc,
+                    )
                     outcomes.append(
                         PublishedChart(
                             chart=name,
@@ -216,6 +247,13 @@ class PublishService:
                 # in `_emit_publish_events`, making the real publish that
                 # follows look like a retry of an artifact that was never
                 # pushed.
+                _LOG.info(
+                    "publish finished (dry run, nothing pushed): charts=%d kind=%s "
+                    "repository=%s",
+                    len(outcomes),
+                    resolved_kind.value,
+                    repository,
+                )
                 return PublishResult(
                     tuple(outcomes),
                     publish_kind=resolved_kind,
@@ -229,6 +267,17 @@ class PublishService:
                 pr_url=pr_url,
                 git_sha=git_sha,
                 operation_id=operation_id,
+            )
+            # Telemetry failures are not counted here: `emit_non_fatal` already
+            # logs each one, and repeating the count would double-report a
+            # non-fatal condition next to a fatal one.
+            _LOG.info(
+                "publish finished: charts=%d pushed=%d failed=%d kind=%s repository=%s",
+                len(outcomes),
+                sum(1 for chart in outcomes if chart.ok),
+                sum(1 for chart in outcomes if not chart.ok),
+                resolved_kind.value,
+                repository,
             )
             return PublishResult(
                 tuple(outcomes), telemetry_failures, publish_kind=resolved_kind

@@ -256,9 +256,19 @@ class ExposeService:
                 break
             time.sleep(poll_interval)
         else:
-            # All ports never bound in time. Kill the child so we don't leak.
+            # The deadline can pass before the loop ever polls (zero/tiny
+            # timeout), so an already-dead child must be reported as such
+            # here too, not blindly signalled -- its pid may have been
+            # recycled by an unrelated process.
+            if proc.poll() is not None:
+                output = log_file.read_text().strip()
+                raise ChartManagerError(
+                    f"port-forward exited immediately (rc={proc.returncode})\n{output}"
+                )
+            # All ports never bound in time. Terminate through the handle we
+            # own so the signal cannot reach anything but our child.
             with suppress(ProcessLookupError):
-                os.kill(proc.pid, signal.SIGTERM)
+                proc.terminate()
             output = log_file.read_text().strip()
             raise ChartManagerError(
                 f"port-forward did not become ready within {readiness_timeout:.0f}s\n{output}"

@@ -40,7 +40,7 @@ _STATUS_STYLE = {**STATUS_STYLE, "running": "yellow"}
 #: Live-table columns. The last one is "Wall", NOT "Elapsed", and the
 #: difference is load-bearing: this column is wall-clock since the row's
 #: first `running` event, whereas the "Elapsed" column in the final table
-#: (`validate_render.to_text_table` via `wire.row_elapsed_text`) sums the
+#: (`validate_render.to_text_table` via `models.row_elapsed_text`) sums the
 #: row's measured per-phase times. Under `--workers > 1` a row spends real
 #: wall-clock time waiting for a worker, so the two numbers genuinely
 #: diverge. They previously shared the header "Elapsed", which read as a
@@ -146,9 +146,11 @@ class LiveTableDisplay(ProgressDisplay):
         row: WorklistRow,
         phase: str,
         status: str,
-        elapsed_s: float | None = None,
+        # Protocol arg: the table's wall column is row wall-clock measured
+        # here across phases, not the per-phase elapsed the runner reports.
+        elapsed_s: float | None = None,  # noqa: ARG002
     ) -> None:
-        """Update the row's phase cell (and elapsed) and re-render, under the lock."""
+        """Update the row's phase cell and re-render, under the lock."""
         key = (row.chart, row.env)
         with self._lock:
             if key not in self._cells:

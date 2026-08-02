@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.chart_config import (
+from chart_manager.domain.charts import ChartDependency, ChartRepository
+from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,
@@ -15,7 +15,7 @@ from chart_manager.services.chart_config import (
     validate_chart_lifecycle_identity,
     validation_status,
 )
-from chart_manager.services.domain.charts import ChartDependency, ChartRepository
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 

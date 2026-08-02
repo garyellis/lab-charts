@@ -23,7 +23,7 @@ from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.text import truncate_lines
 from chart_manager.services.helmrelease.state import DETAIL_MAX, ReasonLike, Verdict
 
-__all__ = ["EVENTS_LINE_CAP", "conditions", "header", "safe_events"]
+__all__ = ["EVENTS_LINE_CAP", "conditions", "failure_detail", "header", "safe_events"]
 
 #: `kubectl get events` output is unbounded and mostly repetition; the tail is
 #: what explains a failure, but the head is what fits in a report.
@@ -54,6 +54,18 @@ def conditions(status: HelmReleaseStatus, cond_types: Iterable[str]) -> list[str
     return lines
 
 
+def failure_detail(exc: ExternalCommandError) -> str:
+    """Render `exc` as the one capped line a report bullet has room for.
+
+    Every best-effort cluster read on the failure path needs the same thing:
+    the stderr that says *why*, so RBAC-denied, apiserver-unreachable and
+    finalizer-stuck stop rendering identically in the one artifact anybody
+    reads after a failure.
+    """
+    stderr = (exc.stderr or str(exc)).strip()
+    return stderr[:DETAIL_MAX]
+
+
 def safe_events(fetch: Callable[[], str]) -> str:
     """Run `fetch`, returning a placeholder line instead of raising.
 
@@ -64,6 +76,5 @@ def safe_events(fetch: Callable[[], str]) -> str:
     try:
         blob = fetch()
     except ExternalCommandError as exc:
-        stderr = (exc.stderr or str(exc)).strip()
-        return f"<events unavailable: {stderr[:DETAIL_MAX]}>"
+        return f"<events unavailable: {failure_detail(exc)}>"
     return truncate_lines(blob, EVENTS_LINE_CAP)

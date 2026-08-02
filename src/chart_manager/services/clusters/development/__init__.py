@@ -27,7 +27,7 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterResult,
     DevelopmentClusterStatus,
     PortMappingDrift,
-    _DevelopmentClusterRunSummary,
+    RunSummary,
 )
 from chart_manager.services.clusters.development.service import (
     CERT_MANAGER_CHART,
@@ -68,7 +68,7 @@ __all__ = [
     "DevelopmentClusterService",
     "DevelopmentClusterStatus",
     "PortMappingDrift",
-    "_DevelopmentClusterRunSummary",
+    "RunSummary",
     "action_to_dict",
     "converge_to_dict",
     "plan_to_dict",

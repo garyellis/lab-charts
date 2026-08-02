@@ -217,7 +217,30 @@ class MonitorService:
             per_poll=per_poll,
         )
 
+        _LOG.info(
+            "monitor run started: chart=%s version=%s namespace=%s matched=%d "
+            "concurrency=%d fail_fast=%s per_poll=%s per_hr=%s total=%s poll_interval=%.1fs",
+            request.chart_name,
+            request.version,
+            request.namespace or "(all)",
+            len(matched),
+            request.concurrency,
+            request.fail_fast,
+            request.per_poll_timeout,
+            request.per_hr_timeout,
+            request.total_timeout,
+            request.poll_interval,
+        )
+
         if not matched:
+            # A no-match is the one outcome that looks like success to every
+            # caller reading `ok` and means nothing was watched at all.
+            _LOG.warning(
+                "monitor matched no HelmReleases: chart=%s version=%s namespace=%s",
+                request.chart_name,
+                request.version,
+                request.namespace or "(all)",
+            )
             elapsed = self._clock() - start
             return MonitorResult(
                 outcomes=(
@@ -267,6 +290,13 @@ class MonitorService:
                 cancel_on=_fail_fast_predicate(request),
             )
         except Exception:
+            _LOG.exception(
+                "monitor run crashed: chart=%s version=%s matched=%d completed=%d",
+                request.chart_name,
+                request.version,
+                len(matched),
+                len(outcomes),
+            )
             # An infrastructure failure still ends the interval opened above.
             # Without this the timeline keeps a WAITING_ROLLOUT that nothing
             # ever closes -- the exact defect this wiring exists to remove.
@@ -294,6 +324,16 @@ class MonitorService:
             run_verdict((o.verdict for o in result.outcomes), success=Verdict.READY),
             total=len(result.outcomes),
             failures=len(result.failures),
+        )
+        _LOG.info(
+            "monitor run finished: chart=%s version=%s outcomes=%d failures=%d "
+            "cancelled=%s elapsed=%.1fs",
+            request.chart_name,
+            request.version,
+            len(result.outcomes),
+            len(result.failures),
+            result.total_timed_out,
+            elapsed,
         )
         return result
 
@@ -363,7 +403,7 @@ class MonitorService:
         # the apiserver in lockstep.
         self._sleep(self._rand(0.0, request.poll_interval))
         if cancel_event.is_set():
-            return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
+            return self._cancelled(state)
 
         # First pass reuses the status fetched during matching, saving one
         # kubectl call per HR.
@@ -376,25 +416,54 @@ class MonitorService:
                     return terminal
 
             if cancel_event.is_set():
-                return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
+                return self._cancelled(state)
             if self._clock() >= hr_deadline:
                 # Which budget ran out changes what an operator should do:
                 # raise --per-hr-timeout, or accept that the run as a whole
                 # was too big for --total-timeout.
-                return Verdict.TIMED_OUT, (
+                reason = (
                     Reason.TOTAL_BUDGET_EXHAUSTED
                     if self._clock() >= total_deadline
                     else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
+                # WARNING, not DEBUG: a tripped deadline is the single most
+                # common non-obvious monitor outcome, and which of the two
+                # budgets tripped is the whole content of the answer.
+                _LOG.warning(
+                    "monitor deadline reached: ns=%s name=%s reason=%s "
+                    "per_hr=%s total=%s",
+                    state.ref.namespace,
+                    state.ref.name,
+                    reason,
+                    request.per_hr_timeout,
+                    request.total_timeout,
+                )
+                return Verdict.TIMED_OUT, reason
 
             self._sleep(request.poll_interval)
             if cancel_event.is_set():
-                return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
+                return self._cancelled(state)
 
             polled = self._poll(state, per_poll=per_poll)
             if isinstance(polled, Terminal):
                 return polled.verdict, polled.reason
             status = polled
+
+    @staticmethod
+    def _cancelled(state: _WatchState) -> tuple[Verdict, ReasonLike]:
+        """Abandon this watch because a peer (or the total budget) cancelled the run.
+
+        DEBUG, not WARNING: under `--fail-fast` every remaining watcher takes
+        this path, so at INFO a 40-release run would bury the one outcome that
+        actually explains the failure under 39 lines saying "and this one was
+        stopped". The verdict still reaches the caller as an outcome.
+        """
+        _LOG.debug(
+            "monitor watch cancelled: ns=%s name=%s",
+            state.ref.namespace,
+            state.ref.name,
+        )
+        return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
 
     def _evaluate(
         self,
@@ -445,6 +514,12 @@ class MonitorService:
             stderr = (exc.stderr or str(exc)).strip()
             if "NotFound" in stderr or "not found" in stderr:
                 detail = stderr[:DETAIL_MAX]
+                _LOG.error(
+                    "HelmRelease disappeared while being watched: ns=%s name=%s: %s",
+                    state.ref.namespace,
+                    state.ref.name,
+                    detail,
+                )
                 self._record(state, "Disappeared", detail)
                 return Terminal(
                     verdict=Verdict.FAILED,
@@ -480,6 +555,17 @@ class MonitorService:
     ) -> None:
         """Record a transport-error transition unless the previous poll said the same thing."""
         if signature != state.prev_signature:
+            # The dedupe is what makes this safe to log at WARNING from inside
+            # the poll loop: a cluster that is unreachable for ten minutes
+            # produces one line, not one per poll interval. A read that keeps
+            # failing is why a release "just timed out" with no other symptom.
+            _LOG.warning(
+                "monitor poll degraded: ns=%s name=%s phase=%s: %s",
+                state.ref.namespace,
+                state.ref.name,
+                phase,
+                stderr[:DETAIL_MAX],
+            )
             self._record(state, phase, stderr[:DETAIL_MAX])
             state.prev_signature = signature
 
@@ -519,6 +605,19 @@ class MonitorService:
         duration_seconds = self._clock() - started_mono
         diagnostics: str | None = None
         if not verdict.is_passing:
+            # One line per failed release, carrying the pair (verdict, reason)
+            # that the rendered report leads with. The report itself is not
+            # logged: it is multi-kilobyte markdown, and the caller already
+            # has it.
+            _LOG.warning(
+                "monitor outcome not ready: ns=%s name=%s verdict=%s reason=%s "
+                "elapsed=%.1fs",
+                state.ref.namespace,
+                state.ref.name,
+                verdict,
+                reason,
+                duration_seconds,
+            )
             diagnostics = self._compose_diagnostics(
                 state, verdict=verdict, reason=reason, per_poll=per_poll
             )

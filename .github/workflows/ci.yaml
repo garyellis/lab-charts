@@ -88,7 +88,7 @@ jobs:
       - name: ChartLifecycle packaging contract
         run: >-
           uv run --extra dev pytest -q -m integration
-          tests/integration/test_chart_config_packaging.py
+          tests/integration/test_chart_lifecycle_packaging.py
 
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].

@@ -78,22 +78,22 @@ class EventWriter:
         detail: dict[str, Any] | None = None,
         timestamp: datetime | None = None,  # override now() for backfill/seeding
     ) -> None:
-       """Build and write a promotion-lifecycle event for a chart in an environment."""
-       event = PlatformLifecycleEvent(
-           correlation_id=f"{chart_name}@{chart_version}",
-           build_correlation_id=build_correlation_id,
-           promotion_correlation_id=promotion_correlation_id,
-           chart_name=chart_name,
-           chart_version=chart_version,
-           images=images,
-           environment=environment,
-           build_phase=None,
-           promotion_phase=phase,
-           timestamp=timestamp or datetime.now(UTC),
-           source=self._source,
-           pr_url=pr_url,
-           git_sha=git_sha,
-           detail=detail,
-           idempotency_key=None,
-       )
-       self._get_store().write(event)
+        """Build and write a promotion-lifecycle event for a chart in an environment."""
+        event = PlatformLifecycleEvent(
+            correlation_id=f"{chart_name}@{chart_version}",
+            build_correlation_id=build_correlation_id,
+            promotion_correlation_id=promotion_correlation_id,
+            chart_name=chart_name,
+            chart_version=chart_version,
+            images=images,
+            environment=environment,
+            build_phase=None,
+            promotion_phase=phase,
+            timestamp=timestamp or datetime.now(UTC),
+            source=self._source,
+            pr_url=pr_url,
+            git_sha=git_sha,
+            detail=detail,
+            idempotency_key=None,
+        )
+        self._get_store().write(event)

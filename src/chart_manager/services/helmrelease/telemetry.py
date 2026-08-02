@@ -10,8 +10,7 @@ uncomputable.
 
 This module holds the promotion wiring. The *failure policy* it used to own
 now lives in `services/events/failure.py`, which grew a fourth caller (the
-upgrade service) and no longer belongs to this domain; `emit_non_fatal` is
-re-exported here so existing importers keep working.
+upgrade service) and no longer belongs to this domain.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from chart_manager.services.events.writer import EventWriter
 
 from .state import START_PHASE, TERMINAL_PHASES, Stage, Verdict
 
-__all__ = ["PromotionTelemetry", "emit_non_fatal"]
+__all__ = ["PromotionTelemetry"]
 
 
 @dataclass(frozen=True)

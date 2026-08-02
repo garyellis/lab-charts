@@ -6,16 +6,21 @@ carrying Rich console markup (`[red]...[/red]`) that only mean anything to a
 `rich.Console`. An HTTP server, a Slack app, or a PR-comment bot has no
 terminal and must not import this module.
 
-The machine-readable projections -- `to_json`, `to_markdown`,
-`JSON_SCHEMA_VERSION` -- live in `services.manifest_validation.wire` and import no Rich.
+The machine-readable projections live in `services.manifest_validation` and
+import no Rich: `wire.to_json` + `SCHEMA_VERSION` for the versioned contract,
+`markdown.to_markdown` for the GitHub-flavored summary.
 
 Note on `failure_details` / `advisory_details`: these return strings
-containing Rich markup, which is why they live here rather than in the wire
-module. The markup is emphatically *not* part of the wire contract. No
+containing Rich markup, which is why they live here rather than beside those
+projections. The markup is emphatically *not* part of the wire contract. No
 information is lost by keeping them terminal-only: the same failure and
 advisory data is already carried by `wire.to_json` (`rows[].phases[].detail`
 / `.artifacts`) and by the Failures/Advisories sections of
-`wire.to_markdown`, both markup-free.
+`markdown.to_markdown`, both markup-free.
+
+`row_elapsed_text` is imported from `models`, not from a projection module:
+the markdown table and this one must show the same "Elapsed" value, and
+neither renderer gets to be the other's dependency.
 """
 
 from __future__ import annotations
@@ -23,9 +28,12 @@ from __future__ import annotations
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.services.manifest_validation.models import PhaseResult, RunResult
-from chart_manager.services.manifest_validation.render_cache import RenderCacheState
-from chart_manager.services.manifest_validation.wire import row_elapsed_text
+from chart_manager.services.manifest_validation.models import (
+    PhaseResult,
+    RunResult,
+    row_elapsed_text,
+)
+from chart_manager.services.manifest_validation.paths import RenderOutputState
 
 #: Rich style per terminal phase status. Shared with `cli/validate_progress.py`
 #: so the live table and the final table can never disagree about what a FAIL
@@ -59,8 +67,12 @@ def to_text_table(result: RunResult, *, include_timings: bool = False) -> Table:
     return table
 
 
-def render_cache_table(state: RenderCacheState) -> Table:
-    """Render the cache `chart cache clean --dry-run` would remove."""
+def render_output_table(state: RenderOutputState) -> Table:
+    """Render the tree `chart cache clean --dry-run` would remove.
+
+    The table title keeps the command's user-facing "render cache" wording;
+    only the code stopped claiming there is a cache.
+    """
     table = Table("Path", "Exists", "Runs", title="render cache")
     table.add_row(str(state.path), "yes" if state.exists else "no", str(state.runs))
     return table

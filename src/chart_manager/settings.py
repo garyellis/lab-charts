@@ -28,12 +28,12 @@ LogFormat = Literal["text", "json"]
 
 #: Where `Settings` looks for its optional YAML file.
 #:
-#: Module state rather than a constructor argument because `Settings()` is
-#: built independently in roughly a dozen places (the composition root, three
-#: CLI helpers, `main()`), and pydantic-settings resolves its sources from the
-#: *class*, not from per-instance kwargs -- there is no `Settings(config=...)`
-#: to thread through. The surface sets this once from `--config` before any
-#: service constructs Settings; nothing else writes it.
+#: Module state rather than a constructor argument because pydantic-settings
+#: resolves its sources from the *class*, not from per-instance kwargs --
+#: there is no `Settings(config=...)` to thread through, and `Container`
+#: builds its own default when no `Settings` is injected. The surface sets
+#: this once from `--config` in `cli/main.py`'s root callback, before
+#: anything constructs Settings; nothing else writes it.
 _config_file: Path = DEFAULT_CONFIG_FILE
 
 

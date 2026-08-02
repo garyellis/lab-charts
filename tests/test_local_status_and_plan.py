@@ -17,14 +17,15 @@ from typing import Any
 
 import pytest
 
+from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
     status_to_dict,
 )
+from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.expose import ExposeStatus
-from chart_manager.services.local_resources import ResolvedChartTarget
 
 
 class _Helm:
@@ -251,9 +252,13 @@ def test_status_reads_through_the_context_bound_clients(tmp_path: Path) -> None:
     )
     contexts: list[str] = []
 
-    def clients(handle: Any) -> tuple[Any, Any, Any]:
+    def clients(handle: Any) -> BoundClients:
         contexts.append(handle.context)
-        return bound, _Kubectl(), _Expose()
+        return BoundClients(
+            helm=bound,  # type: ignore[arg-type]
+            kubectl=_Kubectl(),  # type: ignore[arg-type]
+            expose=_Expose(),  # type: ignore[arg-type]
+        )
 
     status = _service(tmp_path, helm=ambient, client_factory=clients).status("chart-manager")
 

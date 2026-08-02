@@ -16,10 +16,9 @@ from typing import Annotated, Any, Protocol
 import typer
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli._wiring import container as _container
-from chart_manager.composition import Settings
+from chart_manager.cli._container import container as _container
+from chart_manager.cli._container import resolve_chart
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.local_resources import resolve_chart_target
 from chart_manager.services.upgrader import (
     FinalizeRequest,
     FinalizeResult,
@@ -129,24 +128,17 @@ def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
 
     `--path` is the frozen-in-muscle-memory spelling and stays verbatim: it
     is a repository-relative path and the service has always taken it as
-    one. The CHART argument goes through `resolve_chart_target`, the same
-    resolver `chart test` and `chart validate` use, so a bare chart name
-    means the same thing in all three — and so this module contains no path
-    heuristic of its own (design commitment 6).
+    one. The CHART argument goes through `_container.resolve_chart`, the same
+    helper `chart test`, `local up` and `chart validate` use, so a bare chart
+    name means the same thing in all four -- and so this module contains no
+    path heuristic and no configuration read of its own (design commitment 6).
     """
     if (chart is None) == (path is None):
         raise ChartManagerError("name exactly one chart, as the CHART argument or --path")
     if path is not None:
         return path
     assert chart is not None
-    settings = Settings()
-    target = resolve_chart_target(
-        root,
-        chart,
-        charts_dir=settings.charts_dir,
-        local_config=settings.local_config,
-    )
-    return target.path.relative_to(root)
+    return resolve_chart(root, chart).path.relative_to(root)
 
 
 def upgrade_finalize(
@@ -165,7 +157,7 @@ def upgrade_finalize(
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
     root = Path(".").resolve()
-    update_data = load_update_data(data_file, repo_root=root)
+    update_data = load_update_data(data_file)
     result = _make_finalize_service(root).finalize(
         FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)
     )

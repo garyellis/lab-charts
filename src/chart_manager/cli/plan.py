@@ -22,15 +22,15 @@ from typing import Annotated, Any
 import typer
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import RootOption
-from chart_manager.cli._wiring import container as _container
 from chart_manager.cli.streams import console
-from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.ci import MatrixSelection
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
+from chart_manager.services.lifecycle.wire import impact_to_dict
 
 #: `plan`'s output vocabulary: the core three plus its own `github`, the
 #: GitHub Actions matrix document. `github` stays command-local because it is
@@ -68,12 +68,7 @@ def register(app: typer.Typer) -> None:
 
 def _impact_service(root: Path) -> LifecycleImpactService:
     """Build the impact service at a seam tests can replace."""
-    settings = Settings()
-    return LifecycleImpactService(
-        root,
-        charts_dir=settings.charts_dir,
-        local_config=settings.local_config,
-    )
+    return _container().impact_service(root)
 
 
 def _changed_paths(
@@ -281,7 +276,7 @@ def plan(
     # error when neither source was given.
     result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
     if output != output_mod.TABLE:
-        output_mod.emit(result.to_dict(), mode=output)
+        output_mod.emit(impact_to_dict(result), mode=output)
     else:
         _render_impact_text(
             result,

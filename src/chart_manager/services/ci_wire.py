@@ -39,7 +39,7 @@ def cluster_test_matrix_to_dict(
 ) -> dict[str, list[dict[str, str]]]:
     """Project selected matrix entries onto the GitHub Actions matrix payload.
 
-    Deliberately narrower than `ClusterTestImpact.to_dict()`: the selection
+    Deliberately narrower than `lifecycle/wire.py`'s `impact_to_dict`: the selection
     `reasons` are why a chart was chosen, which is useful to a human reading
     `ci impact` and meaningless to `strategy.matrix`. Including them would
     add a `matrix.reasons` dimension to every job.

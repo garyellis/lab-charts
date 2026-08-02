@@ -15,13 +15,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 import yaml
 
 from chart_manager.cli import plan as plan_cli
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
+from chart_manager.services.lifecycle import (
+    SCHEMA_VERSION,
+    ClusterTestImpact,
+    ImpactReason,
+    ImpactReasonCode,
+    LifecycleImpact,
+    ValidationImpact,
+)
 
 from .conftest import cli
 
@@ -30,70 +37,43 @@ def _impact_result(
     *,
     spec_errors: tuple[str, ...] = (),
     warnings: tuple[str, ...] = (),
-) -> Any:
-    reason = SimpleNamespace(
-        code="validation-trigger",
-        changed_file=Path("charts/grafana/values-dev.yaml"),
-        detail="authored validation trigger selected grafana",
-    )
-    validation = SimpleNamespace(
-        chart="grafana",
-        environment="dev",
-        reasons=(reason,),
-    )
-    cluster = SimpleNamespace(
-        chart="grafana",
-        profile="minimal",
-        reasons=(
-            SimpleNamespace(
-                code="chart-change",
-                changed_file=Path("charts/grafana/values-dev.yaml"),
-                detail="changed file belongs to grafana",
+) -> LifecycleImpact:
+    """The real result object, so the assertions below pin the real contract."""
+    return LifecycleImpact(
+        changed_files=(
+            Path("charts/grafana/values-dev.yaml"),
+            Path("kind-config.yaml"),
+        ),
+        validation=(
+            ValidationImpact(
+                chart="grafana",
+                environment="dev",
+                release="grafana",
+                namespace="lab-dev",
+                reasons=(
+                    ImpactReason(
+                        code=ImpactReasonCode.VALIDATION_TRIGGER,
+                        changed_file=Path("charts/grafana/values-dev.yaml"),
+                        detail="authored validation trigger selected grafana",
+                    ),
+                ),
             ),
         ),
-    )
-    payload = {
-        "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
-        "kind": "LifecycleImpact",
-        "changedFiles": [
-            "charts/grafana/values-dev.yaml",
-            "kind-config.yaml",
-        ],
-        "validationSelection": [
-            {
-                "chart": "grafana",
-                "environment": "dev",
-                "reasons": [
-                    {
-                        "code": "validation-trigger",
-                        "changedFile": "charts/grafana/values-dev.yaml",
-                        "detail": "authored validation trigger selected grafana",
-                    }
-                ],
-            }
-        ],
-        "clusterTestMatrix": [
-            {
-                "chart": "grafana",
-                "profile": "minimal",
-                "reasons": [
-                    {
-                        "code": "chart-change",
-                        "changedFile": "charts/grafana/values-dev.yaml",
-                        "detail": "changed file belongs to grafana",
-                    }
-                ],
-            }
-        ],
-        "specErrors": list(spec_errors),
-        "warnings": list(warnings),
-    }
-    return SimpleNamespace(
-        validation=(validation,),
-        cluster_tests=(cluster,),
+        cluster_tests=(
+            ClusterTestImpact(
+                chart="grafana",
+                profile="minimal",
+                reasons=(
+                    ImpactReason(
+                        code=ImpactReasonCode.CHART_CHANGE,
+                        changed_file=Path("charts/grafana/values-dev.yaml"),
+                        detail="changed file belongs to grafana",
+                    ),
+                ),
+            ),
+        ),
         spec_errors=spec_errors,
         warnings=warnings,
-        to_dict=lambda: payload,
     )
 
 
@@ -154,7 +134,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
 
     assert result.exit_code == 0
     assert captured == [["charts/grafana/values-dev.yaml", "kind-config.yaml"]]
-    assert json.loads(result.stdout)["kind"] == "LifecycleImpact"
+    assert json.loads(result.stdout)["schema_version"] == SCHEMA_VERSION
 
 
 def test_impact_requires_an_explicit_change_source() -> None:
@@ -249,6 +229,5 @@ def test_impact_yaml_preserves_machine_envelope(
 
     assert result.exit_code == 0
     payload = yaml.safe_load(result.stdout)
-    assert payload["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
-    assert payload["kind"] == "LifecycleImpact"
-    assert payload["clusterTestMatrix"][0]["profile"] == "minimal"
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["cluster_test_matrix"][0]["profile"] == "minimal"

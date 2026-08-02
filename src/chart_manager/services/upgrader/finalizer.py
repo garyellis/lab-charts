@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import stat
 from collections.abc import Mapping, MutableMapping, Sequence
@@ -21,6 +22,11 @@ from chart_manager.services.upgrader.models import (
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path, safe_output_path
 from chart_manager.settings import DEFAULT_CHARTS_DIR
+
+#: This runs as a Renovate post-upgrade task inside Renovate's own checkout,
+#: where nothing renders narration and the only surviving record of the run is
+#: whatever reached stderr.
+_LOG = logging.getLogger(__name__)
 
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _HEADING = re.compile(r"^##\s")
@@ -79,7 +85,6 @@ def _updates_from_data(data: Mapping[str, Any] | None) -> tuple[UpdateMetadata, 
 def load_update_data(
     path: Path,
     *,
-    repo_root: Path | None = None,
     max_bytes: int = 1024 * 1024,
 ) -> Mapping[str, Any]:
     """Safely load an explicitly selected Renovate callback data file.
@@ -130,6 +135,15 @@ class UpgradeFinalizer:
             charts_dir=self._charts_dir,
         )
         chart_rel = chart_path.relative_to(root)
+        _LOG.info(
+            "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=%d "
+            "dry_run=%s",
+            chart_path.name,
+            chart_rel.as_posix(),
+            request.baseline_ref,
+            len(request.updates),
+            request.dry_run,
+        )
         baseline_text = self._baseline.read(root, request.baseline_ref, chart_rel / "Chart.yaml")
         yaml = YAML()
         yaml.preserve_quotes = True
@@ -146,7 +160,17 @@ class UpgradeFinalizer:
             dict.fromkeys(tuple(request.updates) + _updates_from_data(request.update_data))
         )
         if not updates:
+            # Renovate passed no callback metadata, so the update set is
+            # reconstructed from the Chart.yaml diff. That inference decides the
+            # bump and the changelog body, and it cannot see an image update
+            # made outside `dependencies:` -- worth a line when it fires.
             updates = _chart_dependency_diff(baseline_doc, current)
+            _LOG.warning(
+                "no Renovate update metadata; inferring updates from the Chart.yaml "
+                "dependency diff: chart=%s inferred=%d",
+                chart_path.name,
+                len(updates),
+            )
         qualifying = tuple(update for update in updates if update.qualifies)
         for update in qualifying:
             if not update.dependency or not update.current_version or not update.new_version:
@@ -160,6 +184,12 @@ class UpgradeFinalizer:
                     "wrapper version diverged from baseline without a qualifying "
                     f"image or Helm dependency update: {'.'.join(map(str, current_version))}"
                 )
+            _LOG.info(
+                "upgrade finalize finished: chart=%s version=%s bump=none changed=False "
+                "(no qualifying update)",
+                chart_path.name,
+                ".".join(map(str, current_version)),
+            )
             return FinalizeResult(
                 chart=chart_path.name,
                 previous_version=".".join(map(str, baseline_version)),
@@ -206,6 +236,18 @@ class UpgradeFinalizer:
                 (changelog_changed, changelog_file),
             )
             if changed
+        )
+        _LOG.info(
+            "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
+            "changed=%s files=%d qualifying=%d dry_run=%s",
+            chart_path.name,
+            baseline_value,
+            target,
+            "major" if major else "patch",
+            bool(files),
+            len(files),
+            len(qualifying),
+            request.dry_run,
         )
         return FinalizeResult(
             chart=chart_path.name,

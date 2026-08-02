@@ -17,7 +17,7 @@ import typer
 from rich.console import Console
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli._wiring import container as _container
+from chart_manager.cli._container import container as _container
 from chart_manager.cli.helmrelease_render import (
     _PrettyProgressDriver,
     render_monitor_json,

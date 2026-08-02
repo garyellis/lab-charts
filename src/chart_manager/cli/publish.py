@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from chart_manager.cli._wiring import container as _container
+from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import console as data
 from chart_manager.cli.streams import narration
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for

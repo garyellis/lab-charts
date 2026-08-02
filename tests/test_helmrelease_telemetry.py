@@ -14,6 +14,7 @@ telemetry.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -27,7 +28,9 @@ from chart_manager.integrations.helmrelease import (
 )
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import PromotionPhase
+from chart_manager.services.helmrelease.helm_test import TestRequest, TestService
 from chart_manager.services.helmrelease.monitor import MonitorRequest, MonitorService
 from chart_manager.services.helmrelease.state import (
     PROMOTE_PHASE,
@@ -37,7 +40,6 @@ from chart_manager.services.helmrelease.state import (
     Verdict,
     run_verdict,
 )
-from chart_manager.services.helmrelease.test import TestRequest, TestService
 
 CHART = "loki"
 VERSION = "0.2.0"
@@ -84,6 +86,7 @@ def _status(
     ready: str = "True",
     ready_reason: str = "ReconciliationSucceeded",
     released: str = "True",
+    suspended: bool = False,
 ) -> HelmReleaseStatus:
     return HelmReleaseStatus(
         ref=ref,
@@ -91,7 +94,7 @@ def _status(
         generation=1,
         observed_generation=1,
         resource_version="1",
-        suspended=False,
+        suspended=suspended,
         desired_chart_name=CHART,
         desired_chart_version=VERSION,
         last_applied_revision=None,
@@ -365,6 +368,53 @@ def test_helm_test_failure_closes_with_helm_test_failed_and_no_promoted() -> Non
     assert events.events[1]["detail"]["verdict"] == "failed"
 
 
+def test_all_suspended_helm_test_run_emits_no_terminal_phase() -> None:
+    """Zero tests ran, so nothing was verified and nothing was promoted.
+
+    `SKIPPED_SUSPENDED` is a passing verdict, which used to make an
+    all-suspended run fold to `PASSED` and emit (HELM_TEST_OK, PROMOTED) --
+    recording a version as verified-live in the environment when helm was
+    never invoked. The interval still opens; it just has no terminal.
+    """
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _status(ref, suspended=True)},
+    )
+    events = _RecordingEvents()
+    result = _tester(cluster, _FakeHelm(), events).test(_test_req())
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.SKIPPED_SUSPENDED]
+    assert events.phases == [PromotionPhase.HELM_TEST_RUN]
+
+
+def test_all_suspended_rollout_emits_no_terminal_phase() -> None:
+    # Same contract on the monitor half: a rollout nobody was watching for
+    # is not a ROLLOUT_OK.
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _status(ref, suspended=True)},
+    )
+    events = _RecordingEvents()
+    result = _monitor(cluster, events).monitor(_monitor_req())
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.SKIPPED_SUSPENDED]
+    assert events.phases == [PromotionPhase.WAITING_ROLLOUT]
+
+
+def test_a_skip_alongside_a_real_pass_still_reports_the_pass() -> None:
+    # The narrow reading of the rule above: only an *entirely* suspended run
+    # is a non-transition. One suspended peer must not suppress the terminal
+    # phase for the release that actually went green.
+    assert (
+        run_verdict(
+            [Verdict.SKIPPED_SUSPENDED, Verdict.PASSED], success=Verdict.PASSED
+        )
+        is Verdict.PASSED
+    )
+
+
 def test_helm_test_emits_nothing_without_an_environment() -> None:
     events = _RecordingEvents()
     _tester(_one_ready_hr(), _FakeHelm(), events).test(_test_req(environment=None))
@@ -385,6 +435,37 @@ def test_event_emission_failure_does_not_break_the_run(
     assert result.ok is True
     assert len(events.events) == 2  # both attempted, both swallowed
     assert "non-fatal" in caplog.text
+
+
+def test_the_swallow_records_the_exception_type_not_only_its_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A dropped event is only debuggable if the log says what dropped it.
+
+    Transport exceptions from the store adapters frequently stringify to the
+    empty string, which turned this line into "... (non-fatal): " -- a message
+    that reads like a bug in the logging rather than a report about the
+    backend. The type is what stays informative when the text does not.
+    """
+    with caplog.at_level("WARNING"):
+        error = emit_non_fatal(
+            _raise(KeyError("COSMOS_ENDPOINT")), strict=False, what="promotion"
+        )
+
+    assert isinstance(error, KeyError)
+    [record] = [r for r in caplog.records if "non-fatal" in r.message]
+    assert record.levelname == "WARNING"
+    assert "promotion event emission failed (non-fatal)" in record.getMessage()
+    assert "KeyError" in record.getMessage()
+
+
+def _raise(exc: Exception) -> Callable[[], None]:
+    """An emitter that always fails with `exc`."""
+
+    def emit() -> None:
+        raise exc
+
+    return emit
 
 
 def test_strict_events_surfaces_the_emission_failure() -> None:

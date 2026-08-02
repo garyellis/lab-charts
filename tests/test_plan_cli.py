@@ -20,13 +20,20 @@ import pytest
 import yaml
 
 from chart_manager.cli import plan as plan_cli
-from chart_manager.services.lifecycle import ClusterTestImpact
+from chart_manager.services.lifecycle import (
+    SCHEMA_VERSION,
+    ClusterTestImpact,
+    ImpactReason,
+    ImpactReasonCode,
+    LifecycleImpact,
+    ValidationImpact,
+)
 
 from .conftest import cli
 
 
-def _reason(code: str = "chart-change") -> SimpleNamespace:
-    return SimpleNamespace(
+def _reason(code: ImpactReasonCode = ImpactReasonCode.CHART_CHANGE) -> ImpactReason:
+    return ImpactReason(
         code=code,
         changed_file=Path("charts/grafana/values-dev.yaml"),
         detail="changed file belongs to grafana",
@@ -37,23 +44,22 @@ def _impact(
     *,
     spec_errors: tuple[str, ...] = (),
     warnings: tuple[str, ...] = (),
-) -> Any:
+) -> LifecycleImpact:
     """An impact document with one validation case and one cluster test."""
-    return SimpleNamespace(
+    return LifecycleImpact(
+        changed_files=(Path("charts/grafana/values-dev.yaml"),),
         validation=(
-            SimpleNamespace(chart="grafana", environment="dev", reasons=(_reason("validation-trigger"),)),
+            ValidationImpact(
+                chart="grafana",
+                environment="dev",
+                release="grafana",
+                namespace="lab-dev",
+                reasons=(_reason(ImpactReasonCode.VALIDATION_TRIGGER),),
+            ),
         ),
         cluster_tests=(ClusterTestImpact("grafana", "minimal", (_reason(),)),),
         spec_errors=spec_errors,
         warnings=warnings,
-        to_dict=lambda: {
-            "apiVersion": "lifecycle.chartmanager.io/v1alpha1",
-            "kind": "LifecycleImpact",
-            "validationSelection": [{"chart": "grafana", "environment": "dev"}],
-            "clusterTestMatrix": [{"chart": "grafana", "profile": "minimal"}],
-            "specErrors": list(spec_errors),
-            "warnings": list(warnings),
-        },
     )
 
 
@@ -196,8 +202,10 @@ def test_json_emits_the_whole_document_even_when_for_narrows_the_view(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["kind"] == "LifecycleImpact"
-    assert payload["clusterTestMatrix"] == [{"chart": "grafana", "profile": "minimal"}]
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert [
+        (entry["chart"], entry["profile"]) for entry in payload["cluster_test_matrix"]
+    ] == [("grafana", "minimal")]
 
 
 # --------------------------------------------------------------------------

@@ -26,7 +26,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import output as output_mod
-from chart_manager.cli._wiring import container
+from chart_manager.cli._container import container
 from chart_manager.cli.streams import console, narration
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.plumbing.preflight import CheckStatus

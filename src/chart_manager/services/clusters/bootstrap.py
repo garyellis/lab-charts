@@ -18,19 +18,24 @@ from chart_manager.api.local.v1alpha1 import (
     BootstrapRelease,
     LocalCluster,
 )
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.install_plan import InstallPlanEntry
+from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
+from chart_manager.services.clusters._shared import (
+    DEFAULT_NAMESPACE,
+    chart_name,
+    lifecycle_install_plan,
+    oci_chart_ref,
+    oci_identity,
+)
 from chart_manager.services.clusters.environment import EnvironmentHandle
-from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.progress import ProgressCallback, emit, step
 
-DEFAULT_NAMESPACE = "default"
 DEFAULT_TIMEOUT = "10m"
 _RUNTIME_FACTS = {
     "${kind.controlPlanePort}": "6443",
@@ -131,14 +136,14 @@ class LocalBootstrapExecutor:
         sets: dict[str, str],
     ) -> list[BootstrapOutcome]:
         catalog, plan = self._lifecycle_plan(release)
-        chart_name = self._chart_name(release.chart)
+        root_chart = chart_name(self.root, release.chart)
         outcomes: list[BootstrapOutcome] = []
         for entry in plan:
             entry_chart = catalog.get(entry.chart)
             profile = require_cluster_test_profile(entry_chart.spec, entry.profile)
             namespace = profile.namespace or DEFAULT_NAMESPACE
             is_bootstrap_root = (
-                entry.chart == chart_name and entry.profile == release.profile
+                entry.chart == root_chart and entry.profile == release.profile
             )
             runtime_sets = sets if is_bootstrap_root else {}
             emit(
@@ -165,16 +170,13 @@ class LocalBootstrapExecutor:
         self,
         release: BootstrapLifecycleRelease,
     ) -> tuple[ClusterTestCatalog, list[InstallPlanEntry]]:
-        chart_name = self._chart_name(release.chart)
-        catalog = ClusterTestCatalog(self.root, charts_dir=release.chart.parent)
-        chart = catalog.get(chart_name)
-        expected = (self.root / release.chart).resolve()
-        if chart.path.resolve() != expected:
-            raise ChartManagerError(
-                f"bootstrap chart {release.chart} resolved to unexpected path {chart.path}"
-            )
-        plan = DependencyResolver(catalog.get).install_plan(chart_name, release.profile)
-        return catalog, plan
+        """Bind this executor's root and error wording to the shared resolver.
+
+        `preflight` and `_install_lifecycle` must resolve identically -- the
+        first publishes the ownership identities the second then converges --
+        so they go through one call site, not two.
+        """
+        return lifecycle_install_plan(self.root, release, source="bootstrap chart")
 
     def _install_local(
         self,
@@ -207,16 +209,11 @@ class LocalBootstrapExecutor:
         *,
         sets: dict[str, str],
     ) -> BootstrapOutcome:
-        identity = release.version or release.digest or "pinned"
-        chart_ref = (
-            f"{release.chart}@{release.digest}"
-            if release.digest is not None
-            else release.chart
-        )
+        identity = oci_identity(release)
         emit(self.progress, step("Bootstrapping", f"{release.name}@{identity}"))
         result = self.helm.upgrade_install(
             release.name,
-            chart_ref,
+            oci_chart_ref(release),
             namespace=release.namespace,
             values=[self.root / path for path in release.values],
             sets=sets,
@@ -266,16 +263,8 @@ class LocalBootstrapExecutor:
             emit(self.progress, step("Waiting for bootstrap workloads", gate.namespace))
             self.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)
 
-    def _chart_name(self, relative: Path) -> str:
-        document = load_yaml_file(self.root / relative / "Chart.yaml")
-        name = document.get("name")
-        if not isinstance(name, str):
-            raise ChartManagerError(f"{relative}/Chart.yaml must define a string name")
-        return name
-
 
 __all__ = [
-    "DEFAULT_NAMESPACE",
     "DEFAULT_TIMEOUT",
     "BootstrapOutcome",
     "LocalBootstrapExecutor",

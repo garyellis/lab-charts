@@ -5,7 +5,7 @@ from __future__ import annotations
 import yaml
 
 from chart_manager.api.lifecycle.v1alpha1 import LIFECYCLE_API_VERSION, LIFECYCLE_KIND
-from chart_manager.services.chart_config import (
+from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,

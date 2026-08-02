@@ -7,12 +7,10 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
     ExternallySatisfiedLifecycle,
-    PlanProjectionError,
     exclude_bootstrap_owned_charts,
 )
 
@@ -22,7 +20,6 @@ def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
         action_id=f"cluster-test:{chart}:minimal:{suffix}",
         kind=kind,
         target=ActionTarget(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile="minimal",
             release=chart,
@@ -43,7 +40,6 @@ def cluster_plan() -> LifecyclePlan:
     )
     grafana_install = action("grafana", "install", ActionKind.HELM_UPGRADE_INSTALL)
     return LifecyclePlan(
-        workflow=Workflow.CLUSTER_TEST,
         chart="grafana",
         profile="minimal",
         actions=(
@@ -134,22 +130,6 @@ def test_bootstrap_requested_target_keeps_only_readiness_and_test_actions() -> N
     # This fixture has no target readiness/test actions, so all target install
     # preparation is removed. A compiled plan retains its readiness/test pair.
     assert projected.actions == ()
-
-
-def test_rejects_projection_of_validation_plan() -> None:
-    render = action("grafana", "render", ActionKind.RENDER)
-    validation = LifecyclePlan(
-        workflow=Workflow.VALIDATION,
-        chart="grafana",
-        environment="dev",
-        actions=(render,),
-    )
-
-    with pytest.raises(PlanProjectionError, match="requires a cluster-test plan"):
-        exclude_bootstrap_owned_charts(
-            validation,
-            {externally_satisfied("cilium")},
-        )
 
 
 @pytest.mark.parametrize(

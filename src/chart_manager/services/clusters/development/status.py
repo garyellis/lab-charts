@@ -16,13 +16,12 @@ established first, and everything cluster-facing is skipped when it does not.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.access import urls_and_grafana_host
 from chart_manager.services.clusters.development.drift import port_mapping_drift
 from chart_manager.services.clusters.development.models import (
@@ -30,15 +29,10 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterStatus,
 )
 from chart_manager.services.clusters.environment import (
-    EnvironmentHandle,
+    ClientFactory,
     EnvironmentSpec,
     KubernetesEnvironmentProvider,
 )
-from chart_manager.services.expose import ExposeService
-
-#: Bind the cluster-facing clients to a resolved environment. The same shape
-#: `DevelopmentClusterService` hands `_ensure_environment`.
-ClientFactory = Callable[[EnvironmentHandle], tuple[Helm, Kubectl, ExposeService]]
 
 
 def cluster_status(
@@ -73,10 +67,10 @@ def cluster_status(
     if handle is None:
         return DevelopmentClusterStatus(cluster_name=cluster_name, exists=False)
 
-    helm, kubectl, expose = clients(handle)
-    releases, releases_error = _releases(helm)
-    urls, urls_error = _urls(kubectl)
-    forward = expose.status(cluster_name)
+    bound = clients(handle)
+    releases, releases_error = _releases(bound.helm)
+    urls, urls_error = _urls(bound.kubectl)
+    forward = bound.expose.status(cluster_name)
     return DevelopmentClusterStatus(
         cluster_name=cluster_name,
         exists=True,
@@ -100,7 +94,7 @@ def _releases(helm: Helm) -> tuple[tuple[DevelopmentClusterRelease, ...], str | 
     """
     try:
         found = helm.list_releases(all_namespaces=True)
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         return (), f"could not list helm releases ({exc})"
     return (
         tuple(
@@ -120,7 +114,7 @@ def _urls(kubectl: Kubectl) -> tuple[tuple[str, ...], str | None]:
     """The reachable URLs, through the same projection `local up` prints."""
     try:
         hosts = kubectl.list_virtualservice_hosts()
-    except (ExternalCommandError, ChartManagerError) as exc:
+    except ChartManagerError as exc:
         return (), f"could not list VirtualServices ({exc}); skipping URL hints"
     urls, _grafana_host = urls_and_grafana_host(hosts)
     return urls, None

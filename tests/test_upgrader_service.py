@@ -12,6 +12,7 @@ from chart_manager.services.upgrader import (
     UpgradeTelemetry,
     build_upgrade_plan,
 )
+from chart_manager.services.upgrader.wire import upgrade_to_dict
 
 
 def _chart(tmp_path: Path) -> Path:
@@ -64,7 +65,7 @@ def test_service_uses_injected_adapter_and_factory(tmp_path: Path) -> None:
     assert calls
     assert result.outcome == "dry_run"
     assert result.current_version == "0.4.2"
-    assert result.to_dict()["chart_path"] == str(chart)
+    assert upgrade_to_dict(result)["path"] == chart.as_posix()
 
 
 def test_service_projects_new_and_existing_pull_request_status(tmp_path: Path) -> None:

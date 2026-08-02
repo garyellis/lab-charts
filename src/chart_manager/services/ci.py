@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from chart_manager.domain.charts import ChartRepository
+from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
     SpecError,
 )
-from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
-from chart_manager.services.domain.charts import ChartRepository
 from chart_manager.services.lifecycle.impact import (
     ClusterTestImpact,
     LifecycleImpact,

@@ -110,20 +110,28 @@ class Helm:
         self.verbose = verbose
         # Per-subprocess wall-clock cap for all helm invocations on this
         # instance. None = unbounded (legacy behavior). Validate sets this
-        # from --row-timeout so a hung helm template doesn't pin a worker.
+        # from --tool-timeout so a hung helm template doesn't pin a worker.
         # dependency_update's own `timeout=` kwarg takes precedence when set.
         self.timeout = timeout
         # Per-chart dedupe for `helm dependency update`. Same Helm instance
         # validating one chart across 5 envs in parallel must only fetch
-        # deps once. Lock is held across the subprocess so a concurrent
-        # caller waits for the first update to finish before proceeding
-        # to `helm template`.
+        # deps once, and a concurrent caller for the SAME chart waits for
+        # that fetch to finish before proceeding to `helm template`.
+        #
+        # Two levels, deliberately: `_deps_updated_lock` guards the bookkeeping
+        # (the cache and the registry) and is never held across a subprocess,
+        # while `_chart_locks[path]` serializes fetches of one chart. A single
+        # lock held across the fetch also serialized *distinct* charts, which
+        # silently defeated every caller that fans dependency updates out
+        # across a thread pool. Lock order is always chart lock -> bookkeeping
+        # lock, and the two are never held in the other order.
         self._deps_updated: set[Path] = set()
         self._deps_updated_lock = threading.Lock()
+        self._chart_locks: dict[Path, threading.Lock] = {}
         # Whether a chart declares dependencies, and whether its materialized
         # ones are current, are questions about chart *metadata* -- service
         # policy this adapter deliberately does not parse. `Container.helm`
-        # wires the real predicates from services/domain/chart_deps; unwired,
+        # wires the real predicates from domain/chart_deps; unwired,
         # both answers are the conservative ones, so the update always runs.
         self._deps_are_fresh = deps_are_fresh
         self._chart_has_dependencies = chart_has_dependencies
@@ -146,18 +154,40 @@ class Helm:
             ),
         )
 
+    def _chart_lock(self, resolved: Path) -> threading.Lock:
+        """Return the fetch lock for one chart, creating it on first use."""
+        with self._deps_updated_lock:
+            lock = self._chart_locks.get(resolved)
+            if lock is None:
+                lock = threading.Lock()
+                self._chart_locks[resolved] = lock
+            return lock
+
+    def _mark_updated(self, resolved: Path) -> None:
+        """Record that this chart's dependencies were fetched in this process."""
+        with self._deps_updated_lock:
+            self._deps_updated.add(resolved)
+
+    def _already_updated(self, resolved: Path) -> bool:
+        """Whether this chart's dependencies were already fetched in this process."""
+        with self._deps_updated_lock:
+            return resolved in self._deps_updated
+
     def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
         """Run `helm dependency update`, at most once per chart per instance."""
         resolved = chart_path.resolve()
-        with self._deps_updated_lock:
-            if resolved in self._deps_updated:
+        with self._chart_lock(resolved):
+            # Re-checked inside the chart lock, not before it: a caller that
+            # lost the race must see the winner's result, not start a second
+            # fetch of the same chart.
+            if self._already_updated(resolved):
                 return
             self.runner.run(
                 self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
                 capture=not self.verbose,
                 timeout=timeout,
             )
-            self._deps_updated.add(resolved)
+            self._mark_updated(resolved)
 
     def dependency_update_if_stale(
         self, chart_path: Path, *, timeout: float | None = None
@@ -181,20 +211,20 @@ class Helm:
         chart. Any other shape falls through to running the update.
         """
         resolved = chart_path.resolve()
-        with self._deps_updated_lock:
-            if resolved in self._deps_updated:
+        with self._chart_lock(resolved):
+            if self._already_updated(resolved):
                 return False
             if self._deps_are_fresh(resolved):
                 # Mark as updated so subsequent calls in this process skip
                 # the freshness probe entirely.
-                self._deps_updated.add(resolved)
+                self._mark_updated(resolved)
                 return False
             self.runner.run(
                 self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
                 capture=not self.verbose,
                 timeout=timeout,
             )
-            self._deps_updated.add(resolved)
+            self._mark_updated(resolved)
             return True
 
     def package(

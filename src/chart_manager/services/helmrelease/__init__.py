@@ -8,14 +8,26 @@ because that is where it was first parsed. Surfaces that need to *name* the type
 e.g. `cli/helmrelease_render.py` typing its progress driver -- import it from
 here, so no surface has to reach into `integrations/` for a type annotation.
 
-The underlying question (that `plumbing/` and `integrations/` both hold domain
-model which probably wants its own `domain/` package) is tracked separately;
-this re-export is the local fix, not that split.
+The underlying question -- whether the Flux identity records `plumbing/` and
+`integrations/` hold belong in `chart_manager.domain` alongside the chart
+policy -- is still open, and deliberately so: `domain/` today is chart and
+lifecycle policy, and moving a Flux type in would need the same "what is it?"
+answer, not just a free slot. This re-export is the local fix, not that split.
+
+Scope boundary (kept from this package's deleted README, which was otherwise
+stale planning prose): one `PromoteService.promote()` call promotes one chart
+into one (path, environment). Deciding *which* environments a publish fans out
+to belongs to the orchestrator that triggers it -- multi-env fan-out is N
+separate calls -- and so does gating on cluster state (`Ready=True`,
+`TestSuccess=True`), which the trigger waits for before firing the next call.
+Any future non-CLI surface reuses `PromoteService.promote()` unchanged rather
+than re-deciding either question.
 """
 
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 
 from .editor import EditResult, set_version
+from .helm_test import TestOutcome, TestPodSnapshot, TestRequest, TestResult, TestService
 from .monitor import MonitorOutcome, MonitorRequest, MonitorResult, MonitorService
 from .promote import PromoteRequest, PromoteResult, PromoteService
 from .scanner import HelmReleaseMatch, scan
@@ -28,7 +40,6 @@ from .state import (
     Transition,
     Verdict,
 )
-from .test import TestOutcome, TestPodSnapshot, TestRequest, TestResult, TestService
 from .wire import (
     SCHEMA_VERSION,
     monitor_to_dict,

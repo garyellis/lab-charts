@@ -17,6 +17,7 @@ import pytest
 from chart_manager.composition import Container, Settings
 from chart_manager.integrations.kind import kind_context
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.expose import ExposeRequest
 from tests.conftest import FakeCommandRunner
 
@@ -104,6 +105,34 @@ def test_sandbox_service_gets_configured_adapters() -> None:
     container = _configured()
 
     assert container.ephemeral_test_cluster_service(Path(".")).kubectl.context == "kind-b"
+
+
+def test_one_client_factory_serves_both_cluster_services() -> None:
+    """Both services rebind through the same factory, and it binds all three.
+
+    There used to be two closures here of two different arities -- three
+    clients for the development service, two for the ephemeral one -- for one
+    job. Arity is exactly what an unpacking caller has to agree with its
+    factory about, and getting it wrong is how bootstrap ended up converging
+    against the ambient kubecontext.
+    """
+    container = _configured()
+    handle = EnvironmentHandle(
+        identity="lab", context="kind-lab", provider_type="kind"
+    )
+
+    bound = container.cluster_clients(handle)
+
+    assert bound.helm._context == "kind-lab"
+    assert bound.kubectl.context == "kind-lab"
+    assert bound.expose.kubectl.context == "kind-lab"
+    # `==` rather than `is`: a bound method is a fresh object per attribute
+    # access, and equal ones are the same function on the same container.
+    assert (
+        container.development_cluster_service(Path("."))._client_factory
+        == container.ephemeral_test_cluster_service(Path("."))._client_factory
+        == container.cluster_clients
+    )
 
 
 def test_two_containers_address_two_clusters_in_one_process() -> None:

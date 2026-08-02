@@ -202,11 +202,11 @@ def test_zero_timeouts_become_unbounded_at_the_runner_boundary(tmp_path: Path) -
     rec = Recorder()
 
     _app(rec).run(
-        RunRequest(root=tmp_path, skip_change_detection=True, row_timeout=0.0, dep_update_timeout=0.0)
+        RunRequest(root=tmp_path, skip_change_detection=True, tool_timeout=0.0, dep_update_timeout=0.0)
     )
 
     spec = rec.runs[0][0]
-    assert spec.row_timeout is None
+    assert spec.tool_timeout is None
     assert spec.dep_update_timeout is None
 
 
@@ -360,17 +360,26 @@ def test_spec_policy_extra_that_does_not_exist_is_skipped(tmp_path: Path) -> Non
 # --- helm bindings ----------------------------------------------------------
 
 
-def test_rows_group_by_helm_binding_and_results_are_resorted(tmp_path: Path) -> None:
-    """One runner per distinct binding; the union stays globally ordered."""
+def test_mixed_helm_bindings_reach_one_runner_carrying_their_binding(
+    tmp_path: Path,
+) -> None:
+    """No grouping: every row goes to one runner, tagged with its own binding.
+
+    Partitioning by binding here is what used to force a second copy of
+    fan-out, fail-fast, NOT_RUN synthesis and ordering on top of the runner --
+    and made a pinned chart wait for every unpinned one to finish.
+    """
     _chart(tmp_path, "zulu", extra='helmVersion: "3.20.0"\n')
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
     outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
 
-    assert len(rec.runs) == 2
-    assert {spec.helm_version for spec, _ in rec.runs} == {None, "3.20.0"}
-    # zulu ran in its own (later) sub-run, but sorts first in the union.
+    assert len(rec.runs) == 1
+    assert {cfg.row.chart: cfg.helm_binding for cfg in rec.runs[0][1]} == {
+        "alpha": (None, None),
+        "zulu": ("3.20.0", None),
+    }
     assert [r.row.chart for r in outcome.result.rows] == ["alpha", "zulu"]
 
 
@@ -385,36 +394,22 @@ def test_all_rows_share_one_runner_when_bindings_match(tmp_path: Path) -> None:
     assert len(rec.runs[0][1]) == 4
 
 
-def test_group_construction_failure_does_not_block_later_binding(
-    tmp_path: Path,
-) -> None:
-    _chart(tmp_path, "alpha")
-    _chart(tmp_path, "zulu", extra='helmVersion: "3.20.0"\n')
-    rec = Recorder()
-
-    def factory(spec: RunnerSpec):
-        if spec.helm_version is None:
-            raise RuntimeError("helm binding unavailable")
-        return FakeRunner(spec, rec.runs)
-
-    outcome = ManifestValidationService(
-        runner_factory=factory,
-        run_id_factory=lambda: "RUNID",
-    ).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
-
-    by_chart = {row.row.chart: row for row in outcome.result.rows}
-    assert by_chart["alpha"].phases["render"].status == "FAIL"
-    assert "helm binding unavailable" in (by_chart["alpha"].phases["render"].detail or "")
-    assert by_chart["zulu"].phases["render"].status == "PASS"
-    assert len(rec.runs) == 1
-
-
-def test_fail_fast_stops_before_preparing_later_binding(tmp_path: Path) -> None:
+def test_fail_fast_is_delegated_to_the_single_runner(tmp_path: Path) -> None:
+    """The service no longer stops anything itself; the runner owns the flag."""
     _chart(tmp_path, "bad-alpha")
     _chart(tmp_path, "zulu", extra='helmVersion: "3.20.0"\n')
-    rec = Recorder()
+    seen: list[bool] = []
 
-    outcome = _app(rec).run(
+    class _FailFastRecordingRunner(FakeRunner):
+        def run(self, configs, *, enabled_phases=None, fail_fast=False):
+            seen.append(fail_fast)
+            return super().run(configs, enabled_phases=enabled_phases, fail_fast=fail_fast)
+
+    rec = Recorder()
+    outcome = ManifestValidationService(
+        runner_factory=lambda spec: _FailFastRecordingRunner(spec, rec.runs),
+        run_id_factory=lambda: "RUNID",
+    ).run(
         RunRequest(
             root=tmp_path,
             skip_change_detection=True,
@@ -423,10 +418,9 @@ def test_fail_fast_stops_before_preparing_later_binding(tmp_path: Path) -> None:
         )
     )
 
-    by_chart = {row.row.chart: row for row in outcome.result.rows}
-    assert by_chart["bad-alpha"].phases["render"].status == "FAIL"
-    assert {phase.status for phase in by_chart["zulu"].phases.values()} == {"NOT_RUN"}
-    assert len(rec.runs) == 1
+    assert seen == [True]
+    assert {cfg.row.chart for cfg in rec.runs[0][1]} == {"bad-alpha", "zulu"}
+    assert outcome.result.rows[0].row.chart == "bad-alpha"
 
 
 # --- result assembly --------------------------------------------------------

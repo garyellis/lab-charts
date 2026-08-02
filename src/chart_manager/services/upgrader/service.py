@@ -170,9 +170,15 @@ class UpgradeService:
         if self._telemetry is not None:
             self._telemetry.completed(upgrade_result, previously_proposed=previously_proposed)
         _LOG.info(
-            "Upgrade result for %s: %s",
+            "Upgrade result for %s: outcome=%s current=%s proposed=%s branch=%s pr=%s "
+            "diagnostics=%d",
             plan.chart,
             upgrade_result.outcome,
+            upgrade_result.current_version,
+            upgrade_result.proposed_version or "(none)",
+            upgrade_result.branch or "(none)",
+            upgrade_result.pr_url or "(none)",
+            len(upgrade_result.diagnostics),
         )
         return upgrade_result
 
@@ -198,15 +204,39 @@ class UpgradeService:
         try:
             text = self._branch_file_reader(f"{relative}/Chart.yaml", pull_request.branch)
         except ChartManagerError as exc:
+            _LOG.warning(
+                "proposed wrapper version unavailable: chart=%s branch=%s file=%s: %s",
+                plan.chart,
+                pull_request.branch,
+                f"{relative}/Chart.yaml",
+                exc,
+            )
             diagnostics.append(f"proposed wrapper version unavailable: {exc}")
             return None
         version = _chart_version(text)
         if version is None:
+            _LOG.warning(
+                "no wrapper version on the upgrade branch: chart=%s branch=%s file=%s",
+                plan.chart,
+                pull_request.branch,
+                f"{relative}/Chart.yaml",
+            )
             diagnostics.append(
                 f"no wrapper version found in {relative}/Chart.yaml on {pull_request.branch}"
             )
             return None
         if version == plan.current_version:
+            # The post-upgrade callback is the only thing that bumps this, and
+            # Renovate records a failed or disallowed one as an artifact error
+            # while still opening the PR with exit 0.
+            _LOG.warning(
+                "wrapper version unchanged on the upgrade branch; the "
+                "upgrade-finalize callback may not have run: chart=%s branch=%s "
+                "baseline=%s",
+                plan.chart,
+                pull_request.branch,
+                plan.current_version,
+            )
             diagnostics.append(
                 f"wrapper version on {pull_request.branch} still matches the baseline "
                 f"{plan.current_version}; the upgrade-finalize callback may not have run"
@@ -240,6 +270,14 @@ class UpgradeService:
         try:
             found = tuple(self._pull_request_lookup(branch_prefix))
         except ChartManagerError as exc:
+            # This is what turns a real outcome into `status_unknown`: the run
+            # happened, but nothing can say what it produced.
+            _LOG.warning(
+                "pull-request lookup failed; upgrade outcome degrades to "
+                "status_unknown: branch_prefix=%s: %s",
+                branch_prefix,
+                exc,
+            )
             diagnostics.append(f"pull-request status unavailable: {exc}")
             return None, False
         if len(found) > 1:
@@ -247,6 +285,12 @@ class UpgradeService:
             # grouping config no longer collapses this chart's updates into a
             # single branch; report it rather than silently picking one.
             branches = ", ".join(sorted(pr.branch for pr in found))
+            _LOG.warning(
+                "multiple open pull requests for one chart; the first is used: "
+                "branch_prefix=%s branches=%s",
+                branch_prefix,
+                branches,
+            )
             diagnostics.append(
                 f"multiple open pull requests under {branch_prefix}: {branches}"
             )

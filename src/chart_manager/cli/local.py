@@ -25,13 +25,16 @@ from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import output as output_mod
+from chart_manager.cli._container import container as _container
+from chart_manager.cli._container import exit_if_failed as _exit_if_failed
+from chart_manager.cli._container import resolve_chart
 from chart_manager.cli._options import RootOption
-from chart_manager.cli._wiring import container as _container
-from chart_manager.cli._wiring import exit_if_failed as _exit_if_failed
-from chart_manager.cli._wiring import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
-from chart_manager.composition import Settings
+from chart_manager.domain.local_resources import (
+    ResolvedLocalTarget,
+    ResolvedStackTarget,
+)
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development import (
     LAB_CA_SECRET_NAME,
@@ -47,11 +50,6 @@ from chart_manager.services.clusters.development import (
     status_to_dict,
 )
 from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME
-from chart_manager.services.local_resources import (
-    LocalTargetResolver,
-    ResolvedLocalTarget,
-    ResolvedStackTarget,
-)
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
 #: projection, and offering one that silently rendered as a table would be
@@ -79,7 +77,7 @@ def register(app: typer.Typer) -> None:
 
 def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
     """Resolve a chart directory or LocalStack through configured repository paths."""
-    return LocalTargetResolver(root, local_config=Settings().local_config).resolve(target)
+    return _container().local_target_resolver(root).resolve(target)
 
 
 def _resolve_stack_target(root: Path, stack: str) -> ResolvedStackTarget:

@@ -2,15 +2,15 @@
 
 This document answers one question: **where does a type belong?**
 
-The enforcement lives in `tests/test_layering.py` and in the TID251 table in
-`pyproject.toml`. This is the prose that explains why those rules are shaped the
-way they are.
+The enforcement lives in `tests/test_layering.py` and in the TID251 tables in
+`pyproject.toml` and `src/chart_manager/domain/.ruff.toml`. This is the prose
+that explains why those rules are shaped the way they are.
 
 ## The shape
 
 ```text
 cli/surfaces -> services -> api + domain + integrations
-                         domain -> plumbing
+                         domain -> api + plumbing
                             api -> plumbing (pure helpers only)
 ```
 
@@ -18,6 +18,26 @@ Read the arrows as guidance, not permission. `integrations/` shares a rank with
 `api/` and `domain/` because services depend on all three — not because an
 adapter should reach for an authored API type. Adapters are handed resolved
 service inputs.
+
+`src/chart_manager/domain/` is a top-level package, so the diagram and the
+directory tree say the same thing. It used to live inside `services/`, which
+made the diagram a lie and produced a membership rule nobody could predict: a
+module was "domain" if a domain module happened to import it. The rule now is
+what a module *is* — policy and algorithms over `api/` models plus the schemas
+this project does not own (`Chart.yaml`, `Chart.lock`) — and the direction is
+enforced: `domain/` may not import `services/`, `integrations/` or `cli/`
+(`src/chart_manager/domain/.ruff.toml`, plus `test_domain_does_not_import_upward`).
+
+## What `domain/` holds
+
+| Module | What it decides |
+|---|---|
+| `domain/charts.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
+| `domain/chart_deps.py` | Whether materialized chart dependencies are stale |
+| `domain/lifecycle_policy.py` | Loading `chart-lifecycle.yaml`, identity agreement, and the three `require_*` capability gates |
+| `domain/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
+| `domain/install_plan.py` | Dependency resolution and install order |
+| `domain/local_resources.py` | Loading `LocalCluster`/`LocalStack` and resolving a CLI target against the tree |
 
 ## What `api/` is for
 
@@ -68,9 +88,10 @@ similar enough to be mistaken for one thing.
 the `helmTest` alias *is* the wire format, so renaming it breaks authored charts.
 But "profile `minimal` is not declared, here are the ones that are" is a lookup
 against a resolved catalog, and it raises the user-facing `SpecError`. That is
-`require_cluster_test_profile()` in `services/domain/cluster_test_policy.py`. An
-API model that raised `SpecError` would be an API model that knows what a CLI
-exit code is.
+`require_cluster_test_profile()` in `domain/lifecycle_policy.py`, beside
+`require_validation()` and `require_cluster_test()` — one module for the whole
+capability gate. An API model that raised `SpecError` would be an API model
+that knows what a CLI exit code is.
 
 **`spec.validation` — shape is API, namespace resolution is interpretation.**
 `ManifestValidationSpec` is in `api/lifecycle/v1alpha1.py`. `resolve_namespace()`
@@ -80,10 +101,11 @@ reading an already-valid document, not a rule about whether the document is
 valid.
 
 **`LifecyclePlan` — looks like an API type, is not one.**
-It carries an `apiVersion` and a `kind`, which is exactly the trap. But nobody
-authors a `LifecyclePlan`; it is what the compiler *produces* from authored
-intent. It stays in `services/lifecycle/models.py`, and its wire shape is
-guarded by `tests/test_wire_contracts.py` instead.
+It used to carry an `apiVersion` and a `kind`, which was exactly the trap.
+Nobody authors a `LifecyclePlan`; it is what the compiler *produces* from
+authored intent — so it stays in `services/lifecycle/models.py` and projects
+through `services/lifecycle/wire.py` with a `schema_version`, like every
+other result. Its wire shape is guarded by `tests/test_wire_contracts.py`.
 
 ## What stays out of `api/`
 
@@ -102,8 +124,8 @@ where documents are found, not what a document may say.
 
 - It may import the standard library, Pydantic, and side-effect-free lexical
   helpers from `plumbing` (`plumbing/names.py`, `plumbing/paths.py`).
-- It must not import `services`, `integrations`, `cli`, the composition root,
-  repository settings, Rich, or Typer.
+- It must not import `domain`, `services`, `integrations`, `cli`, the
+  composition root, repository settings, Rich, or Typer.
 - Its validators raise `ValueError` or Pydantic validation errors — never
   `SpecError`. Translating a decode failure into a user-facing diagnostic is the
   loader's job.

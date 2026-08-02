@@ -2,7 +2,7 @@
 
 Its own module, not a "helper", because this is network I/O: one
 `kubectl get hr` plus one `kubectl get hr/<name>` per ref, all serial and
-all before any thread pool exists. Filed next to `monitor.py`/`test.py` so
+all before any thread pool exists. Filed next to `monitor.py`/`helm_test.py` so
 that cost is visible to whoever changes the fan-out, and so the known N+1
 (see discovery F12a) has one place to be fixed rather than two.
 """

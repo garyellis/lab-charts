@@ -11,14 +11,14 @@ from chart_manager.api.local.v1alpha1 import (
     LifecycleRelease,
     OciChartRelease,
 )
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.local_resources import (
+from chart_manager.domain.local_resources import (
     LocalResourceLoader,
     LocalTargetResolver,
     ResolvedChartTarget,
     ResolvedStackTarget,
     load_local_stack,
 )
+from chart_manager.plumbing.errors import SpecError
 
 from .conftest import REPO_ROOT
 

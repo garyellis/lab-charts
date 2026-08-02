@@ -25,12 +25,12 @@ class HelmReleaseMatch:
 
 
 def _yaml_loader() -> YAML:
-    """Build a comment-preserving round-trip YAML loader."""
-    # `rt` (round-trip) preserves comments, key order, and quoting style —
-    # essential for in-place edits on GitOps repos humans also review.
-    yaml = YAML(typ="rt")
-    yaml.preserve_quotes = True
-    return yaml
+    """Build a read-only YAML loader."""
+    # `safe`, not `rt`: `scan` reads five scalars and discards the tree, and
+    # it does that for every YAML file under the root. Round-trip parsing
+    # buys comment and quoting fidelity nothing here consumes, at roughly an
+    # order of magnitude the cost. `editor.py` is where `rt` is load-bearing.
+    return YAML(typ="safe")
 
 
 def is_helmrelease(doc: Any) -> bool:

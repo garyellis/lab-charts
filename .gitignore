@@ -37,6 +37,13 @@ charts/*/charts/*.tgz
 charts/*/charts/*.tar.gz
 charts/*/charts/*/
 
+# Agent/editor scratch. `.claude/` holds per-workstation settings, agent
+# memory and worktrees; nothing under it is tracked. Ignoring it here rather
+# than relying on a developer's global gitignore is what keeps a fresh CI
+# clone running `git add -A` from committing someone's local permissions
+# file. Force-add (`git add -f`) if a shared project setting ever lands.
+**/.claude/
+
 # Local/editor artifacts
 .DS_Store
 .idea/
