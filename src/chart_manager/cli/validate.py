@@ -4,7 +4,14 @@ Thin CLI shell over `services/manifest_validation/app.ManifestValidationService`
 help text, progress-display choice, output-format dispatch, and the
 mapping from domain errors to Typer's `BadParameter`. Everything that
 changes the *answer* — worklist construction, row assembly, helm binding,
-workers, run identity, artifact retention — lives in the service.
+workers, phase selection, run identity, the `summary.md`/`summary.json`
+artifacts and their retention — lives in the service.
+
+The one write that stays here is the `$GITHUB_STEP_SUMMARY` append: that
+file is GitHub Actions plumbing, not an artifact of a validate run, and no
+other surface has an equivalent. It appends the markdown
+`write_summaries` returns, so the sidecar and the step summary are one
+rendering into two sinks and cannot disagree.
 
 Commands register themselves onto a Typer app passed in by cli/main.py.
 The `register_*(app)` pattern keeps cli/main.py free of validate-specific
@@ -50,7 +57,7 @@ from chart_manager.cli.validate_progress import (
 from chart_manager.cli.validate_render import (
     advisory_details,
     failure_details,
-    render_cache_table,
+    render_output_table,
     to_text_table,
 )
 from chart_manager.composition import Settings
@@ -58,20 +65,20 @@ from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.services.manifest_validation.app import (
-    ALL_PHASES,
     ManifestValidationService,
     RunOutcome,
     RunRequest,
     ValidateInputError,
-    resolve_workers,
+    resolve_phases,
 )
-from chart_manager.services.manifest_validation.models import PHASE_ORDER, RunResult
+from chart_manager.services.manifest_validation.markdown import to_markdown
+from chart_manager.services.manifest_validation.models import RunResult
+from chart_manager.services.manifest_validation.paths import (
+    RenderOutputService,
+    RenderOutputState,
+)
 from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
-from chart_manager.services.manifest_validation.render_cache import (
-    RenderCacheService,
-    RenderCacheState,
-)
-from chart_manager.services.manifest_validation.wire import to_json, to_markdown
+from chart_manager.services.manifest_validation.wire import to_json
 
 #: This command's output vocabulary. `all` is local to `validate` and is not
 #: really a projection: it prints the table on stdout *and* writes
@@ -328,15 +335,10 @@ def validate(
     """
     mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS, console=console)
     selected = tuple(charts or ()) + tuple(chart)
-    enabled_phases = _parse_phases(phase)
-    # `--no-kubeconform` / `--no-policy` subtract from the phase set rather
-    # than replacing it, so at the `--phase` default they reproduce the old
-    # `validate chart` semantics exactly ({render} + schema? + policy?) while
-    # still composing with an explicit `--phase`.
-    if not kubeconform:
-        enabled_phases -= {"schema"}
-    if not policy:
-        enabled_phases -= {"policy"}
+    try:
+        enabled_phases = resolve_phases(phase, kubeconform=kubeconform, policy=policy)
+    except ValidateInputError as exc:
+        raise _bad_parameter(exc) from exc
     root = root.resolve()
     target = _chart_target(selected, root=root)
     request = RunRequest(
@@ -426,15 +428,9 @@ def _execute(
         )
 
     # --verbose streams raw subprocess stdout/stderr. Live can't share the
-    # terminal with that, and >1 worker interleaves the streams into
-    # illegible noise — the service forces serial; we say so.
+    # terminal with that, so drop out of the live table before the run.
     if request.verbose and progress in ("auto", "live"):
         progress = "plain"
-    if request.verbose and resolve_workers(request.workers) > 1:
-        narration.print(
-            "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
-            "streamed subprocess output readable"
-        )
 
     display = _resolve_display(progress, mode=mode)
 
@@ -448,6 +444,17 @@ def _execute(
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
 
+    # >1 worker interleaves streamed subprocess output into illegible noise,
+    # so the service clamps a verbose run to one worker. This reports the
+    # count the run actually got rather than re-deriving `resolve_workers`
+    # to predict it — the prediction and the clamp were two copies of one
+    # rule, and only one of them ran.
+    if request.verbose and request.workers != 1 and outcome.workers == 1:
+        narration.print(
+            "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
+            "streamed subprocess output readable"
+        )
+
     # Retention runs however emission ends. It is still ordered *after* the
     # summary (with `-o all` the sidecars are written into the render
     # dir), but a raise from _emit_result must not skip it and orphan the
@@ -455,6 +462,7 @@ def _execute(
     try:
         _emit_result(
             outcome,
+            app=app,
             mode=mode,
             out_dir=outcome.out_dir,
             extra_warnings=outcome.warnings,
@@ -517,6 +525,7 @@ def _resolve_display(progress: str, *, mode: str) -> ProgressDisplay:
 def _emit_result(
     source: RunResult | RunOutcome,
     *,
+    app: ManifestValidationService,
     mode: str,
     out_dir: Path,
     extra_warnings: tuple[str, ...] = (),
@@ -533,23 +542,42 @@ def _emit_result(
     callers must opt in explicitly so local debugging on a runner-like
     shell never triggers a surprise side-channel write.
 
-    For `mode == "all"`, also writes <out_dir>/summary.md and
-    <out_dir>/summary.json so post-job tooling can consume structured
-    results without re-parsing markdown.
+    For `mode == "all"`, `app.write_summaries` puts <out_dir>/summary.md and
+    <out_dir>/summary.json in the render dir so post-job tooling can consume
+    structured results without re-parsing markdown. That write is the
+    service's because a REST or Slack surface wants the same artifacts; the
+    step-summary append below is not, because only a GitHub runner has one.
 
     `mode` arrives already resolved and already validated (at parse time, by
     `OutputOption`'s callback), so there is no re-check here.
     """
     result = source.result if isinstance(source, RunOutcome) else source
 
-    # Both projections are pure functions of (result, timings), and both have
-    # more than one consumer: markdown feeds `-o md`, the `all` sidecar, and
-    # the step summary; JSON feeds `-o json` and the sidecar. Memoize rather
-    # than compute eagerly — the default `table` path needs neither, and
-    # recomputing was the previous behavior (markdown up to 3x per run). The
-    # caches are closures, so they die with this call; nothing is retained.
+    # `-o all` renders the markdown once, in the service, and hands it back
+    # so the step summary appends those exact bytes. The sidecars are
+    # written before stdout emission for that reason alone: everything below
+    # needs the text, and rendering it twice is how two sinks drift.
+    sidecar_markdown = (
+        app.write_summaries(
+            source,
+            out_dir=out_dir,
+            include_timings=timings,
+            requested_charts=requested_charts,
+            requested_environments=requested_environments,
+        )
+        if mode == output_mod.ALL
+        else None
+    )
+
+    # Markdown has up to two consumers in one call (`-o md` on stdout and the
+    # step summary), so memoize rather than compute eagerly: the default
+    # `table` path needs it zero times, and recomputing was the previous
+    # behavior (markdown up to 3x per run). The cache is a closure, so it
+    # dies with this call.
     @functools.cache
     def markdown_text() -> str:
+        if sidecar_markdown is not None:
+            return sidecar_markdown
         return to_markdown(
             source,
             include_timings=timings,
@@ -557,9 +585,8 @@ def _emit_result(
             requested_environments=requested_environments,
         )
 
-    @functools.cache
-    def json_text() -> str:
-        return (
+    if mode == output_mod.JSON:
+        sys.stdout.write(
             json.dumps(
                 to_json(
                     source,
@@ -570,9 +597,6 @@ def _emit_result(
             )
             + "\n"
         )
-
-    if mode == output_mod.JSON:
-        sys.stdout.write(json_text())
     elif mode == output_mod.MD:
         sys.stdout.write(markdown_text())
     else:  # table or all
@@ -585,19 +609,6 @@ def _emit_result(
         # Operator warnings are not part of the projection.
         for warn in extra_warnings:
             narration.print(f"[yellow]warn:[/yellow] {warn}")
-
-    if mode == output_mod.ALL:
-        # Best-effort: don't fail the run if the rendered tree was deleted.
-        for filename, payload in (
-            ("summary.md", markdown_text()),
-            ("summary.json", json_text()),
-        ):
-            sidecar = out_dir / filename
-            try:
-                sidecar.parent.mkdir(parents=True, exist_ok=True)
-                sidecar.write_text(payload)
-            except OSError as exc:
-                narration.print(f"[yellow]warning: could not write {sidecar}: {exc}[/yellow]")
 
     if github_step_summary:
         step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -619,37 +630,6 @@ def _emit_result(
                 narration.print(
                     f"[yellow]warning: could not write GITHUB_STEP_SUMMARY ({exc})[/yellow]"
                 )
-
-
-def _parse_phases(values: list[str]) -> frozenset[str]:
-    """Turn the repeatable `--phase` values into a validated set.
-
-    An empty list means "not given", which is all three phases -- the same
-    default the old comma-separated `--phases render,schema,policy` spelled
-    out. Expressing the default as absence rather than as a literal string is
-    what lets `--no-kubeconform` stay subtractive without having to know
-    whether the caller typed the default explicitly.
-    """
-    parts = {value.strip() for value in values if value.strip()}
-    if not parts:
-        if values:
-            # Given, but nothing but blanks -- `--phase ""`. Silently falling
-            # back to "all phases" would run more work than the caller asked
-            # for and report success for phases they tried to exclude.
-            raise typer.BadParameter(
-                "--phase needs a phase name", param_hint="--phase"
-            )
-        return frozenset(ALL_PHASES)
-    unknown = parts - ALL_PHASES
-    if unknown:
-        raise typer.BadParameter(
-            # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
-            # order the user would type them into --phase, which is also
-            # the order the flag's help text uses.
-            f"unknown phase(s): {', '.join(sorted(unknown))}; valid: {','.join(PHASE_ORDER)}",
-            param_hint="--phase",
-        )
-    return frozenset(parts)
 
 
 def _print_summary(outcome: RunOutcome) -> None:
@@ -706,9 +686,9 @@ def clean(
     command runs.
     """
     output_mod.require_dry_run(output, dry_run=dry_run)
-    service = RenderCacheService(root)
+    service = RenderOutputService(root)
     if dry_run:
-        _render_cache_plan(service.state(), ctx=ctx, output=output)
+        _render_output_plan(service.state(), ctx=ctx, output=output)
         return
     try:
         state = service.clean()
@@ -721,10 +701,10 @@ def clean(
     narration.print(f"cleaned: {state.path}")
 
 
-def _render_cache_plan(
-    state: RenderCacheState, *, ctx: typer.Context, output: str | None
+def _render_output_plan(
+    state: RenderOutputState, *, ctx: typer.Context, output: str | None
 ) -> None:
-    """Print the cache state as the selected projection; narrate the no-op."""
+    """Print the render-tree state as the selected projection; narrate the no-op."""
     mode = output_mod.resolve(output, ctx, allowed=_CLEAN_OUTPUTS, console=console)
-    output_mod.emit(state.to_dict(), mode=mode, table=render_cache_table(state))
+    output_mod.emit(state.to_dict(), mode=mode, table=render_output_table(state))
     narration.print("[yellow]dry run[/yellow]: nothing was removed")

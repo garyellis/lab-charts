@@ -6,9 +6,9 @@ of a document that already parsed, so it raises ``SpecError`` rather than a
 Pydantic error.
 
 It is a leaf module rather than a function on
-``manifest_validation.compiler`` because ``planner`` needs it too, and
+``manifest_validation.resolver`` because ``planner`` needs it too, and
 ``planner`` -- along with ``lifecycle.impact``, which imports ``planner`` --
-is currently free of ``chart_manager.integrations``.  Importing the compiler
+is currently free of ``chart_manager.integrations``.  Importing the resolver
 would drag the helm, kubeconform and kyverno adapters into both for the sake
 of one pure string substitution.
 """

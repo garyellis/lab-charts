@@ -9,9 +9,13 @@ stops before later rows start.
 
 Rows are independent: with max_workers > 1 they execute concurrently via a
 ThreadPoolExecutor. The per-row sequencing above is preserved inside each
-worker. Phase functions (and the integrations they call) are responsible
+worker. The validators (and the integrations they call) are responsible
 for their own thread-safety; Helm's per-chart `dependency update` dedupe
 is the load-bearing example.
+
+Render lives here as `_render` rather than in a `phases` module of its own:
+it is not a pluggable gate the way schema and policy are, it has exactly one
+caller, and the tree it writes is the input every gate reads.
 """
 
 from __future__ import annotations
@@ -25,8 +29,7 @@ from pathlib import Path
 from threading import Lock
 
 from chart_manager.integrations.helm import Helm
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.manifest_validation import phases
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
     ErrorType,
@@ -37,7 +40,7 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.output_paths import (
+from chart_manager.services.manifest_validation.paths import (
     case_output_directory,
     reset_case_output_directory,
 )
@@ -332,17 +335,7 @@ class ManifestValidationRunner:
             chart=cfg.row.chart,
             environment=cfg.row.env,
         )
-        render_result = self._timed(
-            cfg.row,
-            "render",
-            lambda: phases.render(
-                cfg.row,
-                helm=self.helm,
-                chart_path=cfg.chart_path,
-                values=cfg.values,
-                output_root=self.output_root,
-            ),
-        )
+        render_result = self._timed(cfg.row, "render", lambda: self._render(cfg))
 
         validator_results: dict[str, PhaseResult] = {}
         if render_result.status != "PASS":
@@ -417,6 +410,44 @@ class ManifestValidationRunner:
             row=cfg.row,
             phases=phase_map,
             validator_results=validator_results,
+        )
+
+    def _render(self, cfg: RowConfig) -> PhaseResult:
+        """Render one (chart, env) into output_root/<chart>/<env>/.
+
+        Output layout matches the worklist row keys so the schema and policy
+        validators can locate manifests by row identity alone.
+
+        This was the last resident of a `phases.py` that held one function
+        with one caller. Render is not a pluggable gate the way schema and
+        policy are -- every row renders, and the tree it produces is what the
+        gates then read -- so it belongs to the thing that sequences rows.
+        """
+        out_dir = (self.output_root / cfg.row.chart / cfg.row.env).resolve()
+        try:
+            rendered = self.helm.template(
+                cfg.row.release,
+                cfg.chart_path,
+                namespace=cfg.row.namespace,
+                output_dir=out_dir,
+                values=cfg.values,
+            )
+        except ExternalCommandError as exc:
+            # error_type="tool" promotes the row to `Outcome.TOOL` — the
+            # underlying issue is a helm crash, not a chart-author problem.
+            return PhaseResult(
+                phase="render",
+                status="FAIL",
+                detail=str(exc),
+                artifacts=(),
+                error_type="tool",
+            )
+
+        return PhaseResult(
+            phase="render",
+            status="PASS",
+            detail=None,
+            artifacts=(rendered,),
         )
 
     def _run_category(

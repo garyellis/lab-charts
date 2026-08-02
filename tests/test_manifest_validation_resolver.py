@@ -1,4 +1,4 @@
-"""Focused tests for authored-to-runtime manifest-validation compilation."""
+"""Focused tests for authored-to-runtime manifest-validation resolution."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import pytest
 
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
-from chart_manager.services.manifest_validation.compiler import (
+from chart_manager.services.manifest_validation.models import ManifestValidationTarget
+from chart_manager.services.manifest_validation.resolver import (
     ResolvedManifestValidation,
     resolve_manifest_validation,
 )
-from chart_manager.services.manifest_validation.models import ManifestValidationTarget
 from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,

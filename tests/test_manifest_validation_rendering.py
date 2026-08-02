@@ -16,18 +16,15 @@ from chart_manager.cli.validate_render import (
     failure_details,
     to_text_table,
 )
+from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
+    RunOutcome,
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.requests import RunOutcome
-from chart_manager.services.manifest_validation.wire import (
-    SCHEMA_VERSION,
-    to_json,
-    to_markdown,
-)
+from chart_manager.services.manifest_validation.wire import SCHEMA_VERSION, to_json
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "golden"
 RUN_RESULT_GOLDEN = GOLDEN_DIR / "run-result.md.golden"
@@ -40,7 +37,8 @@ RUN_RESULT_JSON_GOLDEN = GOLDEN_DIR / "run-result.json.golden"
 @pytest.mark.parametrize(
     ("module", "attrs"),
     [
-        ("chart_manager.services.manifest_validation.wire", ("to_json", "to_markdown")),
+        ("chart_manager.services.manifest_validation.wire", ("to_json", "SCHEMA_VERSION")),
+        ("chart_manager.services.manifest_validation.markdown", ("to_markdown",)),
         (
             "chart_manager.services.manifest_validation.app",
             ("ManifestValidationService", "RunRequest"),

@@ -2,19 +2,30 @@
 
 Architectural contract, by owner:
 
-    `phases.py`    — pure functions over a rendered dir. No sequencing, no
-                     env awareness; they do no IO beyond what the runner
-                     hands them.
-    `runner.py`    — sequences the phases per row and fans rows out across
-                     workers. Does not interpret phase results beyond
+    `models.py`    — the vocabulary: rows, phase results, the request a
+                     surface hands in and the outcome it gets back, plus the
+                     folds (tally, no-work reason) every projection shares.
+    `validators.py`
+                   — the validator contracts: ids, categories, config
+                     shapes, and the two protocols a validator implements.
+    `validator_adapters.py`
+                   — the built-in validators end to end: input resolution,
+                     execution against a rendered dir, and the registry.
+    `runner.py`    — renders each row, sequences its gates, and fans rows out
+                     across workers. Does not interpret results beyond
                      aggregating them into a `RunResult`.
+    `paths.py`     — where rendered output goes, and what `cache clean`
+                     removes. Every containment check lives here.
     `catalog.py`   — discovers charts with manifest-validation specifications.
     `planner.py`   — selects chart/environment rows from changes and filters.
-    `compiler.py`  — resolves authored inputs into runtime paths and options.
+    `resolver.py`  — resolves authored inputs into runtime paths and options.
     `app.py`       — `ManifestValidationService`: the env-aware layer. Changed-file
-                     resolution, render-dir paths, run ids, artifact
-                     retention/cleanup, worker counts, helm bindings.
-    `wire.py`      — machine-readable projections (JSON, markdown).
+                     resolution, render-dir paths, run ids, summary
+                     artifacts, retention/cleanup, worker counts, helm
+                     bindings.
+    `wire.py`      — the versioned machine-readable JSON contract.
+    `markdown.py`  — the GitHub-flavored markdown rendering of a run.
+    `progress.py`  — the progress port surfaces plug a display into.
 
 The CLI owns exactly one thing this package does not: terminating the
 process. Everything else it used to own — paths, run ids, cleanup — moved

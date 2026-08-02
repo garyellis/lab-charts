@@ -40,7 +40,7 @@ _STATUS_STYLE = {**STATUS_STYLE, "running": "yellow"}
 #: Live-table columns. The last one is "Wall", NOT "Elapsed", and the
 #: difference is load-bearing: this column is wall-clock since the row's
 #: first `running` event, whereas the "Elapsed" column in the final table
-#: (`validate_render.to_text_table` via `wire.row_elapsed_text`) sums the
+#: (`validate_render.to_text_table` via `models.row_elapsed_text`) sums the
 #: row's measured per-phase times. Under `--workers > 1` a row spends real
 #: wall-clock time waiting for a worker, so the two numbers genuinely
 #: diverge. They previously shared the header "Elapsed", which read as a

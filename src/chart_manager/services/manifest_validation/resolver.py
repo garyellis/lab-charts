@@ -1,4 +1,10 @@
-"""Compile authored manifest validation into cwd-independent runtime inputs."""
+"""Resolve authored manifest validation into cwd-independent runtime inputs.
+
+Named for what it does. It compiles nothing in the `lifecycle/compiler.py`
+sense -- there is no plan, no action list, no execution graph. It takes an
+authored spec plus its chart on disk and answers "which absolute paths, which
+namespace, which validator configs", which is resolution.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +17,9 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 from chart_manager.services.manifest_validation.namespaces import resolve_namespace
+from chart_manager.services.manifest_validation.paths import require_within
 from chart_manager.services.manifest_validation.runner import RowConfig
-from chart_manager.services.manifest_validation.validator_inputs import require_within
-from chart_manager.services.manifest_validation.validator_registry import (
+from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
@@ -54,7 +60,7 @@ def resolve_manifest_validation(
     environments: dict[str, ResolvedValidationEnvironment] = {}
     for name, authored_env in target.spec.environments.items():
         values = tuple(
-            _compile_value_file(
+            _resolve_value_file(
                 value,
                 chart_path=chart_path,
                 environment=name,
@@ -90,23 +96,23 @@ def resolve_manifest_validation(
     )
 
 
-def row_config_for(compiled: ResolvedManifestValidation, row: WorklistRow) -> RowConfig:
-    """Build one runner configuration from already-compiled inputs."""
+def row_config_for(resolved: ResolvedManifestValidation, row: WorklistRow) -> RowConfig:
+    """Build one runner configuration from already-resolved inputs."""
     try:
-        environment = compiled.environments[row.env]
+        environment = resolved.environments[row.env]
     except KeyError as exc:
         raise SpecError(
-            f"unknown environment {row.env!r} for chart {compiled.target.name!r}"
+            f"unknown environment {row.env!r} for chart {resolved.target.name!r}"
         ) from exc
     return RowConfig(
         row=row,
-        chart_path=compiled.target.path,
+        chart_path=resolved.target.path,
         values=list(environment.values),
-        validator_invocations=compiled.validator_invocations,
+        validator_invocations=resolved.validator_invocations,
     )
 
 
-def _compile_value_file(
+def _resolve_value_file(
     value: str,
     *,
     chart_path: Path,

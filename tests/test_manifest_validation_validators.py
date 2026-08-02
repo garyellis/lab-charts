@@ -12,11 +12,11 @@ from chart_manager.services.manifest_validation.app import (
 from chart_manager.services.manifest_validation.catalog import (
     load_manifest_validation_target,
 )
-from chart_manager.services.manifest_validation.compiler import (
+from chart_manager.services.manifest_validation.models import PhaseResult, WorklistRow
+from chart_manager.services.manifest_validation.resolver import (
     resolve_manifest_validation,
     row_config_for,
 )
-from chart_manager.services.manifest_validation.models import PhaseResult, WorklistRow
 from chart_manager.services.manifest_validation.runner import (
     ManifestValidationRunner,
     RowConfig,

@@ -7,10 +7,11 @@ validate`. It owns the *sequencing* of a run:
   * which helm binding each row runs under (specs may pin a version),
   * how many workers a run gets,
   * how N per-binding sub-runs are stitched into one ordered `RunResult`,
-  * the identity (run id) and lifetime (retention rule) of the render dir.
+  * the identity (run id), contents (`summary.md`/`summary.json`) and
+    lifetime (retention rule) of the render dir.
 
 It does NOT own what a row *is*. ``planner.py`` selects the chart/environment
-rows, while ``compiler.py`` resolves each target's runtime paths and options.
+rows, while ``resolver.py`` resolves each target's runtime paths and options.
 
 It owns none of the *appearance*: no `format=`, no `color=`, no console.
 Callers get a `RunOutcome` and decide how to render it. Progress narration
@@ -26,11 +27,12 @@ dragging a TUI library into the process. A guard test in
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,28 +42,28 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
-from chart_manager.services.manifest_validation.compiler import (
-    ResolvedManifestValidation,
-    resolve_manifest_validation,
-    row_config_for,
-)
+from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
+    PHASE_ORDER,
     PhaseResult,
     RowResult,
+    RunOutcome,
+    RunRequest,
     RunResult,
+    ValidateInputError,
 )
+from chart_manager.services.manifest_validation.paths import RENDER_OUTPUT_DIR
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
 from chart_manager.services.manifest_validation.progress import (
     NullDisplay,
     ProgressDisplay,
     ProgressFinalizer,
 )
-from chart_manager.services.manifest_validation.render_cache import RENDER_CACHE_DIR
-from chart_manager.services.manifest_validation.requests import (
-    RunOutcome,
-    RunRequest,
-    ValidateInputError,
+from chart_manager.services.manifest_validation.resolver import (
+    ResolvedManifestValidation,
+    resolve_manifest_validation,
+    row_config_for,
 )
 from chart_manager.services.manifest_validation.runner import (
     EventCallback,
@@ -69,22 +71,23 @@ from chart_manager.services.manifest_validation.runner import (
     RowConfig,
     blocked_phase_result,
 )
-from chart_manager.services.manifest_validation.validator_registry import (
+from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
     ValidatorProvider,
     validate_registry,
 )
+from chart_manager.services.manifest_validation.wire import to_json
 from chart_manager.settings import (
     DEFAULT_CHARTS_DIR,
     validate_charts_dir,
 )
 
 # Re-exports, so a surface needs one import for "drive the validate
-# capability": `ALL_PHASES` is defined in `services.manifest_validation.models`, and
-# the request/result vocabulary in `.requests`. Those two modules are the
-# definitions; this list only spares callers a second import line.
+# capability": `ALL_PHASES` and the request/result vocabulary are defined in
+# `services.manifest_validation.models`. That module is the definition; this
+# list only spares callers a second import line.
 __all__ = [
     "ALL_PHASES",
     "ManifestValidationService",
@@ -94,6 +97,7 @@ __all__ = [
     "ValidateInputError",
     "default_workers",
     "new_run_id",
+    "resolve_phases",
     "resolve_workers",
 ]
 
@@ -116,6 +120,51 @@ def default_workers() -> int:
 def resolve_workers(requested: int) -> int:
     """Resolve the requested worker count (0 = auto, else at least 1)."""
     return default_workers() if requested == 0 else max(1, requested)
+
+
+def resolve_phases(
+    requested: Sequence[str],
+    *,
+    kubeconform: bool = True,
+    policy: bool = True,
+) -> frozenset[str]:
+    """Resolve a surface's phase selection into the set the runner executes.
+
+    An empty `requested` means "not given", which is all three phases.
+    Expressing the default as absence rather than as a literal list is what
+    lets `kubeconform=False` / `policy=False` stay *subtractive*: they narrow
+    whatever was selected instead of replacing it, so at the default they
+    reproduce `{render} + schema? + policy?` and still compose with an
+    explicit selection.
+
+    Rejects unknown and blank names here rather than leaving them to
+    `RunRequest.__post_init__`, so a surface can map `hint="phases"` onto its
+    own input name (a flag, a JSON field) before a run starts. Subtracting
+    down to the empty set is deliberately *not* rejected here -- that is the
+    request's invariant, and it holds for every caller, not just this one.
+    """
+    parts = {value.strip() for value in requested if value.strip()}
+    if not parts:
+        if requested:
+            # Given, but nothing but blanks. Silently falling back to "all
+            # phases" would run more work than the caller asked for and
+            # report success for phases they tried to exclude.
+            raise ValidateInputError("--phase needs a phase name", hint="phases")
+        parts = set(ALL_PHASES)
+    unknown = parts - ALL_PHASES
+    if unknown:
+        raise ValidateInputError(
+            # PHASE_ORDER, not sorted(ALL_PHASES): show the phases in the
+            # order a caller would type them, which is also the order the
+            # CLI's help text uses.
+            f"unknown phase(s): {', '.join(sorted(unknown))}; valid: {','.join(PHASE_ORDER)}",
+            hint="phases",
+        )
+    if not kubeconform:
+        parts -= {"schema"}
+    if not policy:
+        parts -= {"policy"}
+    return frozenset(parts)
 
 
 def new_run_id() -> str:
@@ -377,7 +426,60 @@ class ManifestValidationService:
             charts_unvalidated=build.chart_count_unvalidated,
             rows_filtered_out=filtered_out,
             enabled_phases=request.phases,
+            workers=workers,
         )
+
+    # --- artifacts ---------------------------------------------------------
+
+    def write_summaries(
+        self,
+        outcome: RunOutcome | RunResult,
+        *,
+        out_dir: Path,
+        include_timings: bool = False,
+        requested_charts: tuple[str, ...] = (),
+        requested_environments: tuple[str, ...] = (),
+    ) -> str:
+        """Write `summary.md` and `summary.json` into `out_dir`; return the markdown.
+
+        The CLI used to compose and write these itself, which made the whole
+        `--output all` artifact set unreachable from any second surface while
+        `cli/validate.py`'s docstring claimed retention lived here.
+
+        Returns the markdown it wrote so a caller with a second sink -- the
+        `$GITHUB_STEP_SUMMARY` append is the one in this repo, and it is
+        genuinely runner-specific plumbing -- emits the same bytes rather
+        than rendering the run twice.
+
+        Best effort: a failed write warns through `on_warn` and does not
+        raise. The rendered tree may legitimately be gone by now, and losing
+        a summary must not change the verdict of the run it summarizes.
+        """
+        markdown = to_markdown(
+            outcome,
+            include_timings=include_timings,
+            requested_charts=requested_charts,
+            requested_environments=requested_environments,
+        )
+        payload = (
+            json.dumps(
+                to_json(
+                    outcome,
+                    requested_charts=requested_charts,
+                    requested_environments=requested_environments,
+                ),
+                indent=2,
+            )
+            + "\n"
+        )
+        for filename, text in (("summary.md", markdown), ("summary.json", payload)):
+            sidecar = out_dir / filename
+            try:
+                sidecar.parent.mkdir(parents=True, exist_ok=True)
+                sidecar.write_text(text)
+            except OSError as exc:
+                self._on_warn(f"warning: could not write {sidecar}: {exc}")
+        return markdown
 
     # --- artifact lifetime -------------------------------------------------
 
@@ -411,7 +513,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / RENDER_CACHE_DIR / run_id).resolve(), keep
+        return (repo_root / RENDER_OUTPUT_DIR / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".

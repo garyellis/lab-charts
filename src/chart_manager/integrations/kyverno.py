@@ -172,7 +172,7 @@ class Kyverno:
 def _discover_manifests(root: Path) -> list[Path]:
     """Walk `root` and return every .yaml/.yml regular file.
 
-    `followlinks=False` matches the schema phase's `_has_manifests` policy
+    `followlinks=False` matches `services/manifest_validation/paths.has_manifests`
     so a cyclic symlink in the rendered tree can't hang us.
     """
     found: list[Path] = []

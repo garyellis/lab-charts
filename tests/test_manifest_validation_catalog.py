@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.services.manifest_validation.validator_inputs import (
+from chart_manager.services.manifest_validation.validator_adapters import (
     discover_policy_paths,
 )
 
