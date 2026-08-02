@@ -10,7 +10,6 @@ from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
@@ -41,11 +40,6 @@ def exclude_bootstrap_owned_charts(
     is still verified without fabricating install work or evidence. Remaining
     action order is unchanged, so compiler ordering remains authoritative.
     """
-
-    if plan.workflow is not Workflow.CLUSTER_TEST:
-        raise PlanProjectionError(
-            "bootstrap-owned chart projection requires a cluster-test plan"
-        )
 
     externally_satisfied = frozenset(bootstrap_lifecycles)
     if any(

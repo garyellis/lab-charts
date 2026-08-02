@@ -80,10 +80,11 @@ reading an already-valid document, not a rule about whether the document is
 valid.
 
 **`LifecyclePlan` — looks like an API type, is not one.**
-It carries an `apiVersion` and a `kind`, which is exactly the trap. But nobody
-authors a `LifecyclePlan`; it is what the compiler *produces* from authored
-intent. It stays in `services/lifecycle/models.py`, and its wire shape is
-guarded by `tests/test_wire_contracts.py` instead.
+It used to carry an `apiVersion` and a `kind`, which was exactly the trap.
+Nobody authors a `LifecyclePlan`; it is what the compiler *produces* from
+authored intent — so it stays in `services/lifecycle/models.py` and projects
+through `services/lifecycle/wire.py` with a `schema_version`, like every
+other result. Its wire shape is guarded by `tests/test_wire_contracts.py`.
 
 ## What stays out of `api/`
 

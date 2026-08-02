@@ -24,8 +24,8 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
+from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
 from chart_manager.services.local_resources import ResolvedStackTarget
 
 from .conftest import cli
@@ -624,7 +624,6 @@ def test_chart_test_requires_exactly_one_chart(tmp_path: Path, argv: list[str]) 
 def _dry_run_plan() -> LifecyclePlan:
     """The plan a stubbed service hands back: two charts, install then test."""
     return LifecyclePlan(
-        workflow=Workflow.CLUSTER_TEST,
         chart="alloy",
         profile="minimal",
         actions=tuple(
@@ -632,7 +631,6 @@ def _dry_run_plan() -> LifecyclePlan:
                 action_id=f"cluster-test.alloy.minimal.{kind.value}",
                 kind=kind,
                 target=ActionTarget(
-                    workflow=Workflow.CLUSTER_TEST,
                     chart="alloy",
                     profile="minimal",
                     release="alloy",
@@ -691,7 +689,7 @@ def test_chart_test_dry_run_prints_the_plan_and_runs_nothing(
     assert result.exit_code == 0, result.output
     assert planning_container == ["plan"]
     payload = json.loads(result.stdout)
-    assert payload["kind"] == "LifecyclePlan"
+    assert payload["schema_version"] == SCHEMA_VERSION
     assert [action["kind"] for action in payload["actions"]] == [
         "helm-upgrade-install",
         "helm-test",
@@ -740,7 +738,7 @@ def test_chart_test_dry_run_takes_the_invocation_wide_output(
     )
 
     assert result.exit_code == 0, result.output
-    assert yaml.safe_load(result.stdout)["kind"] == "LifecyclePlan"
+    assert yaml.safe_load(result.stdout)["schema_version"] == SCHEMA_VERSION
 
 
 def test_chart_test_output_without_dry_run_is_a_usage_error(

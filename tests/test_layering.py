@@ -187,7 +187,7 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     # leaf on purpose: putting it on the compiler would make `planner.py`
     # drag in the helm/kubeconform/kyverno adapters.
     validation_domain = _SERVICES / "manifest_validation"
-    expected = {"models.py", "namespaces.py", "output_paths.py"}
+    expected = {"models.py", "namespaces.py", "paths.py"}
     actual = {path.name for path in validation_domain.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual, (
         f"missing from services/manifest_validation: {sorted(expected - actual)} -- "
@@ -653,12 +653,11 @@ _ENVELOPE_API_VERSION = frozenset({"apiVersion", "api_version"})
 
 #: Classes outside `api/` that legitimately declare the header as fields.
 #: Empty, and the emptiness is the finding: `services/lifecycle/models.py`'s
-#: `LifecyclePlan` is the projection the refactor plan calls out as an
-#: execution-domain concept rather than part of the configuration API, and it
-#: does not appear here because it does not declare `apiVersion`/`kind` at all
-#: -- it emits them from `to_dict()`, which is `tests/test_wire_contracts.py`'s
-#: subject. Anything added here is keyed `path::ClassName` and needs a comment
-#: saying which external consumer parses it and why it is not authored YAML.
+#: `LifecyclePlan` is an execution-domain projection, not configuration API,
+#: and since `services/lifecycle/wire.py` took over its emission it neither
+#: declares nor emits `apiVersion`/`kind` at all. Anything added here is
+#: keyed `path::ClassName` and needs a comment saying which external consumer
+#: parses it and why it is not authored YAML.
 _ENVELOPE_ALLOWLIST: frozenset[str] = frozenset()
 
 

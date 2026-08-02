@@ -6,13 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.cluster_test_catalog import ClusterTestCatalog
 from chart_manager.services.domain.cluster_test_policy import require_cluster_test_profile
-from chart_manager.services.lifecycle.models import LIFECYCLE_API_VERSION
 from chart_manager.services.local_resources import load_local_cluster
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
@@ -38,14 +36,6 @@ class ImpactReason:
     changed_file: Path
     detail: str
 
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-safe explanation."""
-        return {
-            "code": self.code.value,
-            "changedFile": self.changed_file.as_posix(),
-            "detail": self.detail,
-        }
-
 
 @dataclass(frozen=True)
 class ValidationImpact:
@@ -57,16 +47,6 @@ class ValidationImpact:
     namespace: str
     reasons: tuple[ImpactReason, ...]
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-safe validation selection."""
-        return {
-            "chart": self.chart,
-            "environment": self.environment,
-            "release": self.release,
-            "namespace": self.namespace,
-            "reasons": [reason.to_dict() for reason in self.reasons],
-        }
-
 
 @dataclass(frozen=True)
 class ClusterTestImpact:
@@ -75,14 +55,6 @@ class ClusterTestImpact:
     chart: str
     profile: str
     reasons: tuple[ImpactReason, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-safe cluster-test matrix entry."""
-        return {
-            "chart": self.chart,
-            "profile": self.profile,
-            "reasons": [reason.to_dict() for reason in self.reasons],
-        }
 
 
 @dataclass(frozen=True)
@@ -94,18 +66,6 @@ class LifecycleImpact:
     cluster_tests: tuple[ClusterTestImpact, ...]
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the stable CI-facing projection."""
-        return {
-            "apiVersion": LIFECYCLE_API_VERSION,
-            "kind": "LifecycleImpact",
-            "changedFiles": [path.as_posix() for path in self.changed_files],
-            "validationSelection": [case.to_dict() for case in self.validation],
-            "clusterTestMatrix": [case.to_dict() for case in self.cluster_tests],
-            "specErrors": list(self.spec_errors),
-            "warnings": list(self.warnings),
-        }
 
 
 @dataclass(frozen=True)

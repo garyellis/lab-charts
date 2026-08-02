@@ -41,6 +41,10 @@ packages = ["src/chart_manager"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# No test module defines a Test*-named class; tests are plain functions.
+# Disabling class collection keeps pytest from probing production classes
+# (TestService, TestResult, ...) that test modules import.
+python_classes = []
 markers = ["integration: requires helm/kubeconform/kyverno on PATH"]
 addopts = "-m 'not integration'"
 

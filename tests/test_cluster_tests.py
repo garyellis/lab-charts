@@ -12,6 +12,7 @@ from chart_manager.services.chart_config import (
     require_cluster_test,
 )
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
+from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
@@ -22,7 +23,6 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 
@@ -178,7 +178,6 @@ def _migration_action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAct
         action_id=f"cluster-test:{chart}:minimal:{suffix}",
         kind=kind,
         target=ActionTarget(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile="minimal",
             release=chart,
@@ -198,7 +197,6 @@ def _profile_action(
         action_id=f"cluster-test.{chart}.{profile}.{kind.value}",
         kind=kind,
         target=ActionTarget(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile=profile,
             release=chart,
@@ -248,7 +246,6 @@ def _fanout_plan(
             actions.append(lint_action)
         actions.extend((install, ready, helm_test))
     return LifecyclePlan(
-        workflow=Workflow.CLUSTER_TEST,
         chart=target,
         profile=profile,
         actions=tuple(actions),
@@ -269,7 +266,6 @@ def _migration_plan(*, lint: bool = False) -> LifecyclePlan:
         actions.append(lint_action)
     actions.extend((install, ready, test))
     return LifecyclePlan(
-        workflow=Workflow.CLUSTER_TEST,
         chart="grafana",
         profile="minimal",
         actions=tuple(actions),
@@ -345,9 +341,15 @@ def test_ephemeral_no_ensure_binds_clients_to_selected_provider_context(
     handles: list[Any] = []
     helm = service.helm
 
-    def bind(handle: Any) -> tuple[Any, Any]:
+    def bind(handle: Any) -> BoundClients:
         handles.append(handle)
-        return helm, kubectl
+        # One factory shape serves both cluster services; this one owns no
+        # port-forward, so it never reads `expose`.
+        return BoundClients(
+            helm=helm,
+            kubectl=kubectl,
+            expose=None,  # type: ignore[arg-type]
+        )
 
     service._client_factory = bind  # type: ignore[assignment]
     monkeypatch.setattr(

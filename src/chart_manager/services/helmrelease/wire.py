@@ -24,11 +24,11 @@ from typing import Any
 
 from chart_manager.plumbing.exit_codes import Outcome
 
+from .helm_test import TestOutcome, TestResult
 from .monitor import MonitorOutcome, MonitorResult
 from .promote import PromoteResult
 from .scanner import HelmReleaseMatch
 from .state import PROMOTE_OUTCOME, Transition
-from .test import TestOutcome, TestResult
 
 # Bump only on a breaking change to the payload shape; additive fields are
 # safe at this version.

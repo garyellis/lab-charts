@@ -7,7 +7,6 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
@@ -21,7 +20,6 @@ def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
         action_id=f"cluster-test:{chart}:minimal:{suffix}",
         kind=kind,
         target=ActionTarget(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile="minimal",
             release=chart,
@@ -42,7 +40,6 @@ def cluster_plan() -> LifecyclePlan:
     )
     grafana_install = action("grafana", "install", ActionKind.HELM_UPGRADE_INSTALL)
     return LifecyclePlan(
-        workflow=Workflow.CLUSTER_TEST,
         chart="grafana",
         profile="minimal",
         actions=(

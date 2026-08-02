@@ -28,6 +28,7 @@ from chart_manager.integrations.helmrelease import (
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.events.lifecycle import PromotionPhase
+from chart_manager.services.helmrelease.helm_test import TestRequest, TestService
 from chart_manager.services.helmrelease.monitor import MonitorRequest, MonitorService
 from chart_manager.services.helmrelease.state import (
     PROMOTE_PHASE,
@@ -37,7 +38,6 @@ from chart_manager.services.helmrelease.state import (
     Verdict,
     run_verdict,
 )
-from chart_manager.services.helmrelease.test import TestRequest, TestService
 
 CHART = "loki"
 VERSION = "0.2.0"

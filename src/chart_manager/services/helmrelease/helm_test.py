@@ -17,7 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from typing import ClassVar
 
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import (
@@ -67,9 +66,6 @@ _HELM_UNAVAILABLE_PATTERN = re.compile(
 @dataclass(frozen=True)
 class TestRequest:
     """Inputs and tunables for a `helm test` run over matching HelmReleases."""
-
-    # Tell pytest to skip collection of this Test*-named class.
-    __test__: ClassVar[bool] = False
 
     chart_name: str
     version: str
@@ -140,8 +136,6 @@ class TestRequest:
 class TestPodSnapshot:
     """Captured logs + phase for one test pod, gathered for failure diagnostics."""
 
-    __test__: ClassVar[bool] = False
-
     namespace: str
     name: str
     phase: str
@@ -152,8 +146,6 @@ class TestPodSnapshot:
 @dataclass(frozen=True)
 class TestOutcome:
     """Result of testing one HelmRelease: verdict, helm output, pods, and diagnostics."""
-
-    __test__: ClassVar[bool] = False
 
     ref: HelmReleaseRef
     verdict: Verdict
@@ -171,8 +163,6 @@ class TestOutcome:
 @dataclass(frozen=True)
 class TestResult:
     """Aggregate result across all tested HelmReleases."""
-
-    __test__: ClassVar[bool] = False
 
     outcomes: tuple[TestOutcome, ...]
     total_duration_seconds: float
@@ -224,8 +214,6 @@ class _RunContext:
 
 class TestService:
     """Run `helm test` across matching HelmReleases concurrently, with reaping + diagnostics."""
-
-    __test__ = False
 
     def __init__(
         self,

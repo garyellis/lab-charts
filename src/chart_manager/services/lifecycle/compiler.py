@@ -15,9 +15,13 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.settings import DEFAULT_CHARTS_DIR
+
+#: Frozen first segment of every action ID (formerly `Workflow.CLUSTER_TEST`,
+#: deleted as a single-member enum). Changing this string changes every
+#: `action_id` and therefore every `input_digest`.
+_CLUSTER_TEST_PREFIX = "cluster-test"
 
 
 class ClusterTestCompiler:
@@ -40,7 +44,7 @@ class ClusterTestCompiler:
         chart: str,
         profile: str,
         *,
-        default_namespace: str = "default",
+        default_namespace: str,
         namespace_override: str | None = None,
         lint: bool = False,
     ) -> LifecyclePlan:
@@ -67,13 +71,12 @@ class ClusterTestCompiler:
                 else profile_spec.namespace or default_namespace
             )
             target_coordinates = ActionTarget(
-                workflow=Workflow.CLUSTER_TEST,
                 chart=entry.chart,
                 profile=entry.profile,
                 release=entry.chart,
                 namespace=namespace,
             )
-            prefix = (Workflow.CLUSTER_TEST, entry.chart, entry.profile)
+            prefix = (_CLUSTER_TEST_PREFIX, entry.chart, entry.profile)
             entry_actions: list[LifecycleAction] = []
             for kind in (
                 ActionKind.NAMESPACE_ENSURE,
@@ -147,7 +150,6 @@ class ClusterTestCompiler:
                 actions.append(helm_test)
 
         return LifecyclePlan(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile=profile,
             actions=tuple(actions),
@@ -157,7 +159,7 @@ class ClusterTestCompiler:
 def _action_id(*parts: object) -> str:
     """Build a deterministic, evidence-path-safe human-readable action ID."""
     candidate = ".".join(
-        str(part.value if isinstance(part, (Workflow, ActionKind)) else part) for part in parts
+        str(part.value if isinstance(part, ActionKind) else part) for part in parts
     )
     if len(candidate) <= 128 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", candidate):
         return candidate

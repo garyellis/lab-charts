@@ -22,11 +22,11 @@ from chart_manager.integrations.helmrelease import (
 )
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease.state import Transition
-from chart_manager.services.helmrelease.test import (
+from chart_manager.services.helmrelease.helm_test import (
     TestRequest,
     TestService,
 )
+from chart_manager.services.helmrelease.state import Transition
 
 CHART = "loki"
 VERSION = "0.2.0"

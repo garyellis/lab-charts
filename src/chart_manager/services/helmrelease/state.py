@@ -73,7 +73,7 @@ class Verdict(StrEnum):
         """True when this verdict counts toward a successful run.
 
         The single home for the rule that used to be six hardcoded tuples --
-        three in `monitor.py`, one in `test.py`, and two more in
+        three in `monitor.py`, one in `helm_test.py`, and two more in
         `cli/helmrelease_render.py` where `ok_count` re-implemented
         `MonitorResult.ok`'s predicate. A seventh verdict added to only some
         of them made the headline count and the process exit code disagree.

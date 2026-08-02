@@ -13,7 +13,6 @@ from chart_manager.services.lifecycle.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.progress import ProgressEvent
 
@@ -98,7 +97,6 @@ def action(
         action_id=action_id,
         kind=kind,
         target=ActionTarget(
-            workflow=Workflow.CLUSTER_TEST,
             chart=chart,
             profile="smoke",
             release=chart,
@@ -111,13 +109,8 @@ def action(
     )
 
 
-def plan(
-    actions: tuple[LifecycleAction, ...],
-    *,
-    workflow: Workflow = Workflow.CLUSTER_TEST,
-) -> LifecyclePlan:
+def plan(actions: tuple[LifecycleAction, ...]) -> LifecyclePlan:
     return LifecyclePlan(
-        workflow=workflow,
         chart="grafana",
         profile="smoke",
         actions=actions,

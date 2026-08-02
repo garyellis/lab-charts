@@ -31,6 +31,7 @@ from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.ci import MatrixSelection
 from chart_manager.services.ci_wire import cluster_test_matrix_to_dict
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
+from chart_manager.services.lifecycle.wire import impact_to_dict
 
 #: `plan`'s output vocabulary: the core three plus its own `github`, the
 #: GitHub Actions matrix document. `github` stays command-local because it is
@@ -281,7 +282,7 @@ def plan(
     # error when neither source was given.
     result = _impact_service(root).analyze(_changed_paths(changed_files, changed_file))
     if output != output_mod.TABLE:
-        output_mod.emit(result.to_dict(), mode=output)
+        output_mod.emit(impact_to_dict(result), mode=output)
     else:
         _render_impact_text(
             result,

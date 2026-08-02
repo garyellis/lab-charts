@@ -10,16 +10,19 @@ from chart_manager.services.lifecycle.impact import (
     ValidationImpact,
 )
 from chart_manager.services.lifecycle.models import (
-    LIFECYCLE_API_VERSION,
     ActionKind,
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
+)
+from chart_manager.services.lifecycle.wire import (
+    SCHEMA_VERSION,
+    impact_to_dict,
+    plan_to_dict,
 )
 
 __all__ = [
-    "LIFECYCLE_API_VERSION",
+    "SCHEMA_VERSION",
     "ActionKind",
     "ActionTarget",
     "ClusterTestCompiler",
@@ -31,5 +34,6 @@ __all__ = [
     "LifecycleImpactService",
     "LifecyclePlan",
     "ValidationImpact",
-    "Workflow",
+    "impact_to_dict",
+    "plan_to_dict",
 ]

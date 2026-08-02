@@ -8,8 +8,10 @@ from pathlib import Path
 import yaml
 
 from chart_manager.services.lifecycle import (
+    SCHEMA_VERSION,
     ImpactReasonCode,
     LifecycleImpactService,
+    impact_to_dict,
 )
 
 from .conftest import MakeChart
@@ -263,16 +265,15 @@ def test_impact_is_deterministic_deduplicated_and_json_serializable(
     ]
 
     impact = LifecycleImpactService(chart_root).analyze(changes)
-    projected = impact.to_dict()
+    projected = impact_to_dict(impact)
 
-    assert projected["changedFiles"] == [
+    assert projected["changed_files"] == [
         "README.md",
         "charts/app/values.yaml",
     ]
-    assert len(projected["validationSelection"]) == 1
-    assert len(projected["clusterTestMatrix"]) == 1
-    assert projected["apiVersion"] == "lifecycle.chartmanager.io/v1alpha1"
-    assert projected["kind"] == "LifecycleImpact"
+    assert len(projected["validation_selection"]) == 1
+    assert len(projected["cluster_test_matrix"]) == 1
+    assert projected["schema_version"] == SCHEMA_VERSION
     assert json.loads(json.dumps(projected)) == projected
 
 

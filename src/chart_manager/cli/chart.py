@@ -42,6 +42,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestRequest,
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
+from chart_manager.services.lifecycle.wire import plan_to_dict
 
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
 NamespaceOverrideOption = Annotated[
@@ -244,7 +245,7 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
             action.target.namespace or "",
             action.target.release or "",
         )
-    output_mod.emit(plan.to_dict(), mode=mode, table=table)
+    output_mod.emit(plan_to_dict(plan), mode=mode, table=table)
     for warning in plan.warnings:
         narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
     narration.print(

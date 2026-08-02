@@ -17,7 +17,6 @@ from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
-    Workflow,
 )
 from chart_manager.services.progress import (
     ProgressCallback,
@@ -155,11 +154,6 @@ class ClusterActionExecutor:
     def execute(self, plan: LifecyclePlan) -> ClusterExecutionResult:
         """Execute a cluster plan and return a terminal outcome for every action."""
 
-        if plan.workflow is not Workflow.CLUSTER_TEST:
-            raise ClusterPlanError(
-                f"cluster executor requires workflow {Workflow.CLUSTER_TEST.value!r}, "
-                f"got {plan.workflow.value!r}"
-            )
         if not plan.actions:
             raise ClusterPlanError("cluster plan contains no actions")
         action_ids: set[str] = set()
@@ -207,11 +201,6 @@ class ClusterActionExecutor:
         return ClusterExecutionResult(tuple(outcomes))
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
-        if action.target.workflow is not Workflow.CLUSTER_TEST:
-            raise ClusterPlanError(
-                f"action {action.action_id!r} targets workflow "
-                f"{action.target.workflow.value!r}, expected {Workflow.CLUSTER_TEST.value!r}"
-            )
         if action.kind is ActionKind.NAMESPACE_ENSURE:
             _required(action.target.namespace, action, "namespace")
         elif action.kind is ActionKind.HELM_UPGRADE_INSTALL:
