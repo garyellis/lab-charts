@@ -26,7 +26,7 @@ rate this platform actually produces, partition size is a non-issue; locality
 of the queries operators actually run is not.
 """
 import os
-from typing import Protocol
+from typing import Any, Protocol
 
 from chart_manager.integrations import cosmos as cosmos_client
 from chart_manager.integrations import dynamodb as dynamodb_client
@@ -37,6 +37,12 @@ from chart_manager.plumbing.preflight import Check
 from chart_manager.services.events.adapters.cosmos import CosmosEventStore
 from chart_manager.services.events.adapters.dynamodb import DynamoDBEventStore
 from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
+from chart_manager.services.events.query import (
+    EventQuery,
+    EventsDisabledError,
+    dynamodb_read_unsupported,
+    newest_first,
+)
 
 # The attribute both backends partition on. Named once so the writer, the
 # adapters, and scripts/query-events cannot drift apart.
@@ -53,10 +59,20 @@ DEFAULT_BACKEND = "none"
 
 
 class EventStore(Protocol):
-    """Structural interface for an events sink: anything with a `write(event)`."""
+    """Structural interface for an events backend: write one event, query many.
+
+    `query` is part of the protocol even though only Cosmos serves it today:
+    a store that cannot read raises a typed `EventReadError` rather than
+    being a store with a hole in it, so every backend answers `event list`
+    -- some of them with the reason they cannot.
+    """
 
     def write(self, event: PlatformLifecycleEvent) -> None:
         """Persist one lifecycle event."""
+        ...
+
+    def query(self, query: EventQuery) -> list[dict[str, Any]]:
+        """Return stored event documents matching `query`, newest first."""
         ...
 
 class NullEventStore:
@@ -73,6 +89,18 @@ class NullEventStore:
     def write(self, event: PlatformLifecycleEvent) -> None:
         """Accept and discard the event."""
         return None
+
+    def query(self, query: EventQuery) -> list[dict[str, Any]]:
+        """There is no ledger to read; say so, and say how to get one.
+
+        Writes are silently dropped because telemetry must never break the
+        run that produced it; a *read* is the deliverable of the command
+        that asked, so silence (an empty list) would be a lie.
+        """
+        raise EventsDisabledError(
+            "events are disabled (EVENTS_BACKEND is unset or 'none'); "
+            "set EVENTS_BACKEND=cosmos to record and read lifecycle events"
+        )
 
 def _build_cosmos_store() -> CosmosEventStore:
     """Wire a CosmosEventStore against the platform/lifecycle-events container."""
@@ -102,6 +130,27 @@ def get_event_store() -> EventStore:
     if backend == "none":
         return NullEventStore()
     raise ValueError(f"unsupported EVENTS_BACKEND: {backend!r}")
+
+
+def query_events(query: EventQuery) -> list[dict[str, Any]]:
+    """Run one read-side selection against the configured backend.
+
+    Lives beside `get_event_store` because this module owns the
+    EVENTS_BACKEND switch. It short-circuits `dynamodb` on the variable
+    rather than calling `get_event_store().query(...)` blind for one
+    reason: building the DynamoDB store *provisions* its table
+    (`get_table` creates it and blocks on `wait_until_exists`), and a read
+    that cannot be served must not touch -- let alone create --
+    infrastructure. The `none` case does go through the store, so
+    `NullEventStore.query` stays an exercised path rather than a stub.
+
+    Results are re-sorted newest-first client-side; see
+    `query.newest_first` for why the backend's string ORDER BY is not
+    trusted as chronology.
+    """
+    if os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND) == "dynamodb":
+        raise dynamodb_read_unsupported()
+    return newest_first(get_event_store().query(query))
 
 
 def preflight_event_store() -> tuple[Check, ...]:

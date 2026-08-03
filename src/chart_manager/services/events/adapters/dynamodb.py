@@ -1,7 +1,8 @@
-"""DynamoDB-backed EventStore adapter."""
-from typing import TYPE_CHECKING
+"""DynamoDB-backed EventStore adapter (write-only; the read side is Cosmos-only)."""
+from typing import TYPE_CHECKING, Any
 
 from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
+from chart_manager.services.events.query import EventQuery, dynamodb_read_unsupported
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
@@ -35,3 +36,13 @@ class DynamoDBEventStore:
         # put_item overwrites retry-safe transitions and appends UUID-backed
         # events. The timestamp remains in the item for chronological reads.
         self._table.put_item(Item=item)
+
+    def query(self, query: EventQuery) -> list[dict[str, Any]]:  # noqa: ARG002
+        """Refuse with the Cosmos-only message; the write path is unaffected.
+
+        The all-charts view needs either a Scan or a `chart_name`/`timestamp`
+        GSI, and the sort key's `idempotent#` prefix breaks time-ordering
+        within a partition -- both deliberately deferred with the DynamoDB
+        read side. `scripts/query-events-dynamodb` remains the dev tool.
+        """
+        raise dynamodb_read_unsupported()

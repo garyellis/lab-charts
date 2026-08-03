@@ -18,7 +18,9 @@ from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
 from chart_manager.services.events.ref import (
     ChartRef,
     ChartRefError,
+    ChartSelector,
     parse_ref,
+    parse_selector,
     ref_from_parts,
 )
 
@@ -177,6 +179,72 @@ def test_ref_from_parts_rejects_an_embedded_separator() -> None:
 
 
 def test_a_ref_is_hashable_and_compares_by_value() -> None:
-    """Frozen: it is an identity, and P1b will want it as a dict key."""
+    """Frozen: it is an identity, and the read side wants it as a dict key."""
     assert parse_ref("grafana@1.2.3") == parse_ref("grafana@1.2.3")
     assert len({parse_ref("grafana@1.2.3"), ref_from_parts("grafana", "1.2.3")}) == 1
+
+
+# --------------------------------------------------------------------------
+# the read side's CHART[@VERSION] selector (design doc 7.5)
+# --------------------------------------------------------------------------
+
+
+def test_a_bare_chart_is_a_selector_for_the_whole_history() -> None:
+    selector = parse_selector("grafana")
+
+    assert (selector.name, selector.version) == ("grafana", None)
+    assert selector.correlation_id is None
+
+
+def test_a_versioned_selector_narrows_to_one_release() -> None:
+    selector = parse_selector("grafana@1.2.3")
+
+    assert (selector.name, selector.version) == ("grafana", "1.2.3")
+
+
+def test_the_selector_correlation_id_is_the_ref_wire_form() -> None:
+    """Composed through `ChartRef`, so a selector cannot disagree with the
+    join key the writer composes."""
+    assert parse_selector("grafana@1.2.3").correlation_id == str(parse_ref("grafana@1.2.3"))
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "   ", "@1.2.3", "a@b@c", "grafana@", "graf ana", "graf ana@1.2.3"],
+    ids=[
+        "empty",
+        "blank",
+        "no-chart",
+        "two-separators",
+        "empty-version",
+        "whitespace-in-name",
+        "whitespace-in-versioned-name",
+    ],
+)
+def test_selector_rejections_are_shared_with_the_ref_grammar(token: str) -> None:
+    """Everything but the bare-chart form is rejected exactly as `parse_ref`
+    rejects it: `grafana@` is malformed, only `grafana` is versionless."""
+    with pytest.raises(ChartRefError):
+        parse_selector(token)
+
+
+def test_selector_whitespace_is_stripped_like_the_ref() -> None:
+    assert parse_selector("  grafana  ") == ChartSelector(name="grafana")
+    assert parse_selector(" grafana @ 1.2.3 ") == ChartSelector(name="grafana", version="1.2.3")
+
+
+def test_direct_selector_construction_enforces_the_component_rules() -> None:
+    """The invariant belongs to the type, exactly as it does for `ChartRef`."""
+    with pytest.raises(ChartRefError):
+        ChartSelector(name="graf@ana")
+    with pytest.raises(ChartRefError):
+        ChartSelector(name="grafana", version="1.2 .3")
+
+
+def test_parse_ref_and_parse_selector_agree_on_the_versioned_form() -> None:
+    """One grammar, two readings: the versioned selector and the ref carry
+    the same halves."""
+    ref = parse_ref("grafana@1.2.3")
+    selector = parse_selector("grafana@1.2.3")
+
+    assert (ref.name, ref.version) == (selector.name, selector.version)
