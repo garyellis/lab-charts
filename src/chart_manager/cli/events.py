@@ -18,6 +18,7 @@ stays accepted as a hidden alias and reaches the same resolver.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -165,6 +166,50 @@ def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) 
         raise typer.BadParameter(str(exc)) from exc
 
 
+#: The composed event document, in `-o` form. Offered only with `--dry-run`
+#: (a real emit's confirmation is narration, not data -- see `_emit`).
+_DRY_RUN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+
+DryRunOutputOption = Annotated[
+    str | None,
+    output_mod.output_option(*_DRY_RUN_OUTPUTS, extra_help=" Requires --dry-run."),
+]
+
+DryRunOption = Annotated[
+    bool,
+    typer.Option(
+        "--dry-run",
+        help=(
+            "Print the fully-composed event document instead of writing it. "
+            "Touches no backend; works with EVENTS_BACKEND unset."
+        ),
+    ),
+]
+
+
+def _emit_dry_run(document: dict[str, Any], *, ctx: typer.Context, output: str | None) -> None:
+    """Print the document a real run would write, in the resolved `-o` form.
+
+    The JSON round-trip is what makes the printout the *stored* shape:
+    `to_dict` leaves phase enums and the images tuple as Python objects and
+    lets the backend's encoder flatten them, so encoding here -- with the
+    same stdlib encoder -- shows the values a reader of the ledger would
+    see, and keeps `-o yaml` from choking on an Enum.
+    """
+    stored: dict[str, Any] = json.loads(json.dumps(document, default=str))
+    mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
+    output_mod.emit(stored, mode=mode, table=_document_table(stored))
+
+
+def _document_table(document: dict[str, Any]) -> Table:
+    """One event document as Field/Value rows, leaves spelled as JSON."""
+    table = Table("Field", "Value")
+    for field, value in document.items():
+        rendered = value if isinstance(value, str) else json.dumps(value)
+        table.add_row(escape(field), escape(rendered))
+    return table
+
+
 def _emit(
     writer: EventWriter, strict: bool, summary: str, fn: Callable[[EventWriter], None]
 ) -> None:
@@ -194,6 +239,7 @@ def _emit(
 
 
 def build(
+    ctx: typer.Context,
     phase: Annotated[BuildPhase, typer.Option(help="Build lifecycle phase.")],
     ref: RefArgument = None,
     chart: ChartOption = None,
@@ -202,6 +248,8 @@ def build(
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
     at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp with an explicit UTC offset (naive is rejected; stored as UTC). Default: now. For backfill/seeding.")] = None,
+    dry_run: DryRunOption = False,
+    output: DryRunOutputOption = None,
     strict: Annotated[
         bool,
         typer.Option("--strict-events", help="Fail the step on emit error."),
@@ -212,8 +260,17 @@ def build(
     # parameter after an optional one, and the positional ref has to be
     # optional for the deprecated flag pair to substitute for it. Click does
     # not care about declaration order for options.
+    output_mod.require_dry_run(output, dry_run=dry_run)
     resolved = _resolve_ref(ref, chart, chart_version)
     timestamp = _parse_at(at)
+    if dry_run:
+        event = _make_event_writer().compose_build(
+            chart_name=resolved.name, chart_version=resolved.version, phase=phase,
+            build_correlation_id=build_correlation_id, pr_url=pr_url, git_sha=git_sha,
+            timestamp=timestamp,
+        )
+        _emit_dry_run(event.to_dict(), ctx=ctx, output=output)
+        return
     _emit(
         _make_event_writer(),
         strict,
@@ -226,6 +283,7 @@ def build(
     )
 
 def promote(
+    ctx: typer.Context,
     environment: Annotated[str, typer.Option("--env", help="Target environment.")],
     phase: Annotated[PromotionPhase, typer.Option(help="Promotion lifecycle phase.")],
     ref: RefArgument = None,
@@ -236,14 +294,27 @@ def promote(
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
     at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp with an explicit UTC offset (naive is rejected; stored as UTC). Default: now. For backfill/seeding.")] = None,
+    dry_run: DryRunOption = False,
+    output: DryRunOutputOption = None,
     strict: Annotated[
         bool,
         typer.Option("--strict-events", help="Fail the step on emit error."),
     ] = False,
     ) -> None:
     """Emit a promotion-lifecycle event (flux repo CI)."""
+    output_mod.require_dry_run(output, dry_run=dry_run)
     resolved = _resolve_ref(ref, chart, chart_version)
     timestamp = _parse_at(at)
+    if dry_run:
+        event = _make_event_writer().compose_promote(
+            chart_name=resolved.name, chart_version=resolved.version,
+            environment=environment, phase=phase,
+            promotion_correlation_id=promotion_correlation_id,
+            build_correlation_id=build_correlation_id, pr_url=pr_url, git_sha=git_sha,
+            timestamp=timestamp,
+        )
+        _emit_dry_run(event.to_dict(), ctx=ctx, output=output)
+        return
     _emit(
         _make_event_writer(),
         strict,

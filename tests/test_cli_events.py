@@ -360,6 +360,79 @@ def test_the_pre_emit_spelling_is_gone() -> None:
 
 
 # --------------------------------------------------------------------------
+# `event emit --dry-run`
+# --------------------------------------------------------------------------
+
+
+def test_dry_run_prints_the_composed_document_and_confirms_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The point: see the exact stored document with no backend configured.
+
+    Backend resolution is rigged to fail, so the test proves --dry-run never
+    reaches it; EVENTS_BACKEND is unset, which is the shipped default.
+    """
+    from chart_manager.services.events import writer as writer_module
+
+    monkeypatch.setattr(
+        writer_module,
+        "get_event_store",
+        lambda: pytest.fail("--dry-run resolved an event store"),
+    )
+    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
+
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "published", "--git-sha", "deadbeef",
+        "--at", "2026-07-30T14:00:00+02:00",
+        "--dry-run", "-o", "json",
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["correlation_id"] == "grafana@1.2.3"
+    assert document["chart_name"] == "grafana"
+    assert document["build_phase"] == "published"
+    assert document["git_sha"] == "deadbeef"
+    # The --at offset is already normalized in what would be written.
+    assert document["timestamp"] == "2026-07-30T12:00:00+00:00"
+    assert "emitted" not in result.stderr
+
+
+def test_dry_run_promote_carries_the_environment_and_phase() -> None:
+    result = cli(
+        "event", "emit", "promote", "grafana@1.2.3",
+        "--env", "staging", "--phase", "promoted", "--dry-run", "-o", "json",
+    )
+
+    document = json.loads(result.stdout)
+    assert document["environment"] == "staging"
+    assert document["promotion_phase"] == "promoted"
+    assert document["build_phase"] is None
+
+
+def test_dry_run_has_a_table_projection_for_a_human() -> None:
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "published", "--dry-run", "-o", "table",
+    )
+
+    assert result.exit_code == 0
+    assert "correlation_id" in result.stdout
+    assert "grafana@1.2.3" in result.stdout
+
+
+def test_output_without_dry_run_is_a_usage_error(writer: RecordingWriter) -> None:
+    """A real emit has no projection; accepting -o and ignoring it would lie."""
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "-o", "json"
+    )
+
+    assert result.exit_code == 2
+    assert writer.build_calls == []
+
+
+# --------------------------------------------------------------------------
 # the read side: `event list`
 # --------------------------------------------------------------------------
 
