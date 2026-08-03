@@ -17,14 +17,15 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, probe_binary
 
@@ -160,13 +161,14 @@ class Renovate:
             "Authentication: %s",
             "configured" if request.token is not None else "not configured",
         )
-        result = self.runner.run(
-            [self._binary, request.repository],
-            cwd=repo_root,
-            check=False,
-            timeout=self.timeout,
-            env=env,
-        )
+        with _installed(self._binary):
+            result = self.runner.run(
+                [self._binary, request.repository],
+                cwd=repo_root,
+                check=False,
+                timeout=self.timeout,
+                env=env,
+            )
         stdout = _redact_token(result.stdout, request.token)
         stderr = _redact_token(result.stderr, request.token)
         _log_subprocess_output(stdout, error=False)
@@ -211,12 +213,34 @@ class Renovate:
         if not global_config:
             args.append("--no-global")
         args.extend(str(path) for path in resolved)
-        result = self.runner.run(args, cwd=root, timeout=self.timeout)
+        with _installed(self._validator_binary):
+            result = self.runner.run(args, cwd=root, timeout=self.timeout)
         return RenovateResult(
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
+
+
+@contextmanager
+def _installed(binary: str) -> Iterator[None]:
+    """Replace a bare missing-binary error with one that says what to install.
+
+    `SubprocessRunner` can only report the argv it was handed, so an absent
+    Renovate reads as "required tool not found on PATH: renovate" arriving
+    immediately after this adapter logged that it was starting Renovate --
+    which looks like Renovate launched and died. The remediation is the same
+    string `preflight` already offers; this is where it reaches an operator
+    who ran the command directly instead of running `doctor` first.
+    """
+    try:
+        yield
+    except MissingToolError as exc:
+        raise MissingToolError(
+            f"{binary} is not installed (not found on PATH). "
+            "Install Renovate with `npm install -g renovate`, "
+            "or run `chart-manager doctor` to check everything this command needs."
+        ) from exc
 
 
 def _require_directory(path: Path, *, label: str) -> Path:
