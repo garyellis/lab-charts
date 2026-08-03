@@ -1,5 +1,13 @@
 """EventStore protocol and backend selection (EVENTS_BACKEND: cosmos | dynamodb | none).
 
+Events are opt-in
+-----------------
+Unset means `none`: no event is written anywhere until an operator exports
+EVENTS_BACKEND=cosmos (or dynamodb). A default that pointed at a real backend
+meant every unconfigured run paid for a doomed connection attempt and logged
+a swallowed failure -- noise that trains operators to ignore the one warning
+that reports genuinely dropped telemetry.
+
 Partitioning
 ------------
 Both backends partition on `chart_name`, not on `correlation_id`.
@@ -39,8 +47,9 @@ PARTITION_KEY = "chart_name"
 COSMOS_DATABASE = "platform"
 EVENTS_RESOURCE = "lifecycle-events"
 
-#: The backend when EVENTS_BACKEND is unset.
-DEFAULT_BACKEND = "cosmos"
+#: The backend when EVENTS_BACKEND is unset. `none`: events are opt-in, and
+#: an environment that never asked for telemetry writes nothing anywhere.
+DEFAULT_BACKEND = "none"
 
 
 class EventStore(Protocol):
@@ -51,14 +60,14 @@ class EventStore(Protocol):
         ...
 
 class NullEventStore:
-    """Drop every event. Selected by EVENTS_BACKEND=none.
+    """Drop every event. Selected when EVENTS_BACKEND is unset (the default) or `none`.
 
-    Makes "events are off" a first-class, silent state. Without it the only
-    way to run without a backend is to leave Cosmos unconfigured, which
-    raises `KeyError: 'COSMOS_ENDPOINT'` on first write -- swallowed as
-    non-fatal, but logged as a warning on every single run, which trains
-    operators to ignore the one log line that reports genuinely dropped
-    telemetry.
+    Makes "events are off" a first-class, silent state -- and the default
+    one. Without it the only way to run without a backend is to leave Cosmos
+    unconfigured, which raises `KeyError: 'COSMOS_ENDPOINT'` on first write
+    -- swallowed as non-fatal, but logged as a warning on every single run,
+    which trains operators to ignore the one log line that reports genuinely
+    dropped telemetry.
     """
 
     def write(self, event: PlatformLifecycleEvent) -> None:
@@ -84,7 +93,7 @@ def _build_dynamodb_store() -> DynamoDBEventStore:
     return DynamoDBEventStore(table, sort_key="event_id")
 
 def get_event_store() -> EventStore:
-    """Select and build the event store from EVENTS_BACKEND (default cosmos)."""
+    """Select and build the event store from EVENTS_BACKEND (default none: opt-in)."""
     backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
     if backend == "cosmos":
         return _build_cosmos_store()
@@ -112,7 +121,14 @@ def preflight_event_store() -> tuple[Check, ...]:
     """
     backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
     if backend == "none":
-        return (Check.skipped("events-backend", "EVENTS_BACKEND=none (telemetry disabled)"),)
+        # Disabled is the default; the unset case names the switch so the
+        # report doubles as the instruction for turning events on.
+        detail = (
+            "EVENTS_BACKEND=none (events disabled)"
+            if "EVENTS_BACKEND" in os.environ
+            else "events disabled (EVENTS_BACKEND unset; set EVENTS_BACKEND=cosmos to enable)"
+        )
+        return (Check.skipped("events-backend", detail),)
     if backend == "cosmos":
         return (cosmos_client.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
     if backend == "dynamodb":

@@ -348,6 +348,23 @@ def test_events_disabled_is_a_skip_and_not_a_failure(monkeypatch: pytest.MonkeyP
     assert check.outcome is Outcome.SUCCESS
 
 
+def test_events_unset_is_reported_disabled_with_the_way_to_enable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Events are opt-in: no EVENTS_BACKEND is the default, not a failure.
+
+    The detail names the switch, because for the disabled-by-default state
+    the report *is* the documentation for turning events on.
+    """
+    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
+
+    (check,) = preflight_event_store()
+
+    assert check.status is CheckStatus.SKIPPED
+    assert check.outcome is Outcome.SUCCESS
+    assert "EVENTS_BACKEND" in check.detail
+
+
 def test_an_unknown_events_backend_is_a_spec_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing is down: the operator wrote something the switch does not accept."""
     monkeypatch.setenv("EVENTS_BACKEND", "postgres")
