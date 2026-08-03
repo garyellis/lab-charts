@@ -405,7 +405,7 @@ def _events_table(events: Sequence[dict[str, Any]]) -> Table:
             escape(str(event.get("chart_version") or "-")),
             escape(str(event.get("build_phase") or event.get("promotion_phase") or "-")),
             escape(str(event.get("environment") or "-")),
-            escape(_pr(event)),
+            _pr_link(event.get("pr_url")),
             escape(str(event.get("source") or "-")),
             _stamp(event.get("timestamp")),
             _age(event.get("timestamp"), now=now),
@@ -413,21 +413,10 @@ def _events_table(events: Sequence[dict[str, Any]]) -> Table:
     return table
 
 
-def _pr(event: dict[str, Any]) -> str:
-    """Compact PR reference: #38 from pr_url or a correlation id; "-" without one.
-
-    The full URL and both correlation ids stay in the JSON projection; the
-    table only answers "which PR", scoped by the row's chart.
-    """
-    url = str(event.get("pr_url") or "")
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    if tail.isdigit():
-        return f"#{tail}"
-    for field in ("build_correlation_id", "promotion_correlation_id"):
-        value = str(event.get(field) or "")
-        if "#" in value:
-            return f"#{value.rsplit('#', 1)[-1]}"
-    return "-"
+def _pr_link(pr_url: Any) -> str:
+    """The event's PR URL as a terminal hyperlink; "-" without one."""
+    url = escape(str(pr_url or ""))
+    return f"[link={url}]{url}[/link]" if url else "-"
 
 
 def _stamp(timestamp: Any) -> str:
