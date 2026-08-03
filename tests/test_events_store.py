@@ -181,6 +181,20 @@ def test_dynamodb_wiring_declares_the_bare_attribute_name(
     assert seen["sort_key"] == "event_id"
 
 
+def test_events_are_opt_in_unset_selects_the_null_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default backend is `none`: no EVENTS_BACKEND, no writes anywhere.
+
+    Flipped from `cosmos` deliberately (2026-08-02): a telemetry default that
+    pointed at a real backend made every unconfigured run log a swallowed
+    connection failure.
+    """
+    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
+
+    assert isinstance(get_event_store(), NullEventStore)
+
+
 def test_backend_none_is_a_silent_sink(monkeypatch: pytest.MonkeyPatch) -> None:
     """"Events off" must be a first-class state, not an unconfigured Cosmos.
 

@@ -63,3 +63,6 @@ charts/*/charts/*/
 !.chart-manager/stacks/*.yaml
 
 *.env
+
+# Render output leaked by tests that use tests/fixtures as the repository root.
+tests/fixtures/.chart-manager/

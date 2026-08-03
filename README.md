@@ -47,6 +47,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
 | `uv run chart-manager chart upgrade --path charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
 | `uv run chart-manager helmrelease promote\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
+| `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; `event emit --dry-run` previews a document without a backend. |
 | `uv run chart-manager grafana dashboard export <uid> --to <path>` | Export one dashboard from the kind Grafana as canonical JSON. `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
 

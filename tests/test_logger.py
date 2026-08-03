@@ -62,6 +62,49 @@ def test_setup_logging_filters_debug_at_info_level() -> None:
     assert "visible progress" in output.getvalue()
 
 
+def test_setup_logging_quiets_dependency_chatter_at_info_level() -> None:
+    output = io.StringIO()
+    console = Console(file=output, force_terminal=False, no_color=True, width=200)
+    root = logging.getLogger()
+    previous_handlers = root.handlers[:]
+    previous_level = root.level
+    azure = logging.getLogger("azure")
+    previous_azure_level = azure.level
+    try:
+        setup_logging("INFO", console=console)
+        sdk_logger = logging.getLogger("azure.cosmos._cosmos_http_logging_policy")
+
+        sdk_logger.info("Request URL: https://example/")
+        sdk_logger.warning("retrying after throttle")
+    finally:
+        root.handlers = previous_handlers
+        root.setLevel(previous_level)
+        azure.setLevel(previous_azure_level)
+
+    assert "Request URL" not in output.getvalue()
+    assert "retrying after throttle" in output.getvalue()
+
+
+def test_setup_logging_reopens_dependency_chatter_at_debug_level() -> None:
+    output = io.StringIO()
+    console = Console(file=output, force_terminal=False, no_color=True, width=200)
+    root = logging.getLogger()
+    previous_handlers = root.handlers[:]
+    previous_level = root.level
+    azure = logging.getLogger("azure")
+    previous_azure_level = azure.level
+    try:
+        setup_logging("INFO", console=console)
+        setup_logging("DEBUG", console=console)
+        logging.getLogger("azure.cosmos").info("Request URL: https://example/")
+    finally:
+        root.handlers = previous_handlers
+        root.setLevel(previous_level)
+        azure.setLevel(previous_azure_level)
+
+    assert "Request URL" in output.getvalue()
+
+
 def test_setup_logging_renders_json_with_execution_fields() -> None:
     output = io.StringIO()
     root = logging.getLogger()

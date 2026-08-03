@@ -42,13 +42,14 @@ The rules, and why each is a *domain* rule rather than a CLI rule
    something the caller meant. A space in the middle of a name is not.
 
 `ChartRef` validates in `__post_init__` rather than trusting its two
-constructors, so the invariant belongs to the type: a future reader side
-(design doc P1b) that builds a ref some third way cannot skip the rules.
+constructors, so the invariant belongs to the type: a reader side that
+builds a ref some third way cannot skip the rules.
 
-Not built here, deliberately: design doc 7.5 also gives `event list` a
-`CHART[@VERSION]` form where the version is optional. That belongs to P1b
-along with the command that needs it; adding the option now would be an
-unused branch with no call site to keep it honest.
+The read side's form (design doc 7.5) is `CHART[@VERSION]`: `event list`
+may address a whole chart, where an *emitter* always knows the version it
+reports on. That optional-version grammar is `ChartSelector`/`parse_selector`
+below; `parse_ref` is the emit-side reading of the same token with the
+version made mandatory, so the two forms cannot drift on what a component is.
 """
 
 from __future__ import annotations
@@ -57,7 +58,15 @@ from dataclasses import dataclass
 
 from chart_manager.plumbing.errors import ChartManagerError
 
-__all__ = ["SEPARATOR", "ChartRef", "ChartRefError", "parse_ref", "ref_from_parts"]
+__all__ = [
+    "SEPARATOR",
+    "ChartRef",
+    "ChartRefError",
+    "ChartSelector",
+    "parse_ref",
+    "parse_selector",
+    "ref_from_parts",
+]
 
 #: The one character that joins the two halves. Named so the schema comment
 #: in `lifecycle.py`, this grammar and any future formatter cannot drift.
@@ -100,28 +109,58 @@ class ChartRef:
         return f"{self.name}{SEPARATOR}{self.version}"
 
 
-def parse_ref(text: str) -> ChartRef:
-    """Parse a `CHART@VERSION` token.
+@dataclass(frozen=True, slots=True)
+class ChartSelector:
+    """`CHART[@VERSION]` -- the read side's optional-version selection.
 
-    Raises `ChartRefError` when the token is empty, carries no `@`, carries
-    more than one, or has an empty half. See the module docstring for why
-    each of those is rejected rather than guessed at.
+    A bare chart selects a whole history; a versioned one selects a single
+    release timeline. Distinct from `ChartRef` on purpose: a ref *names a
+    record* and composes a `correlation_id`, where a selector *narrows a
+    query* and may legitimately leave the version open. Making the version
+    nullable on `ChartRef` instead would let an emitter compose
+    `"grafana@None"` into a real ledger (rule 2).
+    """
+
+    name: str
+    version: str | None = None
+
+    def __post_init__(self) -> None:
+        """Hold each present component to the same rules a ref enforces."""
+        _validate("chart name", self.name)
+        if self.version is not None:
+            _validate("chart version", self.version)
+
+    @property
+    def correlation_id(self) -> str | None:
+        """The join key this selector narrows to; None selects the whole chart.
+
+        Composed through `ChartRef` so a selector and a ref cannot disagree
+        about how the halves go back together.
+        """
+        if self.version is None:
+            return None
+        return str(ChartRef(name=self.name, version=self.version))
+
+
+def parse_selector(text: str) -> ChartSelector:
+    """Parse a `CHART[@VERSION]` token -- the read side's form.
+
+    Accepts everything `parse_ref` accepts plus a bare chart name. Every
+    rejection is shared with `parse_ref`: empty token, more than one
+    separator, an empty half, a version with no chart.
     """
     token = text.strip()
     if not token:
         raise ChartRefError(f"a chart ref may not be empty; {_EXPECTED}")
 
     parts = token.split(SEPARATOR)
-    if len(parts) == 1:
-        raise ChartRefError(
-            f"{token!r} has no version; {_EXPECTED}. Emitting an event always "
-            "knows the version it reports on."
-        )
     if len(parts) > 2:
         raise ChartRefError(
             f"{token!r} has {len(parts) - 1} {SEPARATOR!r} separators; {_EXPECTED}. "
             f"Neither a chart name nor a version may contain {SEPARATOR!r}."
         )
+    if len(parts) == 1:
+        return ChartSelector(name=token)
 
     name, version = (part.strip() for part in parts)
     if not name:
@@ -132,7 +171,24 @@ def parse_ref(text: str) -> ChartRef:
             f"{token!r} names a version with no chart; {_EXPECTED}. A version "
             "alone would have to be scanned for across every chart."
         )
-    return ChartRef(name=name, version=version)
+    return ChartSelector(name=name, version=version)
+
+
+def parse_ref(text: str) -> ChartRef:
+    """Parse a `CHART@VERSION` token -- the emit-side form, version mandatory.
+
+    One reading of the token (`parse_selector`) plus one extra rejection:
+    raises `ChartRefError` when the token is empty, carries no `@`, carries
+    more than one, or has an empty half. See the module docstring for why
+    each of those is rejected rather than guessed at.
+    """
+    selector = parse_selector(text)
+    if selector.version is None:
+        raise ChartRefError(
+            f"{selector.name!r} has no version; {_EXPECTED}. Emitting an event "
+            "always knows the version it reports on."
+        )
+    return ChartRef(name=selector.name, version=selector.version)
 
 
 def ref_from_parts(name: str, version: str) -> ChartRef:

@@ -17,6 +17,7 @@ the positional.
 from __future__ import annotations
 
 import ast
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from typing import Any
 import pytest
 
 from chart_manager.cli import events as events_cli
+from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
 from chart_manager.services.events.ref import SEPARATOR
 
@@ -104,7 +106,7 @@ def test_the_optional_fields_still_reach_the_writer(writer: RecordingWriter) -> 
         "--build-correlation-id", "org/charts#7",
         "--pr-url", "https://example.invalid/pr/7",
         "--git-sha", "deadbeef",
-        "--at", "2026-07-30T12:00:00",
+        "--at", "2026-07-30T12:00:00Z",
     )
 
     assert writer.build_calls[0] == {
@@ -116,6 +118,28 @@ def test_the_optional_fields_still_reach_the_writer(writer: RecordingWriter) -> 
         "git_sha": "deadbeef",
         "timestamp": datetime(2026, 7, 30, 12, 0, tzinfo=UTC),
     }
+
+
+def test_a_non_utc_at_offset_is_normalized_to_utc(writer: RecordingWriter) -> None:
+    """Stored timestamps are isoformat strings; only UTC stamps compare
+    chronologically against the UTC stamps every live emitter writes."""
+    cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "merged", "--at", "2026-07-30T14:00:00+02:00",
+    )
+
+    assert writer.build_calls[0]["timestamp"] == datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+
+
+def test_a_naive_at_timestamp_is_a_usage_error(writer: RecordingWriter) -> None:
+    """A backfill from a laptop in another timezone must not shift history."""
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "merged", "--at", "2026-07-30T12:00:00",
+    )
+
+    assert result.exit_code == 2
+    assert writer.build_calls == []
 
 
 @pytest.mark.parametrize(
@@ -335,10 +359,229 @@ def test_the_pre_emit_spelling_is_gone() -> None:
     assert "No such command" in result.output
 
 
-def test_the_read_side_is_not_built_yet() -> None:
-    """`list` and `describe` are P1b. Guard against them arriving by accident,
-    since a half-built read side is worse than none: `event list` that only
-    works for one backend would be discovered in an incident."""
+# --------------------------------------------------------------------------
+# `event emit --dry-run`
+# --------------------------------------------------------------------------
+
+
+def test_dry_run_prints_the_composed_document_and_confirms_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The point: see the exact stored document with no backend configured.
+
+    Backend resolution is rigged to fail, so the test proves --dry-run never
+    reaches it; EVENTS_BACKEND is unset, which is the shipped default.
+    """
+    from chart_manager.services.events import writer as writer_module
+
+    monkeypatch.setattr(
+        writer_module,
+        "get_event_store",
+        lambda: pytest.fail("--dry-run resolved an event store"),
+    )
+    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
+
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "published", "--git-sha", "deadbeef",
+        "--at", "2026-07-30T14:00:00+02:00",
+        "--dry-run", "-o", "json",
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["correlation_id"] == "grafana@1.2.3"
+    assert document["chart_name"] == "grafana"
+    assert document["build_phase"] == "published"
+    assert document["git_sha"] == "deadbeef"
+    # The --at offset is already normalized in what would be written.
+    assert document["timestamp"] == "2026-07-30T12:00:00+00:00"
+    assert "emitted" not in result.stderr
+
+
+def test_dry_run_promote_carries_the_environment_and_phase() -> None:
+    result = cli(
+        "event", "emit", "promote", "grafana@1.2.3",
+        "--env", "staging", "--phase", "promoted", "--dry-run", "-o", "json",
+    )
+
+    document = json.loads(result.stdout)
+    assert document["environment"] == "staging"
+    assert document["promotion_phase"] == "promoted"
+    assert document["build_phase"] is None
+
+
+def test_dry_run_has_a_table_projection_for_a_human() -> None:
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "published", "--dry-run", "-o", "table",
+    )
+
+    assert result.exit_code == 0
+    assert "correlation_id" in result.stdout
+    assert "grafana@1.2.3" in result.stdout
+
+
+def test_output_without_dry_run_is_a_usage_error(writer: RecordingWriter) -> None:
+    """A real emit has no projection; accepting -o and ignoring it would lie."""
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "-o", "json"
+    )
+
+    assert result.exit_code == 2
+    assert writer.build_calls == []
+
+
+# --------------------------------------------------------------------------
+# the read side: `event list`
+# --------------------------------------------------------------------------
+
+
+_EVENT_DOC: dict[str, Any] = {
+    "chart_name": "grafana",
+    "chart_version": "1.2.3",
+    "correlation_id": "grafana@1.2.3",
+    "build_phase": None,
+    "promotion_phase": "promoted",
+    "environment": "staging",
+    "source": "chart-manager",
+    "timestamp": "2026-08-01T12:00:00+00:00",
+}
+
+
+@pytest.fixture
+def reader(monkeypatch: pytest.MonkeyPatch):
+    """Replace the read-side seam with a recorder over scripted documents."""
+
+    class RecordingReader:
+        def __init__(self) -> None:
+            self.queries: list[Any] = []
+            self.events: list[dict[str, Any]] = [dict(_EVENT_DOC)]
+
+        def __call__(self, request: Any) -> list[dict[str, Any]]:
+            self.queries.append(request)
+            return list(self.events)
+
+    recorder = RecordingReader()
+    monkeypatch.setattr(events_cli, "_query_events", recorder)
+    return recorder
+
+
+def test_list_with_no_selector_asks_for_recent_activity_across_all_charts(
+    reader,
+) -> None:
     result = cli("event", "list")
 
-    assert result.exit_code != 0
+    assert result.exit_code == 0
+    (query,) = reader.queries
+    assert (query.chart_name, query.correlation_id) == (None, None)
+
+
+def test_list_with_a_bare_chart_selects_that_charts_history(reader) -> None:
+    cli("event", "list", "grafana")
+
+    (query,) = reader.queries
+    assert (query.chart_name, query.correlation_id) == ("grafana", None)
+
+
+def test_list_with_a_versioned_selector_selects_one_release_timeline(reader) -> None:
+    cli("event", "list", "grafana@1.2.3")
+
+    (query,) = reader.queries
+    assert (query.chart_name, query.correlation_id) == ("grafana", "grafana@1.2.3")
+
+
+def test_list_passes_the_limit_through_and_defaults_it(reader) -> None:
+    from chart_manager.services.events.query import DEFAULT_LIMIT
+
+    cli("event", "list")
+    cli("event", "list", "-n", "5")
+
+    assert [query.limit for query in reader.queries] == [DEFAULT_LIMIT, 5]
+
+
+def test_a_malformed_selector_is_a_usage_error(reader) -> None:
+    result = cli("event", "list", "a@b@c")
+
+    assert result.exit_code == 2
+    assert reader.queries == []
+
+
+def test_the_table_is_the_human_recent_activity_view(reader) -> None:
+    result = cli("event", "list", "-o", "table")
+
+    for column in ("Chart", "Version", "Phase", "Env", "PR", "Source", "Timestamp", "Age"):
+        assert column in result.stdout
+    assert "grafana" in result.stdout
+    assert "promoted" in result.stdout
+    assert "staging" in result.stdout
+    assert "2026-08-01 12:00:00Z" in result.stdout
+
+
+def test_the_table_shows_the_pr_url(reader) -> None:
+    reader.events = [
+        dict(_EVENT_DOC, pr_url="https://github.com/garyellis/lab-charts/pull/38"),
+        dict(_EVENT_DOC),
+    ]
+
+    result = cli("event", "list", "-o", "table")
+
+    assert "pull/38" in result.stdout.replace("\n", "")
+
+
+def test_the_json_projection_is_the_versioned_wire_document(reader) -> None:
+    from chart_manager.services.events.wire import SCHEMA_VERSION
+
+    result = cli("event", "list", "grafana@1.2.3", "-o", "json")
+
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["chart"] == "grafana"
+    assert payload["correlation_id"] == "grafana@1.2.3"
+    assert payload["count"] == 1
+    assert payload["events"] == [_EVENT_DOC]
+
+
+def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
+    """conftest pins EVENTS_BACKEND=none, which is also the shipped default."""
+    result = cli("event", "list")
+
+    assert result.exit_code == EXIT_ENVIRONMENT
+    assert "EVENTS_BACKEND" in result.stderr
+    assert result.stdout == ""
+
+
+def test_list_against_dynamodb_says_the_read_side_is_cosmos_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
+
+    result = cli("event", "list")
+
+    assert result.exit_code == EXIT_ENVIRONMENT
+    assert "Cosmos-only" in result.stderr
+    assert "query-events-dynamodb" in result.stderr
+
+
+def test_list_renders_newest_first_across_mixed_timezone_stamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through the real dispatch: a +02:00 stamp that is *older*
+    in real time must not lead the listing just because it string-sorts
+    newer. The fake container returns the backend's string order."""
+
+    class FakeContainer:
+        def query_items(self, **kwargs: Any) -> list[dict[str, Any]]:
+            offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
+            utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
+            return [offset, utc]  # string order: +02:00 first
+
+    from chart_manager.services.events import store as store_module
+
+    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    monkeypatch.setattr(store_module, "get_container", lambda **kwargs: FakeContainer())
+
+    result = cli("event", "list", "-o", "json")
+
+    charts = [event["chart_name"] for event in json.loads(result.stdout)["events"]]
+    assert charts == ["newer", "older"]
