@@ -104,7 +104,7 @@ def test_the_optional_fields_still_reach_the_writer(writer: RecordingWriter) -> 
         "--build-correlation-id", "org/charts#7",
         "--pr-url", "https://example.invalid/pr/7",
         "--git-sha", "deadbeef",
-        "--at", "2026-07-30T12:00:00",
+        "--at", "2026-07-30T12:00:00Z",
     )
 
     assert writer.build_calls[0] == {
@@ -116,6 +116,28 @@ def test_the_optional_fields_still_reach_the_writer(writer: RecordingWriter) -> 
         "git_sha": "deadbeef",
         "timestamp": datetime(2026, 7, 30, 12, 0, tzinfo=UTC),
     }
+
+
+def test_a_non_utc_at_offset_is_normalized_to_utc(writer: RecordingWriter) -> None:
+    """Stored timestamps are isoformat strings; only UTC stamps compare
+    chronologically against the UTC stamps every live emitter writes."""
+    cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "merged", "--at", "2026-07-30T14:00:00+02:00",
+    )
+
+    assert writer.build_calls[0]["timestamp"] == datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+
+
+def test_a_naive_at_timestamp_is_a_usage_error(writer: RecordingWriter) -> None:
+    """A backfill from a laptop in another timezone must not shift history."""
+    result = cli(
+        "event", "emit", "build", "grafana@1.2.3",
+        "--phase", "merged", "--at", "2026-07-30T12:00:00",
+    )
+
+    assert result.exit_code == 2
+    assert writer.build_calls == []
 
 
 @pytest.mark.parametrize(

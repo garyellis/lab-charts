@@ -82,14 +82,27 @@ def _make_event_writer() -> EventWriter:
 
 
 def _parse_at(at: str | None) -> datetime | None:
-    """Parse an --at ISO-8601 string into a tz-aware datetime (default UTC)."""
+    """Parse an --at ISO-8601 string into a UTC datetime.
+
+    Normalized to UTC before the event is built: the store keeps timestamps
+    as isoformat *strings*, and a `+02:00` stamp does not compare
+    chronologically against the `+00:00` ones every live emitter writes.
+    Naive input is rejected rather than assumed -- a backfill run from a
+    laptop in another timezone silently shifting history is exactly the bug
+    an explicit offset requirement prevents.
+    """
     if at is None:
         return None
     try:
         ts = datetime.fromisoformat(at)
     except ValueError as exc:
         raise typer.BadParameter(f"invalid --at timestamp {at!r}: {exc}") from exc
-    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    if ts.tzinfo is None:
+        raise typer.BadParameter(
+            f"--at timestamp {at!r} has no UTC offset; append one, "
+            "e.g. 2026-07-30T12:00:00Z or 2026-07-30T14:00:00+02:00"
+        )
+    return ts.astimezone(UTC)
 
 
 def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) -> ChartRef:
@@ -170,7 +183,7 @@ def build(
     build_correlation_id: Annotated[str | None, typer.Option(help="Charts-repo PR.")] = None,
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
-    at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp (default: now). For backfill/seeding.")] = None,
+    at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp with an explicit UTC offset (naive is rejected; stored as UTC). Default: now. For backfill/seeding.")] = None,
     strict: Annotated[
         bool,
         typer.Option("--strict-events", help="Fail the step on emit error."),
@@ -204,7 +217,7 @@ def promote(
     build_correlation_id: Annotated[str | None, typer.Option(help="Originating charts-repo PR.")] = None,
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
-    at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp (default: now). For backfill/seeding.")] = None,
+    at: Annotated[str | None, typer.Option(help="ISO-8601 event timestamp with an explicit UTC offset (naive is rejected; stored as UTC). Default: now. For backfill/seeding.")] = None,
     strict: Annotated[
         bool,
         typer.Option("--strict-events", help="Fail the step on emit error."),
