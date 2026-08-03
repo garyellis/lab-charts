@@ -17,6 +17,11 @@ from typing import TextIO
 from rich.console import Console
 from rich.text import Text
 
+#: Libraries that log per-request chatter at INFO, expecting consumers to
+#: filter by namespace downstream; the root handler would render all of it.
+#: Their WARNING and above still surface.
+_NOISY_DEPENDENCY_LOGGERS = ("azure", "botocore", "urllib3")
+
 _LEVEL_STYLES = {
     logging.DEBUG: "dim cyan",
     logging.INFO: "cyan",
@@ -112,6 +117,14 @@ def setup_logging(
         handlers=[handler],
         force=force,
     )
+
+    # At DEBUG the operator asked for wire-level detail, so dependencies
+    # inherit it; set explicitly either way so repeated setup calls reset.
+    dependency_level = (
+        numeric_level if numeric_level <= logging.DEBUG else logging.WARNING
+    )
+    for name in _NOISY_DEPENDENCY_LOGGERS:
+        logging.getLogger(name).setLevel(dependency_level)
 
 
 __all__ = ["JsonLogFormatter", "RichLogHandler", "setup_logging"]
