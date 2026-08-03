@@ -1,10 +1,15 @@
-"""`chart-manager event emit` subcommands.
+"""`chart-manager event emit|list` subcommands.
 
 Thin CLI surface over EventWriter so CI (GitHub Actions) can emit lifecycle
-events as shell steps. Emission is non-fatal by default: a failed write logs
-a warning and exits 0 so telemetry never breaks a build. --strict-events overrides.
+events as shell steps, plus the read side: `event list` over the same
+ledger. Emission is non-fatal by default: a failed write logs a warning and
+exits 0 so telemetry never breaks a build. --strict-events overrides. A
+*read* is the opposite -- the listing is the deliverable, so an unreadable
+backend is a reported failure, exiting through the typed `EventReadError`'s
+own outcome.
 
-The chart and version arrive as one `CHART@VERSION` positional, parsed by
+The chart and version arrive as one `CHART@VERSION` positional (`event
+list` takes the optional-version `CHART[@VERSION]` selector), parsed by
 `services/events/ref.py`. Nothing here looks for an `@`: the token is the
 event `correlation_id`, so its grammar is the events domain's, not the
 surface's (design commitment 6). The old `--chart` / `--version` flag pair
@@ -13,21 +18,34 @@ stays accepted as a hidden alias and reaches the same resolver.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+from rich.markup import escape
+from rich.table import Table
 
+from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
+from chart_manager.cli.streams import console, errors, narration
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
+from chart_manager.services.events.query import (
+    DEFAULT_LIMIT,
+    EventQuery,
+    EventReadError,
+)
 from chart_manager.services.events.ref import (
     ChartRef,
     ChartRefError,
     parse_ref,
+    parse_selector,
     ref_from_parts,
 )
+from chart_manager.services.events.store import query_events
+from chart_manager.services.events.wire import events_to_dict
 from chart_manager.services.events.writer import EventWriter
 
 #: The `CHART@VERSION` positional. Optional in the signature only so the
@@ -240,11 +258,111 @@ def promote(
     )
 
 
+# --- the read side ---------------------------------------------------------
+
+#: The listing renders as a table, or as the versioned wire document from
+#: `services/events/wire.py`.
+_LIST_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+
+ListOutputOption = Annotated[str | None, output_mod.output_option(*_LIST_OUTPUTS)]
+
+SelectorArgument = Annotated[
+    str | None,
+    typer.Argument(
+        metavar="CHART[@VERSION]",
+        help=(
+            "Narrow to one chart's history, or to one release with "
+            "CHART@VERSION. Absent: recent activity across every chart."
+        ),
+    ),
+]
+
+LimitOption = Annotated[
+    int,
+    typer.Option("--limit", "-n", min=1, help="Maximum events to show, newest first."),
+]
+
+
+def _query_events(request: EventQuery) -> list[dict[str, Any]]:
+    """Run the read-side selection (module-level so tests can override)."""
+    return query_events(request)
+
+
+def list_events(
+    ctx: typer.Context,
+    selector: SelectorArgument = None,
+    limit: LimitOption = DEFAULT_LIMIT,
+    output: ListOutputOption = None,
+) -> None:
+    """List recent lifecycle events, newest first.
+
+    Requires an events backend that can serve reads (EVENTS_BACKEND=cosmos
+    today). The refusals are typed: `none`/unset says events are disabled
+    and how to enable them; `dynamodb` says the read side is Cosmos-only.
+    Both exit through the error's own outcome in the exit-code table --
+    nothing the caller asked about failed, the environment has no readable
+    ledger.
+    """
+    mode = output_mod.resolve(output, ctx, allowed=_LIST_OUTPUTS, console=console)
+    try:
+        parsed = None if selector is None else parse_selector(selector)
+    except ChartRefError as exc:
+        # A usage error, exactly as `_resolve_ref` narrows it for emit.
+        raise typer.BadParameter(str(exc)) from exc
+    request = EventQuery.from_selector(parsed, limit=limit)
+    try:
+        events = _query_events(request)
+    except EventReadError as exc:
+        errors.print(f"[red]error:[/red] {escape(str(exc))}")
+        raise typer.Exit(code=exit_code_for(exc.outcome)) from exc
+    if not events:
+        # Narration, not data: an empty table (or a count:0 document) is the
+        # projection; this line says the emptiness is real, not a bug.
+        narration.print("no events matched")
+    output_mod.emit(
+        events_to_dict(events, query=request), mode=mode, table=_events_table(events)
+    )
+
+
+def _events_table(events: Sequence[dict[str, Any]]) -> Table:
+    """Render recent activity for a human: one row per event, newest first."""
+    table = Table("Chart", "Version", "Phase", "Env", "Source", "Age")
+    now = datetime.now(UTC)
+    for event in events:
+        table.add_row(
+            escape(str(event.get("chart_name") or "?")),
+            escape(str(event.get("chart_version") or "-")),
+            escape(str(event.get("build_phase") or event.get("promotion_phase") or "-")),
+            escape(str(event.get("environment") or "-")),
+            escape(str(event.get("source") or "-")),
+            _age(event.get("timestamp"), now=now),
+        )
+    return table
+
+
+def _age(timestamp: Any, *, now: datetime) -> str:
+    """Compact age of one ISO-8601 stamp: 42s, 5m, 3h, 12d; "?" when unreadable."""
+    try:
+        parsed = datetime.fromisoformat(str(timestamp))
+    except ValueError:
+        return "?"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    seconds = max(0, int((now - parsed).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
 # --- the command tree ------------------------------------------------------
 #
 # Assembled here rather than in `cli/main.py` so the whole `event` group --
-# including, later, P1b's read side -- is one file. `main.py` mounts it, the
-# way it already mounts `upgrade` and `publish`.
+# emit and the read side -- is one file. `main.py` mounts it, the way it
+# already mounts `upgrade` and `publish`.
 
 emit_app = typer.Typer(no_args_is_help=True, help="Emit one platform lifecycle event.")
 emit_app.command("build")(build)
@@ -252,6 +370,7 @@ emit_app.command("promote")(promote)
 
 event_app = typer.Typer(no_args_is_help=True, help="Platform lifecycle events.")
 event_app.add_typer(emit_app, name="emit")
+event_app.command("list")(list_events)
 
 
 def register(app: typer.Typer) -> None:
@@ -259,4 +378,4 @@ def register(app: typer.Typer) -> None:
     app.add_typer(event_app, name="event")
 
 
-__all__ = ["build", "emit_app", "event_app", "promote", "register"]
+__all__ = ["build", "emit_app", "event_app", "list_events", "promote", "register"]
