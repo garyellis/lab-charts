@@ -510,11 +510,25 @@ def test_a_malformed_selector_is_a_usage_error(reader) -> None:
 def test_the_table_is_the_human_recent_activity_view(reader) -> None:
     result = cli("event", "list", "-o", "table")
 
-    for column in ("Chart", "Version", "Phase", "Env", "Source", "Age"):
+    for column in ("Chart", "Version", "Phase", "Env", "PR", "Source", "Timestamp", "Age"):
         assert column in result.stdout
     assert "grafana" in result.stdout
     assert "promoted" in result.stdout
     assert "staging" in result.stdout
+    assert "2026-08-01 12:00:00Z" in result.stdout
+
+
+def test_the_table_shows_a_compact_pr_reference(reader) -> None:
+    reader.events = [
+        dict(_EVENT_DOC, pr_url="https://github.com/garyellis/lab-charts/pull/38"),
+        dict(_EVENT_DOC, build_correlation_id="garyellis/lab-charts#41"),
+        dict(_EVENT_DOC),
+    ]
+
+    result = cli("event", "list", "-o", "table")
+
+    assert "#38" in result.stdout
+    assert "#41" in result.stdout
 
 
 def test_the_json_projection_is_the_versioned_wire_document(reader) -> None:

@@ -397,7 +397,7 @@ def list_events(
 
 def _events_table(events: Sequence[dict[str, Any]]) -> Table:
     """Render recent activity for a human: one row per event, newest first."""
-    table = Table("Chart", "Version", "Phase", "Env", "Source", "Age")
+    table = Table("Chart", "Version", "Phase", "Env", "PR", "Source", "Timestamp", "Age")
     now = datetime.now(UTC)
     for event in events:
         table.add_row(
@@ -405,10 +405,40 @@ def _events_table(events: Sequence[dict[str, Any]]) -> Table:
             escape(str(event.get("chart_version") or "-")),
             escape(str(event.get("build_phase") or event.get("promotion_phase") or "-")),
             escape(str(event.get("environment") or "-")),
+            escape(_pr(event)),
             escape(str(event.get("source") or "-")),
+            _stamp(event.get("timestamp")),
             _age(event.get("timestamp"), now=now),
         )
     return table
+
+
+def _pr(event: dict[str, Any]) -> str:
+    """Compact PR reference: #38 from pr_url or a correlation id; "-" without one.
+
+    The full URL and both correlation ids stay in the JSON projection; the
+    table only answers "which PR", scoped by the row's chart.
+    """
+    url = str(event.get("pr_url") or "")
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    if tail.isdigit():
+        return f"#{tail}"
+    for field in ("build_correlation_id", "promotion_correlation_id"):
+        value = str(event.get(field) or "")
+        if "#" in value:
+            return f"#{value.rsplit('#', 1)[-1]}"
+    return "-"
+
+
+def _stamp(timestamp: Any) -> str:
+    """One ISO-8601 stamp normalized to compact UTC; "?" when unreadable."""
+    try:
+        parsed = datetime.fromisoformat(str(timestamp))
+    except ValueError:
+        return "?"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
 def _age(timestamp: Any, *, now: datetime) -> str:
