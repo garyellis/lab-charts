@@ -11,7 +11,11 @@ kubectl = "1.35.3"
 kind = "0.32.0"
 kubeconform = "0.8.0"
 kyverno = "1.18.1"
-"npm:renovate" = "43.281.0"
+# libzip@3.2.2 was published without provenance in yarn's 2025-09-18 manual
+# 16-package release (whole wave unattested, publisher is the project lead,
+# tarball diff vs the attested 3.2.0 is clean bug fixes, no install hooks).
+# Drop the exclusion when renovate resolves a re-attested libzip.
+"npm:renovate" = { version = "43.281.0", trust_policy_excludes = ["@yarnpkg/libzip@3.2.2"] }
 
 [tasks.setup]
 description = "Install Python dependencies for the chart-manager CLI."
