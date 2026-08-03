@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ExternalCommandError,
+    MissingToolError,
+)
 from tests.conftest import FakeCommandRunner
 
 
@@ -164,6 +168,26 @@ def test_repository_slug_is_validated_before_execution(
         )
 
     assert runner.calls == []
+
+
+def test_an_absent_binary_names_itself_and_its_remediation(tmp_path: Path) -> None:
+    class MissingBinaryRunner:
+        def run(self, *args: object, **kwargs: object) -> object:
+            raise MissingToolError("required tool not found on PATH: renovate")
+
+    request = RenovateRequest(
+        repo_root=tmp_path,
+        repository="owner/repo",
+        global_config_path=_config(tmp_path),
+    )
+
+    with pytest.raises(MissingToolError) as excinfo:
+        Renovate(runner=MissingBinaryRunner()).run(request)
+
+    message = str(excinfo.value)
+    assert "renovate is not installed" in message
+    assert "npm install -g renovate" in message
+    assert "chart-manager doctor" in message
 
 
 def test_missing_config_and_invalid_overlay_use_expected_error_hierarchy(
