@@ -5,6 +5,13 @@ Local-development chart for the Linux-based Azure Cosmos DB emulator.
 The emulator image is pinned to the deterministic `vnext-EN20260706` release.
 Update both `image.tag` and the chart `appVersion` when adopting a newer release.
 
+The CI profile gives first-time database initialization a 20-minute startup
+window. Its lifecycle timeouts are deliberately longer than that window so a
+slow GitHub-hosted runner can finish one initialization attempt without the
+startup probe restarting the process and repeating initialization work. The
+readiness check remains `/ready`; a rollout cannot pass until the emulator
+reports that its database is initialized.
+
 ```bash
 mise run validate -- --all --chart cosmosdb-emulator --env ci
 mise run kind-test -- cosmosdb-emulator --profile routed

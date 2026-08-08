@@ -19,6 +19,7 @@ resources:
     memory: 4Gi
 
 startupProbe:
-  # Allow slow first-time initialization on shared GitHub-hosted runners without
-  # restarting the emulator; the additional CPU and memory normally make it faster.
-  failureThreshold: 120
+  # First-time database initialization can exceed ten minutes on a contended
+  # GitHub-hosted runner. Keep the original process alive for up to 20 minutes;
+  # restarting it interrupts initialization and repeats the slow path.
+  failureThreshold: 240

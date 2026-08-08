@@ -37,7 +37,9 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        timeout: 15m
+        # Exceed the CI startup-probe budget so rollout observes one complete
+        # initialization attempt instead of timing out during a restarted one.
+        timeout: 25m
 
       routed:
         description: Install the emulator behind the shared apps gateway so it is callable through its VirtualService host.
@@ -49,6 +51,7 @@ spec:
           - values.yaml
           - values-ci.yaml
         helmTest: true
-        timeout: 20m
+        # Includes the 20-minute CI startup budget plus gateway setup overhead.
+        timeout: 30m
 
     dependentTests: []
