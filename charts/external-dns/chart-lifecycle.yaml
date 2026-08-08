@@ -1,0 +1,31 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: external-dns
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: external-dns
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: external-dns
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "Chart.lock":           [ci]
+      "values.yaml":          [ci]
+      "values-ci.yaml":       [ci]
+      "templates/**":         [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    # The Designate webhook authenticates to Keystone during process startup.
+    # A truthful cluster test therefore requires live OpenStack credentials and
+    # belongs in edge-w acceptance, not an offline kind sandbox.
+    enabled: false
+    profiles: {}
+    dependentTests: []

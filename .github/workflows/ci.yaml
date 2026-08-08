@@ -207,8 +207,8 @@ jobs:
 
           # Publishing is direct ownership only: any current chart with a
           # changed path is selected, independent of lifecycle/test fanout.
-          # Compute this on the hosted prep runner so a no-chart PR never
-          # reserves the private kind runner or contacts Harbor.
+          # Computed here so a no-chart PR never reaches the publish job or
+          # contacts the registry at all.
           # `-o table` is required, not decorative. `plan`'s output default is
           # `auto`, which resolves to json whenever stdout is not a TTY or
           # CI=true -- i.e. always, here. This capture is read back with
@@ -492,13 +492,23 @@ jobs:
         needs.validate.result == 'success' &&
         (needs.sandbox-test.result == 'success' || needs.sandbox-test.result == 'skipped')
       }}
-    runs-on: [runner-scale-set, kind]
+    # ghcr.io is on the public internet and presents a publicly-trusted
+    # certificate, so publishing no longer needs the private runner or the lab
+    # root CA that Harbor required. Every chart dependency resolves from a
+    # public upstream repo, so `helm dependency update` works here too.
+    runs-on: ubuntu-latest
+    # A job-level block REPLACES the workflow-level `contents: read`, so both
+    # keys are named here. `packages: write` is what lets GITHUB_TOKEN push to
+    # ghcr.io; the fork guard in `if:` above is what keeps that grant off
+    # pull requests from forks.
+    permissions:
+      contents: read
+      packages: write
     env:
-      HARBOR_REGISTRY: ${{ vars.HARBOR_REGISTRY }}
-      HARBOR_USERNAME: ${{ vars.HARBOR_USERNAME }}
-      HARBOR_PROJECT: ${{ vars.HARBOR_PROJECT || 'charts' }}
-      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
-      HARBOR_CA_FILE: /usr/local/share/ca-certificates/lab-root-ca.crt
+      # ghcr.io rejects an uppercase namespace. `repository_owner` is already
+      # lowercase, so the fold in the publish step is defensive only.
+      GHCR_NAMESPACE: ${{ github.repository_owner }}
+      GHCR_PROJECT: ${{ vars.GHCR_PROJECT || 'charts' }}
       EVENT_NAME: ${{ github.event_name }}
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -518,16 +528,19 @@ jobs:
       - name: Install mise + tools
         uses: jdx/mise-action@v4
 
-      - name: Login to Harbor
+      # No secret to provision: GITHUB_TOKEN is minted per run and the
+      # `packages: write` grant above is the whole authorization story.
+      # Routed through env rather than interpolated into the shell so the
+      # token never appears in the rendered script.
+      - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
         run: |
           set -euo pipefail
-          : "${HARBOR_REGISTRY:?configure HARBOR_REGISTRY in the runner environment}"
-          : "${HARBOR_USERNAME:?configure HARBOR_USERNAME in the runner environment}"
-          : "${HARBOR_PASSWORD:?configure the HARBOR_PASSWORD repository secret}"
-          printf '%s' "$HARBOR_PASSWORD" \
-            | helm registry login "$HARBOR_REGISTRY" \
-                --username "$HARBOR_USERNAME" \
-                --ca-file "$HARBOR_CA_FILE" \
+          printf '%s' "$GHCR_TOKEN" \
+            | helm registry login ghcr.io \
+                --username "$GHCR_USER" \
                 --password-stdin
 
       - name: Publish directly changed charts
@@ -538,10 +551,13 @@ jobs:
             [[ -n "$chart" ]] && charts+=("$chart")
           done <<< "$PUBLISH_CHARTS"
 
-          repository="oci://${HARBOR_REGISTRY}/${HARBOR_PROJECT:-charts}"
+          namespace="$(printf '%s' "$GHCR_NAMESPACE" | tr '[:upper:]' '[:lower:]')"
+          repository="oci://ghcr.io/${namespace}/${GHCR_PROJECT:-charts}"
+          # No --ca-file: ghcr.io's certificate chains to the runner's default
+          # trust store, and the publisher omits helm's --ca-file flag entirely
+          # when none is passed.
           publish_args=(
             --repository "$repository"
-            --ca-file "$HARBOR_CA_FILE"
             --git-sha "$SOURCE_SHA"
             --operation-id "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           )

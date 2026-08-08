@@ -28,7 +28,7 @@ def publish(
         typer.Option(
             "--repository",
             envvar="CHART_MANAGER_OCI_REPOSITORY",
-            help="Destination OCI repository, for example oci://harbor.local/library.",
+            help="Destination OCI repository, for example oci://ghcr.io/owner/charts.",
         ),
     ],
     root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
