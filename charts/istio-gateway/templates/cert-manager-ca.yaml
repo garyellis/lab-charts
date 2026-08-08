@@ -1,3 +1,4 @@
+{{- if .Values.certManager.enabled }}
 ---
 # 1. Bootstrap Issuer (cluster-scoped: signs the Root CA)
 apiVersion: cert-manager.io/v1
@@ -58,3 +59,4 @@ spec:
   dnsNames:
     - "*.{{ .Values.appsDomain }}"
     - "{{ .Values.appsDomain }}"
+{{- end }}

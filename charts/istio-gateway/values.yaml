@@ -6,10 +6,32 @@
 # Apply values-ci.yaml on top to flatten these for a single-node kind
 # cluster (ClusterIP, no LB annotations, no node placement, single replica).
 
+# The starter apps-tier Gateway (templates/apps-gateway.yaml). Enabled by
+# default so a standalone install of this chart is immediately usable.
+# Consumers that own their listener topology elsewhere -- e.g. the
+# lab-openstack platform bootstrap, which scaffolds a role-aware Gateway per
+# cluster (edge redirect vs workload ingress) -- set this to false and keep
+# only the gateway workload from the upstream subchart.
+appsGateway:
+  enabled: true
+
+# The self-signed CA chain and wildcard leaf in templates/cert-manager-ca.yaml.
+# Enabled by default for the same reason: a standalone install needs some
+# issuer to satisfy the apps-gateway credentialName. Consumers that already run
+# a cert-manager issuing story (public ACME at an edge, a shared fleet CA in
+# workload clusters) set this to false so the chart does not mint a second,
+# competing root.
+#
+# Turning this off also drops the apps-wildcard leg of the helm test, which
+# would otherwise wait forever on a Certificate that is no longer rendered.
+certManager:
+  enabled: true
+
 # Apps-tier ingress domain. Drives the lab CA leaf cert (commonName +
 # dnsNames) and the Gateway listener hosts. Per-app VirtualServices in
 # other charts (grafana, etc.) consume the same appsDomain so VS hosts
 # match the cert SANs and the gateway accepts them.
+# Only read when appsGateway.enabled or certManager.enabled.
 appsDomain: k8s.home.lab.io
 appsHosts:
   - "*.home.lab"

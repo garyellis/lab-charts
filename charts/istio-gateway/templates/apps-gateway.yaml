@@ -1,3 +1,4 @@
+{{- if .Values.appsGateway.enabled }}
 ---
 apiVersion: networking.istio.io/v1
 kind: Gateway
@@ -29,3 +30,4 @@ spec:
       tls:
         mode: SIMPLE
         credentialName: apps-wildcard-cert
+{{- end }}
