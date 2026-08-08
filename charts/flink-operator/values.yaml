@@ -60,6 +60,6 @@ flinkDeployment:
       memory: "1024m"
 
   job:
-    jarURI: local:///opt/flink/examples/streaming/StateMachine.jar
+    jarURI: local:///opt/flink/examples/streaming/StateMachineExample.jar
     parallelism: 2
     upgradeMode: stateless

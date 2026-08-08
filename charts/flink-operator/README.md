@@ -67,8 +67,8 @@ operator and CRDs, creates the sample, waits for its job manager to report
 `READY`, and deletes it when the test exits.
 
 The sample defaults to Flink's built-in StateMachine streaming example
-(`local:///opt/flink/examples/streaming/StateMachine.jar`), so verification has
-no external dependency.
+(`local:///opt/flink/examples/streaming/StateMachineExample.jar`), so
+verification has no external dependency.
 
 To test your own job, point `flinkDeployment.job.jarURI` at your jar (bundled in
 a custom `flinkDeployment.image`, or mounted). Set `flinkDeployment.enabled:

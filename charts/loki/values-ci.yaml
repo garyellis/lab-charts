@@ -32,7 +32,7 @@ loki:
 
   chunksCache:
     replicas: 1
-    nodeSelector: {}
+    nodeSelector: null
     tolerations: []
     allocatedMemory: 256
     resources:
@@ -48,7 +48,7 @@ loki:
       storageSize: 3Gi
 
   resultsCache:
-    nodeSelector: {}
+    nodeSelector: null
     tolerations: []
     allocatedMemory: 128
     resources:
@@ -63,7 +63,7 @@ loki:
     fullnameOverride: loki-minio
     enabled: true
     address: loki-minio.observability.svc:9000
-    nodeSelector: {}
+    nodeSelector: null
     tolerations: []
     persistence:
       storageClass: standard
@@ -82,7 +82,7 @@ loki:
 
   singleBinary:
     replicas: 1
-    nodeSelector: {}
+    nodeSelector: null
     tolerations: []
     resources:
       requests:
@@ -96,7 +96,7 @@ loki:
       size: 2Gi
 
   gateway:
-    nodeSelector: {}
+    nodeSelector: null
     tolerations: []
     resources:
       requests:
