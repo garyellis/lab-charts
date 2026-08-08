@@ -1,0 +1,15 @@
+# VCS and editor artifacts
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+
+# Local tooling
+.chart-manager/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.log

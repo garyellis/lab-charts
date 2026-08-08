@@ -1,0 +1,42 @@
+external-dns:
+  sources:
+    - crd
+  domainFilters:
+    - int.garys-lab.io
+  policy: upsert-only
+  registry: txt
+  txtOwnerId: edge-designate
+
+  provider:
+    name: webhook
+    webhook:
+      image:
+        repository: ghcr.io/inovex/external-dns-openstack-webhook
+        tag: "2.2.0@sha256:1e63b48ea2a30e5d1b092118fc8154a3c83a5eeaf3b92039505b4719668c3f13"
+      env:
+        - name: OS_CLOUD
+          value: openstack
+      extraVolumeMounts:
+        - name: openstack-clouds
+          mountPath: /etc/openstack
+          readOnly: true
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+
+  extraVolumes:
+    - name: openstack-clouds
+      secret:
+        secretName: external-dns-openstack
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
