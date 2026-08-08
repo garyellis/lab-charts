@@ -1,16 +1,13 @@
 ---
 # CI overlay: single-node kind cluster.
 # Override the openstack defaults in values.yaml: switch the Service from
-# LoadBalancer to ClusterIP (kind has no LB controller), wipe the edge
-# node selector/tolerations (kind nodes are not labeled/tainted that way),
-# drop podAntiAffinity (only one node), scale to a single replica, and
-# trim resources.
+# LoadBalancer to NodePort (kind has no LB controller), wipe the edge
+# placement and tolerations (kind nodes are not labeled/tainted that way),
+# scale to a single replica, and trim resources.
 #
-# nodeSelector is wiped via `~` (null) so the subchart's
-# `{{ with .Values.nodeSelector }}` block is skipped entirely. The helm
-# runner applies --skip-schema-validation for wrapper installs (see
-# src/chart_manager/integrations/helm.py) because the gateway subchart's
-# values.schema.json forbids null at these paths.
+# The production edge-node requirement is expressed as node affinity in
+# values.yaml. Replacing its nodeSelectorTerms list here keeps this overlay
+# schema-valid while allowing the gateway to run on any Linux kind node.
 #
 # Note: service.annotations stays as `{}` (cannot be null — the upstream
 # template calls deepCopy on it, which panics on null). Helm deep-merges
@@ -38,8 +35,8 @@ gateway:
     type: NodePort
     # Required when downgrading from LoadBalancer (values.yaml default):
     # the field is only valid on externally-accessible Services and must
-    # be wiped, not deep-merged.
-    externalTrafficPolicy: null
+    # be cleared.
+    externalTrafficPolicy: ""
     annotations: {}
     ports:
       - name: status-port
@@ -65,9 +62,16 @@ gateway:
       cpu: 250m
       memory: 256Mi
 
-  nodeSelector: ~
   tolerations: []
-  affinity: {}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                  - linux
 
 routes:
   # Cross-cutting hubble route's default host is *.kind.local which

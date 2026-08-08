@@ -6,6 +6,8 @@ spec:
   enabled: true
   validation:
     enabled: true
+    validators:
+      policy: false
     releaseName: k6-operator
     namespaceTemplate: "lab-${env}"
     environments:

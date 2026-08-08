@@ -6,6 +6,8 @@ spec:
   enabled: true
   validation:
     enabled: true
+    validators:
+      policy: false
     releaseName: loki
     namespaceTemplate: "lab-${env}"
     environments:

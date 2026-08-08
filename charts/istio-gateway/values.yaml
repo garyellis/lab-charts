@@ -54,9 +54,6 @@ gateway:
       cpu: 2000m
       memory: 1024Mi
 
-  nodeSelector:
-    node-role.kubernetes.io/edge: ""
-
   tolerations:
     - key: node-role.kubernetes.io/edge
       operator: Equal
@@ -64,6 +61,12 @@ gateway:
       effect: NoSchedule
 
   affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: Exists
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
         - weight: 100

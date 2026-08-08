@@ -3,7 +3,7 @@ apiVersion: v2
 name: k6-operator
 description: k6-operator vendor/deployment chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "1.4.0"
 dependencies:
   - name: k6-operator
