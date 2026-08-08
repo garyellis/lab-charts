@@ -1,3 +1,17 @@
+# This wrapper's own ServiceMonitors, not the subchart's. `cilium` targets
+# kube-system, which every cluster has; `istio` targets istio-system, which
+# exists only where istio is installed -- and no cluster-test profile
+# installs it, since `prometheus-operator:minimal` has `requires: []` and
+# every profile that pulls it in (alloy, kube-state-metrics, node-exporter)
+# inherits that. Helm fails the entire release when a manifest names a
+# namespace that does not exist, so the operator never comes up at all.
+#
+# Off for ci only. dev/test/uat/prod still render it, so `chart validate`
+# keeps covering the template in four of five environments.
+serviceMonitors:
+  istio:
+    enabled: false
+
 prometheus-operator:
   crds:
     enabled: true
