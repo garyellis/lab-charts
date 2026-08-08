@@ -46,7 +46,7 @@ def test_every_production_chart_package_contains_chart_lifecycle(
         pytest.skip("missing tool on PATH: helm")
 
     chart_dirs = sorted(path.parent for path in (REPO_ROOT / "charts").glob("*/Chart.yaml"))
-    assert len(chart_dirs) == 28
+    assert len(chart_dirs) == 29
 
     staging_root = tmp_path / "src"
     staging_root.mkdir()
