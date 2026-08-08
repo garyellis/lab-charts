@@ -21,6 +21,10 @@ from .conftest import REPO_ROOT
 #: skipping cluster tests stays a deliberate, reviewed act instead of
 #: something a new chart can quietly drift into.
 CLUSTER_TEST_OPT_OUTS = {
+    # The preview Cosmos DB emulator can remain unready for more than twenty
+    # minutes on hosted runners, so its live test is quarantined while static
+    # render, schema, and policy validation remain enabled.
+    "cosmosdb-emulator",
     # Two reasons, both properties of the live environment rather than of the
     # chart: the OpenStack Designate webhook authenticates to Keystone during
     # process startup, and nothing installs the DNSEndpoint CRD that this
