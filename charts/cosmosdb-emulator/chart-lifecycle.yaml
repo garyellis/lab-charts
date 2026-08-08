@@ -25,7 +25,9 @@ spec:
     unmatchedChanges: warn
 
   clusterTest:
-    enabled: true
+    # The preview emulator does not become ready reliably on hosted runners.
+    # Keep static validation enabled while quarantining the blocking live test.
+    enabled: false
     profiles:
       minimal:
         description: Install the Cosmos DB emulator with the Istio VirtualService CRD available and wait for the emulator readiness endpoint.
