@@ -142,9 +142,24 @@ metadata:
 spec:
   serviceAccountName: {{ $testName }}
   restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: kubectl
-      image: registry.k8s.io/kubectl:v1.36.2
+      # The test uses a shell so it can clean up the ephemeral FlinkDeployment
+      # on both success and failure. The official kubectl image is distroless.
+      image: docker.io/alpine/kubectl:1.36.2
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        runAsNonRoot: true
+        runAsUser: 65532
       command: ["/bin/sh", "-c"]
       args:
         - |
