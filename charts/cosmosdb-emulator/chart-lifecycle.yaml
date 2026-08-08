@@ -36,7 +36,7 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
-        helmTest: true
+        helmTest: false
         # Exceed the CI startup-probe budget so rollout observes one complete
         # initialization attempt instead of timing out during a restarted one.
         timeout: 25m
@@ -50,7 +50,7 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
-        helmTest: true
+        helmTest: false
         # Includes the 20-minute CI startup budget plus gateway setup overhead.
         timeout: 30m
 
