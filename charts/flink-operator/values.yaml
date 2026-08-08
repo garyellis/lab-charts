@@ -31,10 +31,11 @@ flink-kubernetes-operator:
     runAsUser: 9999
     runAsGroup: 9999
 
-# Sample FlinkDeployment managed by this release. Defaults to the built-in
-# StateMachine streaming example so the install is self-verifying without any
-# external dependency (no Kafka, no artifact storage). Point `job.jarURI` at
-# your own jar, or set enabled: false and submit FlinkSessionJobs separately.
+# Ephemeral FlinkDeployment created only by `helm test`, after the operator and
+# CRDs are ready, then deleted when the test exits. It defaults to the built-in
+# StateMachine streaming example so the chart is self-verifying without any
+# external dependency (no Kafka, no artifact storage). Set enabled: false to
+# skip this workload test.
 flinkDeployment:
   enabled: true
   name: lab-flink

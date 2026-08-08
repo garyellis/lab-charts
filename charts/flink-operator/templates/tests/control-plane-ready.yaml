@@ -2,6 +2,7 @@
 {{- $readyTestName := printf "%s-control-plane-ready" .Release.Name -}}
 {{- $crdTestName := printf "%s-crds-installed" .Release.Name -}}
 {{- $jobReadyTestName := printf "%s-flinkdeployment-ready" .Release.Name -}}
+{{- $fd := .Values.flinkDeployment -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -27,7 +28,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["flink.apache.org"]
     resources: ["flinkdeployments"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["create", "delete", "get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -123,7 +124,7 @@ spec:
         - flinksessionjobs.flink.apache.org
         - flinkstatesnapshots.flink.apache.org
         - flinkbluegreendeployments.flink.apache.org
-{{- if .Values.flinkDeployment.enabled }}
+{{- if $fd.enabled }}
 ---
 apiVersion: v1
 kind: Pod
@@ -132,7 +133,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-weight: "0"
+    # Run only after the operator and its CRDs have passed the tests above.
+    # Creating the CR from inside this pod is intentional: rendering a
+    # FlinkDeployment as a Helm resource makes a fresh install fail discovery
+    # before Helm has installed the dependency chart's CRDs.
+    helm.sh/hook-weight: "10"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   serviceAccountName: {{ $testName }}
@@ -140,11 +145,51 @@ spec:
   containers:
     - name: kubectl
       image: registry.k8s.io/kubectl:v1.36.2
-      command:
-        - kubectl
-        - wait
-        - flinkdeployment/{{ .Values.flinkDeployment.name }}
-        - --for=jsonpath={.status.jobManagerDeploymentStatus}=READY
-        - --namespace={{ .Release.Namespace }}
-        - --timeout=600s
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+
+          cleanup() {
+            kubectl delete flinkdeployment {{ required "flinkDeployment.name is required" $fd.name | quote }} \
+              --namespace={{ .Release.Namespace }} \
+              --ignore-not-found \
+              --wait=true \
+              --timeout=180s || true
+          }
+          trap cleanup EXIT
+
+          # Remove a resource left by an interrupted prior test before creating
+          # this run's ephemeral sample.
+          cleanup
+
+          cat <<'EOF' | kubectl create -f -
+          apiVersion: flink.apache.org/v1beta1
+          kind: FlinkDeployment
+          metadata:
+            name: {{ required "flinkDeployment.name is required" $fd.name | quote }}
+            namespace: {{ .Release.Namespace }}
+          spec:
+            image: {{ required "flinkDeployment.image is required" $fd.image | quote }}
+            flinkVersion: {{ required "flinkDeployment.flinkVersion is required" $fd.flinkVersion }}
+            serviceAccount: {{ $fd.serviceAccount | quote }}
+{{- with $fd.flinkConfiguration }}
+            flinkConfiguration:
+{{ toYaml . | indent 14 }}
+{{- end }}
+            jobManager:
+{{ toYaml $fd.jobManager | indent 14 }}
+            taskManager:
+{{ toYaml $fd.taskManager | indent 14 }}
+{{- with $fd.job }}
+            job:
+{{ toYaml . | indent 14 }}
+{{- end }}
+          EOF
+
+          kubectl wait \
+            flinkdeployment/{{ $fd.name }} \
+            --for=jsonpath='{.status.jobManagerDeploymentStatus}'=READY \
+            --namespace={{ .Release.Namespace }} \
+            --timeout=600s
 {{- end }}

@@ -11,7 +11,7 @@ flink-kubernetes-operator:
         memory: 384Mi
 
 flinkDeployment:
-  # Single task slot keeps the example job schedulable on a small kind node.
+  # Single task slot keeps the ephemeral test job schedulable on a kind node.
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "1"
 

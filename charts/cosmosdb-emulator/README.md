@@ -2,6 +2,9 @@
 
 Local-development chart for the Linux-based Azure Cosmos DB emulator.
 
+The emulator image is pinned to the deterministic `vnext-EN20260706` release.
+Update both `image.tag` and the chart `appVersion` when adopting a newer release.
+
 ```bash
 mise run validate -- --all --chart cosmosdb-emulator --env ci
 mise run kind-test -- cosmosdb-emulator --profile routed

@@ -1,13 +1,14 @@
 # Apache Flink Kubernetes Operator
 
 Umbrella chart for installing the Apache Flink Kubernetes Operator from the
-upstream Apache Helm repository, plus a self-verifying sample `FlinkDeployment`.
+upstream Apache Helm repository, plus a self-verifying, test-only sample
+`FlinkDeployment`.
 
 ```mermaid
 flowchart LR
   values[values.yaml / values-ci.yaml] --> umbrella[charts/flink-operator]
   umbrella --> upstream[flink-kubernetes-operator 1.15.0]
-  umbrella --> sample[FlinkDeployment lab-flink]
+  test[helm test] --> sample[ephemeral FlinkDeployment lab-flink]
   upstream --> ns[flink-operator]
   ns --> operator[flink-kubernetes-operator deployment]
   ns --> webhook[admission webhook]
@@ -58,16 +59,22 @@ flink-kubernetes-operator:
 
 ## The sample FlinkDeployment
 
-`flinkDeployment` renders a `FlinkDeployment` CR in the release namespace. It
-defaults to Flink's built-in StateMachine streaming example
-(`local:///opt/flink/examples/streaming/StateMachine.jar`), so the install is
-self-verifying with no external dependency — the `helm test` waits for the job
-manager to report `READY`.
+`flinkDeployment` configures an ephemeral `FlinkDeployment` created by
+`helm test` in the release namespace. It is deliberately not part of the
+installed release: on a fresh cluster, the operator CRDs must be installed
+before Kubernetes can accept a `FlinkDeployment`. The test waits for the
+operator and CRDs, creates the sample, waits for its job manager to report
+`READY`, and deletes it when the test exits.
 
-To run your own job, point `flinkDeployment.job.jarURI` at your jar (bundled in
+The sample defaults to Flink's built-in StateMachine streaming example
+(`local:///opt/flink/examples/streaming/StateMachine.jar`), so verification has
+no external dependency.
+
+To test your own job, point `flinkDeployment.job.jarURI` at your jar (bundled in
 a custom `flinkDeployment.image`, or mounted). Set `flinkDeployment.enabled:
-false` to install only the operator and submit `FlinkDeployment` /
-`FlinkSessionJob` resources separately.
+false` to skip the sample workload test; the operator and CRD readiness tests
+still run. Submit persistent `FlinkDeployment` / `FlinkSessionJob` resources
+separately after installing this chart.
 
 ### Wiring to Strimzi Kafka
 

@@ -8,7 +8,7 @@ replicaCount: 1
 
 image:
   repository: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
-  tag: vnext-latest
+  tag: vnext-EN20260706
   pullPolicy: IfNotPresent
 
 emulator:
@@ -82,6 +82,10 @@ resources:
   limits:
     cpu: "2"
     memory: 4Gi
+
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 60
 
 nodeSelector: {}
 tolerations: []

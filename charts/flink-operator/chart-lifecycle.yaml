@@ -25,7 +25,7 @@ spec:
     enabled: true
     profiles:
       minimal:
-        description: Install the Flink Kubernetes Operator with a sample FlinkDeployment and verify both become ready.
+        description: Install the Flink Kubernetes Operator, then create an ephemeral sample FlinkDeployment during helm test and verify both become ready.
         namespace: flink-operator
         requires: []
         values:

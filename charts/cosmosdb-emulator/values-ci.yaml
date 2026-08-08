@@ -6,10 +6,19 @@ persistence:
   storageClassName: ""
   size: 1Gi
 
+emulator:
+  explorer:
+    enabled: false
+
 resources:
   requests:
-    cpu: 100m
-    memory: 512Mi
-  limits:
     cpu: "1"
     memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+startupProbe:
+  # Allow slow first-time initialization on shared GitHub-hosted runners without
+  # restarting the emulator; the additional CPU and memory normally make it faster.
+  failureThreshold: 120
