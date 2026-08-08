@@ -29,9 +29,13 @@ on:
   workflow_dispatch:
     inputs:
       charts:
-        description: "Charts to run: leave empty for diff-based (default), 'all' for every chart, or a comma/space-separated list (e.g. 'grafana,alloy'). Branch is selected via the 'Use workflow from' dropdown."
+        description: "Charts to run: leave empty for diff-based (default), 'all' for every chart, or a comma/space-separated list (e.g. 'grafana,alloy'). Ignored when publish_all is enabled."
         type: string
         default: ""
+      publish_all:
+        description: "Validate, sandbox-test, and publish every chart as a release from main."
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -122,6 +126,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_CHARTS: ${{ inputs.charts }}
+          DISPATCH_PUBLISH_ALL: ${{ inputs.publish_all }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
@@ -144,12 +149,22 @@ jobs:
           chart_list_newline=""
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$DISPATCH_PUBLISH_ALL" == "true" ]]; then
+              if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+                echo "::error::publish_all must be dispatched from main."
+                exit 1
+              fi
+              mode="all"
+            fi
+
             # Trim leading/trailing whitespace once for the all-check and the
             # empty-check; per-element trimming happens in the awk parser.
             trimmed="$(printf '%s' "$DISPATCH_CHARTS" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
             # Case-insensitive "all".
             lower="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
-            if [[ "$lower" == "all" ]]; then
+            if [[ "$DISPATCH_PUBLISH_ALL" == "true" ]]; then
+              : # publish_all already forced all-chart mode above.
+            elif [[ "$lower" == "all" ]]; then
               mode="all"
             elif [[ -n "$trimmed" ]]; then
               # Split on commas + whitespace, drop empties, dedupe preserving
@@ -205,18 +220,29 @@ jobs:
           echo "changed files:"
           cat "$tmp" || true
 
-          # Publishing is direct ownership only: any current chart with a
-          # changed path is selected, independent of lifecycle/test fanout.
-          # Computed here so a no-chart PR never reaches the publish job or
-          # contacts the registry at all.
+          # Normal publishing is direct ownership only: any current chart with
+          # a changed path is selected, independent of lifecycle/test fanout.
+          # An explicit publish_all dispatch replaces that projection with the
+          # full valid chart catalog. Computed here so an ordinary no-chart run
+          # never reaches the publish job or contacts the registry at all.
           # `-o table` is required, not decorative. `plan`'s output default is
           # `auto`, which resolves to json whenever stdout is not a TTY or
           # CI=true -- i.e. always, here. This capture is read back with
           # `while IFS= read -r chart`, so it must be the newline-delimited
           # chart list that `table` projects, not a JSON array.
-          publish_charts="$(
-            uv run chart-manager plan --for publish -o table --changed-files "$tmp"
-          )"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_PUBLISH_ALL" == "true" ]]; then
+            # The catalog is the authoritative inventory. Invalid lifecycle
+            # documents make `chart list` fail instead of silently omitting a
+            # chart from a requested full publication.
+            publish_charts="$(
+              uv run chart-manager chart list -o json \
+                | jq -r '.charts[] | select(.error == null) | .name'
+            )"
+          else
+            publish_charts="$(
+              uv run chart-manager plan --for publish -o table --changed-files "$tmp"
+            )"
+          fi
 
           # Multi-line outputs via random delimiter (avoids any chance of a
           # path/name collision with the EOF marker).
@@ -485,8 +511,14 @@ jobs:
             github.event_name == 'pull_request' &&
             github.event.pull_request.head.repo.full_name == github.repository
           ) ||
-          github.event_name == 'push'
-        ) &&
+            github.event_name == 'push'
+            ||
+            (
+              github.event_name == 'workflow_dispatch' &&
+              inputs.publish_all &&
+              github.ref == 'refs/heads/main'
+            )
+          ) &&
         needs.prep.outputs.publish_charts != '' &&
         needs.layering.result == 'success' &&
         needs.validate.result == 'success' &&
@@ -543,7 +575,7 @@ jobs:
                 --username "$GHCR_USER" \
                 --password-stdin
 
-      - name: Publish directly changed charts
+      - name: Publish selected charts
         run: |
           set -euo pipefail
           charts=()
