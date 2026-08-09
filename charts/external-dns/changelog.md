@@ -1,3 +1,13 @@
+## 0.1.1
+
+- Add the `istio-gateway` source so the edge publishes each workload cluster's
+  `*.<cluster>.int.garys-lab.io` record from the live ingress gateway
+  LoadBalancer address, replacing the provisioning-time constant OpenTofu
+  wrote. Keep `crd` for free-standing DNSEndpoint records.
+- Switch `policy` from `upsert-only` to `sync`, so a changed LoadBalancer
+  address is rewritten and a decommissioned cluster's record is removed.
+  Deletion stays bounded by the TXT registry.
+
 ## 0.1.0
 
 - Add ExternalDNS 0.21.0 through official chart 1.21.1.

@@ -1,9 +1,30 @@
 external-dns:
+  # istio-gateway is the source that matters here. Every workload cluster
+  # registers a Gateway in the edge's platform/routes/ tree whose hosts are
+  # `*.<cluster>.int.garys-lab.io`, and ExternalDNS resolves the target by
+  # looking up the istio ingress gateway Service -- so the record follows the
+  # live LoadBalancer address instead of a provisioning-time constant. This is
+  # what lets a cluster behind the edge stop needing to know the edge address.
+  #
+  # The edge's own edge-http-redirect Gateway uses hosts: ["*"], which the
+  # source drops (it filters the bare "*" and nothing else), so the redirect
+  # produces no record while `*.<cluster>...` hosts pass through.
+  #
+  # crd stays for free-standing DNSEndpoint records that no Kubernetes object
+  # implies. The chart installs dnsendpoints.externaldns.k8s.io from crds/ and
+  # derives RBAC from this list, so both sources are self-wiring.
   sources:
+    - istio-gateway
     - crd
   domainFilters:
     - int.garys-lab.io
-  policy: upsert-only
+  # sync, not upsert-only. Upsert-only never rewrites a record whose target
+  # changed and never removes one for a decommissioned cluster -- which would
+  # defeat the point of tracking a LoadBalancer address that is allowed to
+  # move. Deletion is bounded by the TXT registry: ExternalDNS only touches
+  # records carrying its own ownership TXT, so records created by anything
+  # else in this zone are invisible to it.
+  policy: sync
   registry: txt
   txtOwnerId: edge-designate
 
