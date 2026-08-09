@@ -28,6 +28,25 @@ external-dns:
   registry: txt
   txtOwnerId: edge-designate
 
+  # Required, not optional, for this lab.
+  #
+  # The TXT registry prefixes the record type onto the ownership record's name,
+  # so `*.k01dw.int.garys-lab.io` yields `a-*.k01dw.int.garys-lab.io`. That is
+  # not a legal DNS name -- a wildcard is only valid as a whole leftmost label --
+  # and Designate rejects it:
+  #
+  #   400 invalid_object: Host name a-*.k01dw.int.garys-lab.io. is invalid
+  #
+  # The A record still lands, but its ownership TXT never does, so `policy:
+  # sync` can neither update nor reap it and the create is retried forever.
+  # Substituting a literal label makes the TXT name valid
+  # (`a-wildcard.k01dw.int.garys-lab.io`) and leaves the A record untouched.
+  #
+  # Passed through extraArgs because the upstream chart exposes no dedicated
+  # value for it.
+  extraArgs:
+    txt-wildcard-replacement: wildcard
+
   provider:
     name: webhook
     webhook:

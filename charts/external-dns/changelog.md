@@ -1,3 +1,11 @@
+## 0.1.2
+
+- Set `--txt-wildcard-replacement=wildcard`. Without it the TXT registry builds
+  an ownership record named `a-*.<cluster>.<zone>`, which is not a legal DNS
+  name, and Designate rejects it with 400 `invalid_object`. The A record lands
+  but is left unowned, so `policy: sync` can neither update nor reap it and the
+  create retries indefinitely. Confirmed against Designate before the fix.
+
 ## 0.1.1
 
 - Add the `istio-gateway` source so the edge publishes each workload cluster's
