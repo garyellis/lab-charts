@@ -8,8 +8,10 @@ from chart_manager.api.local.v1alpha1 import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
+    BootstrapRepoChartRelease,
     LifecycleRelease,
     OciChartRelease,
+    RepoChartRelease,
 )
 from chart_manager.domain.local_resources import (
     LocalResourceLoader,
@@ -102,6 +104,14 @@ spec:
         namespace: kube-system
         values: [values/remote.yaml]
         timeout: 10m
+      - type: repo
+        name: ingress
+        repo: https://example.test/helm
+        chart: ingress
+        version: 2.3.4
+        namespace: ingress
+        values: [values/remote.yaml]
+        timeout: 5m
 """,
     )
 
@@ -111,8 +121,14 @@ spec:
         BootstrapLifecycleRelease,
         BootstrapLocalChartRelease,
         BootstrapOciChartRelease,
+        BootstrapRepoChartRelease,
     ]
-    assert [release.type for release in releases] == ["lifecycle", "local", "oci"]
+    assert [release.type for release in releases] == [
+        "lifecycle",
+        "local",
+        "oci",
+        "repo",
+    ]
     raw = releases[1]
     assert isinstance(raw, BootstrapLocalChartRelease)
     assert raw.runtime_values == {
@@ -125,7 +141,7 @@ spec:
     assert raw.readiness.workloads_ready.namespace == "platform"
 
 
-def test_stack_only_accepts_lifecycle_and_pinned_oci_releases(tmp_path: Path) -> None:
+def test_stack_accepts_lifecycle_oci_and_https_repo_releases(tmp_path: Path) -> None:
     stack = _write(
         tmp_path,
         "stack.yaml",
@@ -143,6 +159,14 @@ spec:
       namespace: monitoring
       values: []
       timeout: 10m
+    - type: repo
+      name: ingress
+      repo: https://example.test/helm
+      chart: ingress
+      version: 2.3.4
+      namespace: ingress
+      values: []
+      timeout: 5m
 """,
     )
 
@@ -150,6 +174,7 @@ spec:
 
     assert isinstance(resource.spec.releases[0], LifecycleRelease)
     assert isinstance(resource.spec.releases[1], OciChartRelease)
+    assert isinstance(resource.spec.releases[2], RepoChartRelease)
 
     bad = stack.read_text(encoding="utf-8").replace(
         "type: lifecycle, chart: charts/demo, profile: minimal",
@@ -268,6 +293,45 @@ spec:
     )
 
     with pytest.raises(SpecError, match=r"exactly one|exact SemVer|sha256"):
+        load_local_stack(stack)
+
+
+@pytest.mark.parametrize(
+    ("repo", "chart", "version"),
+    [
+        ("http://example.test/helm", "demo", "1.2.3"),
+        ("https://example.test/helm", "org/demo", "1.2.3"),
+        ("https://example.test/helm", "demo", "latest"),
+        ("https://example.test/helm", "demo", "1.2"),
+    ],
+)
+def test_repo_release_requires_https_bare_chart_and_exact_version(
+    tmp_path: Path,
+    repo: str,
+    chart: str,
+    version: str,
+) -> None:
+    stack = _write(
+        tmp_path,
+        "bad.yaml",
+        f"""
+apiVersion: local.chartmanager.io/v1alpha1
+kind: LocalStack
+metadata: {{name: bad}}
+spec:
+  releases:
+    - type: repo
+      name: demo
+      repo: {repo}
+      chart: {chart}
+      version: '{version}'
+      namespace: demo
+      values: []
+      timeout: 1m
+""",
+    )
+
+    with pytest.raises(SpecError, match=r"HTTPS|bare chart|exact SemVer"):
         load_local_stack(stack)
 
 

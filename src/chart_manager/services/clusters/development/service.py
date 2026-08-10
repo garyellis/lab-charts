@@ -15,7 +15,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.api.local.v1alpha1 import LifecycleRelease, OciChartRelease
+from chart_manager.api.local.v1alpha1 import (
+    LifecycleRelease,
+    LocalCluster,
+    OciChartRelease,
+    RepoChartRelease,
+)
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
@@ -27,6 +32,7 @@ from chart_manager.domain.local_resources import (
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters._shared import (
     DEFAULT_NAMESPACE,
@@ -63,6 +69,7 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
+from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
 from chart_manager.services.expose import ExposeService
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.progress import (
@@ -99,13 +106,20 @@ class _TargetLocalExecution:
 #: One preflighted release, carrying whatever converging it needs.
 #:
 #: `_preflight_target` used to return executions index-aligned with the
-#: releases it was given, `None` for every OCI entry, and both callers
+#: releases it was given, `None` for every remote entry, and both callers
 #: re-zipped the two sequences under an `assert execution is not None`. The
 #: alignment was an invariant across a function boundary with nothing but the
 #: assert holding it -- and `python -O` deletes asserts. A lifecycle release
 #: and its resolved plan are one value here, so there is no pairing left to
 #: get wrong.
-type _TargetStep = _TargetLocalExecution | OciChartRelease
+type _TargetStep = _TargetLocalExecution | OciChartRelease | RepoChartRelease
+
+
+@dataclass(frozen=True)
+class _PreparedConverge:
+    local_cluster: LocalCluster
+    steps: tuple[_TargetStep, ...]
+    config: Path
 
 
 class DevelopmentClusterService:
@@ -123,6 +137,8 @@ class DevelopmentClusterService:
         local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: ClientFactory | None = None,
+        command_runner: CommandRunner | None = None,
+        command_timeout: float | None = None,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -144,6 +160,12 @@ class DevelopmentClusterService:
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
         self._client_factory = client_factory
+        self._hooks = ProvisioningHookRunner(
+            self.root,
+            runner=command_runner or SubprocessRunner(),
+            timeout=command_timeout,
+        )
+        self.run_provision_hooks = True
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
@@ -154,6 +176,7 @@ class DevelopmentClusterService:
         profile: str | None,
         cluster_name: str,
         skip_installed: bool = False,
+        run_provision_hooks: bool | None = None,
     ) -> DevelopmentClusterResult:
         """Prepare LocalCluster, run bootstrap, then converge a chart or LocalStack.
 
@@ -162,13 +185,35 @@ class DevelopmentClusterService:
         the development-friendly continue-on-error accounting.
         """
         started = time.monotonic()
-        local_cluster = self.local_resources.load_cluster()
-        releases = self._target_releases(target, profile=profile)
-        steps = self._preflight_target(
-            releases,
-            excluded_lifecycle_identities=self._bootstrap_executor().preflight(local_cluster),
+        prepared = self._prepare_target(target, profile=profile)
+        return self._converge_prepared(
+            prepared,
+            target=target,
+            profile=profile,
+            cluster_name=cluster_name,
+            skip_installed=skip_installed,
+            run_provision_hooks=(
+                self.run_provision_hooks if run_provision_hooks is None else run_provision_hooks
+            ),
+            run_pre_hook=True,
+            started=started,
         )
-        config = kind_config_path(self.root, local_cluster)
+
+    def _converge_prepared(
+        self,
+        prepared: _PreparedConverge,
+        *,
+        target: ResolvedLocalTarget,
+        profile: str | None,
+        cluster_name: str,
+        skip_installed: bool,
+        run_provision_hooks: bool,
+        run_pre_hook: bool,
+        started: float,
+    ) -> DevelopmentClusterResult:
+        local_cluster = prepared.local_cluster
+        steps = prepared.steps
+        config = prepared.config
         _LOG.info(
             "local converge started: cluster=%s target=%s kind=%s profile=%s "
             "steps=%d skip_installed=%s",
@@ -179,10 +224,21 @@ class DevelopmentClusterService:
             len(steps),
             skip_installed,
         )
+        if run_provision_hooks and run_pre_hook:
+            self._hooks.run("preProvision", local_cluster, cluster_name=cluster_name)
         self._progress(step("Ensuring local cluster", cluster_name))
         environment = self._ensure_environment(cluster_name, config=config)
         self._progress(step("Waiting for kube-apiserver"))
         self.kubectl.wait_apiserver_ready()
+        if run_provision_hooks:
+            self._hooks.run(
+                "postProvision",
+                local_cluster,
+                cluster_name=cluster_name,
+                environment=environment,
+            )
+            self._progress(step("Waiting for kube-apiserver after post-provision hook"))
+            self.kubectl.wait_apiserver_ready()
 
         summary = RunSummary()
         installed_keys = self._existing_release_keys()
@@ -217,16 +273,27 @@ class DevelopmentClusterService:
                 )
                 continue
 
-            self._converge_oci_release(
-                target_step.name,
-                target_step,
-                namespace=target_step.namespace,
-                values=[self.root / path for path in target_step.values],
-                timeout=target_step.timeout,
-                installed_keys=installed_keys,
-                summary=summary,
-                skip_installed=skip_installed,
-            )
+            if isinstance(target_step, OciChartRelease):
+                self._converge_oci_release(
+                    target_step.name,
+                    target_step,
+                    namespace=target_step.namespace,
+                    values=[self.root / path for path in target_step.values],
+                    timeout=target_step.timeout,
+                    installed_keys=installed_keys,
+                    summary=summary,
+                    skip_installed=skip_installed,
+                )
+                continue
+            if isinstance(target_step, RepoChartRelease):
+                self._converge_repo_release(
+                    target_step,
+                    installed_keys=installed_keys,
+                    summary=summary,
+                    skip_installed=skip_installed,
+                )
+                continue
+            raise ChartManagerError(f"unsupported local target step: {target_step!r}")
 
         self._wait_apps_wildcard_ready(summary)
         self._warn_on_port_mapping_drift(cluster_name, config=config)
@@ -241,8 +308,7 @@ class DevelopmentClusterService:
         # `failed` is a count, not a raise: this path is continue-on-error, so
         # the run's exit status alone does not say how much of it converged.
         _LOG.info(
-            "local converge finished: cluster=%s applied=%d no_change=%d failed=%d "
-            "elapsed=%.1fs",
+            "local converge finished: cluster=%s applied=%d no_change=%d failed=%d elapsed=%.1fs",
             cluster_name,
             len(summary.applied),
             len(summary.no_change),
@@ -313,6 +379,7 @@ class DevelopmentClusterService:
         profile: str | None,
         cluster_name: str,
         destroys: bool = False,
+        run_provision_hooks: bool | None = None,
     ) -> DevelopmentClusterPlan:
         """Resolve what a converge would install, without touching the cluster.
 
@@ -360,19 +427,32 @@ class DevelopmentClusterService:
                     )
                 )
                 continue
+            if isinstance(target_step, RepoChartRelease):
+                entries.append(
+                    DevelopmentClusterPlanEntry(
+                        chart=target_step.name,
+                        profile=target_step.version,
+                        namespace=target_step.namespace,
+                        source="target",
+                    )
+                )
+                continue
+            if not isinstance(target_step, _TargetLocalExecution):
+                raise ChartManagerError(f"unsupported local target step: {target_step!r}")
             for entry in target_step.plan:
                 chart = target_step.catalog.get(entry.chart)
                 entries.append(
                     DevelopmentClusterPlanEntry(
                         chart=entry.chart,
                         profile=entry.profile,
-                        namespace=require_cluster_test_profile(
-                            chart.spec, entry.profile
-                        ).namespace
+                        namespace=require_cluster_test_profile(chart.spec, entry.profile).namespace
                         or DEFAULT_NAMESPACE,
                         source="target",
                     )
                 )
+        hooks_enabled = (
+            self.run_provision_hooks if run_provision_hooks is None else run_provision_hooks
+        )
         return DevelopmentClusterPlan(
             command="reset" if destroys else "up",
             cluster_name=cluster_name,
@@ -380,6 +460,19 @@ class DevelopmentClusterService:
             target_kind=target.kind,
             destroys=destroys,
             entries=tuple(entries),
+            provisioning_hooks_enabled=hooks_enabled,
+            provisioning_hooks=(
+                ()
+                if local_cluster.spec.cluster.hooks is None
+                else tuple(
+                    (phase, tuple(command))
+                    for phase, command in (
+                        ("preProvision", local_cluster.spec.cluster.hooks.pre_provision),
+                        ("postProvision", local_cluster.spec.cluster.hooks.post_provision),
+                    )
+                    if command is not None
+                )
+            ),
         )
 
     def plan_down(self, cluster_name: str) -> DevelopmentClusterPlan:
@@ -435,21 +528,42 @@ class DevelopmentClusterService:
         *,
         profile: str | None,
         cluster_name: str,
+        run_provision_hooks: bool | None = None,
     ) -> DevelopmentClusterResult:
         """Destroy and fully converge a chart or LocalStack."""
         # All authored state is resolved before deleting a healthy cluster.
-        local_cluster = self.local_resources.load_cluster()
-        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
-        self._preflight_target(
-            self._target_releases(target, profile=profile),
-            excluded_lifecycle_identities=bootstrap_identities,
+        prepared = self._prepare_target(target, profile=profile)
+        hooks_enabled = (
+            self.run_provision_hooks if run_provision_hooks is None else run_provision_hooks
         )
+        if hooks_enabled:
+            self._hooks.run("preProvision", prepared.local_cluster, cluster_name=cluster_name)
         self._destroy_environment(cluster_name)
-        return self.up_target(
-            target,
+        return self._converge_prepared(
+            prepared,
+            target=target,
             profile=profile,
             cluster_name=cluster_name,
             skip_installed=False,
+            run_provision_hooks=hooks_enabled,
+            run_pre_hook=False,
+            started=time.monotonic(),
+        )
+
+    def _prepare_target(
+        self, target: ResolvedLocalTarget, *, profile: str | None
+    ) -> _PreparedConverge:
+        """Complete every static check once, before hooks or provider mutation."""
+        local_cluster = self.local_resources.load_cluster()
+        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
+        steps = self._preflight_target(
+            self._target_releases(target, profile=profile),
+            excluded_lifecycle_identities=bootstrap_identities,
+        )
+        return _PreparedConverge(
+            local_cluster=local_cluster,
+            steps=steps,
+            config=kind_config_path(self.root, local_cluster),
         )
 
     def _bootstrap_executor(self) -> LocalBootstrapExecutor:
@@ -501,7 +615,7 @@ class DevelopmentClusterService:
         target: ResolvedLocalTarget,
         *,
         profile: str | None,
-    ) -> tuple[LifecycleRelease | OciChartRelease, ...]:
+    ) -> tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...]:
         if isinstance(target, ResolvedChartTarget):
             return (
                 LifecycleRelease(
@@ -519,27 +633,25 @@ class DevelopmentClusterService:
 
     def _preflight_target(
         self,
-        releases: tuple[LifecycleRelease | OciChartRelease, ...],
+        releases: tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...],
         *,
-        excluded_lifecycle_identities: frozenset[
-            ExternallySatisfiedLifecycle
-        ] = frozenset(),
+        excluded_lifecycle_identities: frozenset[ExternallySatisfiedLifecycle] = frozenset(),
     ) -> tuple[_TargetStep, ...]:
         """Compile and validate all local identities without mutating Helm state.
 
-        Authored order is preserved: an OCI release passes through as itself
-        (there is nothing to compile), a lifecycle release is replaced by the
-        plan it resolved to.
+        Authored order is preserved: an OCI or HTTPS repository release passes
+        through as itself (there is nothing to compile), while a lifecycle
+        release is replaced by the plan it resolved to.
         """
         seen: dict[Path, tuple[str, str]] = {}
         steps: list[_TargetStep] = []
         for release in releases:
-            if isinstance(release, OciChartRelease):
+            if isinstance(release, (OciChartRelease, RepoChartRelease)):
                 steps.append(release)
                 continue
-            catalog, plan = lifecycle_install_plan(
-                self.root, release, source="local release"
-            )
+            if not isinstance(release, LifecycleRelease):
+                raise ChartManagerError(f"unsupported local release: {release!r}")
+            catalog, plan = lifecycle_install_plan(self.root, release, source="local release")
             deduped: list[InstallPlanEntry] = []
             for entry in plan:
                 chart = catalog.get(entry.chart)
@@ -653,8 +765,7 @@ class DevelopmentClusterService:
                 profile = require_cluster_test_profile(chart.spec, entry.profile)
             except ChartManagerError as exc:
                 _LOG.error(
-                    "profile resolution failed; recorded as a failed row: "
-                    "chart=%s profile=%s: %s",
+                    "profile resolution failed; recorded as a failed row: chart=%s profile=%s: %s",
                     entry.chart,
                     entry.profile,
                     exc,
@@ -752,8 +863,7 @@ class DevelopmentClusterService:
                 installed_keys.add(key)
             except ChartManagerError as exc:
                 _LOG.error(
-                    "chart apply failed; converge continues: chart=%s profile=%s "
-                    "namespace=%s: %s",
+                    "chart apply failed; converge continues: chart=%s profile=%s namespace=%s: %s",
                     entry.chart,
                     entry.profile,
                     namespace,
@@ -787,17 +897,14 @@ class DevelopmentClusterService:
         identity = oci_identity(source)
         if key in installed_keys and skip_installed:
             self._progress(detail("skip", f"{release} (already installed in {namespace})"))
-            summary.no_change.append(
-                DevelopmentClusterEntryOutcome(release, identity, namespace)
-            )
+            summary.no_change.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
             return
 
         missing_values = [path for path in values if not path.is_file()]
         if missing_values:
             message = "OCI values file(s) not found: " + ", ".join(map(str, missing_values))
             _LOG.error(
-                "OCI release skipped; converge continues: release=%s identity=%s "
-                "namespace=%s: %s",
+                "OCI release skipped; converge continues: release=%s identity=%s namespace=%s: %s",
                 release,
                 identity,
                 namespace,
@@ -843,6 +950,77 @@ class DevelopmentClusterService:
                     chart=release,
                     profile=identity,
                     namespace=namespace,
+                    error=str(exc),
+                )
+            )
+
+    def _converge_repo_release(
+        self,
+        source: RepoChartRelease,
+        *,
+        installed_keys: set[tuple[str, str]],
+        summary: RunSummary,
+        skip_installed: bool,
+    ) -> None:
+        """Converge one exactly versioned HTTPS Helm repository release."""
+        key = (source.namespace, source.name)
+        if key in installed_keys and skip_installed:
+            self._progress(
+                detail(
+                    "skip",
+                    f"{source.name} (already installed in {source.namespace})",
+                )
+            )
+            summary.no_change.append(
+                DevelopmentClusterEntryOutcome(
+                    source.name,
+                    source.version,
+                    source.namespace,
+                )
+            )
+            return
+
+        try:
+            self._progress(step("Converging repository release", f"{source.name}@{source.version}"))
+            result = self.helm.upgrade_install(
+                source.name,
+                source.chart,
+                namespace=source.namespace,
+                values=[self.root / path for path in source.values],
+                timeout=source.timeout,
+                wait=True,
+                version=source.version,
+                repo=source.repo,
+            )
+            bucket = summary.applied if result.status == "applied" else summary.no_change
+            bucket.append(
+                DevelopmentClusterEntryOutcome(
+                    source.name,
+                    source.version,
+                    source.namespace,
+                )
+            )
+            installed_keys.add(key)
+        except ChartManagerError as exc:
+            _LOG.error(
+                "repository release apply failed; converge continues: release=%s "
+                "version=%s namespace=%s: %s",
+                source.name,
+                source.version,
+                source.namespace,
+                exc,
+            )
+            self._progress(
+                failure(
+                    "apply failed:",
+                    f"{source.name}@{source.version} -> {exc}",
+                )
+            )
+            summary.failed.append(
+                DevelopmentClusterEntryFailure(
+                    chart=source.name,
+                    profile=source.version,
+                    namespace=source.namespace,
                     error=str(exc),
                 )
             )

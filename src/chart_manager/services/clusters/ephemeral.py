@@ -20,6 +20,7 @@ from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters._shared import kind_config_path
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
@@ -30,6 +31,7 @@ from chart_manager.services.clusters.environment import (
     KindEnvironmentProvider,
     KubernetesEnvironmentProvider,
 )
+from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
 from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
     HelmTestResult,
@@ -89,6 +91,7 @@ class EphemeralTestRequest:
     ensure_cluster: bool = True
     include_dependent_tests: bool = False
     lint: bool = False
+    run_provision_hooks: bool = True
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,8 @@ class EphemeralTestClusterService:
         local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: ClientFactory | None = None,
+        command_runner: CommandRunner | None = None,
+        command_timeout: float | None = None,
     ) -> None:
         """Wire integrations; every cluster-facing collaborator is required.
 
@@ -153,6 +158,11 @@ class EphemeralTestClusterService:
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
         self._client_factory = client_factory
+        self._hooks = ProvisioningHookRunner(
+            self.root,
+            runner=command_runner or SubprocessRunner(),
+            timeout=command_timeout,
+        )
         # No-op default so the narration call sites don't need a None check.
         self._progress: ProgressCallback = progress or (lambda _event: None)
 
@@ -184,9 +194,7 @@ class EphemeralTestClusterService:
         """Create/start the environment and bind the clients to its context."""
         self._progress(step("Ensuring local cluster", cluster_name))
         return self._bind_clients(
-            self.environment_provider.ensure(
-                self._environment_spec(cluster_name, local_cluster)
-            )
+            self.environment_provider.ensure(self._environment_spec(cluster_name, local_cluster))
         )
 
     def _bind_clients(self, handle: EnvironmentHandle) -> EnvironmentHandle:
@@ -283,6 +291,8 @@ class EphemeralTestClusterService:
             options.lint,
         )
         if options.ensure_cluster:
+            if options.run_provision_hooks:
+                self._hooks.run("preProvision", local_cluster, cluster_name=options.cluster_name)
             handle = self._ensure_environment(options.cluster_name, local_cluster)
             # ensure_cluster may have started stopped node containers
             # (DevelopmentClusterService's `down` path leaves them stopped
@@ -293,6 +303,15 @@ class EphemeralTestClusterService:
             # which races. Gate explicitly.
             self._progress(step("Waiting for kube-apiserver"))
             self.kubectl.wait_apiserver_ready()
+            if options.run_provision_hooks:
+                self._hooks.run(
+                    "postProvision",
+                    local_cluster,
+                    cluster_name=options.cluster_name,
+                    environment=handle,
+                )
+                self._progress(step("Waiting for kube-apiserver after post-provision hook"))
+                self.kubectl.wait_apiserver_ready()
         else:
             # The caller owns environment existence, but chart-manager still
             # owns addressing. Never fall back to ambient kubeconfig merely
@@ -403,10 +422,7 @@ class EphemeralTestClusterService:
                     exc,
                 )
                 self._progress(
-                    warn(
-                        f"failed to collect diagnostics for namespace "
-                        f"{namespace}: {exc}"
-                    )
+                    warn(f"failed to collect diagnostics for namespace {namespace}: {exc}")
                 )
             else:
                 if diagnostics.strip():
@@ -448,6 +464,7 @@ class EphemeralTestClusterService:
             for chart, profile in requested
         ]
         return _merge_lifecycle_plans(plans)
+
 
 def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
     """Compose authored fanout plans, executing each chart/profile action once.

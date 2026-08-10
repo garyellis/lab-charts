@@ -28,7 +28,11 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import exit_if_failed as _exit_if_failed
 from chart_manager.cli._container import resolve_chart
-from chart_manager.cli._options import RootOption
+from chart_manager.cli._options import (
+    ProvisionHooksOption,
+    RootOption,
+    provision_hooks_enabled,
+)
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.domain.local_resources import (
@@ -137,6 +141,7 @@ def local_up(
         ),
     ] = False,
     dry_run: DryRunOption = False,
+    run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
@@ -161,9 +166,15 @@ def local_up(
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
+    hooks_enabled = provision_hooks_enabled(run_provision_hooks)
+    service.run_provision_hooks = hooks_enabled
     if dry_run:
         _render_plan(
-            service.plan_target(resolved, profile=profile, cluster_name=DEFAULT_CLUSTER_NAME),
+            service.plan_target(
+                resolved,
+                profile=profile,
+                cluster_name=DEFAULT_CLUSTER_NAME,
+            ),
             output,
         )
         return
@@ -222,6 +233,7 @@ def local_reset(
         ),
     ] = None,
     dry_run: DryRunOption = False,
+    run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
     root: RootOption = Path("."),
 ) -> None:
@@ -236,6 +248,8 @@ def local_reset(
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
+    hooks_enabled = provision_hooks_enabled(run_provision_hooks)
+    service.run_provision_hooks = hooks_enabled
     if dry_run:
         _render_plan(
             service.plan_target(
@@ -348,6 +362,10 @@ def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
     console.print(f"[bold]{escape(title)}[/bold]  cluster={escape(plan.cluster_name)}")
     if plan.destroys:
         console.print("  [yellow]would destroy and recreate the cluster first[/yellow]")
+    state = "enabled" if plan.provisioning_hooks_enabled else "disabled"
+    console.print(f"  provisioning hooks: {state}")
+    for phase, argv in plan.provisioning_hooks:
+        console.print(f"    {escape(phase)}: {escape(' '.join(argv))}")
     if plan.entries:
         table = Table("Source", "Chart", "Profile", "Namespace", title="Would install")
         for entry in plan.entries:
@@ -390,9 +408,7 @@ def _render_development_cluster_result(
             mode=output,
         )
     if not result.ok:
-        narration.print(
-            f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above"
-        )
+        narration.print(f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above")
     _render_access_hints(result.hints)
 
 

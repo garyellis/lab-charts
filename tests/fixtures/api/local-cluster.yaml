@@ -1,6 +1,6 @@
 # Representative LocalCluster used by tests/test_api_contract_freeze.py.
 #
-# Covers all three bootstrap release variants, both OCI pin styles, the Kind
+# Covers all four bootstrap release variants, both OCI pin styles, the Kind
 # runtime placeholders and both readiness gates. Paths point at directories
 # that need not exist: this fixture is parsed by the API model directly, never
 # through LocalResourceLoader, which is what performs the repository checks.
@@ -50,3 +50,11 @@ spec:
         values:
           - values/digest.yaml
         timeout: 1h
+      - type: repo
+        name: ingress
+        repo: https://example.test/charts
+        chart: ingress
+        version: 1.2.3
+        namespace: ingress
+        values: []
+        timeout: 2m

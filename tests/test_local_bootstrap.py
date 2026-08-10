@@ -140,6 +140,16 @@ def test_ordered_bootstrap_injects_only_declared_kind_facts_and_waits(
                 "timeout": "5m",
                 "runtimeValues": {"cluster.name": "${kind.clusterName}"},
             },
+            {
+                "type": "repo",
+                "name": "ingress",
+                "repo": "https://example.test/helm",
+                "chart": "ingress",
+                "version": "2.3.4",
+                "namespace": "ingress",
+                "values": [],
+                "timeout": "3m",
+            },
         ]
     )
     helm = _Helm()
@@ -154,16 +164,19 @@ def test_ordered_bootstrap_injects_only_declared_kind_facts_and_waits(
         ),
     )
 
-    assert [call[0] for call in helm.calls] == ["network", "metrics"]
+    assert [call[0] for call in helm.calls] == ["network", "metrics", "ingress"]
     assert helm.calls[0][2]["sets"] == {
         "api.host": "172.18.0.2",
         "api.port": "6443",
     }
     assert helm.calls[1][2]["sets"] == {"cluster.name": "dev-cluster"}
     assert helm.calls[1][2]["version"] == "1.2.3"
+    assert helm.calls[2][1] == "ingress"
+    assert helm.calls[2][2]["version"] == "2.3.4"
+    assert helm.calls[2][2]["repo"] == "https://example.test/helm"
     assert kind.ip_calls == ["dev-cluster"]
     assert kubectl.calls == [("nodes", "4m"), ("kube-system", "4m")]
-    assert [outcome.name for outcome in outcomes] == ["network", "metrics"]
+    assert [outcome.name for outcome in outcomes] == ["network", "metrics", "ingress"]
 
 
 def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 ``LocalCluster`` owns the Kind configuration and the ordered bootstrap
 sequence.  ``LocalStack`` is a reusable application composition.  This module
-owns the complete accepted shape of both: the envelopes, the three release
+owns the complete accepted shape of both: the envelopes, the four release
 variants and the two discriminated unions over them, the bootstrap-only
 additions, and every rule that can be decided by reading one document.
 
@@ -14,7 +14,7 @@ all need more than the document and therefore live in
 lives in ``chart_manager.domain.lifecycle_policy``.
 
 Declaration order is load-bearing and matches the original module: the
-``_BootstrapRelease`` mixin must precede the three ``Bootstrap*`` classes that
+``_BootstrapRelease`` mixin must precede the four ``Bootstrap*`` classes that
 list it first among their bases, and both union aliases must follow all of
 their members.
 """
@@ -41,6 +41,7 @@ __all__ = [
     "BootstrapOciChartRelease",
     "BootstrapReadiness",
     "BootstrapRelease",
+    "BootstrapRepoChartRelease",
     "LifecycleRelease",
     "LocalApiVersion",
     "LocalBootstrap",
@@ -53,6 +54,8 @@ __all__ = [
     "LocalStackKind",
     "LocalStackSpec",
     "OciChartRelease",
+    "ProvisioningHooks",
+    "RepoChartRelease",
     "ResourceMetadata",
     "StackRelease",
     "WorkloadsReady",
@@ -219,6 +222,44 @@ class OciChartRelease(_RawHelmRelease):
         return self
 
 
+class RepoChartRelease(_RawHelmRelease):
+    """Install an exactly versioned chart from one HTTPS Helm repository."""
+
+    type: Literal["repo"]
+    repo: str
+    chart: str
+    version: str
+
+    @field_validator("repo")
+    @classmethod
+    def _https_repo(cls, value: str) -> str:
+        if value != value.strip() or not value.startswith("https://"):
+            raise ValueError("release.repo must be an HTTPS URL beginning with https://")
+        authority = value.removeprefix("https://").split("/", 1)[0]
+        if (
+            not authority
+            or authority.startswith(".")
+            or any(character in authority for character in "?#@")
+        ):
+            raise ValueError("release.repo must be an HTTPS URL with a host")
+        return value
+
+    @field_validator("chart")
+    @classmethod
+    def _bare_chart(cls, value: str) -> str:
+        try:
+            return dns_label(value, field="release.chart")
+        except ValueError as exc:
+            raise ValueError("release.chart must be a bare chart name") from exc
+
+    @field_validator("version")
+    @classmethod
+    def _exact_version(cls, value: str) -> str:
+        if not _EXACT_SEMVER.fullmatch(value):
+            raise ValueError("release.version must be an exact SemVer version")
+        return value
+
+
 class WorkloadsReady(StrictApiModel):
     """Wait for every workload in one namespace after bootstrap installation."""
 
@@ -284,14 +325,21 @@ class BootstrapOciChartRelease(_BootstrapRelease, OciChartRelease):
     """OCI release augmented with bootstrap runtime contracts."""
 
 
+class BootstrapRepoChartRelease(_BootstrapRelease, RepoChartRelease):
+    """HTTPS repository release augmented with bootstrap runtime contracts."""
+
+
 type BootstrapRelease = Annotated[
-    BootstrapLifecycleRelease | BootstrapLocalChartRelease | BootstrapOciChartRelease,
+    BootstrapLifecycleRelease
+    | BootstrapLocalChartRelease
+    | BootstrapOciChartRelease
+    | BootstrapRepoChartRelease,
     Field(discriminator="type"),
 ]
 # Deliberately narrower than BootstrapRelease: a `type: local` release is
 # accepted while bootstrapping a cluster but rejected inside a stack.
 type StackRelease = Annotated[
-    LifecycleRelease | OciChartRelease,
+    LifecycleRelease | OciChartRelease | RepoChartRelease,
     Field(discriminator="type"),
 ]
 
@@ -305,11 +353,26 @@ class LocalClusterSettings(StrictApiModel):
     """
 
     config: Path
+    hooks: ProvisioningHooks | None = None
 
     @field_validator("config", mode="before")
     @classmethod
     def _safe_config(cls, value: object) -> Path:
         return relative_path(value, field="spec.cluster.config")
+
+
+class ProvisioningHooks(StrictApiModel):
+    """Optional fail-fast argv commands around environment provisioning."""
+
+    pre_provision: list[str] | None = Field(default=None, alias="preProvision")
+    post_provision: list[str] | None = Field(default=None, alias="postProvision")
+
+    @field_validator("pre_provision", "post_provision")
+    @classmethod
+    def _valid_argv(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and (not value or any(not item for item in value)):
+            raise ValueError("provisioning hook must be a non-empty argv of non-empty strings")
+        return value
 
 
 class LocalBootstrap(StrictApiModel):
@@ -348,7 +411,8 @@ class LocalStackSpec(StrictApiModel):
 
     Typed as `StackRelease`, not `BootstrapRelease`: a `type: local` release is
     rejected here. A stack must stay reusable, so every release names either a
-    lifecycle profile or a pinned OCI chart.
+    lifecycle profile, a pinned OCI chart, or an exactly versioned chart from
+    an HTTPS Helm repository.
     """
 
     releases: list[StackRelease] = Field(min_length=1)

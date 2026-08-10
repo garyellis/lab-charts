@@ -1,9 +1,9 @@
 """Generic Helm bootstrap for repository-defined local Kubernetes clusters.
 
 The core deliberately has no knowledge of CNI implementations. A
-``LocalCluster`` declares an ordered list of local lifecycle, raw local, or
-pinned OCI releases. This executor applies them after the Kind API is ready
-and before workload convergence begins.
+``LocalCluster`` declares an ordered list of local lifecycle, raw local, pinned
+OCI, or exactly versioned HTTPS repository releases. This executor applies
+them after the Kind API is ready and before workload convergence begins.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from chart_manager.api.local.v1alpha1 import (
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
     BootstrapRelease,
+    BootstrapRepoChartRelease,
     LocalCluster,
 )
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
@@ -85,6 +86,8 @@ class LocalBootstrapExecutor:
                 outcomes.append(self._install_local(release, sets=sets))
             elif isinstance(release, BootstrapOciChartRelease):
                 outcomes.append(self._install_oci(release, sets=sets))
+            elif isinstance(release, BootstrapRepoChartRelease):
+                outcomes.append(self._install_repo(release, sets=sets))
             else:  # pragma: no cover - the strict discriminated union prevents this
                 raise ChartManagerError(f"unsupported bootstrap release: {release!r}")
             self._wait_ready(release)
@@ -245,6 +248,31 @@ class LocalBootstrapExecutor:
                 environment.identity
             )
         return {key: facts[value] for key, value in release.runtime_values.items()}
+
+    def _install_repo(
+        self,
+        release: BootstrapRepoChartRelease,
+        *,
+        sets: dict[str, str],
+    ) -> BootstrapOutcome:
+        emit(self.progress, step("Bootstrapping", f"{release.name}@{release.version}"))
+        result = self.helm.upgrade_install(
+            release.name,
+            release.chart,
+            namespace=release.namespace,
+            values=[self.root / path for path in release.values],
+            sets=sets,
+            timeout=release.timeout,
+            wait=False,
+            version=release.version,
+            repo=release.repo,
+        )
+        return BootstrapOutcome(
+            release.name,
+            release.version,
+            release.namespace,
+            result.status,
+        )
 
     def _wait_ready(self, release: BootstrapRelease) -> None:
         readiness = release.readiness

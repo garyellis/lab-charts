@@ -598,7 +598,8 @@
           "mapping": {
             "lifecycle": "#/$defs/BootstrapLifecycleRelease",
             "local": "#/$defs/BootstrapLocalChartRelease",
-            "oci": "#/$defs/BootstrapOciChartRelease"
+            "oci": "#/$defs/BootstrapOciChartRelease",
+            "repo": "#/$defs/BootstrapRepoChartRelease"
           },
           "propertyName": "type"
         },
@@ -611,8 +612,84 @@
           },
           {
             "$ref": "#/$defs/BootstrapOciChartRelease"
+          },
+          {
+            "$ref": "#/$defs/BootstrapRepoChartRelease"
           }
         ]
+      },
+      "BootstrapRepoChartRelease": {
+        "additionalProperties": false,
+        "description": "HTTPS repository release augmented with bootstrap runtime contracts.",
+        "properties": {
+          "chart": {
+            "title": "Chart",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BootstrapReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "repo": {
+            "title": "Repo",
+            "type": "string"
+          },
+          "runtimeValues": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Runtimevalues",
+            "type": "object"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          },
+          "type": {
+            "const": "repo",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "values",
+          "timeout",
+          "type",
+          "repo",
+          "chart",
+          "version"
+        ],
+        "title": "BootstrapRepoChartRelease",
+        "type": "object"
       },
       "LocalBootstrap": {
         "additionalProperties": false,
@@ -637,6 +714,17 @@
             "format": "path",
             "title": "Config",
             "type": "string"
+          },
+          "hooks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProvisioningHooks"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -661,6 +749,44 @@
           "bootstrap"
         ],
         "title": "LocalClusterSpec",
+        "type": "object"
+      },
+      "ProvisioningHooks": {
+        "additionalProperties": false,
+        "description": "Optional fail-fast argv commands around environment provisioning.",
+        "properties": {
+          "postProvision": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Postprovision"
+          },
+          "preProvision": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preprovision"
+          }
+        },
+        "title": "ProvisioningHooks",
         "type": "object"
       },
       "ResourceMetadata": {
@@ -759,7 +885,7 @@
       },
       "LocalStackSpec": {
         "additionalProperties": false,
-        "description": "Releases composing one stack, at least one.\n\nTyped as `StackRelease`, not `BootstrapRelease`: a `type: local` release is\nrejected here. A stack must stay reusable, so every release names either a\nlifecycle profile or a pinned OCI chart.",
+        "description": "Releases composing one stack, at least one.\n\nTyped as `StackRelease`, not `BootstrapRelease`: a `type: local` release is\nrejected here. A stack must stay reusable, so every release names either a\nlifecycle profile, a pinned OCI chart, or an exactly versioned chart from\nan HTTPS Helm repository.",
         "properties": {
           "releases": {
             "items": {
@@ -845,6 +971,61 @@
         "title": "OciChartRelease",
         "type": "object"
       },
+      "RepoChartRelease": {
+        "additionalProperties": false,
+        "description": "Install an exactly versioned chart from one HTTPS Helm repository.",
+        "properties": {
+          "chart": {
+            "title": "Chart",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "repo": {
+            "title": "Repo",
+            "type": "string"
+          },
+          "timeout": {
+            "title": "Timeout",
+            "type": "string"
+          },
+          "type": {
+            "const": "repo",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "format": "path",
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "values",
+          "timeout",
+          "type",
+          "repo",
+          "chart",
+          "version"
+        ],
+        "title": "RepoChartRelease",
+        "type": "object"
+      },
       "ResourceMetadata": {
         "additionalProperties": false,
         "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
@@ -864,7 +1045,8 @@
         "discriminator": {
           "mapping": {
             "lifecycle": "#/$defs/LifecycleRelease",
-            "oci": "#/$defs/OciChartRelease"
+            "oci": "#/$defs/OciChartRelease",
+            "repo": "#/$defs/RepoChartRelease"
           },
           "propertyName": "type"
         },
@@ -874,6 +1056,9 @@
           },
           {
             "$ref": "#/$defs/OciChartRelease"
+          },
+          {
+            "$ref": "#/$defs/RepoChartRelease"
           }
         ]
       }

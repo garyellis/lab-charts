@@ -58,11 +58,13 @@ Three authored kinds, all defined in
 
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
-  `ChartLifecycle` profile, a raw local chart, or a version-pinned OCI chart.
+  `ChartLifecycle` profile, a raw local chart, a pinned OCI chart, or an exact
+  chart version from an HTTPS Helm repository.
 - `ChartLifecycle` (`charts/<name>/chart-lifecycle.yaml`) — each chart's
   profiles, values, namespace, timeout, dependencies, and Helm test gate.
-- `LocalStack` (`.chart-manager/stacks/<name>.yaml`) — composes lifecycle and
-  pinned OCI releases. Composition only; no templating or orchestration.
+- `LocalStack` (`.chart-manager/stacks/<name>.yaml`) — composes lifecycle,
+  pinned OCI, and exact-version HTTPS repository releases. Composition only;
+  no templating or orchestration.
 
 All `local` commands target the single `chart-manager` cluster by default,
 avoiding duplicate kind clusters and host-port conflicts from the shared
@@ -83,7 +85,11 @@ apiVersion: local.chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
-  cluster: {config: kind-config.yaml}
+  cluster:
+    config: kind-config.yaml
+    hooks:
+      preProvision: [./scripts/corporate-kind, pre]
+      postProvision: [./scripts/corporate-kind, post]
   bootstrap:
     releases:
       - type: lifecycle
@@ -95,7 +101,62 @@ spec:
         readiness:
           nodesReady: true
           workloadsReady: {namespace: kube-system, timeout: 15m}
+      - type: repo
+        name: metrics-server
+        repo: https://kubernetes-sigs.github.io/metrics-server/
+        chart: metrics-server
+        version: 3.12.2
+        namespace: kube-system
+        values: []
+        timeout: 10m
 ```
+
+Repository releases use Helm's per-command `--repo` and `--version` flags;
+chart-manager does not add or manage entries in the user's Helm repository
+configuration. Plain HTTP repositories, qualified chart names, and version
+ranges are rejected when the resource is loaded.
+
+Provisioning hooks are a deliberately small, trusted-code boundary: at most
+one argv command may be authored for `preProvision` and one for
+`postProvision`. They are not shell strings and chart-manager does not source
+their output. A path executable must be a repository-relative file inside the
+checkout; a bare executable is resolved through `PATH` when run. Hooks execute
+synchronously as the current user, from the repository root, and fail the run
+immediately. Review hook changes as carefully as application code, do not put
+credentials in argv or committed files, and read secrets only from an existing
+credential store or inherited environment.
+
+Hooks run by default for `local up`, `local reset`, and `chart test` when that
+command provisions a cluster. They default off when `CI` is conventionally
+truthy (`1`, `true`, `yes`, or `on`, case-insensitive). The explicit
+`--run-provision-hooks` / `--no-run-provision-hooks` flag wins over that
+default. Dry runs validate and display local hooks but never execute them;
+`chart test --no-ensure-cluster`, `local down`, and `local status` never run
+hooks. Every eligible up runs them even when the Kind cluster already exists,
+so scripts must be idempotent.
+
+The child inherits normal proxy and trust variables such as `HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE`. Chart-manager also supplies
+`CHART_MANAGER_HOOK_PHASE`, `CHART_MANAGER_ROOT`,
+`CHART_MANAGER_CLUSTER_NAME`, and `CHART_MANAGER_KIND_CONFIG`; the post hook
+additionally receives `CHART_MANAGER_KUBE_CONTEXT` and
+`CHART_MANAGER_PROVIDER_TYPE`. A corporate wrapper can switch on the phase:
+
+```sh
+#!/bin/sh
+set -eu
+case "$CHART_MANAGER_HOOK_PHASE" in
+  preProvision) corporate-runtime-login --non-interactive ;;
+  postProvision) kubectl --context "$CHART_MANAGER_KUBE_CONTEXT" apply -f company-ca.yaml ;;
+esac
+```
+
+Keep vendor-specific runtime, proxy, CA, and registry setup in that wrapper.
+Chart-manager manages Kind only: it does not start, stop, or destroy Colima,
+Podman, Rancher Desktop, Docker Desktop, or another host runtime. For a
+persistent non-default Docker endpoint, configure your Docker context or set
+`CHART_MANAGER_DOCKER_HOST`; hooks inherit the parent environment, while Kind
+commands receive that configured daemon address directly.
 
 `local status` reports state without judging it: an absent cluster or a failed
 release is the answer and still exits 0. Filter in the caller:
@@ -192,8 +253,9 @@ each failure. The exit code classifies the problem: `127` missing binary,
 but broken tool, `3` invalid configuration.
 
 - kind nodes `NotReady` — expected until Cilium installs as the CNI.
-- `kind: command not found` or cluster creation hangs — start Docker
-  Desktop/Colima/OrbStack first.
+- `kind: command not found` or cluster creation hangs — start the configured
+  container runtime and verify the active Docker context or
+  `CHART_MANAGER_DOCKER_HOST`.
 - `mise: command not found` — install mise, then `mise trust` in the repo.
 - A local URL stopped resolving after editing `kind-config.yaml` — creation
   settings need `local reset`, not `local up`; `local status` shows the
