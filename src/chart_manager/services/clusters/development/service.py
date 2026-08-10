@@ -15,7 +15,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.api.local.v1alpha1 import LifecycleRelease, OciChartRelease
+from chart_manager.api.local.v1alpha1 import (
+    LifecycleRelease,
+    OciChartRelease,
+    RepoChartRelease,
+)
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
@@ -99,13 +103,13 @@ class _TargetLocalExecution:
 #: One preflighted release, carrying whatever converging it needs.
 #:
 #: `_preflight_target` used to return executions index-aligned with the
-#: releases it was given, `None` for every OCI entry, and both callers
+#: releases it was given, `None` for every remote entry, and both callers
 #: re-zipped the two sequences under an `assert execution is not None`. The
 #: alignment was an invariant across a function boundary with nothing but the
 #: assert holding it -- and `python -O` deletes asserts. A lifecycle release
 #: and its resolved plan are one value here, so there is no pairing left to
 #: get wrong.
-type _TargetStep = _TargetLocalExecution | OciChartRelease
+type _TargetStep = _TargetLocalExecution | OciChartRelease | RepoChartRelease
 
 
 class DevelopmentClusterService:
@@ -217,16 +221,27 @@ class DevelopmentClusterService:
                 )
                 continue
 
-            self._converge_oci_release(
-                target_step.name,
-                target_step,
-                namespace=target_step.namespace,
-                values=[self.root / path for path in target_step.values],
-                timeout=target_step.timeout,
-                installed_keys=installed_keys,
-                summary=summary,
-                skip_installed=skip_installed,
-            )
+            if isinstance(target_step, OciChartRelease):
+                self._converge_oci_release(
+                    target_step.name,
+                    target_step,
+                    namespace=target_step.namespace,
+                    values=[self.root / path for path in target_step.values],
+                    timeout=target_step.timeout,
+                    installed_keys=installed_keys,
+                    summary=summary,
+                    skip_installed=skip_installed,
+                )
+                continue
+            if isinstance(target_step, RepoChartRelease):
+                self._converge_repo_release(
+                    target_step,
+                    installed_keys=installed_keys,
+                    summary=summary,
+                    skip_installed=skip_installed,
+                )
+                continue
+            raise ChartManagerError(f"unsupported local target step: {target_step!r}")
 
         self._wait_apps_wildcard_ready(summary)
         self._warn_on_port_mapping_drift(cluster_name, config=config)
@@ -360,6 +375,18 @@ class DevelopmentClusterService:
                     )
                 )
                 continue
+            if isinstance(target_step, RepoChartRelease):
+                entries.append(
+                    DevelopmentClusterPlanEntry(
+                        chart=target_step.name,
+                        profile=target_step.version,
+                        namespace=target_step.namespace,
+                        source="target",
+                    )
+                )
+                continue
+            if not isinstance(target_step, _TargetLocalExecution):
+                raise ChartManagerError(f"unsupported local target step: {target_step!r}")
             for entry in target_step.plan:
                 chart = target_step.catalog.get(entry.chart)
                 entries.append(
@@ -501,7 +528,7 @@ class DevelopmentClusterService:
         target: ResolvedLocalTarget,
         *,
         profile: str | None,
-    ) -> tuple[LifecycleRelease | OciChartRelease, ...]:
+    ) -> tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...]:
         if isinstance(target, ResolvedChartTarget):
             return (
                 LifecycleRelease(
@@ -519,7 +546,7 @@ class DevelopmentClusterService:
 
     def _preflight_target(
         self,
-        releases: tuple[LifecycleRelease | OciChartRelease, ...],
+        releases: tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...],
         *,
         excluded_lifecycle_identities: frozenset[
             ExternallySatisfiedLifecycle
@@ -527,16 +554,18 @@ class DevelopmentClusterService:
     ) -> tuple[_TargetStep, ...]:
         """Compile and validate all local identities without mutating Helm state.
 
-        Authored order is preserved: an OCI release passes through as itself
-        (there is nothing to compile), a lifecycle release is replaced by the
-        plan it resolved to.
+        Authored order is preserved: an OCI or HTTPS repository release passes
+        through as itself (there is nothing to compile), while a lifecycle
+        release is replaced by the plan it resolved to.
         """
         seen: dict[Path, tuple[str, str]] = {}
         steps: list[_TargetStep] = []
         for release in releases:
-            if isinstance(release, OciChartRelease):
+            if isinstance(release, (OciChartRelease, RepoChartRelease)):
                 steps.append(release)
                 continue
+            if not isinstance(release, LifecycleRelease):
+                raise ChartManagerError(f"unsupported local release: {release!r}")
             catalog, plan = lifecycle_install_plan(
                 self.root, release, source="local release"
             )
@@ -843,6 +872,79 @@ class DevelopmentClusterService:
                     chart=release,
                     profile=identity,
                     namespace=namespace,
+                    error=str(exc),
+                )
+            )
+
+    def _converge_repo_release(
+        self,
+        source: RepoChartRelease,
+        *,
+        installed_keys: set[tuple[str, str]],
+        summary: RunSummary,
+        skip_installed: bool,
+    ) -> None:
+        """Converge one exactly versioned HTTPS Helm repository release."""
+        key = (source.namespace, source.name)
+        if key in installed_keys and skip_installed:
+            self._progress(
+                detail(
+                    "skip",
+                    f"{source.name} (already installed in {source.namespace})",
+                )
+            )
+            summary.no_change.append(
+                DevelopmentClusterEntryOutcome(
+                    source.name,
+                    source.version,
+                    source.namespace,
+                )
+            )
+            return
+
+        try:
+            self._progress(
+                step("Converging repository release", f"{source.name}@{source.version}")
+            )
+            result = self.helm.upgrade_install(
+                source.name,
+                source.chart,
+                namespace=source.namespace,
+                values=[self.root / path for path in source.values],
+                timeout=source.timeout,
+                wait=True,
+                version=source.version,
+                repo=source.repo,
+            )
+            bucket = summary.applied if result.status == "applied" else summary.no_change
+            bucket.append(
+                DevelopmentClusterEntryOutcome(
+                    source.name,
+                    source.version,
+                    source.namespace,
+                )
+            )
+            installed_keys.add(key)
+        except ChartManagerError as exc:
+            _LOG.error(
+                "repository release apply failed; converge continues: release=%s "
+                "version=%s namespace=%s: %s",
+                source.name,
+                source.version,
+                source.namespace,
+                exc,
+            )
+            self._progress(
+                failure(
+                    "apply failed:",
+                    f"{source.name}@{source.version} -> {exc}",
+                )
+            )
+            summary.failed.append(
+                DevelopmentClusterEntryFailure(
+                    chart=source.name,
+                    profile=source.version,
+                    namespace=source.namespace,
                     error=str(exc),
                 )
             )

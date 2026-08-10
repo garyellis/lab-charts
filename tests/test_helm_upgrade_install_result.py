@@ -115,3 +115,21 @@ def test_upgrade_install_passes_an_exact_oci_version() -> None:
 
     upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
     assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
+
+
+def test_upgrade_install_uses_a_repository_url_without_managing_repo_state() -> None:
+    runner = _scripted(list_responses=["[]", _release(1)])
+    helm = Helm(runner=runner)
+
+    helm.upgrade_install(
+        "demo",
+        "demo",
+        namespace="demo-ns",
+        version="1.2.3",
+        repo="https://example.test/helm",
+    )
+
+    upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
+    assert upgrade[upgrade.index("--repo") + 1] == "https://example.test/helm"
+    assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
+    assert not any("repo" in argv and "add" in argv for argv in runner.calls)

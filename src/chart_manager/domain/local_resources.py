@@ -27,6 +27,7 @@ from chart_manager.api.local.v1alpha1 import (
     LocalCluster,
     LocalStack,
     OciChartRelease,
+    RepoChartRelease,
     StackRelease,
 )
 from chart_manager.domain.lifecycle_policy import (
@@ -155,7 +156,7 @@ class LocalResourceLoader:
                         f"lifecycle release chart {release.chart} has no enabled clusterTest"
                     )
                 require_cluster_test_profile(cluster_test, release.profile)
-        if isinstance(release, (LocalChartRelease, OciChartRelease)):
+        if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):
             for path in release.values:
                 self._require_file(path, field="release.values[]")
 

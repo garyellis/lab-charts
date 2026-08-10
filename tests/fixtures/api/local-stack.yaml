@@ -1,6 +1,6 @@
 # Representative LocalStack used by tests/test_api_contract_freeze.py.
 #
-# A stack accepts only the `lifecycle` and `oci` release variants, and none of
+# A stack accepts the `lifecycle`, `oci`, and `repo` release variants, and none of
 # the bootstrap-only contracts (runtimeValues, readiness). There is no
 # checked-in LocalStack anywhere in the repository yet, so this fixture is the
 # only authored example of the kind.
@@ -21,3 +21,11 @@ spec:
       values:
         - values/prometheus.yaml
       timeout: 10m
+    - type: repo
+      name: metrics
+      repo: https://example.test/helm
+      chart: metrics
+      version: 2.3.4
+      namespace: monitoring
+      values: []
+      timeout: 2m

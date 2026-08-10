@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
+from chart_manager.api.local.v1alpha1 import RepoChartRelease
 from chart_manager.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -317,3 +318,54 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
     assert "namespace=observability" in rendered
     # The exception detail, not just the fact of a failure.
     assert "timed out" in rendered
+
+
+def test_https_repo_release_stays_out_of_lifecycle_and_preserves_result_semantics(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    helm = _Helm("kind-lab", calls)
+    service = DevelopmentClusterService(
+        tmp_path,
+        helm=helm,  # type: ignore[arg-type]
+        kind=_Kind(),  # type: ignore[arg-type]
+        kubectl=_Kubectl(),  # type: ignore[arg-type]
+        expose=_Expose(),  # type: ignore[arg-type]
+    )
+    release = RepoChartRelease(
+        type="repo",
+        name="metrics",
+        repo="https://example.test/helm",
+        chart="metrics",
+        version="1.2.3",
+        namespace="monitoring",
+        values=[],
+        timeout="2m",
+    )
+
+    assert service._preflight_target((release,)) == (release,)
+    summary = RunSummary()
+    installed: set[tuple[str, str]] = set()
+    service._converge_repo_release(
+        release,
+        installed_keys=installed,
+        summary=summary,
+        skip_installed=False,
+    )
+
+    assert calls == [("kind-lab", "metrics")]
+    assert [(row.chart, row.profile, row.namespace) for row in summary.applied] == [
+        ("metrics", "1.2.3", "monitoring")
+    ]
+    assert installed == {("monitoring", "metrics")}
+
+    service._converge_repo_release(
+        release,
+        installed_keys=installed,
+        summary=summary,
+        skip_installed=True,
+    )
+    assert calls == [("kind-lab", "metrics")]
+    assert [(row.chart, row.profile) for row in summary.no_change] == [
+        ("metrics", "1.2.3")
+    ]

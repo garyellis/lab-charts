@@ -58,11 +58,13 @@ Three authored kinds, all defined in
 
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
-  `ChartLifecycle` profile, a raw local chart, or a version-pinned OCI chart.
+  `ChartLifecycle` profile, a raw local chart, a pinned OCI chart, or an exact
+  chart version from an HTTPS Helm repository.
 - `ChartLifecycle` (`charts/<name>/chart-lifecycle.yaml`) — each chart's
   profiles, values, namespace, timeout, dependencies, and Helm test gate.
-- `LocalStack` (`.chart-manager/stacks/<name>.yaml`) — composes lifecycle and
-  pinned OCI releases. Composition only; no templating or orchestration.
+- `LocalStack` (`.chart-manager/stacks/<name>.yaml`) — composes lifecycle,
+  pinned OCI, and exact-version HTTPS repository releases. Composition only;
+  no templating or orchestration.
 
 All `local` commands target the single `chart-manager` cluster by default,
 avoiding duplicate kind clusters and host-port conflicts from the shared
@@ -95,7 +97,20 @@ spec:
         readiness:
           nodesReady: true
           workloadsReady: {namespace: kube-system, timeout: 15m}
+      - type: repo
+        name: metrics-server
+        repo: https://kubernetes-sigs.github.io/metrics-server/
+        chart: metrics-server
+        version: 3.12.2
+        namespace: kube-system
+        values: []
+        timeout: 10m
 ```
+
+Repository releases use Helm's per-command `--repo` and `--version` flags;
+chart-manager does not add or manage entries in the user's Helm repository
+configuration. Plain HTTP repositories, qualified chart names, and version
+ranges are rejected when the resource is loaded.
 
 `local status` reports state without judging it: an absent cluster or a failed
 release is the answer and still exits 0. Filter in the caller:

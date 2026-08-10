@@ -60,11 +60,13 @@ from chart_manager.api.local.v1alpha1 import (
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
     BootstrapReadiness,
+    BootstrapRepoChartRelease,
     LifecycleRelease,
     LocalBootstrap,
     LocalCluster,
     LocalStack,
     OciChartRelease,
+    RepoChartRelease,
     ResourceMetadata,
 )
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
@@ -286,8 +288,15 @@ def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
         BootstrapLocalChartRelease,
         BootstrapOciChartRelease,
         BootstrapOciChartRelease,
+        BootstrapRepoChartRelease,
     ]
-    assert [release.type for release in releases] == ["lifecycle", "local", "oci", "oci"]
+    assert [release.type for release in releases] == [
+        "lifecycle",
+        "local",
+        "oci",
+        "oci",
+        "repo",
+    ]
     assert set(dumped["spec"]["bootstrap"]["releases"][0]) == {
         "type",
         "chart",
@@ -344,6 +353,7 @@ def test_local_stack_fixture_round_trips_through_authored_aliases() -> None:
     assert [type(release) for release in resource.spec.releases] == [
         LifecycleRelease,
         OciChartRelease,
+        RepoChartRelease,
     ]
     # A stack release carries none of the bootstrap-only contracts.
     assert set(dumped["spec"]["releases"][0]) == {"type", "chart", "profile"}

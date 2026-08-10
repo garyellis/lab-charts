@@ -329,6 +329,7 @@ class Helm:
         timeout: str = "10m",
         wait: bool = True,
         version: str | None = None,
+        repo: str | None = None,
     ) -> UpgradeResult:
         """Run `helm upgrade --install`; classify outcome as applied vs no-change.
 
@@ -368,6 +369,8 @@ class Helm:
             args.append("--wait")
         if version is not None:
             args.extend(["--version", version])
+        if repo is not None:
+            args.extend(["--repo", repo])
         args.extend(_values_args(values or []))
         args.extend(_set_args(sets or {}))
         # Always capture stdout so we can surface it on the result object
