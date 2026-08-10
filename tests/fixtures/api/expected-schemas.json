@@ -714,6 +714,17 @@
             "format": "path",
             "title": "Config",
             "type": "string"
+          },
+          "hooks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProvisioningHooks"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -738,6 +749,44 @@
           "bootstrap"
         ],
         "title": "LocalClusterSpec",
+        "type": "object"
+      },
+      "ProvisioningHooks": {
+        "additionalProperties": false,
+        "description": "Optional fail-fast argv commands around environment provisioning.",
+        "properties": {
+          "postProvision": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Postprovision"
+          },
+          "preProvision": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preprovision"
+          }
+        },
+        "title": "ProvisioningHooks",
         "type": "object"
       },
       "ResourceMetadata": {

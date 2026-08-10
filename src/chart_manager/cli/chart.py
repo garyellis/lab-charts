@@ -28,7 +28,12 @@ from rich.table import Table
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import resolve_chart
-from chart_manager.cli._options import ClusterNameOption, RootOption
+from chart_manager.cli._options import (
+    ClusterNameOption,
+    ProvisionHooksOption,
+    RootOption,
+    provision_hooks_enabled,
+)
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.plumbing.errors import ChartManagerError
@@ -201,6 +206,7 @@ def _run_chart_test(
     lint: bool,
     dry_run: bool,
     output: str | None,
+    run_provision_hooks: bool | None,
 ) -> None:
     """Run one chart test through the canonical charts command."""
     root = root.resolve()
@@ -219,6 +225,7 @@ def _run_chart_test(
         ensure_cluster=not no_ensure_cluster,
         include_dependent_tests=dependent_tests,
         lint=lint,
+        run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
     )
     if dry_run:
         _render_test_plan(service.plan(request), ctx=ctx, output=output)
@@ -289,6 +296,7 @@ def chart_test(
         ),
     ] = False,
     output: DryRunOutputOption = None,
+    run_provision_hooks: ProvisionHooksOption = None,
 ) -> None:
     """Install and exercise one chart on an ephemeral local Kubernetes cluster.
 
@@ -323,6 +331,7 @@ def chart_test(
         no_ensure_cluster=no_ensure_cluster,
         lint=lint,
         dry_run=dry_run,
+        run_provision_hooks=run_provision_hooks,
     )
 
 

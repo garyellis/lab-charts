@@ -370,6 +370,8 @@ class Container:
             local_config=self._settings.local_config,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
+            command_runner=self.command_runner(),
+            command_timeout=self._settings.command_timeout,
         )
 
     def ephemeral_test_cluster_service(
@@ -391,6 +393,8 @@ class Container:
             local_config=self._settings.local_config,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
+            command_runner=self.command_runner(),
+            command_timeout=self._settings.command_timeout,
         )
 
     def ci_service(self, root: Path) -> CiService:
@@ -451,8 +455,7 @@ class Container:
                 # Actions exposes its repository token as GITHUB_TOKEN. Honor
                 # the explicit Renovate name first and use the standard CI
                 # token as the composition-boundary fallback.
-                token=os.environ.get("RENOVATE_TOKEN")
-                or os.environ.get("GITHUB_TOKEN"),
+                token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
             )
 
         def relevant_changes(paths: Sequence[Path]) -> Sequence[str]:

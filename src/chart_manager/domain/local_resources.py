@@ -116,9 +116,36 @@ class LocalResourceLoader:
     def load_cluster(self) -> LocalCluster:
         cluster = load_local_cluster(self.cluster_path)
         self._require_file(cluster.spec.cluster.config, field="spec.cluster.config")
+        hooks = cluster.spec.cluster.hooks
+        if hooks is not None:
+            for phase, command in (
+                ("preProvision", hooks.pre_provision),
+                ("postProvision", hooks.post_provision),
+            ):
+                if command is not None:
+                    self._validate_hook_executable(command[0], phase=phase)
         for release in cluster.spec.bootstrap.releases:
             self._validate_release(release)
         return cluster
+
+    def _validate_hook_executable(self, executable: str, *, phase: str) -> None:
+        """Resolve authored path executables; leave bare PATH commands unresolved."""
+        if "/" not in executable and "\\" not in executable:
+            return
+        try:
+            authored_path = executable.replace("\\", "/")
+            # Hook examples conventionally use `./script`; accept that
+            # explicit execution spelling while applying the repository path
+            # validator to the path it identifies.
+            if authored_path.startswith("./"):
+                authored_path = authored_path[2:]
+            relative = relative_path(
+                authored_path,
+                field=f"spec.cluster.hooks.{phase}[0]",
+            )
+        except ValueError as exc:
+            raise SpecError(str(exc)) from exc
+        self._require_file(relative, field=f"spec.cluster.hooks.{phase}[0]")
 
     def load_stack(self, path: Path) -> LocalStack:
         absolute = self._inside_root(path)

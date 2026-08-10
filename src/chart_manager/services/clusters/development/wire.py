@@ -165,6 +165,10 @@ def plan_to_dict(plan: DevelopmentClusterPlan) -> dict[str, Any]:
         "target": plan.target,
         "target_kind": plan.target_kind,
         "destroys": plan.destroys,
+        "provisioning_hooks_enabled": plan.provisioning_hooks_enabled,
+        "provisioning_hooks": [
+            {"phase": phase, "argv": list(argv)} for phase, argv in plan.provisioning_hooks
+        ],
         "entries": [
             {
                 "chart": entry.chart,

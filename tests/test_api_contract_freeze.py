@@ -279,7 +279,8 @@ def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
     _assert_authored_subset(document, dumped)
     assert list(dumped) == ["apiVersion", "kind", "metadata", "spec"]
     assert set(dumped["spec"]) == {"cluster", "bootstrap"}
-    assert set(dumped["spec"]["cluster"]) == {"config"}
+    assert set(dumped["spec"]["cluster"]) == {"config", "hooks"}
+    assert dumped["spec"]["cluster"]["hooks"] is None
     assert set(dumped["spec"]["bootstrap"]) == {"releases"}
 
     releases = resource.spec.bootstrap.releases

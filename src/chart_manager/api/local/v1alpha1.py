@@ -54,6 +54,7 @@ __all__ = [
     "LocalStackKind",
     "LocalStackSpec",
     "OciChartRelease",
+    "ProvisioningHooks",
     "RepoChartRelease",
     "ResourceMetadata",
     "StackRelease",
@@ -235,8 +236,10 @@ class RepoChartRelease(_RawHelmRelease):
         if value != value.strip() or not value.startswith("https://"):
             raise ValueError("release.repo must be an HTTPS URL beginning with https://")
         authority = value.removeprefix("https://").split("/", 1)[0]
-        if not authority or authority.startswith(".") or any(
-            character in authority for character in "?#@"
+        if (
+            not authority
+            or authority.startswith(".")
+            or any(character in authority for character in "?#@")
         ):
             raise ValueError("release.repo must be an HTTPS URL with a host")
         return value
@@ -350,11 +353,26 @@ class LocalClusterSettings(StrictApiModel):
     """
 
     config: Path
+    hooks: ProvisioningHooks | None = None
 
     @field_validator("config", mode="before")
     @classmethod
     def _safe_config(cls, value: object) -> Path:
         return relative_path(value, field="spec.cluster.config")
+
+
+class ProvisioningHooks(StrictApiModel):
+    """Optional fail-fast argv commands around environment provisioning."""
+
+    pre_provision: list[str] | None = Field(default=None, alias="preProvision")
+    post_provision: list[str] | None = Field(default=None, alias="postProvision")
+
+    @field_validator("pre_provision", "post_provision")
+    @classmethod
+    def _valid_argv(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and (not value or any(not item for item in value)):
+            raise ValueError("provisioning hook must be a non-empty argv of non-empty strings")
+        return value
 
 
 class LocalBootstrap(StrictApiModel):

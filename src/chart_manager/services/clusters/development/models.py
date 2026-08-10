@@ -167,6 +167,8 @@ class DevelopmentClusterPlan:
     target_kind: str | None = None
     destroys: bool = False
     entries: tuple[DevelopmentClusterPlanEntry, ...] = ()
+    provisioning_hooks_enabled: bool = True
+    provisioning_hooks: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)

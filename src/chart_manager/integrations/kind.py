@@ -74,8 +74,8 @@ class Kind:
         Three checks rather than one because they fail independently and
         want different advice: no `kind` means "install kind", no `docker`
         means "install Docker", and a docker client with no daemon behind it
-        means "start Docker Desktop" -- the most common of the three and the
-        one a binary-only check would call healthy.
+        means "start the configured container runtime" -- the environment
+        boundary a binary-only check would incorrectly call healthy.
 
         The daemon probe is `docker version`, which is read-only, and it
         carries `PROBE_TIMEOUT` because an unreachable daemon is exactly the
@@ -145,9 +145,7 @@ class Kind:
                 # an already-running container is a no-op but emits a
                 # warning; restricting to the actually-stopped set keeps
                 # output clean and the operation truthful.
-                self._run(
-                    ["docker", "start", *stopped_nodes], capture=False
-                )
+                self._run(["docker", "start", *stopped_nodes], capture=False)
             return
         args = ["kind", "create", "cluster", "--name", name]
         if config is not None:
@@ -256,9 +254,7 @@ class Kind:
                 continue
             if not payload:
                 continue
-            ports_map = (
-                (payload[0].get("NetworkSettings") or {}).get("Ports") or {}
-            )
+            ports_map = (payload[0].get("NetworkSettings") or {}).get("Ports") or {}
             for bindings in ports_map.values():
                 for binding in bindings or []:
                     host_port = (binding or {}).get("HostPort")
@@ -329,6 +325,9 @@ def _daemon_unreachable(where: str, detail: str) -> Check:
     return Check.failed(
         "docker-daemon",
         f"no docker daemon at {where}: {detail}",
-        remediation="start Docker (or point DOCKER_HOST at a running daemon)",
+        remediation=(
+            "start the configured container runtime, select a working Docker context, "
+            "or set CHART_MANAGER_DOCKER_HOST to a running daemon"
+        ),
         outcome=Outcome.ENVIRONMENT,
     )

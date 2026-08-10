@@ -14,6 +14,7 @@ addresses the same kind cluster from `chart test` and from
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -28,4 +29,28 @@ RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
 #: create it) and `grafana dashboard export` (which port-forwards into it).
 ClusterNameOption = Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")]
 
-__all__ = ["ClusterNameOption", "RootOption"]
+ProvisionHooksOption = Annotated[
+    bool | None,
+    typer.Option(
+        "--run-provision-hooks/--no-run-provision-hooks",
+        help=(
+            "Run trusted repository provisioning hooks. Defaults on locally and off "
+            "when CI is 1/true/yes/on. Hooks execute with your user permissions."
+        ),
+    ),
+]
+
+
+def provision_hooks_enabled(override: bool | None) -> bool:
+    """Resolve the explicit dual flag over the conventional CI default."""
+    if override is not None:
+        return override
+    return os.environ.get("CI", "").strip().lower() not in {"1", "true", "yes", "on"}
+
+
+__all__ = [
+    "ClusterNameOption",
+    "ProvisionHooksOption",
+    "RootOption",
+    "provision_hooks_enabled",
+]
