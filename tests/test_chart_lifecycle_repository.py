@@ -35,13 +35,15 @@ CLUSTER_TEST_OPT_OUTS = {
 
 
 def test_every_production_chart_has_one_valid_enabled_config() -> None:
-    chart_dirs = sorted(path.parent for path in (REPO_ROOT / "charts").glob("*/Chart.yaml"))
+    charts_root = REPO_ROOT / "charts"
+    chart_dirs = {path.parent for path in charts_root.glob("*/Chart.yaml")}
+    lifecycle_dirs = {path.parent for path in charts_root.glob(f"*/{LIFECYCLE_FILENAME}")}
 
-    assert len(chart_dirs) == 29
+    assert chart_dirs == lifecycle_dirs
     # An opt-out naming a chart that no longer exists would silently weaken
     # nothing, but it would still be a lie about the repository.
     assert CLUSTER_TEST_OPT_OUTS.issubset(chart_dir.name for chart_dir in chart_dirs)
-    for chart_dir in chart_dirs:
+    for chart_dir in sorted(chart_dirs):
         config_path = chart_dir / LIFECYCLE_FILENAME
         document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert list(document) == ["apiVersion", "kind", "metadata", "spec"], chart_dir.name
