@@ -1,0 +1,12 @@
+# Kind nodes keep their persistent journal under /run/log/journal rather than
+# /var/log/journal. Mount it at the path expected by systemd-monitor.json.
+node-problem-detector:
+  logDir:
+    host: /run/log/journal
+    pod: /var/log/journal
+  settings:
+    log_monitors:
+      - /config/systemd-monitor.json
+    custom_plugin_monitors: []
+  extraVolumes: []
+  extraVolumeMounts: []

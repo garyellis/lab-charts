@@ -1,0 +1,75 @@
+{{- $testName := printf "%s-daemonset-ready" .Release.Name -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $testName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $testName }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $testName }}
+  restartPolicy: Never
+  initContainers:
+    - name: stability-delay
+      image: "{{ (index .Values "node-problem-detector").image.repository }}{{- if (index .Values "node-problem-detector").image.digest }}@{{ (index .Values "node-problem-detector").image.digest }}{{- else }}:{{ (index .Values "node-problem-detector").image.tag }}{{- end }}"
+      imagePullPolicy: {{ (index .Values "node-problem-detector").image.pullPolicy }}
+      command:
+        - /bin/sh
+        - -c
+        - sleep 15
+  containers:
+    - name: kubectl
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      command:
+        - kubectl
+        - wait
+        - pod
+        - --selector=app.kubernetes.io/name=node-problem-detector,app.kubernetes.io/instance={{ .Release.Name }}
+        - --namespace={{ .Release.Namespace }}
+        - --for=condition=Ready
+        - --timeout=5s

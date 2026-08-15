@@ -1,0 +1,43 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: node-problem-detector
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    validators:
+      # NPD needs privileged access to host kernel and journal data.
+      policy: false
+    releaseName: node-problem-detector
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: node-problem-detector
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":              [ci]
+      "Chart.lock":              [ci]
+      "values.yaml":             [ci]
+      "values-ci.yaml":          [ci]
+      "templates/**":            [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install NPD on every kind node and verify the DaemonSet rollout.
+        namespace: node-problem-detector
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []
