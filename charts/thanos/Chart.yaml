@@ -1,0 +1,11 @@
+---
+apiVersion: v2
+name: thanos
+description: Thanos Receive and query deployment chart
+type: application
+version: 0.1.0
+appVersion: "v0.42.4"
+dependencies:
+  - name: thanos
+    version: 0.33.0
+    repository: https://thanos-community.github.io/helm-charts

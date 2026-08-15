@@ -1,0 +1,128 @@
+---
+# Istio resources are opt-in until production hostnames, TLS credentials, and
+# the authentication policy for spoke-cluster writes have been selected.
+istio:
+  enabled: false
+  gateway:
+    create: true
+    name: thanos
+    namespace: ""
+    selector:
+      istio: gateway-internal
+  query:
+    enabled: true
+    host: ""
+    tls:
+      credentialName: ""
+      mode: SIMPLE
+  receive:
+    enabled: true
+    host: ""
+    tls:
+      credentialName: ""
+      mode: SIMPLE
+
+thanos:
+  fullnameOverride: thanos
+
+  global:
+    # Flux/SOPS owns this Secret. It must contain objstore.yml with a supported
+    # Thanos object-store configuration before the StatefulSets can start.
+    objstore:
+      createSecret: false
+      secretName: thanos-objstore
+      secretKey: objstore.yml
+      config: ""
+
+    # The prometheus-operator chart owns these CRDs; do not enable the bundled
+    # kube-prometheus-stack dependency.
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+    thanosRules:
+      enabled: true
+
+  kube-prometheus-stack:
+    enabled: false
+  rustfs:
+    enabled: false
+
+  # A single Receive pod is appropriate for the initial one-node k3s topology.
+  # HA deployments can switch to split mode and override replica counts.
+  receive:
+    enabled: true
+    mode: standalone
+    replicaCount: 1
+    tenancyHeader: THANOS-TENANT
+    tsdb:
+      retention: 48h
+      walCompression: true
+    persistence:
+      enabled: true
+      size: 30Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    vpa:
+      enabled: false
+
+  compactor:
+    enabled: true
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: ""
+    retention:
+      resolutionRaw: 21d
+      resolution5m: 21d
+      resolution1h: 21d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    vpa:
+      enabled: false
+
+  storegateway:
+    enabled: true
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+  query:
+    enabled: true
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+  queryFrontend:
+    enabled: false
+
+  bucket:
+    bucketweb:
+      enabled: false
+  ruler:
+    enabled: false

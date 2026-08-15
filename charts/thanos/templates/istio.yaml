@@ -1,0 +1,95 @@
+{{- if .Values.istio.enabled }}
+{{- $gatewayNamespace := default .Release.Namespace .Values.istio.gateway.namespace }}
+{{- $gatewayRef := printf "%s/%s" $gatewayNamespace .Values.istio.gateway.name }}
+{{- $thanosFullname := include "lab-thanos.upstreamFullname" . }}
+{{- $thanosNamespace := default .Release.Namespace .Values.thanos.namespaceOverride }}
+{{- $receiveService := printf "%s-receive" $thanosFullname }}
+{{- $receivePort := default 10908 .Values.thanos.receive.service.remoteWritePort }}
+{{- if eq .Values.thanos.receive.mode "split" }}
+{{- $receiveService = printf "%s-receive-router" $thanosFullname }}
+{{- $receivePort = default 10908 .Values.thanos.receive.router.service.remoteWritePort }}
+{{- end }}
+{{- if .Values.istio.gateway.create }}
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.istio.gateway.name }}
+  namespace: {{ $gatewayNamespace }}
+spec:
+  selector:
+    {{- toYaml .Values.istio.gateway.selector | nindent 4 }}
+  servers:
+    {{- if .Values.istio.query.enabled }}
+    - hosts:
+        - {{ required "istio.query.host is required when Istio query exposure is enabled" .Values.istio.query.host | quote }}
+      port:
+        name: https-query
+        number: 443
+        protocol: HTTPS
+      tls:
+        mode: {{ .Values.istio.query.tls.mode | quote }}
+        credentialName: {{ required "istio.query.tls.credentialName is required when the Istio Gateway is created" .Values.istio.query.tls.credentialName | quote }}
+    {{- end }}
+    {{- if .Values.istio.receive.enabled }}
+    - hosts:
+        - {{ required "istio.receive.host is required when Istio Receive exposure is enabled" .Values.istio.receive.host | quote }}
+      port:
+        name: https-receive
+        number: 443
+        protocol: HTTPS
+      tls:
+        mode: {{ .Values.istio.receive.tls.mode | quote }}
+        credentialName: {{ required "istio.receive.tls.credentialName is required when the Istio Gateway is created" .Values.istio.receive.tls.credentialName | quote }}
+    {{- end }}
+---
+{{- end }}
+{{- if .Values.istio.query.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-query
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ required "istio.query.host is required when Istio query exposure is enabled" .Values.istio.query.host | quote }}
+  gateways:
+    - {{ $gatewayRef }}
+  http:
+    - match:
+        - uri:
+            prefix: /-/
+        - uri:
+            exact: /metrics
+        - uri:
+            prefix: /debug/
+      directResponse:
+        status: 404
+    - route:
+        - destination:
+            host: {{ $thanosFullname }}-query.{{ $thanosNamespace }}.svc.cluster.local
+            port:
+              number: {{ default 9090 .Values.thanos.query.service.httpPort }}
+---
+{{- end }}
+{{- if .Values.istio.receive.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-receive
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ required "istio.receive.host is required when Istio Receive exposure is enabled" .Values.istio.receive.host | quote }}
+  gateways:
+    - {{ $gatewayRef }}
+  http:
+    - match:
+        - uri:
+            exact: /api/v1/receive
+      route:
+        - destination:
+            host: {{ $receiveService }}.{{ $thanosNamespace }}.svc.cluster.local
+            port:
+              number: {{ $receivePort }}
+{{- end }}
+{{- end }}

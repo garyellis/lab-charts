@@ -1,0 +1,113 @@
+{{- $testName := printf "%s-components-ready" .Release.Name -}}
+{{- $thanosFullname := include "lab-thanos.upstreamFullname" . -}}
+{{- $thanosNamespace := default .Release.Namespace .Values.thanos.namespaceOverride -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $testName }}
+  namespace: {{ $thanosNamespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $testName }}
+  namespace: {{ $thanosNamespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $testName }}
+  namespace: {{ $thanosNamespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $testName }}
+    namespace: {{ $thanosNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $testName }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ $thanosNamespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $testName }}
+  restartPolicy: Never
+  containers:
+    {{- if .Values.thanos.query.enabled }}
+    - name: query
+      image: registry.k8s.io/kubectl:v1.36.3
+      command:
+        - kubectl
+      args:
+        - wait
+        - --for=condition=Available
+        - --timeout=180s
+        - deployment/{{ $thanosFullname }}-query
+    {{- end }}
+    {{- if .Values.thanos.receive.enabled }}
+    {{- if eq .Values.thanos.receive.mode "split" }}
+    - name: receive-router
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: [kubectl]
+      args: [rollout, status, --timeout=180s, deployment/{{ $thanosFullname }}-receive-router]
+    - name: receive-ingester
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: [kubectl]
+      args: [rollout, status, --timeout=180s, statefulset/{{ $thanosFullname }}-receive-ingester]
+    {{- else }}
+    - name: receive
+      image: registry.k8s.io/kubectl:v1.36.3
+      command:
+        - kubectl
+      args:
+        - rollout
+        - status
+        - --timeout=180s
+        - statefulset/{{ $thanosFullname }}-receive
+    {{- end }}
+    {{- end }}
+    {{- if .Values.thanos.storegateway.enabled }}
+    - name: storegateway
+      image: registry.k8s.io/kubectl:v1.36.3
+      command:
+        - kubectl
+      args:
+        - rollout
+        - status
+        - --timeout=180s
+        - statefulset/{{ $thanosFullname }}-storegateway
+    {{- end }}
+    {{- if .Values.thanos.compactor.enabled }}
+    - name: compactor
+      image: registry.k8s.io/kubectl:v1.36.3
+      command:
+        - kubectl
+      args:
+        - rollout
+        - status
+        - --timeout=180s
+        - statefulset/{{ $thanosFullname }}-compactor
+    {{- end }}
