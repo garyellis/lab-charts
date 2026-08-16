@@ -1,10 +1,10 @@
 ---
 # values/istio-gateway.yaml
-# Openstack-flavored base values for the istio gateway wrapper chart:
-# LoadBalancer service with Octavia annotations, edge node placement,
-# HA replicas with podAntiAffinity.
-# Apply values-ci.yaml on top to flatten these for a single-node kind
-# cluster (ClusterIP, no LB annotations, no node placement, single replica).
+# Provider-neutral base values for the istio gateway wrapper chart.
+# OpenStack HA placement and Service annotations are opt-in through
+# values-openstack.yaml. Keeping the base placement maps empty lets consumers
+# replace them with `{}`; Helm cannot erase nested maps inherited from a base.
+# Apply values-ci.yaml on top to flatten these for a single-node kind cluster.
 
 # The starter apps-tier Gateway (templates/apps-gateway.yaml). Enabled by
 # default so a standalone install of this chart is immediately usable.
@@ -38,7 +38,7 @@ appsHosts:
   - "*.k8s.home.lab.io"
 
 gateway:
-  replicaCount: 2
+  replicaCount: 1
   labels:
     istio: gateway-internal
   autoscaling:
@@ -47,13 +47,11 @@ gateway:
   service:
     type: LoadBalancer
     externalTrafficPolicy: Cluster
-    annotations:
-      loadbalancer.openstack.org/keep-floatingip: "true"
-      loadbalancer.openstack.org/enable-health-monitor: "true"
-      loadbalancer.openstack.org/health-monitor-delay: "10"
-      loadbalancer.openstack.org/health-monitor-timeout: "5"
-      loadbalancer.openstack.org/health-monitor-max-retries: "3"
-      loadbalancer.openstack.org/proxy-protocol: "true"
+    # Keep provider annotations out of the base map. Helm deep-merges maps, so
+    # a consumer cannot remove annotations inherited from this file with
+    # `annotations: {}`. OpenStack consumers add values-openstack.yaml; other
+    # providers can supply an empty map and a loadBalancerClass directly.
+    annotations: {}
     ports:
       - name: status-port
         port: 15021
@@ -76,27 +74,8 @@ gateway:
       cpu: 2000m
       memory: 1024Mi
 
-  tolerations:
-    - key: node-role.kubernetes.io/edge
-      operator: Equal
-      value: "true"
-      effect: NoSchedule
-
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-          - matchExpressions:
-              - key: node-role.kubernetes.io/edge
-                operator: Exists
-    podAntiAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          podAffinityTerm:
-            labelSelector:
-              matchLabels:
-                app: istio-ingressgateway
-            topologyKey: kubernetes.io/hostname
+  tolerations: []
+  affinity: {}
 
 # Cross-cutting VirtualServices for workloads installed before istio
 # (e.g. cilium/hubble-ui). They cannot live in their own chart because

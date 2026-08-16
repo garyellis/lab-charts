@@ -1,6 +1,6 @@
 ---
 # CI overlay: single-node kind cluster.
-# Override the openstack defaults in values.yaml: switch the Service from
+# Override the production defaults in values.yaml: switch the Service from
 # LoadBalancer to NodePort (kind has no LB controller), wipe the edge
 # placement and tolerations (kind nodes are not labeled/tainted that way),
 # scale to a single replica, and trim resources.
@@ -10,10 +10,8 @@
 # schema-valid while allowing the gateway to run on any Linux kind node.
 #
 # Note: service.annotations stays as `{}` (cannot be null — the upstream
-# template calls deepCopy on it, which panics on null). Helm deep-merges
-# maps, so the loadbalancer.openstack.org/* annotations remain on the
-# Service object, but they are inert metadata on a ClusterIP Service in
-# kind (no openstack cloud-controller-manager exists to interpret them).
+# template calls deepCopy on it, which panics on null). Since values.yaml is
+# provider-neutral, the rendered kind Service has no cloud annotations.
 
 # Apps-tier ingress domain. *.localhost is special-cased by major
 # browsers (Chrome/Safari/Edge) to resolve to 127.0.0.1 per RFC 6761; no
