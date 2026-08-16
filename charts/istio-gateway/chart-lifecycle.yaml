@@ -9,13 +9,21 @@ spec:
     releaseName: istio-gateway
     namespaceTemplate: "lab-${env}"
     environments:
+      openstack:
+        values:
+          - values.yaml
+          - values-openstack.yaml
       ci:
         values:
           - values.yaml
           - values-ci.yaml
     triggers:
-      "values.yaml":    [ci]
-      "values-ci.yaml": [ci]
+      "Chart.yaml":            [openstack, ci]
+      "Chart.lock":            [openstack, ci]
+      "values.yaml":           [openstack, ci]
+      "values-openstack.yaml": [openstack]
+      "values-ci.yaml":        [ci]
+      "templates/**":          [openstack, ci]
     unmatchedChanges: warn
 
   clusterTest:

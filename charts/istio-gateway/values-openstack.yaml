@@ -1,0 +1,35 @@
+---
+# OpenStack Octavia Service annotations. This overlay preserves the 0.1.2
+# OpenStack defaults while keeping values.yaml usable by other LB providers.
+gateway:
+  replicaCount: 2
+  service:
+    annotations:
+      loadbalancer.openstack.org/keep-floatingip: "true"
+      loadbalancer.openstack.org/enable-health-monitor: "true"
+      loadbalancer.openstack.org/health-monitor-delay: "10"
+      loadbalancer.openstack.org/health-monitor-timeout: "5"
+      loadbalancer.openstack.org/health-monitor-max-retries: "3"
+      loadbalancer.openstack.org/proxy-protocol: "true"
+
+  tolerations:
+    - key: node-role.kubernetes.io/edge
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/edge
+                operator: Exists
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app: istio-ingressgateway
+            topologyKey: kubernetes.io/hostname
