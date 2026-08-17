@@ -20,8 +20,8 @@ spec:
       type: RuntimeDefault
   containers:
     - name: bucket-access
-      image: "{{ .Values.bootstrap.image.repository }}:{{ .Values.bootstrap.image.tag }}"
-      imagePullPolicy: {{ .Values.bootstrap.image.pullPolicy }}
+      image: "{{ .Values.tests.bucketAccess.image.repository }}:{{ .Values.tests.bucketAccess.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.bucketAccess.image.pullPolicy }}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -29,34 +29,90 @@ spec:
         readOnlyRootFilesystem: true
         runAsNonRoot: true
       env:
-        - name: RC_CONFIG_DIR
-          value: /tmp/rc
-        - name: ACCESS_KEY
+        - name: ENDPOINT
+          value: {{ .Values.bootstrap.endpoint | quote }}
+        - name: BUCKET
+          value: {{ required "bootstrap.bucket is required" .Values.bootstrap.bucket | quote }}
+        - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
               name: {{ .Values.bootstrap.workloadSecret.name }}
               key: {{ .Values.bootstrap.workloadSecret.accessKeyKey }}
-        - name: SECRET_KEY
+        - name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: {{ .Values.bootstrap.workloadSecret.name }}
               key: {{ .Values.bootstrap.workloadSecret.secretKeyKey }}
+        - name: AWS_DEFAULT_REGION
+          value: us-east-1
+        - name: AWS_CONFIG_FILE
+          value: /tmp/aws-config
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "true"
+        - name: AWS_PAGER
+          value: ""
+        - name: AWS_REQUEST_CHECKSUM_CALCULATION
+          value: when_required
+        - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+          value: when_required
+        - name: HOME
+          value: /tmp
       command: ["sh", "-c"]
       args:
         - |
           set -eu
-          rc alias set store {{ .Values.bootstrap.endpoint | quote }} "$ACCESS_KEY" "$SECRET_KEY"
-          rc ls "store/{{ .Values.bootstrap.bucket }}/"
+          printf '[default]\ns3 =\n    addressing_style = path\n' > "$AWS_CONFIG_FILE"
+
+          retry_aws() {
+            attempt=1
+            until "$@"; do
+              command_status=$?
+              if [ "$attempt" -ge 10 ]; then
+                echo "S3 operation failed after $attempt attempts" >&2
+                return "$command_status"
+              fi
+              attempt=$((attempt + 1))
+              sleep 2
+            done
+          }
+
+          retry_aws aws s3api head-bucket \
+            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" >/dev/null
+
+          object_key="helm-test/${HOSTNAME}-$(date +%s%N)"
+          payload=/tmp/payload
+          downloaded=/tmp/downloaded
+          printf 'rustfs bucket access test: %s\n' "$object_key" > "$payload"
+
+          cleanup() {
+            aws s3api delete-object \
+              --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT INT TERM
+
+          retry_aws aws s3api put-object \
+            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+            --body "$payload" >/dev/null
+          retry_aws aws s3api get-object \
+            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+            "$downloaded" >/dev/null
+
+          expected_hash="$(sha256sum "$payload")"
+          expected_hash="${expected_hash%% *}"
+          actual_hash="$(sha256sum "$downloaded")"
+          actual_hash="${actual_hash%% *}"
+          test "$actual_hash" = "$expected_hash"
+
+          retry_aws aws s3api delete-object \
+            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+            >/dev/null
+          trap - EXIT INT TERM
       volumeMounts:
         - name: tmp
           mountPath: /tmp
       resources:
-        requests:
-          cpu: 10m
-          memory: 16Mi
-        limits:
-          cpu: 100m
-          memory: 64Mi
+        {{- toYaml .Values.tests.bucketAccess.resources | nindent 8 }}
   volumes:
     - name: tmp
       emptyDir: {}

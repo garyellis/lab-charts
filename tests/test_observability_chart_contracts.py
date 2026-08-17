@@ -99,3 +99,27 @@ def test_rustfs_bootstrap_reconciles_the_workload_secret_key() -> None:
                   --secret-key "$WORKLOAD_SECRET_KEY" \\
                   --policy /policy/policy.json"""
     assert update_command in template
+
+
+def test_rustfs_helm_test_uses_only_bucket_scoped_s3_operations() -> None:
+    values = _yaml("charts/rustfs/values.yaml")
+    template = (
+        REPO_ROOT / "charts/rustfs/templates/tests/bucket-access.yaml"
+    ).read_text(encoding="utf-8")
+
+    image = values["tests"]["bucketAccess"]["image"]
+    assert image == {
+        "repository": "amazon/aws-cli",
+        "tag": "2.31.0",
+        "pullPolicy": "IfNotPresent",
+    }
+    assert "aws s3api put-object" in template
+    assert "aws s3api get-object" in template
+    assert "aws s3api delete-object" in template
+    assert "aws s3api head-bucket" in template
+    assert "--bucket \"$BUCKET\"" in template
+    assert "rc alias set" not in template
+    assert "list-buckets" not in template
+    assert "AWS_ACCESS_KEY_ID" in template
+    assert "readOnlyRootFilesystem: true" in template
+    assert "runAsNonRoot: true" in template

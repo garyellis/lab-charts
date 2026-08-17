@@ -37,6 +37,10 @@ The post-install/post-upgrade bootstrap Job waits for readiness, creates
 limited to that bucket. On upgrade it reconciles the policy, description, and
 secret key for an existing workload access key.
 
+The Helm test uses the bucket-scoped workload credentials to write, read back,
+verify, and delete a unique object in `thanos-metrics`. It calls those S3 APIs
+directly and does not require account-wide bucket-listing permission.
+
 ## Usage
 
 ```shell

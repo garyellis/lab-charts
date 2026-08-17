@@ -35,6 +35,22 @@ bootstrap:
       cpu: 250m
       memory: 128Mi
 
+tests:
+  bucketAccess:
+    # The AWS CLI calls the bucket-scoped S3 API directly. Unlike `rc alias
+    # set`, it does not probe the account with ListAllMyBuckets first.
+    image:
+      repository: amazon/aws-cli
+      tag: 2.31.0
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
 rustfs:
   fullnameOverride: rustfs
   replicaCount: 1
