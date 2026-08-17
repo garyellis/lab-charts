@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "thanos", "custom"],
+      "properties": {
+        "default": {"$ref": "#/definitions/profileToggle"},
+        "custom": {
+          "allOf": [
+            {"$ref": "#/definitions/profileToggle"},
+            {"type": "object", "properties": {"configMapName": {"type": "string"}}}
+          ]
+        },
+        "thanos": {
+          "allOf": [
+            {"$ref": "#/definitions/profileToggle"},
+            {
+              "type": "object",
+              "properties": {
+                "receiver": {
+                  "type": "object",
+                  "properties": {
+                    "url": {"type": "string"},
+                    "serverName": {"type": "string"},
+                    "caFile": {"type": "string"},
+                    "tenantHeader": {"type": "string"},
+                    "tenant": {"type": "string"}
+                  }
+                },
+                "externalLabels": {"type": "object"},
+                "clusterDomain": {"type": "string", "minLength": 1},
+                "scrapeInterval": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+                "wal": {"type": "object"}
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "definitions": {
+    "profileToggle": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean"}}
+    }
+  }
+}

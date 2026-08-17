@@ -1,0 +1,317 @@
+{{- if .Values.profiles.thanos.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-thanos-profile" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics-collector
+data:
+  config.alloy: |
+    logging {
+      level  = "warn"
+      format = "logfmt"
+    }
+
+    prometheus.remote_write "thanos" {
+      external_labels = {
+        cluster      = {{ .Values.profiles.thanos.externalLabels.cluster | quote }},
+        cluster_role = {{ .Values.profiles.thanos.externalLabels.clusterRole | quote }},
+        lane         = {{ .Values.profiles.thanos.externalLabels.lane | quote }},
+        stage        = {{ .Values.profiles.thanos.externalLabels.stage | quote }},
+        region       = {{ .Values.profiles.thanos.externalLabels.region | quote }},
+        cloud        = {{ .Values.profiles.thanos.externalLabels.cloud | quote }},
+        tenant       = {{ .Values.profiles.thanos.externalLabels.tenant | quote }},
+      }
+      endpoint {
+        url            = {{ .Values.profiles.thanos.receiver.url | quote }}
+        name           = "thanos-receive"
+        remote_timeout = "30s"
+        headers = {
+          {{ .Values.profiles.thanos.receiver.tenantHeader | quote }} = {{ .Values.profiles.thanos.receiver.tenant | quote }},
+        }
+        send_exemplars = false
+        tls_config {
+          ca_file     = {{ .Values.profiles.thanos.receiver.caFile | quote }}
+          server_name = {{ .Values.profiles.thanos.receiver.serverName | quote }}
+          min_version = "TLS12"
+        }
+        queue_config {
+          capacity             = 5000
+          max_samples_per_send = 1000
+          batch_send_deadline  = "10s"
+          min_shards           = 1
+          max_shards           = 6
+          min_backoff          = "1s"
+          max_backoff          = {{ .Values.profiles.thanos.wal.maxBackoff | quote }}
+          retry_on_http_429    = true
+          sample_age_limit     = {{ .Values.profiles.thanos.wal.sampleAgeLimit | quote }}
+        }
+        metadata_config {
+          send = false
+        }
+      }
+      wal {
+        truncate_frequency = "1h"
+        min_keepalive_time = "5m"
+        max_keepalive_time = {{ .Values.profiles.thanos.wal.maxKeepalive | quote }}
+      }
+    }
+
+    prometheus.relabel "fleet" {
+      forward_to = [prometheus.remote_write.thanos.receiver]
+      // Alloy 1.12 supports only the bounded LRU relabel cache. Keep its
+      // explicit default until this wrapper moves to a release with TTL mode.
+      max_cache_size = 100000
+      rule {
+        source_labels = ["__name__", "container"]
+        regex = "container_.*;"
+        action = "drop"
+      }
+      rule {
+        source_labels = ["__name__", "id"]
+        regex = "container_.*;/(system|user)\\.slice.*"
+        action = "drop"
+      }
+      rule {
+        source_labels = ["__name__"]
+        action = "drop"
+        regex = "container_(network_(tcp|udp)_usage_total|tasks_state|memory_failures_total|blkio_device_usage_total|spec_.*|fs_(inodes|sector|io_.*)_.*)"
+      }
+      rule {
+        source_labels = ["__name__"]
+        regex = "istio_(request|response)_bytes_bucket"
+        action = "drop"
+      }
+      rule {
+        source_labels = ["__name__"]
+        regex = "kube_.*_annotations"
+        action = "drop"
+      }
+    }
+
+    prometheus.exporter.unix "node" {
+      rootfs_path = "/host/root"
+      procfs_path = "/host/proc"
+      sysfs_path  = "/host/sys"
+      include_exporter_metrics = false
+      filesystem {
+        mount_points_exclude = "^/(dev|proc|sys|run/credentials/.+|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+        fs_types_exclude = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+      }
+      disable_collectors = ["hwmon", "thermal_zone", "rapl", "edac", "powersupplyclass", "fibrechannel", "infiniband", "tapestats", "nvme", "mdadm", "bcache", "btrfs", "zfs", "xfs", "ipvs", "bonding", "arp"]
+    }
+    discovery.relabel "node" {
+      targets = prometheus.exporter.unix.node.targets
+      rule {
+        target_label = "instance"
+        replacement = sys.env("K8S_NODE_NAME")
+      }
+      rule {
+        target_label = "node"
+        replacement = sys.env("K8S_NODE_NAME")
+      }
+      rule {
+        target_label = "job"
+        replacement = "integrations/node_exporter"
+      }
+    }
+    prometheus.scrape "node" {
+      targets = discovery.relabel.node.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+    }
+
+    discovery.kubernetes "nodes" {
+      role = "node"
+    }
+{{- range $name, $path := dict "kubelet" "metrics" "cadvisor" "metrics/cadvisor" "resource" "metrics/resource" }}
+    discovery.relabel {{ $name | quote }} {
+      targets = discovery.kubernetes.nodes.targets
+      rule {
+        target_label = "__scheme__"
+        replacement = "https"
+      }
+      rule {
+        target_label = "__address__"
+        replacement = {{ printf "kubernetes.default.svc.%s:443" $.Values.profiles.thanos.clusterDomain | quote }}
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        regex = "(.+)"
+        target_label = "__metrics_path__"
+        replacement = {{ printf "/api/v1/nodes/${1}/proxy/%s" $path | quote }}
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        target_label = "node"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        target_label = "instance"
+      }
+    }
+    prometheus.scrape {{ $name | quote }} {
+      targets = discovery.relabel.{{ $name }}.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      job_name = {{ printf "integrations/kubernetes/%s" $name | quote }}
+      scrape_interval = {{ $.Values.profiles.thanos.scrapeInterval | quote }}
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      tls_config {
+        ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      }
+      clustering {
+        enabled = true
+      }
+    }
+{{- end }}
+
+    prometheus.scrape "apiserver" {
+      targets = [{
+        "__address__" = {{ printf "kubernetes.default.svc.%s:443" .Values.profiles.thanos.clusterDomain | quote }},
+        "__scheme__" = "https",
+      }]
+      forward_to = [prometheus.relabel.fleet.receiver]
+      job_name = "integrations/kubernetes/apiserver"
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      tls_config {
+        ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      }
+      clustering {
+        enabled = true
+      }
+    }
+
+    discovery.kubernetes "endpoints" {
+      role = "endpoints"
+    }
+    discovery.relabel "coredns" {
+      targets = discovery.kubernetes.endpoints.targets
+      rule {
+        source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_service_name", "__meta_kubernetes_endpoint_port_name"]
+        regex = "kube-system;kube-dns;metrics"
+        action = "keep"
+      }
+      rule {
+        target_label = "job"
+        replacement = "integrations/kubernetes/coredns"
+      }
+    }
+    prometheus.scrape "coredns" {
+      targets = discovery.relabel.coredns.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+      clustering {
+        enabled = true
+      }
+    }
+    discovery.relabel "ksm" {
+      targets = discovery.kubernetes.endpoints.targets
+      rule {
+        source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_service_name", "__meta_kubernetes_endpoint_port_name"]
+        regex = "{{ .Release.Namespace }};kube-state-metrics;http"
+        action = "keep"
+      }
+      rule {
+        target_label = "job"
+        replacement = "integrations/kubernetes/kube-state-metrics"
+      }
+    }
+    prometheus.scrape "ksm" {
+      targets = discovery.relabel.ksm.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+      honor_labels = true
+      clustering {
+        enabled = true
+      }
+    }
+
+    discovery.relabel "local_control_plane" {
+      targets = discovery.kubernetes.nodes.targets
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        regex = sys.env("K8S_NODE_NAME")
+        action = "keep"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_labelpresent_node_role_kubernetes_io_control_plane"]
+        regex = "true"
+        action = "keep"
+      }
+    }
+{{- range $name, $port := dict "controller_manager" "10257" "scheduler" "10259" }}
+    discovery.relabel {{ $name | quote }} {
+      targets = discovery.relabel.local_control_plane.output
+      rule {
+        target_label = "__address__"
+        replacement = "127.0.0.1:{{ $port }}"
+      }
+      rule {
+        target_label = "job"
+        replacement = "integrations/kubernetes/{{ $name }}"
+      }
+    }
+    prometheus.scrape {{ $name | quote }} {
+      targets = discovery.relabel.{{ $name }}.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ $.Values.profiles.thanos.scrapeInterval | quote }}
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      tls_config {
+        ca_file = "/etc/alloy/component-ca/{{ $name }}.crt"
+        server_name = "localhost"
+        min_version = "TLS12"
+      }
+    }
+{{- end }}
+    discovery.relabel "etcd" {
+      targets = discovery.relabel.local_control_plane.output
+      rule {
+        target_label = "__address__"
+        replacement = "127.0.0.1:2381"
+      }
+      rule {
+        target_label = "job"
+        replacement = "integrations/kubernetes/etcd"
+      }
+    }
+    prometheus.scrape "etcd" {
+      targets = discovery.relabel.etcd.output
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+    }
+
+    prometheus.operator.servicemonitors "tenant" {
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape {
+        default_scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+      }
+      clustering {
+        enabled = true
+      }
+    }
+    prometheus.operator.podmonitors "tenant" {
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape {
+        default_scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+      }
+      clustering {
+        enabled = true
+      }
+    }
+    prometheus.operator.probes "tenant" {
+      forward_to = [prometheus.relabel.fleet.receiver]
+      clustering {
+        enabled = true
+      }
+    }
+    prometheus.exporter.self "alloy" {}
+    prometheus.scrape "alloy" {
+      targets = prometheus.exporter.self.alloy.targets
+      forward_to = [prometheus.relabel.fleet.receiver]
+      scrape_interval = {{ .Values.profiles.thanos.scrapeInterval | quote }}
+    }
+{{- end }}

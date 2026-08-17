@@ -3,6 +3,41 @@
 # Replaces Grafana Agent (EOL Nov 2025)
 # ============================================================================
 
+# The legacy combined pipeline remains the default for backward compatibility.
+# Exactly one profile may be enabled. The Thanos profile creates an Alloy
+# ConfigMap named <release>-thanos-profile; consumers must point the upstream
+# subchart at it with alloy.alloy.configMap.create=false and the matching name.
+profiles:
+  default:
+    enabled: true
+  thanos:
+    enabled: false
+    receiver:
+      url: ""
+      serverName: ""
+      caFile: /etc/alloy/remote-ca/ca.crt
+      tenantHeader: THANOS-TENANT
+      tenant: ""
+    externalLabels:
+      cluster: ""
+      clusterRole: ""
+      lane: ""
+      stage: ""
+      region: ""
+      cloud: ""
+      tenant: ""
+    clusterDomain: cluster.local
+    scrapeInterval: 60s
+    wal:
+      maxKeepalive: 2h
+      sampleAgeLimit: 2h
+      maxBackoff: 5m
+  custom:
+    enabled: false
+    # Required when enabled. The wrapper validates that the dependency uses
+    # this existing ConfigMap and does not create the legacy one.
+    configMapName: ""
+
 controller:
   type: daemonset
   # Required for eBPF profiling to see all processes
@@ -470,4 +505,3 @@ service:
   enabled: true
   type: ClusterIP
   internalTrafficPolicy: Local
-

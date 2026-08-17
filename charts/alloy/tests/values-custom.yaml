@@ -1,0 +1,6 @@
+profiles:
+  default: {enabled: false}
+  custom: {enabled: true, configMapName: custom-alloy}
+alloy:
+  alloy:
+    configMap: {create: false, name: custom-alloy}

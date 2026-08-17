@@ -1,0 +1,19 @@
+profiles:
+  default: {enabled: false}
+  thanos:
+    enabled: true
+    receiver:
+      url: https://receiver.example.test/api/v1/receive
+      serverName: receiver.example.test
+      tenant: test
+    externalLabels:
+      cluster: test-cluster
+      clusterRole: workload
+      lane: "01"
+      stage: test
+      region: west
+      cloud: test-cloud
+      tenant: test-tenant
+alloy:
+  alloy:
+    configMap: {create: false, name: alloy-thanos-profile}

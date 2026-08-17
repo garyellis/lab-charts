@@ -1,0 +1,45 @@
+{{- $default := .Values.profiles.default.enabled -}}
+{{- $thanos := .Values.profiles.thanos.enabled -}}
+{{- $custom := .Values.profiles.custom.enabled -}}
+{{- $enabled := 0 -}}
+{{- if $default }}{{- $enabled = add $enabled 1 -}}{{- end -}}
+{{- if $thanos }}{{- $enabled = add $enabled 1 -}}{{- end -}}
+{{- if $custom }}{{- $enabled = add $enabled 1 -}}{{- end -}}
+{{- if ne ($enabled | int) 1 -}}
+{{- fail "exactly one Alloy profile must be enabled: profiles.default, profiles.thanos, or profiles.custom" -}}
+{{- end -}}
+{{- if $thanos -}}
+{{- $profileName := printf "%s-thanos-profile" .Release.Name -}}
+{{- if .Values.alloy.alloy.configMap.create -}}
+{{- fail "profiles.thanos requires alloy.alloy.configMap.create=false" -}}
+{{- end -}}
+{{- if ne (.Values.alloy.alloy.configMap.name | default "") $profileName -}}
+{{- fail (printf "profiles.thanos requires alloy.alloy.configMap.name=%s" $profileName) -}}
+{{- end -}}
+{{- if not (regexMatch "^https://[^/]+/.+" .Values.profiles.thanos.receiver.url) -}}
+{{- fail "profiles.thanos.receiver.url must be an HTTPS URL with a path" -}}
+{{- end -}}
+{{- range $path, $value := dict
+      "receiver.serverName" .Values.profiles.thanos.receiver.serverName
+      "receiver.tenant" .Values.profiles.thanos.receiver.tenant
+      "externalLabels.cluster" .Values.profiles.thanos.externalLabels.cluster
+      "externalLabels.clusterRole" .Values.profiles.thanos.externalLabels.clusterRole
+      "externalLabels.lane" .Values.profiles.thanos.externalLabels.lane
+      "externalLabels.stage" .Values.profiles.thanos.externalLabels.stage
+      "externalLabels.region" .Values.profiles.thanos.externalLabels.region
+      "externalLabels.cloud" .Values.profiles.thanos.externalLabels.cloud
+      "externalLabels.tenant" .Values.profiles.thanos.externalLabels.tenant -}}
+{{- if not $value }}{{- fail (printf "profiles.thanos.%s must be non-empty" $path) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $custom -}}
+{{- if .Values.alloy.alloy.configMap.create -}}
+{{- fail "profiles.custom requires alloy.alloy.configMap.create=false" -}}
+{{- end -}}
+{{- if not .Values.profiles.custom.configMapName -}}
+{{- fail "profiles.custom.configMapName must be non-empty" -}}
+{{- end -}}
+{{- if ne (.Values.alloy.alloy.configMap.name | default "") .Values.profiles.custom.configMapName -}}
+{{- fail "profiles.custom.configMapName must equal alloy.alloy.configMap.name" -}}
+{{- end -}}
+{{- end -}}
