@@ -6,10 +6,6 @@ spec:
   enabled: true
   validation:
     enabled: true
-    # The upstream CI-only RustFS bucket-init Job does not expose pod/container
-    # securityContext values, so it cannot satisfy the repository non-root rule.
-    validators:
-      policy: false
     releaseName: thanos
     namespaceTemplate: "lab-${env}"
     environments:
@@ -34,21 +30,26 @@ spec:
           - values.yaml
           - values-ci.yaml
     triggers:
+      "Chart.yaml":       [dev, test, uat, prod, ci]
       "values.yaml":      [dev, test, uat, prod, ci]
       "values-dev.yaml":  [dev]
       "values-test.yaml": [test]
       "values-uat.yaml":  [uat]
       "values-prod.yaml": [prod]
       "values-ci.yaml":   [ci]
+      "templates/**":     [dev, test, uat, prod, ci]
+      "chart-lifecycle.yaml": [dev, test, uat, prod, ci]
     unmatchedChanges: warn
 
   clusterTest:
     enabled: true
     profiles:
       minimal:
-        description: Install Thanos Receive with Prometheus Operator CRDs and CI-local RustFS object storage.
+        description: Install the infrastructure-only Thanos backend with Prometheus Operator CRDs and standalone RustFS.
         requires:
           - chart: prometheus-operator
+            profile: minimal
+          - chart: rustfs
             profile: minimal
         values:
           - values.yaml

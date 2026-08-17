@@ -1,0 +1,37 @@
+---
+bootstrap:
+  adminSecret:
+    # With no existingSecret, the upstream chart creates this CI-only Secret.
+    name: rustfs-secret
+  workloadSecret:
+    create: true
+    accessKey: ci-thanos
+    secretKey: ci-thanos-secret-not-for-production
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+rustfs:
+  # CI is the only environment allowed to render credentials through Helm.
+  secret:
+    existingSecret: ""
+    allowInsecureDefaults: false
+    rustfs:
+      access_key: ci-rustfs-root
+      secret_key: ci-rustfs-root-secret-not-for-production
+
+  storageclass:
+    name: standard
+    dataStorageSize: 256Mi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

@@ -59,7 +59,7 @@ thanos:
       walCompression: true
     persistence:
       enabled: true
-      size: 30Gi
+      size: 25Gi
       storageClass: ""
     resources:
       requests:
@@ -79,9 +79,9 @@ thanos:
       size: 20Gi
       storageClass: ""
     retention:
-      resolutionRaw: 21d
-      resolution5m: 21d
-      resolution1h: 21d
+      resolutionRaw: 7d
+      resolution5m: 14d
+      resolution1h: 30d
     resources:
       requests:
         cpu: 250m
@@ -97,7 +97,7 @@ thanos:
     replicaCount: 1
     persistence:
       enabled: true
-      size: 20Gi
+      size: 10Gi
       storageClass: ""
     resources:
       requests:
