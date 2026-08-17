@@ -4,8 +4,9 @@
 # Deploys ONLY the operator and CRDs for ServiceMonitor, PodMonitor, etc.
 # Does NOT deploy Prometheus, Alertmanager, or Grafana.
 #
-# Why: We use Mimir for metrics storage, but need the ServiceMonitor CRDs
-# that kube-prometheus-stack provides so Alloy can auto-discover scrape targets.
+# Why: Thanos is the central metrics backend. The operator and its CRDs are
+# installed first so component charts can ship their intended monitoring
+# definitions before collection and rule evaluation are enabled.
 #
 # Subchart values must nest under `prometheus-operator:` because Chart.yaml
 # aliases the kube-prometheus-stack dependency to that name.
@@ -13,6 +14,12 @@
 prometheus-operator:
   crds:
     enabled: true
+
+  # The upstream rules describe a full kube-prometheus-stack installation.
+  # This wrapper installs only the operator, so those rules have no matching
+  # workloads. Component-owned rules remain allowed.
+  defaultRules:
+    create: false
 
   prometheus:
     enabled: false
@@ -38,8 +45,8 @@ prometheus-operator:
   kubeStateMetrics:
     enabled: false
 
-  # Keep the operator itself so ServiceMonitor / PodMonitor / PrometheusRule
-  # CRDs are reconciled.
+  # Keep the operator and admission webhook. The operator validates monitoring
+  # resources; collectors and rule evaluators are deployed in later phases.
   prometheusOperator:
     enabled: true
 
@@ -51,8 +58,7 @@ prometheus-operator:
         cpu: 100m
         memory: 128Mi
 
-  # Disable the default ServiceMonitors for cluster components — without a
-  # Prometheus instance these would only produce noise.
+  # Kubernetes control-plane monitoring is outside this wrapper's scope.
   kubernetesServiceMonitors:
     enabled: false
 
@@ -90,7 +96,7 @@ serviceMonitors:
     enabled: true
     namespace: kube-system
     interval: 30s
-    # Scraped by the alloy release; matches repo-wide convention.
+    # Future Alloy discovery selects this label.
     labels:
       release: alloy
   # istiod control-plane metrics (istio_build, pilot_*). The Envoy data plane

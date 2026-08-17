@@ -1,0 +1,11 @@
+---
+apiVersion: v2
+name: rustfs
+description: Secure standalone RustFS object storage for the observability hub
+type: application
+version: 0.1.0
+appVersion: "1.0.0-beta.12"
+dependencies:
+  - name: rustfs
+    version: 0.12.0
+    repository: https://charts.rustfs.com/

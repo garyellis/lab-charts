@@ -9,33 +9,14 @@ thanos:
       config: |
         type: S3
         config:
-          bucket: thanos
-          endpoint: '{{ printf "%s-rustfs-svc" .Release.Name }}:9000'
-          access_key: rustfsadmin
-          secret_key: rustfsadmin
+          bucket: thanos-metrics
+          endpoint: rustfs-svc:9000
+          access_key: ci-thanos
+          secret_key: ci-thanos-secret-not-for-production
           insecure: true
 
   rustfs:
-    enabled: true
-    replicaCount: 1
-    ingress:
-      enabled: false
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
-    mode:
-      standalone:
-        enabled: true
-      distributed:
-        enabled: false
-    storageclass:
-      name: standard
-      dataStorageSize: 100Mi
-      logStorageSize: 100Mi
+    enabled: false
 
   receive:
     replicaCount: 1
@@ -71,18 +52,6 @@ thanos:
       limits:
         cpu: 500m
         memory: 512Mi
-    extraInitContainers:
-      - name: wait-for-rustfs
-        image: curlimages/curl:8.7.1
-        command:
-          - sh
-          - -c
-          - |
-            until curl -sf http://{{ printf "%s-rustfs-svc" .Release.Name }}:9000/health/ready; do
-              echo "Waiting for RustFS..."
-              sleep 3
-            done
-
   query:
     replicaCount: 1
     resources:

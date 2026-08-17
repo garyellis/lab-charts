@@ -1,0 +1,102 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lab-rustfs.fullname" . }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lab-rustfs.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "lab-rustfs.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.bootstrap.image.repository }}:{{ .Values.bootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.bootstrap.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          env:
+            - name: RC_CONFIG_DIR
+              value: /tmp/rc
+            - name: ENDPOINT
+              value: {{ .Values.bootstrap.endpoint | quote }}
+            - name: BUCKET
+              value: {{ required "bootstrap.bucket is required" .Values.bootstrap.bucket | quote }}
+            - name: DESCRIPTION
+              value: {{ .Values.bootstrap.description | quote }}
+            - name: ADMIN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "bootstrap.adminSecret.name is required" .Values.bootstrap.adminSecret.name }}
+                  key: {{ .Values.bootstrap.adminSecret.accessKeyKey }}
+            - name: ADMIN_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.adminSecret.name }}
+                  key: {{ .Values.bootstrap.adminSecret.secretKeyKey }}
+            - name: WORKLOAD_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "bootstrap.workloadSecret.name is required" .Values.bootstrap.workloadSecret.name }}
+                  key: {{ .Values.bootstrap.workloadSecret.accessKeyKey }}
+            - name: WORKLOAD_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.workloadSecret.name }}
+                  key: {{ .Values.bootstrap.workloadSecret.secretKeyKey }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              rc alias set store "$ENDPOINT" "$ADMIN_ACCESS_KEY" "$ADMIN_SECRET_KEY"
+              until rc ready store --timeout 5; do
+                echo "waiting for RustFS readiness"
+                sleep 3
+              done
+              rc mb --ignore-existing "store/$BUCKET"
+              if rc admin access-key info store "$WORKLOAD_ACCESS_KEY" >/dev/null 2>&1; then
+                rc admin service-account update store "$WORKLOAD_ACCESS_KEY" \
+                  --secret-key "$WORKLOAD_SECRET_KEY" \
+                  --policy /policy/policy.json --description "$DESCRIPTION"
+              else
+                rc admin service-account create store \
+                  "$WORKLOAD_ACCESS_KEY" "$WORKLOAD_SECRET_KEY" \
+                  --policy /policy/policy.json --description "$DESCRIPTION"
+              fi
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "lab-rustfs.fullname" . }}-bootstrap-policy
+        - name: tmp
+          emptyDir: {}
+{{- end }}

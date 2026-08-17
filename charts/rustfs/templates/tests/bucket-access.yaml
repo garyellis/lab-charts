@@ -1,0 +1,63 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "lab-rustfs.fullname" . }}-bucket-access
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lab-rustfs.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: bucket-access
+      image: "{{ .Values.bootstrap.image.repository }}:{{ .Values.bootstrap.image.tag }}"
+      imagePullPolicy: {{ .Values.bootstrap.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+      env:
+        - name: RC_CONFIG_DIR
+          value: /tmp/rc
+        - name: ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.bootstrap.workloadSecret.name }}
+              key: {{ .Values.bootstrap.workloadSecret.accessKeyKey }}
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.bootstrap.workloadSecret.name }}
+              key: {{ .Values.bootstrap.workloadSecret.secretKeyKey }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -eu
+          rc alias set store {{ .Values.bootstrap.endpoint | quote }} "$ACCESS_KEY" "$SECRET_KEY"
+          rc ls "store/{{ .Values.bootstrap.bucket }}/"
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+  volumes:
+    - name: tmp
+      emptyDir: {}
+{{- end }}

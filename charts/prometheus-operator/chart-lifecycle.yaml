@@ -30,12 +30,15 @@ spec:
           - values.yaml
           - values-ci.yaml
     triggers:
+      "Chart.yaml":       [dev, test, uat, prod, ci]
       "values.yaml":      [dev, test, uat, prod, ci]
       "values-dev.yaml":  [dev]
       "values-test.yaml": [test]
       "values-uat.yaml":  [uat]
       "values-prod.yaml": [prod]
       "values-ci.yaml":   [ci]
+      "templates/**":     [dev, test, uat, prod, ci]
+      "chart-lifecycle.yaml": [dev, test, uat, prod, ci]
     unmatchedChanges: warn
 
   clusterTest:

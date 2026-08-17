@@ -1,0 +1,100 @@
+---
+# Production credentials are deliberately external to Helm. The root Secret is
+# consumed by RustFS and the bootstrap Job. The workload Secret is consumed only
+# by the bootstrap Job; Thanos receives the same credentials through its own
+# SOPS-managed objstore configuration Secret.
+bootstrap:
+  enabled: true
+  endpoint: http://rustfs-svc:9000
+  bucket: thanos-metrics
+  description: Thanos object-store access
+  adminSecret:
+    name: rustfs-root
+    accessKeyKey: RUSTFS_ACCESS_KEY
+    secretKeyKey: RUSTFS_SECRET_KEY
+  workloadSecret:
+    name: rustfs-thanos
+    accessKeyKey: accessKey
+    secretKeyKey: secretKey
+    # Local test environments may ask the wrapper to create this Secret.
+    # Production must leave this false and provision the Secret externally.
+    create: false
+    accessKey: ""
+    secretKey: ""
+  image:
+    repository: rustfs/rc
+    tag: v0.1.30
+    pullPolicy: IfNotPresent
+  backoffLimit: 10
+  activeDeadlineSeconds: 900
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+rustfs:
+  fullnameOverride: rustfs
+  replicaCount: 1
+  drivesPerNode: 1
+
+  mode:
+    standalone:
+      enabled: true
+      strategy:
+        type: Recreate
+    distributed:
+      enabled: false
+
+  # This Secret must contain RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY.
+  secret:
+    existingSecret: rustfs-root
+    allowInsecureDefaults: false
+
+  image:
+    rustfs:
+      repository: rustfs/rustfs
+      tag: 1.0.0-beta.12
+      pullPolicy: IfNotPresent
+    initImage:
+      repository: busybox
+      tag: 1.37.0
+      pullPolicy: IfNotPresent
+
+  config:
+    rustfs:
+      console_enable: "false"
+      # Empty disables the separate log PVC and emits logs to container stdout.
+      obs_log_directory: ""
+      obs_environment: production
+
+  storageclass:
+    name: local-path
+    dataStorageSize: 100Gi
+
+  service:
+    type: ClusterIP
+
+  ingress:
+    enabled: false
+  gatewayApi:
+    enabled: false
+  mtls:
+    enabled: false
+
+  serviceAccount:
+    create: true
+    automount: false
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+  pdb:
+    create: false
