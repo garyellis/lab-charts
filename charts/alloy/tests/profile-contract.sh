@@ -13,6 +13,7 @@ fi
 thanos_render="$(helm template alloy "$chart_dir" --namespace observability -f "$chart_dir/tests/values-thanos.yaml")"
 grep -q 'name: alloy-thanos-profile' <<<"$thanos_render"
 grep -q 'prometheus.remote_write "thanos"' <<<"$thanos_render"
+grep -q 'replacement = "https"' <<<"$thanos_render"
 
 helm template alloy "$chart_dir" -f "$chart_dir/tests/values-custom.yaml" >/dev/null
 

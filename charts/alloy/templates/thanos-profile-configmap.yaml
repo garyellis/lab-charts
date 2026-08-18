@@ -247,6 +247,10 @@ data:
     discovery.relabel {{ $name | quote }} {
       targets = discovery.relabel.local_control_plane.output
       rule {
+        target_label = "__scheme__"
+        replacement = "https"
+      }
+      rule {
         target_label = "__address__"
         replacement = "127.0.0.1:{{ $port }}"
       }
