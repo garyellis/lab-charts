@@ -1,0 +1,967 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Host and bounded OpenStack dataplane health for ai1.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Telemetry integrity and cost",
+      "type": "link",
+      "url": "/d/ai1-telemetry-integrity"
+    }
+  ],
+  "panels": [
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Scope:** host and bounded dataplane health; this does not prove OpenStack API, control-plane, guest, attachment, or end-user availability.\n\n**Start:** check scrape freshness, then collector errors and host pressure. Missing data is unknown, not zero.\n\n**Drill down:** use [Telemetry integrity and cost](/d/ai1-telemetry-integrity) for remote-write and cardinality evidence.",
+        "mode": "markdown"
+      },
+      "title": "Operator note",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Telemetry presence",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Both expected scrape jobs should report 1. No data means the end-to-end telemetry path is unknown.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "UP"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "instant": true,
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Expected scrape jobs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Age of the newest sample for each expected job. Treat absence as a pipeline failure, not as age zero.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 180
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"}))",
+          "instant": true,
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sample age",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 5,
+      "panels": [],
+      "title": "Host USE signals",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 11
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",mode=\"idle\"}[$__rate_interval])))",
+          "legendFormat": "CPU busy",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU busy",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 11
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / node_memory_MemTotal_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})",
+          "legendFormat": "Memory used",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory pressure",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Highest mounted filesystem utilization. Read the mountpoint before acting.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 11
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "topk(5, 100 * (1 - node_filesystem_avail_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!=\"\"} / node_filesystem_size_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!=\"\"}))",
+          "instant": true,
+          "legendFormat": "{{mountpoint}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Filesystem utilization",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "PSI reports time workloads waited for CPU, memory, or I/O. Sustained growth is stronger evidence than a single spike.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 11
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(node_pressure_cpu_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])",
+          "legendFormat": "CPU waiting",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(node_pressure_memory_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])",
+          "legendFormat": "Memory waiting",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(node_pressure_io_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])",
+          "legendFormat": "I/O waiting",
+          "refId": "C"
+        }
+      ],
+      "title": "PSI saturation",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 10,
+      "panels": [],
+      "title": "Cinder and host dependencies",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Thin-pool utilization only. It does not prove Cinder API health or successful volume attachment.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "cinder_thin_pool_data_percent{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "data",
+          "refId": "A"
+        },
+        {
+          "expr": "cinder_thin_pool_metadata_percent{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "metadata",
+          "refId": "B"
+        }
+      ],
+      "title": "Cinder thin-pool utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Error 1 means the latest collector run failed. Last-success age should remain near the one-minute schedule.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "openstack_telemetry_cinder_scrape_error{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "error (0 healthy)",
+          "refId": "A"
+        },
+        {
+          "expr": "time() - openstack_telemetry_cinder_last_success_unixtime{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "last success age (seconds)",
+          "refId": "B"
+        }
+      ],
+      "title": "Cinder collector health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Only the explicitly collected units are shown. A value of 1 means active; absence is unknown.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "id": 13,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics))\\.(service|timer)\",state=\"active\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Allowlisted systemd dependencies",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 14,
+      "panels": [],
+      "title": "Management, uplink, and OVS dataplane",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "eno1 is management and eno2 is the physical uplink. br-ex is not presented as the uplink.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (device) (rate(node_network_receive_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} receive",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (device) (rate(node_network_transmit_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} transmit",
+          "refId": "B"
+        }
+      ],
+      "title": "Physical interface traffic",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "A sustained non-zero rate is actionable; correlate with OVS loss and host pressure.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "pps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (device) (rate(node_network_receive_errs_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_transmit_errs_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_receive_drop_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_transmit_drop_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} errors + drops",
+          "refId": "A"
+        }
+      ],
+      "title": "Physical interface errors and drops",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Collector error 1 means the latest read failed. Link state covers only br-ex, br-int, br-tun, and eno2.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "id": 17,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "ovs_interface_link_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",interface=~\"br-ex|br-int|br-tun|eno2\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "expr": "openstack_telemetry_ovs_scrape_error{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        }
+      ],
+      "title": "OVS link and collector state",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Lost lookups should remain zero. Miss percentage is missed divided by hit plus missed; short bursts need correlation before action.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(ovs_datapath_lost_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])",
+          "legendFormat": "lost lookups/s",
+          "refId": "A"
+        },
+        {
+          "expr": "100 * rate(ovs_datapath_missed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]) / (rate(ovs_datapath_hit_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]) + rate(ovs_datapath_missed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]))",
+          "legendFormat": "miss percentage",
+          "refId": "B"
+        }
+      ],
+      "title": "OVS lookup symptoms",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Flow count is context for lookup symptoms, not a standalone health threshold.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "ovs_datapath_flows{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "flows",
+          "refId": "A"
+        },
+        {
+          "expr": "time() - openstack_telemetry_ovs_last_success_unixtime{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "collector age (seconds)",
+          "refId": "B"
+        }
+      ],
+      "title": "OVS flow count and collector age",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 20,
+      "panels": [],
+      "title": "Coverage and identity contract",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "One row should carry the eight producer labels plus Receive-owned tenant_id=lab.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 16,
+        "x": 0,
+        "y": 39
+      },
+      "id": 21,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Producer identity",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "No data is the expected result: ai1 is not a Kubernetes cluster and producers must not emit replica-family labels.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 39
+      },
+      "id": 22,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",cluster!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "cluster",
+          "refId": "A"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",cluster_role!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "cluster_role",
+          "refId": "B"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",__replica__!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__replica__",
+          "refId": "C"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",replica!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "replica",
+          "refId": "D"
+        }
+      ],
+      "title": "Forbidden identity labels (expect no data)",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": [
+    "ai1",
+    "openstack",
+    "sre"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "Thanos",
+          "value": "thanos"
+        },
+        "hide": 0,
+        "label": "Datasource",
+        "name": "DS_PROMETHEUS",
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "lab",
+          "value": "lab"
+        },
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tenant",
+        "multi": false,
+        "name": "tenant_id",
+        "options": [
+          {
+            "selected": true,
+            "text": "lab",
+            "value": "lab"
+          }
+        ],
+        "query": "lab",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "ai1",
+          "value": "ai1"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Infrastructure",
+        "multi": false,
+        "name": "infra",
+        "options": [
+          {
+            "selected": true,
+            "text": "ai1",
+            "value": "ai1"
+          }
+        ],
+        "query": "ai1",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "timezone": "browser",
+  "title": "AI1 / OpenStack — Overview",
+  "uid": "ai1-openstack-overview",
+  "weekStart": ""
+}

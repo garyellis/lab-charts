@@ -75,6 +75,25 @@ def test_rewrites_live_datasource_uids_to_template_vars() -> None:
     assert out["panels"][0]["id"] == 1
 
 
+def test_rewrites_the_obs_w_thanos_datasource_uid() -> None:
+    out = normalize_dashboard(
+        {
+            "panels": [
+                {
+                    "datasource": {"type": "prometheus", "uid": "thanos"},
+                    "id": 1,
+                    "type": "timeseries",
+                }
+            ]
+        }
+    )
+
+    assert out["panels"][0]["datasource"] == {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}",
+    }
+
+
 def test_unknown_datasource_uid_is_left_alone() -> None:
     raw = {
         "title": "T",

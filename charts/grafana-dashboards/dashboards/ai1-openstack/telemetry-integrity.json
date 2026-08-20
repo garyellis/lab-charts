@@ -1,0 +1,778 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "End-to-end telemetry integrity, remote-write behavior, and cardinality cost for ai1.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "OpenStack overview",
+      "type": "link",
+      "url": "/d/ai1-openstack-overview"
+    }
+  ],
+  "panels": [
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Start:** check job freshness. `up=0` is a scrape failure; missing data means the sender, Receive, storage, or query path is unknown.\n\n**Collectors:** error `1` means the latest Cinder or OVS run failed.\n\n**Remote write:** lag is useful after replay; an isolated sender cannot independently report its own outage.\n\n**Cost:** `dm-*` panels are a baseline, not a proven churn rate.",
+        "mode": "markdown"
+      },
+      "title": "Operator note",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Scrape and collector integrity",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Both expected jobs must exist and report 1. Missing is not healthy zero.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "UP"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "instant": true,
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Scrape jobs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Expected near 60 seconds. Age above 180 seconds warrants pipeline investigation.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 180
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"}))",
+          "instant": true,
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest sample age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Error 1 means the latest scheduled collection failed. Age is seconds since the latest success.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "openstack_telemetry_cinder_scrape_error{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "Cinder error",
+          "refId": "A"
+        },
+        {
+          "expr": "time() - openstack_telemetry_cinder_last_success_unixtime{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "Cinder age",
+          "refId": "B"
+        },
+        {
+          "expr": "openstack_telemetry_ovs_scrape_error{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "OVS error",
+          "refId": "C"
+        },
+        {
+          "expr": "time() - openstack_telemetry_ovs_last_success_unixtime{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}",
+          "legendFormat": "OVS age",
+          "refId": "D"
+        }
+      ],
+      "title": "Textfile collectors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 6,
+      "panels": [],
+      "title": "Alloy remote write and WAL",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Failed or dropped samples should remain zero. A recovered sender may replay these metrics after an outage.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "pps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(prometheus_remote_storage_samples_failed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/alloy\"}[$__rate_interval])",
+          "legendFormat": "failed/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(prometheus_remote_storage_samples_dropped_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/alloy\"}[$__rate_interval])",
+          "legendFormat": "dropped/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Remote-write sample failures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Highest-sent lag is forensic after connectivity returns; it cannot independently detect a sender that is unable to report.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 12,
+        "y": 11
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/alloy\"}",
+          "legendFormat": "lag",
+          "refId": "A"
+        }
+      ],
+      "title": "Highest-sent timestamp lag",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Active WAL series is a cost and replay-volume proxy; Alloy exposes no WAL byte-size metric.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 18,
+        "y": 11
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "prometheus_remote_write_wal_storage_active_series{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/alloy\"}",
+          "legendFormat": "active WAL series",
+          "refId": "A"
+        }
+      ],
+      "title": "WAL active series",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 10,
+      "panels": [],
+      "title": "Cardinality and device baseline",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Current visible series for the selected tenant and infrastructure. This is a snapshot, not a durable ceiling.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 19
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})",
+          "interval": "5m",
+          "instant": true,
+          "legendFormat": "series",
+          "refId": "A"
+        }
+      ],
+      "title": "Visible active series",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Bounded top 15 metric families by series count; use this to find cost concentration before adding telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 6,
+        "y": 19
+      },
+      "id": 12,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "topk(15, count by (__name__) ({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}))",
+          "format": "table",
+          "interval": "5m",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top metric families",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Bounded top 10 device labels by series count. Dynamic dm-* devices deserve specific review.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "id": 13,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "topk(10, count by (device) ({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!=\"\"}))",
+          "format": "table",
+          "interval": "5m",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top device labels",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Current distinct dm-* device labels. Seven days of observation are needed before treating this as stable.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 24
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "count(count by (device) ({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"dm-.*\"}))",
+          "interval": "5m",
+          "instant": true,
+          "legendFormat": "dm devices",
+          "refId": "A"
+        }
+      ],
+      "title": "dm-* devices",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Scoped dm-* series through time. It shows inventory growth, not true series churn or lifetime uniqueness.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"dm-.*\"})",
+          "interval": "5m",
+          "legendFormat": "dm-* series",
+          "refId": "A"
+        }
+      ],
+      "title": "dm-* series baseline",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 16,
+      "panels": [],
+      "title": "Label contract",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "The producer owns eight labels; Receive adds tenant_id=lab. job and instance remain scrape labels.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 0,
+        "y": 36
+      },
+      "id": 17,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id, job, instance) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Exact identity tuple",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Expected result is no data. Any returned count is an identity-contract violation.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 36
+      },
+      "id": 18,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",cluster!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "cluster",
+          "refId": "A"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",cluster_role!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "cluster_role",
+          "refId": "B"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",__replica__!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__replica__",
+          "refId": "C"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",replica!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "replica",
+          "refId": "D"
+        },
+        {
+          "expr": "count({tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",prometheus_replica!=\"\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "prometheus_replica",
+          "refId": "E"
+        }
+      ],
+      "title": "Forbidden labels (expect no data)",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": [
+    "ai1",
+    "openstack",
+    "telemetry",
+    "sre"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "Thanos",
+          "value": "thanos"
+        },
+        "hide": 0,
+        "label": "Datasource",
+        "name": "DS_PROMETHEUS",
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "lab",
+          "value": "lab"
+        },
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tenant",
+        "multi": false,
+        "name": "tenant_id",
+        "options": [
+          {
+            "selected": true,
+            "text": "lab",
+            "value": "lab"
+          }
+        ],
+        "query": "lab",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "ai1",
+          "value": "ai1"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Infrastructure",
+        "multi": false,
+        "name": "infra",
+        "options": [
+          {
+            "selected": true,
+            "text": "ai1",
+            "value": "ai1"
+          }
+        ],
+        "query": "ai1",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "timezone": "browser",
+  "title": "AI1 — Telemetry Integrity and Cost",
+  "uid": "ai1-telemetry-integrity",
+  "weekStart": ""
+}

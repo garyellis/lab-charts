@@ -33,6 +33,7 @@ run = [
   "actionlint .github/workflows/ci.yaml",
   "uv run --extra dev ruff check src/ tests/",
   "uv run --extra dev mypy src/chart_manager",
+  "uv run chart-manager grafana dashboard lint -o table",
   "uv run --extra dev pytest -q",
 ]
 

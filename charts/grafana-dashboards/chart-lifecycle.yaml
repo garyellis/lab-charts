@@ -14,17 +14,20 @@ spec:
           - values.yaml
           - values-ci.yaml
     triggers:
-      "values.yaml":    [ci]
-      "values-ci.yaml": [ci]
+      "values.yaml":        [ci]
+      "values-ci.yaml":     [ci]
+      "values.schema.json": [ci]
+      "templates/**":       [ci]
+      "dashboards/**":      [ci]
     unmatchedChanges: warn
 
   clusterTest:
     enabled: true
     # Profiles for the grafana-dashboards chart.
     #
-    # This chart is a thin wrapper: every dashboards/*.json gets templated into a
-    # ConfigMap with the `grafana_dashboard=1` sidecar label so Grafana picks it
-    # up. There are no helm test hooks of its own -- value comes from running it
+    # This chart is a thin wrapper: selected dashboard groups become ConfigMaps
+    # with the `grafana_dashboard=1` sidecar label. There are no Helm test hooks
+    # of its own -- value comes from running it
     # alongside the real observability + mesh + networking stack so dashboards
     # can be exercised against live data during development and prototyping.
     #

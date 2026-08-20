@@ -8,6 +8,7 @@ from chart_manager.services.grafana.dashboard_lint import (
     expand_targets,
     lint_dashboard,
     lint_paths,
+    rendered_configmap_name,
 )
 from chart_manager.services.grafana.wire import SCHEMA_VERSION, lint_result_to_dict
 
@@ -254,7 +255,9 @@ def test_lint_dashboards_recurses_into_a_directory_path(tmp_path: Path) -> None:
     tree = tmp_path / "dashboards"
     (tree / "nested").mkdir(parents=True)
     (tree / "a.json").write_text(_PASSING_DASHBOARD)
-    (tree / "nested" / "b.json").write_text(_PASSING_DASHBOARD)
+    (tree / "nested" / "b.json").write_text(
+        _PASSING_DASHBOARD.replace('"uid": "u"', '"uid": "nested-u"')
+    )
     (tree / "notes.txt").write_text("not a dashboard")
 
     result = _lint("--path", str(tree))
@@ -298,3 +301,67 @@ def test_a_binary_file_is_a_finding_and_not_a_decode_traceback(tmp_path: Path) -
     findings = lint_dashboard(blob)
 
     assert [f.rule for f in findings] == ["R000-json"]
+
+
+def test_lint_rejects_oversize_dashboard_payload(tmp_path: Path) -> None:
+    dashboard = tmp_path / "large.json"
+    payload = json.loads(_PASSING_DASHBOARD)
+    payload["description"] = "x" * (900 * 1024)
+    dashboard.write_text(json.dumps(payload))
+
+    assert "R008-size" in {finding.rule for finding in lint_dashboard(dashboard)}
+
+
+def test_lint_rejects_hard_coded_datasource_uid(tmp_path: Path) -> None:
+    dashboard = tmp_path / "hard-coded.json"
+    payload = json.loads(_PASSING_DASHBOARD)
+    payload["panels"][0]["datasource"]["uid"] = "thanos"
+    dashboard.write_text(json.dumps(payload))
+
+    assert "R009-datasource-uid" in {
+        finding.rule for finding in lint_dashboard(dashboard)
+    }
+
+
+def test_lint_rejects_unsupported_dashboard_url(tmp_path: Path) -> None:
+    dashboard = tmp_path / "unsafe-url.json"
+    payload = json.loads(_PASSING_DASHBOARD)
+    payload["links"] = [{"title": "unsafe", "url": "javascript:alert(1)"}]
+    dashboard.write_text(json.dumps(payload))
+
+    assert "R010-url" in {finding.rule for finding in lint_dashboard(dashboard)}
+
+
+def test_lint_rejects_plain_http_dashboard_url(tmp_path: Path) -> None:
+    dashboard = tmp_path / "plain-http.json"
+    payload = json.loads(_PASSING_DASHBOARD)
+    payload["links"] = [{"title": "insecure", "url": "http://grafana.example.test"}]
+    dashboard.write_text(json.dumps(payload))
+
+    assert "R010-url" in {finding.rule for finding in lint_dashboard(dashboard)}
+
+
+def test_lint_paths_rejects_duplicate_uids(tmp_path: Path) -> None:
+    first = tmp_path / "one" / "a.json"
+    second = tmp_path / "two" / "b.json"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text(_PASSING_DASHBOARD)
+    second.write_text(_PASSING_DASHBOARD)
+
+    result = lint_paths([first, second])
+
+    assert "R011-duplicate-uid" in {finding.rule for finding in result.findings}
+
+
+def test_rendered_name_is_group_qualified_and_bounded(tmp_path: Path) -> None:
+    dashboard = (
+        tmp_path
+        / "ai1-openstack"
+        / "a-dashboard-name-long-enough-to-require-truncation.json"
+    )
+
+    name = rendered_configmap_name(dashboard)
+
+    assert name.startswith("grafana-dashboard-ai1-openstack-")
+    assert len(name) <= 63
