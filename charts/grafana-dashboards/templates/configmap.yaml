@@ -1,54 +1,60 @@
 {{- /*
-Render one ConfigMap per dashboard JSON found under dashboards/**.
-The Grafana sidecar (kiwigrid/k8s-sidecar) discovers these via the
-`{{ .Values.sidecar.label }}` label and assigns each dashboard to a
-Grafana folder based on the value of the `grafana_folder` label
-(controlled by sidecar.dashboards.folderAnnotation on the Grafana chart).
-
-Folder precedence (highest first):
-  1. .Values.dashboardFolder           -- global override across ALL dashboards
-  2. parent directory of the JSON file -- e.g. dashboards/platform/foo.json -> "Platform"
-  3. (none)                            -- falls into Grafana's General folder
-
-ConfigMap name is derived from the JSON basename only, so directory
-restructuring does not change resource names (and therefore does not
-trigger churn on existing releases).
-*/}}
-{{- range $path, $_ := $.Files.Glob "dashboards/**/*.json" }}
-{{- $base := base $path | trimSuffix ".json" }}
-{{- $dir := dir $path | base }}
-{{- $folder := "" }}
-{{- if $.Values.dashboardFolder }}
-  {{- $folder = $.Values.dashboardFolder }}
-{{- else if ne $dir "dashboards" }}
-  {{- if eq $dir "slo" }}
-    {{- $folder = "SLO" }}
-  {{- else }}
-    {{- $folder = $dir | title }}
-  {{- end }}
-{{- end }}
+Render one ConfigMap per JSON dashboard in the explicitly selected groups.
+The group is part of the resource identity and the path hash survives
+truncation, so equal basenames and long names cannot collide silently.
+*/ -}}
+{{- $groups := required "enabledGroups is required and must select at least one dashboard group" .Values.enabledGroups -}}
+{{- if eq (len $groups) 0 -}}
+  {{- fail "enabledGroups must select at least one dashboard group" -}}
+{{- end -}}
+{{- $available := list "ai1-openstack" "networking" "platform" "slo" -}}
+{{- range $group := $groups -}}
+  {{- if not (has $group $available) -}}
+    {{- fail (printf "enabledGroups contains unknown dashboard group %q" $group) -}}
+  {{- end -}}
+  {{- $matches := $.Files.Glob (printf "dashboards/%s/*.json" $group) -}}
+  {{- if eq (len $matches) 0 -}}
+    {{- fail (printf "enabled dashboard group %q contains no dashboards" $group) -}}
+  {{- end -}}
+  {{- range $path, $_ := $matches -}}
+    {{- $document := $.Files.Get $path -}}
+    {{- if gt (len $document) 921600 -}}
+      {{- fail (printf "%s exceeds the 900 KiB dashboard ConfigMap safety limit" $path) -}}
+    {{- end -}}
+    {{- $parsed := mustFromJson $document -}}
+    {{- if not $parsed.uid -}}
+      {{- fail (printf "%s has no dashboard uid" $path) -}}
+    {{- end -}}
+    {{- $base := base $path | trimSuffix ".json" -}}
+    {{- $identity := printf "%s-%s" $group $base -}}
+    {{- $name := printf "grafana-dashboard-%s-%s" ($identity | trunc 35 | trimSuffix "-") (sha256sum $identity | trunc 8) -}}
+    {{- $folder := $group | title -}}
+    {{- if eq $group "slo" -}}
+      {{- $folder = "SLO" -}}
+    {{- else if eq $group "ai1-openstack" -}}
+      {{- $folder = "OpenStack · ai1" -}}
+    {{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ printf "grafana-dashboard-%s" $base }}
+  name: {{ $name }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    {{ $.Values.sidecar.label }}: {{ $.Values.sidecar.labelValue | quote }}
+    grafana_dashboard: "1"
     app.kubernetes.io/name: {{ $.Chart.Name }}
     app.kubernetes.io/instance: {{ $.Release.Name }}
     app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
     app.kubernetes.io/managed-by: {{ $.Release.Service }}
-    {{- if $folder }}
-    grafana_folder: {{ $folder | quote }}
-    {{- end }}
     {{- with $.Values.additionalLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   annotations:
+    grafana_folder: {{ $folder | quote }}
     meta.helm.sh/release-name: {{ $.Release.Name }}
     meta.helm.sh/release-namespace: {{ $.Release.Namespace }}
 data:
   {{ base $path }}: |-
-{{ $.Files.Get $path | indent 4 }}
-{{- end }}
+{{ $document | indent 4 }}
+  {{- end -}}
+{{- end -}}

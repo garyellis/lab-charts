@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "additionalLabels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "app.kubernetes.io/instance",
+            "app.kubernetes.io/managed-by",
+            "app.kubernetes.io/name",
+            "app.kubernetes.io/version",
+            "grafana_dashboard"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "enabledGroups": {
+      "items": {
+        "enum": [
+          "ai1-openstack",
+          "networking",
+          "platform",
+          "slo"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "enabledGroups"
+  ],
+  "type": "object"
+}

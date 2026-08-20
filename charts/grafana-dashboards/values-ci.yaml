@@ -1,8 +1,8 @@
 ---
-# kind / CI overrides for grafana-dashboards. Layered on top of values.yaml.
-# This chart only renders ConfigMaps from dashboards/*.json so kind defaults
-# already work; keep this file as a parity placeholder and a home for future
-# kind-specific tweaks (e.g. additionalLabels, dashboardFolder per profile).
-sidecar:
-  label: grafana_dashboard
-  labelValue: "1"
+# Validate every committed group. Production consumers must select only the
+# groups they own; obs-w selects ai1-openstack alone.
+enabledGroups:
+  - ai1-openstack
+  - networking
+  - platform
+  - slo

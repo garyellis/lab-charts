@@ -1,49 +1,57 @@
-# Grafana Dashboards Chart
+# Grafana dashboards
 
-A Helm chart that dynamically creates ConfigMaps from dashboard JSON files for Grafana sidecar discovery.
+This chart turns reviewed dashboard JSON into ConfigMaps for Grafana's
+dashboard sidecar. Consumers must select an explicit bounded group; the chart
+never installs every dashboard implicitly.
 
-## How It Works
+## Contract
 
-1. Place any Grafana dashboard JSON file in the `dashboards/` directory
-2. The chart automatically creates a ConfigMap for each `.json` file
-3. ConfigMaps are labeled with `grafana_dashboard: "1"`
-4. Grafana's sidecar container discovers and loads them automatically
-
-## Usage
-
-### Adding a New Dashboard
-
-Simply add a `.json` file to `dashboards/`:
-
-```bash
-cp my-new-dashboard.json dashboards/
-helm upgrade grafana-dashboards . -n observability
+```yaml
+enabledGroups:
+  - ai1-openstack
 ```
 
-The dashboard will be automatically discovered without needing to modify any templates.
+`enabledGroups` is required, non-empty, unique, and limited to directories
+owned under `dashboards/`. An unknown group or a selected group with no JSON
+fails rendering.
 
-### Dashboard Naming Convention
+Each dashboard becomes one collision-resistant ConfigMap with:
 
-- File: `gpu-monitoring.json` → ConfigMap: `grafana-dashboard-gpu-monitoring`
-- File: `network-overview.json` → ConfigMap: `grafana-dashboard-network-overview`
+- discovery label `grafana_dashboard: "1"`;
+- group-derived `grafana_folder` annotation;
+- group-qualified name with a stable path hash; and
+- one unmodified JSON data entry.
 
-## Configuration
+The `ai1-openstack` group maps to the Grafana folder `OpenStack · ai1`.
+Dashboard payloads above 900 KiB fail before approaching the ConfigMap limit.
+Additional labels cannot replace chart-owned identity or discovery labels.
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `sidecar.label` | Label key for Grafana sidecar discovery | `grafana_dashboard` |
-| `sidecar.labelValue` | Label value for discovery | `"1"` |
-| `dashboardFolder` | Optional folder name in Grafana UI | `""` (default) |
-| `additionalLabels` | Extra labels to apply to all ConfigMaps | `{}` |
+## Authoring
 
-## Current Dashboards
+Place dashboards at `dashboards/<group>/<name>.json`. Provisioned dashboards
+remain editable in JSON so they can be imported for development; Grafana's
+file provider must set `allowUiUpdates: false` and Git remains authoritative.
 
-- **gpu-monitoring.json** - GPU power and utilization metrics
-- **network-drop.json** - Network packet drop analysis
-- **network-overview.json** - Network traffic overview
-- **slo.json** - Service Level Objectives
+Use `${DS_PROMETHEUS}` for Prometheus-compatible data sources. The exporter
+normalizes the live `thanos` and `mimir` UIDs:
 
-## Requirements
+```bash
+uv run chart-manager grafana dashboard export <uid> \
+  --to charts/grafana-dashboards/dashboards/<group>/<name>.json
+uv run chart-manager grafana dashboard lint -o table
+```
 
-- Grafana chart must have sidecar enabled with matching label configuration
-- See `values/grafana.yaml` for sidecar settings
+For `ai1-openstack`, every PromQL expression must scope both
+`tenant_id="$tenant_id"` and `infra="$infra"`. Keep operator notes short:
+state what the panel proves, how to interpret missing data, and the next
+drilldown.
+
+## Deployment
+
+Flux should own the release. Pair the chart with a Grafana sidecar that watches
+ConfigMaps in the release namespace, reads `grafana_folder` as an annotation,
+and uses a read-only file provider with deletion enabled for pruning.
+
+See [TESTING.md](TESTING.md) for offline gates. Cluster-backed tests are for an
+authorized sandbox only; they are not required to validate the ConfigMap-only
+render.

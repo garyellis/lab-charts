@@ -5,6 +5,7 @@ greppable output suitable for CI.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Iterable
@@ -31,6 +32,8 @@ class Finding:
 _SHORT_RATE = re.compile(
     r"\b(rate|irate|increase)\s*\([^)]*\[(?:\d+s|[1-5]m)\]"
 )
+_MAX_DASHBOARD_BYTES = 900 * 1024
+_SUPPORTED_URL = re.compile(r"^(?:https://|/|\$\{)")
 
 
 def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
@@ -45,8 +48,27 @@ def _iter_panels(dash: dict[str, Any]) -> Iterable[dict[str, Any]]:
     yield from walk(dash.get("panels"))
 
 
+def _iter_objects(node: Any) -> Iterable[dict[str, Any]]:
+    """Yield every object in a dashboard tree for recursive safety checks."""
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _iter_objects(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _iter_objects(value)
+
+
+def rendered_configmap_name(path: Path) -> str:
+    """Return the collision-resistant name used by the Helm template."""
+    group = path.parent.name
+    identity = f"{group}-{path.stem}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
+    return f"grafana-dashboard-{identity[:35].rstrip('-')}-{digest}"
+
+
 def lint_dashboard(path: Path) -> list[Finding]:
-    """Lint one dashboard JSON file against rules R001-R007; invalid JSON is R000.
+    """Lint one dashboard JSON file; invalid or unreadable JSON is R000.
 
     `UnicodeDecodeError` joins `JSONDecodeError` on the R000 arm: a binary
     file handed to `--path` is the same event as a malformed one -- "this is
@@ -54,8 +76,9 @@ def lint_dashboard(path: Path) -> list[Finding]:
     it was named here.
     """
     try:
-        dash = json.loads(path.read_text())
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raw = path.read_bytes()
+        dash = json.loads(raw)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         return [Finding(path, "R000-json", f"invalid JSON: {exc}")]
 
     findings: list[Finding] = []
@@ -63,6 +86,12 @@ def lint_dashboard(path: Path) -> list[Finding]:
     def add(rule: str, msg: str) -> None:
         """Append a Finding for this dashboard."""
         findings.append(Finding(path, rule, msg))
+
+    if len(raw) > _MAX_DASHBOARD_BYTES:
+        add(
+            "R008-size",
+            f"dashboard is {len(raw)} bytes; maximum is {_MAX_DASHBOARD_BYTES}",
+        )
 
     if not dash.get("title"):
         add("R001-title", "missing or empty .title")
@@ -102,6 +131,22 @@ def lint_dashboard(path: Path) -> list[Finding]:
             "R007-templated-ds",
             "no templating variable of type 'datasource' (dashboard is not portable)",
         )
+
+    for obj in _iter_objects(dash):
+        datasource = obj.get("datasource")
+        if isinstance(datasource, dict):
+            uid = datasource.get("uid")
+            if isinstance(uid, str) and uid != "-- Grafana --" and not uid.startswith("${"):
+                add(
+                    "R009-datasource-uid",
+                    f"hard-coded datasource uid {uid!r}; use a datasource variable",
+                )
+        url = obj.get("url")
+        if isinstance(url, str) and url and not _SUPPORTED_URL.match(url):
+            add(
+                "R010-url",
+                f"unsupported dashboard URL {url!r}; use HTTPS or a relative Grafana URL",
+            )
 
     return findings
 
@@ -156,8 +201,33 @@ def lint_paths(paths: Iterable[Path]) -> LintResult:
     """Lint every given dashboard file and aggregate the findings into a result."""
     targets = list(paths)
     findings: list[Finding] = []
+    uids: dict[str, Path] = {}
+    resource_names: dict[str, Path] = {}
     for p in targets:
         findings.extend(lint_dashboard(p))
+        try:
+            dashboard = json.loads(p.read_bytes())
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue
+        uid = dashboard.get("uid")
+        if isinstance(uid, str) and uid:
+            if first := uids.get(uid):
+                findings.append(
+                    Finding(p, "R011-duplicate-uid", f"uid {uid!r} is already used by {first}")
+                )
+            else:
+                uids[uid] = p
+        resource_name = rendered_configmap_name(p)
+        if first := resource_names.get(resource_name):
+            findings.append(
+                Finding(
+                    p,
+                    "R012-rendered-name",
+                    f"ConfigMap name {resource_name!r} is already produced by {first}",
+                )
+            )
+        else:
+            resource_names[resource_name] = p
     return LintResult(findings=tuple(findings), files_scanned=len(targets))
 
 

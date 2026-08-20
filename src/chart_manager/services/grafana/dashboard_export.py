@@ -26,6 +26,7 @@ SECRET_PASSWORD_KEY = "admin-password"
 # the templated variable form so the JSON is portable across clusters.
 _DATASOURCE_REWRITES = {
     "mimir": ("prometheus", "${DS_PROMETHEUS}"),
+    "thanos": ("prometheus", "${DS_PROMETHEUS}"),
     "loki": ("loki", "${DS_LOKI}"),
     "tempo": ("tempo", "${DS_TEMPO}"),
 }
