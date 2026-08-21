@@ -14,6 +14,14 @@
       "title": "OpenStack overview",
       "type": "link",
       "url": "/d/ai1-openstack-overview"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "VMs and hypervisor runtime",
+      "type": "link",
+      "url": "/d/ai1-libvirt-hypervisor"
     }
   ],
   "panels": [
@@ -50,7 +58,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Both expected jobs must exist and report 1. Missing is not healthy zero.",
+      "description": "All four expected jobs must exist and report 1. Missing is not healthy zero.",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -105,7 +113,7 @@
       },
       "targets": [
         {
-          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"})",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -119,7 +127,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Expected near 60 seconds. Age above 180 seconds warrants pipeline investigation.",
+      "description": "Expected near 60 seconds except for the five-minute OpenStack API scrape. Age above seven minutes warrants pipeline investigation.",
       "fieldConfig": {
         "defaults": {
           "thresholds": {
@@ -131,11 +139,11 @@
               },
               {
                 "color": "yellow",
-                "value": 180
+                "value": 420
               },
               {
                 "color": "red",
-                "value": 600
+                "value": 900
               }
             ]
           },
@@ -164,7 +172,7 @@
       },
       "targets": [
         {
-          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"}))",
+          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"}))",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -623,7 +631,7 @@
       },
       "targets": [
         {
-          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id, job, instance) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id, job, instance) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"})",
           "format": "table",
           "instant": true,
           "refId": "A"

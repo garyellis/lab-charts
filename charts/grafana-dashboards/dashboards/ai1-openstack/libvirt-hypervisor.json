@@ -1,0 +1,257 @@
+{
+  "annotations": {"list": []},
+  "description": "Hypervisor-observed lifecycle and runtime telemetry for ai1 OpenStack virtual machines from the read-only libvirt exporter.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {"includeVars": true, "keepTime": true, "targetBlank": false, "title": "OpenStack overview", "type": "link", "url": "/d/ai1-openstack-overview"},
+    {"includeVars": true, "keepTime": true, "targetBlank": false, "title": "Cloud services", "type": "link", "url": "/d/ai1-openstack-cloud-services"},
+    {"includeVars": true, "keepTime": true, "targetBlank": false, "title": "Host health", "type": "link", "url": "/d/ai1-host-health"},
+    {"includeVars": true, "keepTime": true, "targetBlank": false, "title": "Telemetry integrity", "type": "link", "url": "/d/ai1-telemetry-integrity"}
+  ],
+  "panels": [
+    {
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "content": "**Two truths, one machine:** Nova owns requested lifecycle state; libvirt reports what the hypervisor currently observes. A running domain does not prove a healthy guest OS.\n\n**Runtime:** CPU is normalized by assigned vCPUs. RSS is host-resident QEMU memory, not guest working set. Balloon memory appears only when libvirt receives it. Block and network rates are outside-guest observations. Missing data is unknown, never zero.\n\n**Privacy:** joins use pseudonymous keys. Raw instance UUIDs, libvirt domain names, users, MACs, bridges, volume serials, and backing paths are not stored.",
+        "mode": "markdown"
+      },
+      "title": "Operator note",
+      "type": "text"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Alloy's loopback scrape of the root-confined exporter. Value 1 means libvirt collection succeeded.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "collection failed"}, "1": {"color": "green", "text": "collection healthy"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 4},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "min(libvirt_up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",job=\"integrations/libvirt_exporter\"})", "instant": true, "legendFormat": "libvirt", "refId": "A"}],
+      "title": "Libvirt collection",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Age of the latest successful exporter scrape sample.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 120}, {"color": "red", "value": 300}]}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 4},
+      "id": 3,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "time() - max(timestamp(libvirt_up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}))", "instant": true, "legendFormat": "age", "refId": "A"}],
+      "title": "Sample age",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Libvirt domains with OpenStack metadata in the selected project, including powered-off domains.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 4},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "count(libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"})", "instant": true, "legendFormat": "domains", "refId": "A"}],
+      "title": "Selected domains",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Domains whose current libvirt state description is running.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 4},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "count((libvirt_domain_info_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",state_desc=~\".*running.*\"} > 0) * on (libvirt_domain_key) group_left (openstack_project_id) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"})", "instant": true, "legendFormat": "running", "refId": "A"}],
+      "title": "Running",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Domains whose current libvirt state description is shut off.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "gray", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 4},
+      "id": 6,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "count((libvirt_domain_info_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",state_desc=~\".*shut off.*\"} > 0) * on (libvirt_domain_key) group_left (openstack_project_id) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"})", "instant": true, "legendFormat": "shut off", "refId": "A"}],
+      "title": "Shut off",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Latest domains whose individual metric collection exceeded the exporter timeout. Healthy value is zero.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 4},
+      "id": 7,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "sum(libvirt_domain_timed_out{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"} * on (libvirt_domain_key) group_left (openstack_project_id) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"})", "instant": true, "legendFormat": "timed out", "refId": "A"}],
+      "title": "Domain timeouts",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Nova is the lifecycle authority; libvirt is the hypervisor observer. A mismatch can be transitional or evidence of control-plane drift.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 13, "w": 24, "x": 0, "y": 9},
+      "id": 8,
+      "options": {"showHeader": true, "sortBy": [{"desc": false, "displayName": "VM"}]},
+      "targets": [{"expr": "max by (openstack_instance_name, openstack_project_name, openstack_flavor_name, state_desc, status, libvirt_domain_key) (((libvirt_domain_info_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"} * on (libvirt_domain_key) group_left (openstack_instance_name, openstack_project_name, openstack_flavor_name, openstack_resource_key) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}) * on (openstack_resource_key) group_left (status) openstack_nova_server_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"}))", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Virtual machine lifecycle inventory",
+      "transformations": [
+        {"id": "labelsToFields", "options": {"mode": "columns"}},
+        {"id": "organize", "options": {"excludeByName": {"Time": true, "Value": true, "libvirt_domain_key": true}, "indexByName": {"openstack_instance_name": 0, "openstack_project_name": 1, "openstack_flavor_name": 2, "status": 3, "state_desc": 4}, "renameByName": {"openstack_flavor_name": "Flavor", "openstack_instance_name": "VM", "openstack_project_name": "Project", "state_desc": "Libvirt state", "status": "Nova state"}}}
+      ],
+      "type": "table"
+    },
+    {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22}, "id": 9, "panels": [], "title": "CPU execution and scheduling pressure", "type": "row"},
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Domain CPU time rate divided by assigned vCPUs. This is hypervisor-observed execution, normalized to 100% of the VM's allocation.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
+      "id": 10,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "clamp_max(100 * sum by (libvirt_domain_key) (rate(libvirt_domain_info_cpu_time_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) / clamp_min(max by (libvirt_domain_key) (libvirt_domain_info_virtual_cpus{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}), 1), 100) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}}", "refId": "A"}],
+      "title": "VM CPU utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Per-vCPU wait is host scheduler contention; delay is time exposed to the guest as steal. Both are normalized by online vCPUs.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 15}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
+      "id": 11,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "100 * sum by (libvirt_domain_key) (rate(libvirt_domain_vcpu_wait_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) / clamp_min(max by (libvirt_domain_key) (libvirt_domain_vcpu_current{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}), 1) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · wait", "refId": "A"},
+        {"expr": "100 * sum by (libvirt_domain_key) (rate(libvirt_domain_vcpu_delay_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) / clamp_min(max by (libvirt_domain_key) (libvirt_domain_vcpu_current{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}), 1) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · delay", "refId": "B"}
+      ],
+      "title": "vCPU wait and delay",
+      "type": "timeseries"
+    },
+    {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 31}, "id": 12, "panels": [], "title": "Memory observed from the hypervisor", "type": "row"},
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "QEMU resident set divided by the domain's maximum memory. This is host pressure, not guest working-set utilization.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 80}, {"color": "red", "value": 95}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
+      "id": 13,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "100 * max by (libvirt_domain_key) (libvirt_domain_memory_stats_rss_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}) / clamp_min(max by (libvirt_domain_key) (libvirt_domain_info_maximum_memory_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}), 1) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}}", "refId": "A"}],
+      "title": "QEMU RSS / assigned memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Memory utilization reported through libvirt balloon statistics. Absence means the guest/balloon path does not provide it.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 80}, {"color": "red", "value": 95}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
+      "id": 14,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "max by (libvirt_domain_key) (libvirt_domain_memory_stats_used_percent{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}}", "refId": "A"}],
+      "title": "Balloon-reported memory used",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Maximum memory assigned to each selected domain. This is allocation context, not utilization.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
+      "id": 15,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "max by (libvirt_domain_key) (libvirt_domain_info_maximum_memory_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}}", "refId": "A"}],
+      "title": "Assigned memory",
+      "type": "timeseries"
+    },
+    {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40}, "id": 16, "panels": [], "title": "Block devices as seen by libvirt", "type": "row"},
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Aggregate bytes per second across each domain's libvirt block devices.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "Bps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 41},
+      "id": 17,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_read_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · read", "refId": "A"},
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_write_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · write", "refId": "B"}
+      ],
+      "title": "Block throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Aggregate read/write requests per second across domain block devices.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "iops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 41},
+      "id": 18,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_read_requests_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · read", "refId": "A"},
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_write_requests_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · write", "refId": "B"}
+      ],
+      "title": "Block IOPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Libvirt time per completed request. This includes host/backend time but not the guest's full queueing path.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.02}, {"color": "red", "value": 0.1}]}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 41},
+      "id": 19,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_read_time_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) / clamp_min(sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_read_requests_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])), 0.000001) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · read", "refId": "A"},
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_write_time_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) / clamp_min(sum by (libvirt_domain_key) (rate(libvirt_domain_block_stats_write_requests_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])), 0.000001) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · write", "refId": "B"}
+      ],
+      "title": "Average block request time",
+      "type": "timeseries"
+    },
+    {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 49}, "id": 20, "panels": [], "title": "Virtual interfaces as seen by libvirt", "type": "row"},
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Aggregate receive/transmit bytes per second across each domain's virtual interfaces.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "Bps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 50},
+      "id": 21,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_interface_stats_receive_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · receive", "refId": "A"},
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_interface_stats_transmit_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · transmit", "refId": "B"}
+      ],
+      "title": "Virtual interface throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Combined error and drop rates across each domain's virtual interfaces. Healthy value is zero.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.001}]}, "unit": "pps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 50},
+      "id": 22,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_interface_stats_receive_errors_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval]) + rate(libvirt_domain_interface_stats_receive_drops_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · receive", "refId": "A"},
+        {"expr": "sum by (libvirt_domain_key) (rate(libvirt_domain_interface_stats_transmit_errors_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval]) + rate(libvirt_domain_interface_stats_transmit_drops_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\"}[$__rate_interval])) * on (libvirt_domain_key) group_left (openstack_instance_name) libvirt_domain_openstack_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",source=\"hypervisor\",openstack_project_id=\"$openstack_project_id\"}", "legendFormat": "{{openstack_instance_name}} · transmit", "refId": "B"}
+      ],
+      "title": "Virtual interface errors and drops",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": ["ai1", "hypervisor", "libvirt", "openstack", "sre", "virtual-machines"],
+  "templating": {
+    "list": [
+      {"current": {"selected": true, "text": "Thanos", "value": "thanos"}, "hide": 0, "label": "Datasource", "name": "DS_PROMETHEUS", "query": "prometheus", "refresh": 1, "type": "datasource"},
+      {"current": {"selected": true, "text": "lab", "value": "lab"}, "hide": 2, "includeAll": false, "label": "Tenant", "multi": false, "name": "tenant_id", "options": [{"selected": true, "text": "lab", "value": "lab"}], "query": "lab", "type": "custom"},
+      {"current": {"selected": true, "text": "ai1", "value": "ai1"}, "hide": 0, "includeAll": false, "label": "Infrastructure", "multi": false, "name": "infra", "options": [{"selected": true, "text": "ai1", "value": "ai1"}], "query": "ai1", "type": "custom"},
+      {"current": {}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "definition": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\"}, openstack_project_id)", "hide": 0, "includeAll": false, "label": "OpenStack project ID", "multi": false, "name": "openstack_project_id", "options": [], "query": {"query": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\"}, openstack_project_id)", "refId": "OpenStackProjectId"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
+      {"current": {}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "definition": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\",openstack_project_id=\"$openstack_project_id\"}, openstack_project_name)", "hide": 0, "includeAll": false, "label": "OpenStack project name", "multi": false, "name": "openstack_project_name", "options": [], "query": {"query": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\",openstack_project_id=\"$openstack_project_id\"}, openstack_project_name)", "refId": "OpenStackProjectName"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI1 — Virtual Machines and Hypervisor Runtime",
+  "uid": "ai1-libvirt-hypervisor",
+  "version": 1,
+  "weekStart": ""
+}

@@ -27,6 +27,14 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "VMs and hypervisor runtime",
+      "type": "link",
+      "url": "/d/ai1-libvirt-hypervisor"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Telemetry integrity and cost",
       "type": "link",
       "url": "/d/ai1-telemetry-integrity"
@@ -289,7 +297,7 @@
       "gridPos": {"h": 7, "w": 8, "x": 16, "y": 41},
       "id": 22,
       "options": {"showHeader": true},
-      "targets": [{"expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics|openstack-exporter))\\.(service|timer)\",state=~\"active|failed\"}", "format": "table", "instant": true, "refId": "A"}],
+      "targets": [{"expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics|openstack-exporter|libvirt-exporter))\\.(service|timer)\",state=~\"active|failed\"}", "format": "table", "instant": true, "refId": "A"}],
       "title": "Allowlisted systemd states",
       "type": "table"
     },
