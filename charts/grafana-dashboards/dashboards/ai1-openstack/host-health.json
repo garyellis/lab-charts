@@ -1,0 +1,436 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Bare-metal operating health for the ai1 OpenStack host, including bounded node-exporter power and thermal evidence.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "OpenStack overview",
+      "type": "link",
+      "url": "/d/ai1-openstack-overview"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Cloud services",
+      "type": "link",
+      "url": "/d/ai1-openstack-cloud-services"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Telemetry integrity and cost",
+      "type": "link",
+      "url": "/d/ai1-telemetry-integrity"
+    }
+  ],
+  "panels": [
+    {
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "content": "**Scope:** bare-metal health reported by ai1's node exporter. Missing data is unknown, not zero.\n\n**Power boundary:** RAPL is CPU package/component energy only—not whole-server or wall electricity. Package and core domains are nested and are never added together here.\n\n**Start:** pressure and saturation, then storage/network, then thermal alarms and throttling.",
+        "mode": "markdown"
+      },
+      "title": "Operator note",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
+      "id": 2,
+      "panels": [],
+      "title": "Compute pressure",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "1/5/15-minute load divided by logical CPU count. Sustained values above 1 mean runnable or uninterruptible work exceeds CPU capacity.",
+      "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "red", "value": 1}]}, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 5},
+      "id": 3,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"expr": "node_load1{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / scalar(count(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",mode=\"idle\"}))", "legendFormat": "1m", "refId": "A"},
+        {"expr": "node_load5{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / scalar(count(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",mode=\"idle\"}))", "legendFormat": "5m", "refId": "B"},
+        {"expr": "node_load15{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / scalar(count(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",mode=\"idle\"}))", "legendFormat": "15m", "refId": "C"}
+      ],
+      "title": "Normalized load",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Average non-idle CPU across logical CPUs. Correlate with normalized load and CPU PSI before treating utilization alone as saturation.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 75}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 5},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "100 * (1 - avg(rate(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",mode=\"idle\"}[$__rate_interval])))", "legendFormat": "busy", "refId": "A"}],
+      "title": "CPU busy",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Memory not immediately available to workloads. Linux cache remains reclaimable; use the composition panel before acting.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 80}, {"color": "red", "value": 92}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 5},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "100 * (1 - node_memory_MemAvailable_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / node_memory_MemTotal_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "legendFormat": "used", "refId": "A"}],
+      "title": "Memory pressure",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Swap utilization. A host with no configured swap may return no usable ratio; treat that as unknown and inspect the raw swap metrics.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 25}, {"color": "red", "value": 60}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 5},
+      "id": 6,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "100 * (1 - node_memory_SwapFree_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} / node_memory_SwapTotal_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "legendFormat": "swap used", "refId": "A"}],
+      "title": "Swap used",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "CPU time by mode as a percentage of one logical CPU average. Guest time is reported separately by Linux and is not added to user time here.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 10},
+      "id": 7,
+      "options": {"legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "100 * avg by (mode) (rate(node_cpu_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]))", "legendFormat": "{{mode}}", "refId": "A"}],
+      "title": "CPU modes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Percentage of wall time with tasks delayed for CPU, memory, or I/O. Sustained waiting is saturation evidence; absence is unknown.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 10},
+      "id": 8,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "100 * rate(node_pressure_cpu_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "CPU waiting", "refId": "A"},
+        {"expr": "100 * rate(node_pressure_memory_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "memory waiting", "refId": "B"},
+        {"expr": "100 * rate(node_pressure_io_waiting_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "I/O waiting", "refId": "C"}
+      ],
+      "title": "PSI waiting time",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "id": 9,
+      "panels": [],
+      "title": "Memory and scheduler",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Available, page cache, anonymous memory, and slab. These overlap in kernel accounting only where Linux documents it; read as composition clues, not an exact stacked total.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 18},
+      "id": 10,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "node_memory_MemAvailable_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "available", "refId": "A"},
+        {"expr": "node_memory_Cached_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} + node_memory_SReclaimable_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "cache + reclaimable", "refId": "B"},
+        {"expr": "node_memory_AnonPages_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "anonymous", "refId": "C"},
+        {"expr": "node_memory_Slab_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "slab", "refId": "D"}
+      ],
+      "title": "Memory composition",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Pages swapped in and out per second. Sustained activity with memory PSI is stronger evidence than allocated swap alone.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "pps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 12, "y": 18},
+      "id": 11,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(node_vmstat_pswpin{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "swap in", "refId": "A"},
+        {"expr": "rate(node_vmstat_pswpout{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "swap out", "refId": "B"}
+      ],
+      "title": "Swap activity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Runnable and blocked processes. A growing blocked queue usually points toward storage or device latency.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 18, "y": 18},
+      "id": 12,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "node_procs_running{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "running", "refId": "A"},
+        {"expr": "node_procs_blocked{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "blocked", "refId": "B"}
+      ],
+      "title": "Runnable and blocked processes",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25},
+      "id": 13,
+      "panels": [],
+      "title": "Storage and filesystems",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Top non-loop block devices by read/write throughput. Device labels are panel output, not dashboard variables.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "Bps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 26},
+      "id": 14,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "topk(8, rate(node_disk_read_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]))", "legendFormat": "{{device}} read", "refId": "A"},
+        {"expr": "topk(8, rate(node_disk_written_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]))", "legendFormat": "{{device}} write", "refId": "B"}
+      ],
+      "title": "Disk throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Completed read/write operations for the busiest non-loop devices.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "iops"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 26},
+      "id": 15,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "topk(8, rate(node_disk_reads_completed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]))", "legendFormat": "{{device}} read", "refId": "A"},
+        {"expr": "topk(8, rate(node_disk_writes_completed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]))", "legendFormat": "{{device}} write", "refId": "B"}
+      ],
+      "title": "Disk IOPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Average time per completed operation. Ratios are absent while a device has no operations; that is not a zero-latency claim.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 26},
+      "id": 16,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(node_disk_read_time_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]) / rate(node_disk_reads_completed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval])", "legendFormat": "{{device}} read", "refId": "A"},
+        {"expr": "rate(node_disk_write_time_seconds_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval]) / rate(node_disk_writes_completed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device!~\"loop.*|ram.*\"}[$__rate_interval])", "legendFormat": "{{device}} write", "refId": "B"}
+      ],
+      "title": "Disk operation latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Top mounted filesystems by used capacity. Pseudo and container-overlay filesystems are excluded to keep the view bounded.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 80}, {"color": "red", "value": 92}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 33},
+      "id": 17,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "topk(10, 100 * (1 - node_filesystem_avail_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!~\"tmpfs|devtmpfs|overlay|squashfs|tracefs\"} / node_filesystem_size_bytes{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!~\"tmpfs|devtmpfs|overlay|squashfs|tracefs\"}))", "legendFormat": "{{mountpoint}}", "refId": "A"}],
+      "title": "Filesystem utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Top mounted filesystems by inode utilization. Capacity and inode pressure are independent failure modes.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 80}, {"color": "red", "value": 92}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 33},
+      "id": 18,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "topk(10, 100 * (1 - node_filesystem_files_free{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!~\"tmpfs|devtmpfs|overlay|squashfs|tracefs\"} / node_filesystem_files{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",fstype!~\"tmpfs|devtmpfs|overlay|squashfs|tracefs\"}))", "legendFormat": "{{mountpoint}}", "refId": "A"}],
+      "title": "Inode utilization",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+      "id": 19,
+      "panels": [],
+      "title": "Network and host dependencies",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "eno1 is management and eno2 is the physical uplink. Virtual and OVS interfaces are intentionally excluded from this host-level panel.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "Bps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 41},
+      "id": 20,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum by (device) (rate(node_network_receive_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))", "legendFormat": "{{device}} receive", "refId": "A"},
+        {"expr": "sum by (device) (rate(node_network_transmit_bytes_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))", "legendFormat": "{{device}} transmit", "refId": "B"}
+      ],
+      "title": "Physical interface traffic",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Errors and drops should remain zero. Correlate a sustained rate with OVS symptoms and upstream switch evidence.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "pps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 41},
+      "id": 21,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum by (device) (rate(node_network_receive_errs_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_transmit_errs_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_receive_drop_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]) + rate(node_network_transmit_drop_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",device=~\"eno1|eno2\"}[$__rate_interval]))", "legendFormat": "{{device}}", "refId": "A"}],
+      "title": "Interface errors and drops",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Only telemetry's allowlisted systemd units are collected. Value 1 means the shown state is true; absence is unknown.",
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 41},
+      "id": 22,
+      "options": {"showHeader": true},
+      "targets": [{"expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics|openstack-exporter))\\.(service|timer)\",state=~\"active|failed\"}", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Allowlisted systemd states",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 48},
+      "id": 23,
+      "panels": [],
+      "title": "Power and thermals · component evidence",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Temperatures exposed by Linux hwmon, including CPU, CCD, NVMe, and NIC sensors where drivers provide them. Missing sensors are unknown.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}, {"color": "green", "value": 40}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}, "unit": "celsius"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 49},
+      "id": 24,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "node_hwmon_temp_celsius{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{chip}} · {{label}}", "refId": "A"}],
+      "title": "Hardware temperatures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Driver-provided minimum, maximum, and critical thresholds. A threshold's absence does not imply unlimited safe temperature.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "celsius"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 49},
+      "id": 25,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "node_hwmon_temp_min_celsius{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{chip}} · {{label}} min", "refId": "A"},
+        {"expr": "node_hwmon_temp_max_celsius{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{chip}} · {{label}} max", "refId": "B"},
+        {"expr": "node_hwmon_temp_crit_celsius{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{chip}} · {{label}} critical", "refId": "C"}
+      ],
+      "title": "Temperature thresholds",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Hardware alarm flags reported by hwmon. Value 1 is asserted; no series is unknown, not a cleared alarm.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "green", "text": "clear"}, "1": {"color": "red", "text": "asserted"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 57},
+      "id": 26,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "node_hwmon_temp_alarm{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "instant": true, "legendFormat": "{{chip}} · {{sensor}} alarm", "refId": "A"}],
+      "title": "Temperature alarm flags",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Current and maximum kernel cooling states. State semantics are device-specific; rising current state indicates active cooling or throttling response.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 57},
+      "id": 27,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "node_cooling_device_cur_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{type}} {{name}} current", "refId": "A"},
+        {"expr": "node_cooling_device_max_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{type}} {{name}} max", "refId": "B"}
+      ],
+      "title": "Cooling device state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Kernel thermal-throttle events per second. Counters may be unavailable on some CPUs; absence is unknown.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 57},
+      "id": 28,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(node_cpu_package_throttles_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval])", "legendFormat": "package {{package}}", "refId": "A"},
+        {"expr": "sum by (package) (rate(node_cpu_core_throttles_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]))", "legendFormat": "package {{package}} cores", "refId": "B"}
+      ],
+      "title": "Thermal throttle events",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Watts derived only from the RAPL CPU package energy counter. This excludes PSU loss and may exclude memory, disks, NICs, fans, motherboard, and accelerators.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "watt"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 63},
+      "id": 29,
+      "options": {"legend": {"calcs": ["mean", "max", "lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum by (domain) (rate(node_rapl_package_joules_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__rate_interval]))", "legendFormat": "{{domain}}", "refId": "A"}],
+      "title": "CPU package power estimate · not server power",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "CPU package energy over the selected dashboard range. Only package domains are summed; nested core-domain energy is deliberately excluded.",
+      "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}, "unit": "kwatth"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 63},
+      "id": 30,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"expr": "sum(increase(node_rapl_package_joules_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}[$__range])) / 3.6e6", "instant": true, "legendFormat": "CPU package energy", "refId": "A"}],
+      "title": "CPU package energy in selected range · not wall kWh",
+      "type": "stat"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": ["ai1", "bare-metal", "node-exporter", "openstack", "power", "sre", "thermals"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": true, "text": "Thanos", "value": "thanos"},
+        "hide": 0,
+        "label": "Datasource",
+        "name": "DS_PROMETHEUS",
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {"selected": true, "text": "lab", "value": "lab"},
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tenant",
+        "multi": false,
+        "name": "tenant_id",
+        "options": [{"selected": true, "text": "lab", "value": "lab"}],
+        "query": "lab",
+        "type": "custom"
+      },
+      {
+        "current": {"selected": true, "text": "ai1", "value": "ai1"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Infrastructure",
+        "multi": false,
+        "name": "infra",
+        "options": [{"selected": true, "text": "ai1", "value": "ai1"}],
+        "query": "ai1",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI1 — Host Health, Power and Thermals",
+  "uid": "ai1-host-health",
+  "weekStart": ""
+}

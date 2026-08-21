@@ -11,6 +11,22 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Host health, power and thermals",
+      "type": "link",
+      "url": "/d/ai1-host-health"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Cloud services and capacity",
+      "type": "link",
+      "url": "/d/ai1-openstack-cloud-services"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Telemetry integrity and cost",
       "type": "link",
       "url": "/d/ai1-telemetry-integrity"
@@ -26,7 +42,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Scope:** host and bounded dataplane health; this does not prove OpenStack API, control-plane, guest, attachment, or end-user availability.\n\n**Start:** check scrape freshness, then collector errors and host pressure. Missing data is unknown, not zero.\n\n**Drill down:** use [Telemetry integrity and cost](/d/ai1-telemetry-integrity) for remote-write and cardinality evidence.",
+        "content": "**Scope:** concise host and bounded dataplane health; this does not prove guest, attachment, or end-user availability. Missing data is unknown, not zero.\n\n**Drill down:** [Host health](/d/ai1-host-health) for CPU, memory, storage, power, and thermals; [Cloud services](/d/ai1-openstack-cloud-services) for authenticated API collection, agents, VMs, quotas, and capacity; [Telemetry integrity](/d/ai1-telemetry-integrity) for remote-write and cardinality evidence.",
         "mode": "markdown"
       },
       "title": "Operator note",
