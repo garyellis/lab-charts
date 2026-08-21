@@ -1,0 +1,376 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "OpenStack service collection, logical resource state, quotas, and capacity from the independently managed ai1 openstack-exporter.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "OpenStack overview",
+      "type": "link",
+      "url": "/d/ai1-openstack-overview"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Host health",
+      "type": "link",
+      "url": "/d/ai1-host-health"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Telemetry integrity and cost",
+      "type": "link",
+      "url": "/d/ai1-telemetry-integrity"
+    }
+  ],
+  "panels": [
+    {
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "content": "**Scope:** authenticated OpenStack API collection and logical cloud state from the independently managed exporter. Missing data is unknown, not zero.\n\n**Meaning:** service `_up` means that exporter collection succeeded; it is not an end-user availability or latency probe. Start with exporter freshness, then service collection, agents, resource states, quotas, and capacity.\n\n**Identity:** Thanos `tenant_id=lab` is transport ownership. OpenStack projects use only the normalized project ID and name variables.",
+        "mode": "markdown"
+      },
+      "title": "Operator note",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
+      "id": 2,
+      "panels": [],
+      "title": "Exporter and API collection",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Alloy's local scrape of the independently managed openstack-exporter. A present 1 proves the latest scrape; absence is unknown.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "scrape failed"}, "1": {"color": "green", "text": "scrape healthy"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 5},
+      "id": 3,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/openstack_exporter\"}", "instant": true, "legendFormat": "exporter", "refId": "A"}],
+      "title": "Exporter scrape",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Age of the newest exporter scrape sample. Missing data is unknown; it must not be interpreted as age zero.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 420}, {"color": "red", "value": 900}]}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 5},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "time() - max(timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=\"integrations/openstack_exporter\"}))", "instant": true, "legendFormat": "age", "refId": "A"}],
+      "title": "Exporter sample age",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Each documented v1.7 service value reports whether authenticated collection from that OpenStack API succeeded. Missing Identity, Placement, Octavia, or Designate is unknown, never healthy zero.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "collection failed"}, "1": {"color": "green", "text": "collection succeeded"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 5},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "none", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"expr": "max by (__name__) ({__name__=~\"openstack_(identity|placement|loadbalancer|designate)_up\",tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "instant": true, "legendFormat": "{{__name__}}", "refId": "A"}],
+      "title": "OpenStack service collection state",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Per-family OpenStack API collection duration, when the exporter enables collection timing. Absence means timing evidence is unavailable.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 18, "x": 0, "y": 10},
+      "id": 6,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "openstack_metric_collect_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}", "legendFormat": "{{openstack_service}} · {{openstack_metric}}", "refId": "A"}],
+      "title": "API collection duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Expected documented v1.7 count is 4: Identity, Placement, Octavia, and Designate. Fewer means at least one family is missing; no result is unknown.",
+      "fieldConfig": {"defaults": {"max": 4, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 3}, {"color": "green", "value": 4}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 10},
+      "id": 26,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "count({__name__=~\"openstack_(identity|placement|loadbalancer|designate)_up\",tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "instant": true, "legendFormat": "of 4", "refId": "A"}],
+      "title": "Expected service families present",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16},
+      "id": 7,
+      "panels": [],
+      "title": "Control-plane agents",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Nova service state by host and service. Value 1 means the service reported up; admin state remains separate context.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "down"}, "1": {"color": "green", "text": "up"}}, "type": "value"}]}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 17},
+      "id": 8,
+      "options": {"showHeader": true},
+      "targets": [{"expr": "min by (service, hostname, adminState, openstack_region) (openstack_nova_agent_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Nova agents",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Neutron agent liveness and administrative state. Missing agents are unknown and may also indicate exporter/API failure.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "down"}, "1": {"color": "green", "text": "up"}}, "type": "value"}]}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 17},
+      "id": 9,
+      "options": {"showHeader": true},
+      "targets": [{"expr": "min by (service, hostname, adminState, openstack_region) (openstack_neutron_agent_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Neutron agents",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Cinder service liveness and administrative state. Backend capacity is shown separately below.",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "down"}, "1": {"color": "green", "text": "up"}}, "type": "value"}]}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 17},
+      "id": 10,
+      "options": {"showHeader": true},
+      "targets": [{"expr": "min by (service, hostname, adminState, openstack_region) (openstack_cinder_agent_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Cinder agents",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24},
+      "id": 11,
+      "panels": [],
+      "title": "Compute state and Placement capacity",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Server series counted by OpenStack status for the selected project. Counts describe control-plane state, not guest operating-system health.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 25},
+      "id": 12,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "count by (status) (openstack_nova_server_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "{{status}}", "refId": "A"}],
+      "title": "VMs by OpenStack state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Current server count for the selected project, derived from bounded status series. Missing data is unknown.",
+      "fieldConfig": {"defaults": {"min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 4, "x": 8, "y": 25},
+      "id": 13,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "count(openstack_nova_server_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "instant": true, "legendFormat": "VMs", "refId": "A"}],
+      "title": "Selected-project VMs",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Placement usage divided by allocatable inventory after reservation and allocation ratio. Resource types have different units; compare percentages only.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 25},
+      "id": 14,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "100 * sum by (resourcetype) (openstack_placement_resource_usage{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}) / sum by (resourcetype) ((openstack_placement_resource_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"} - openstack_placement_resource_reserved{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"}) * on (hostname, resourcetype) openstack_placement_resource_allocation_ratio{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "legendFormat": "{{resourcetype}}", "refId": "A"}],
+      "title": "Placement allocation pressure",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32},
+      "id": 15,
+      "panels": [],
+      "title": "Project quotas",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Nova and Cinder quota utilization for the selected normalized OpenStack project name. These are slow exporter metrics; missing data is unknown, not unlimited quota.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 33},
+      "id": 16,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "100 * openstack_nova_limits_instances_used{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"} / openstack_nova_limits_instances_max{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"}", "legendFormat": "instances", "refId": "A"},
+        {"expr": "100 * openstack_nova_limits_vcpus_used{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"} / openstack_nova_limits_vcpus_max{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"}", "legendFormat": "vCPU", "refId": "B"},
+        {"expr": "100 * openstack_nova_limits_memory_used{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"} / openstack_nova_limits_memory_max{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"}", "legendFormat": "memory", "refId": "C"},
+        {"expr": "100 * openstack_cinder_limits_volume_used_gb{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"} / openstack_cinder_limits_volume_max_gb{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_name=\"$openstack_project_name\"}", "legendFormat": "volume GiB", "refId": "D"}
+      ],
+      "title": "Compute and volume quota utilization",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+      "id": 18,
+      "panels": [],
+      "title": "Cinder and Neutron resource health",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Volume series counted by Cinder status for the selected project. This is OpenStack control-plane state, not application-level storage verification.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 41},
+      "id": 19,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "count by (status) (openstack_cinder_volume_gb{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "{{status}}", "refId": "A"}],
+      "title": "Volumes by OpenStack state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Aggregate provisioned volume GiB for the selected project. Volume IDs and names are deliberately aggregated away; actual thin-pool capacity remains on the host overview.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "gbytes"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 41},
+      "id": 20,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum(openstack_cinder_volume_gb{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "selected project", "refId": "A"}],
+      "title": "Provisioned volume capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Aggregate allocated IPs divided by total IP capacity visible to the selected project. Network IDs and names are deliberately not exposed.",
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 41},
+      "id": 21,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "100 * sum(openstack_neutron_network_ip_availabilities_used{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"}) / sum(openstack_neutron_network_ip_availabilities_total{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "selected project", "refId": "A"}],
+      "title": "Network IP capacity used",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 48},
+      "id": 22,
+      "panels": [],
+      "title": "Octavia and Designate",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Load balancers counted by provisioning and operating status for the selected project. VIP addresses are deliberately not used as labels or variables here.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 49},
+      "id": 23,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "count by (provisioning_status, operating_status) (openstack_loadbalancer_loadbalancer_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "{{provisioning_status}} · {{operating_status}}", "refId": "A"}],
+      "title": "Load balancers by state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Amphorae counted by status and role. Amphora metrics are cloud-wide because the exporter does not attach an OpenStack project label.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 49},
+      "id": 24,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "count by (status, role) (openstack_loadbalancer_amphora_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\"})", "legendFormat": "{{status}} · {{role}}", "refId": "A"}],
+      "title": "Amphorae by state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "DNS zones counted by Designate status for the selected project. This reports control-plane state, not authoritative DNS answer correctness.",
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 49},
+      "id": 25,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "count by (status, type) (openstack_designate_zone_status{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",openstack_project_id=\"$openstack_project_id\"})", "legendFormat": "{{status}} · {{type}}", "refId": "A"}],
+      "title": "Designate zones by state",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": ["ai1", "capacity", "openstack", "openstack-exporter", "quotas", "sre"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": true, "text": "Thanos", "value": "thanos"},
+        "hide": 0,
+        "label": "Datasource",
+        "name": "DS_PROMETHEUS",
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {"selected": true, "text": "lab", "value": "lab"},
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tenant",
+        "multi": false,
+        "name": "tenant_id",
+        "options": [{"selected": true, "text": "lab", "value": "lab"}],
+        "query": "lab",
+        "type": "custom"
+      },
+      {
+        "current": {"selected": true, "text": "ai1", "value": "ai1"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Infrastructure",
+        "multi": false,
+        "name": "infra",
+        "options": [{"selected": true, "text": "ai1", "value": "ai1"}],
+        "query": "ai1",
+        "type": "custom"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "definition": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\"}, openstack_project_id)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "OpenStack project ID",
+        "multi": false,
+        "name": "openstack_project_id",
+        "options": [],
+        "query": {"query": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\"}, openstack_project_id)", "refId": "OpenStackProjectId"},
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "definition": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\",openstack_project_id=\"$openstack_project_id\"}, openstack_project_name)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "OpenStack project name",
+        "multi": false,
+        "name": "openstack_project_name",
+        "options": [],
+        "query": {"query": "label_values(openstack_identity_project_info{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",enabled=\"true\",openstack_project_id=\"$openstack_project_id\"}, openstack_project_name)", "refId": "OpenStackProjectName"},
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI1 / OpenStack — Cloud Services and Capacity",
+  "uid": "ai1-openstack-cloud-services",
+  "weekStart": ""
+}
