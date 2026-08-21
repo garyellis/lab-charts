@@ -26,13 +26,15 @@ The `ai1-openstack` group maps to the Grafana folder `OpenStack · ai1`.
 Dashboard payloads above 900 KiB fail before approaching the ConfigMap limit.
 Additional labels cannot replace chart-owned identity or discovery labels.
 
-The group contains four deliberately separate operator views:
+The group contains five deliberately separate operator views:
 
 - `AI1 / OpenStack — Overview`: concise host and bounded-dataplane landing page;
 - `AI1 — Host Health, Power and Thermals`: node-exporter CPU, memory, storage,
   network, systemd, hwmon, cooling, throttling, and RAPL component evidence;
 - `AI1 / OpenStack — Cloud Services and Capacity`: independently managed
-  openstack-exporter collection, agents, resources, quotas, and capacity; and
+  openstack-exporter collection, agents, VM inventory, quotas, and capacity;
+- `AI1 — Virtual Machines and Hypervisor Runtime`: read-only libvirt domain
+  state, CPU scheduling, memory, block I/O, and interface observations; and
 - `AI1 — Telemetry Integrity and Cost`: remote-write, freshness, identity, and
   cardinality evidence.
 
@@ -64,9 +66,18 @@ drilldown.
 `tenant_id` is the Thanos receive tenant and must never be overloaded with an
 OpenStack project. Cloud-resource panels use normalized
 `openstack_project_id`, `openstack_project_name`, and `openstack_region` labels.
-The two project variables are single-select, project-bounded queries; do not add
-server, volume, port, address, device, or other unbounded resource variables.
-Missing exporter or node series mean unknown, never healthy zero.
+The two project variables are single-select, project-bounded queries. VM names
+may appear as bounded table or panel output but must not become a variable.
+Never add volume, port, address, device, raw UUID, libvirt domain, or other
+unbounded resource variables. Missing exporter or node series mean unknown,
+never healthy zero.
+
+OpenStack remains the lifecycle and inventory authority. Libvirt is a separate
+hypervisor observer: it can prove that a domain is running and report CPU,
+memory, block, and interface activity, but it does not replace Nova state.
+Dashboard joins use pseudonymous `openstack_resource_key` and
+`libvirt_domain_key`; raw instance UUIDs and libvirt domain names are not
+stored.
 
 ## Deployment
 

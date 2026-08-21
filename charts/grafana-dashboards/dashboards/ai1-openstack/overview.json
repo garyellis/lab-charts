@@ -27,6 +27,14 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "VMs and hypervisor runtime",
+      "type": "link",
+      "url": "/d/ai1-libvirt-hypervisor"
+    },
+    {
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Telemetry integrity and cost",
       "type": "link",
       "url": "/d/ai1-telemetry-integrity"
@@ -42,7 +50,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Scope:** concise host and bounded dataplane health; this does not prove guest, attachment, or end-user availability. Missing data is unknown, not zero.\n\n**Drill down:** [Host health](/d/ai1-host-health) for CPU, memory, storage, power, and thermals; [Cloud services](/d/ai1-openstack-cloud-services) for authenticated API collection, agents, VMs, quotas, and capacity; [Telemetry integrity](/d/ai1-telemetry-integrity) for remote-write and cardinality evidence.",
+        "content": "**Scope:** concise host and bounded dataplane health; this does not prove guest, attachment, or end-user availability. Missing data is unknown, not zero.\n\n**Drill down:** [Host health](/d/ai1-host-health) for CPU, memory, storage, power, and thermals; [Cloud services](/d/ai1-openstack-cloud-services) for authenticated API collection, agents, VM lifecycle, quotas, and capacity; [VMs and hypervisor runtime](/d/ai1-libvirt-hypervisor) for libvirt-observed CPU, memory, block, and interface activity; [Telemetry integrity](/d/ai1-telemetry-integrity) for remote-write and cardinality evidence.",
         "mode": "markdown"
       },
       "title": "Operator note",
@@ -66,7 +74,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Both expected scrape jobs should report 1. No data means the end-to-end telemetry path is unknown.",
+      "description": "All four expected scrape jobs should report 1. No data means the end-to-end telemetry path is unknown.",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -121,7 +129,7 @@
       },
       "targets": [
         {
-          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"})",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -147,11 +155,11 @@
               },
               {
                 "color": "yellow",
-                "value": 180
+                "value": 420
               },
               {
                 "color": "red",
-                "value": 600
+                "value": 900
               }
             ]
           },
@@ -180,7 +188,7 @@
       },
       "targets": [
         {
-          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"}))",
+          "expr": "time() - max by (job) (timestamp(up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"}))",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -568,7 +576,7 @@
       },
       "targets": [
         {
-          "expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics))\\.(service|timer)\",state=\"active\"}",
+          "expr": "node_systemd_unit_state{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",name=~\"(alloy|docker|containerd|openstack-iscsi-compat|openstack-telemetry-(route|cinder-metrics|ovs-metrics|openstack-exporter|libvirt-exporter))\\.(service|timer)\",state=\"active\"}",
           "format": "table",
           "instant": true,
           "refId": "A"
@@ -836,7 +844,7 @@
       },
       "targets": [
         {
-          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy)\"})",
+          "expr": "max by (infra, infra_role, cloud, cloud_region, region, stage, lane, tenant, tenant_id) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",infra_role=\"cloud-host\",cloud=\"openstack\",job=~\"integrations/(node_exporter|alloy|openstack_exporter|libvirt_exporter)\"})",
           "format": "table",
           "instant": true,
           "refId": "A"

@@ -18,7 +18,7 @@ mise exec -- helm template grafana-dashboards \
   --set 'enabledGroups={ai1-openstack}'
 ```
 
-Acceptance requires exactly four ConfigMaps, group-qualified names, discovery
+Acceptance requires exactly five ConfigMaps, group-qualified names, discovery
 label `grafana_dashboard=1`, and folder annotation
 `grafana_folder="OpenStack · ai1"`. The render must not contain dashboards from
 `networking`, `platform`, or `slo`.
@@ -30,5 +30,5 @@ rendered names, and unsupported URL schemes must fail their corresponding
 offline gate.
 
 After an authorized deployment, verify the sidecar can get/list/watch only
-ConfigMaps in `observability`, Grafana lists all four stable UIDs under
-`OpenStack · ai1`, and a Grafana restart restores all four dashboards from Git.
+ConfigMaps in `observability`, Grafana lists all five stable UIDs under
+`OpenStack · ai1`, and a Grafana restart restores all five dashboards from Git.
