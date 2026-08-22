@@ -16,27 +16,72 @@ grep -q 'prometheus.remote_write "thanos"' <<<"$thanos_render"
 grep -q 'replacement = "https"' <<<"$thanos_render"
 
 hub_render_file="$(mktemp)"
-trap 'rm -f "$hub_render_file"' EXIT
+collector_render_file="$(mktemp)"
+trap 'rm -f "$hub_render_file" "$collector_render_file"' EXIT
 helm template alloy "$chart_dir" \
   --namespace observability \
   -f "$chart_dir/values-hub-observability.yaml" \
   -f "$chart_dir/tests/values-hub-observability.yaml" >"$hub_render_file"
 
-uv run --extra dev python - "$hub_render_file" <<'PY'
+helm template collector "$chart_dir" \
+  --namespace observability \
+  -f "$chart_dir/values-hub-observability.yaml" \
+  -f "$chart_dir/tests/values-hub-observability.yaml" \
+  --set alloy.alloy.configMap.name=collector-hub-observability-profile \
+  --set alloy.serviceAccount.name=collector-hub-observability >"$collector_render_file"
+
+uv run --extra dev python - "$hub_render_file" "$collector_render_file" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 import yaml
 
-documents = [
-    document
-    for document in yaml.safe_load_all(Path(sys.argv[1]).read_text())
-    if document
-]
+def load_documents(path: str) -> list[dict]:
+    return [
+        document
+        for document in yaml.safe_load_all(Path(path).read_text())
+        if document
+    ]
 
-def resources(kind: str) -> list[dict]:
-    return [document for document in documents if document.get("kind") == kind]
+documents = load_documents(sys.argv[1])
+collector_documents = load_documents(sys.argv[2])
+
+def resources(kind: str, source: list[dict] = documents) -> list[dict]:
+    return [document for document in source if document.get("kind") == kind]
+
+def assert_hub_identity(source: list[dict], release: str) -> None:
+    expected_name = f"{release}-hub-observability"
+    service_monitor = next(
+        resource
+        for resource in resources("ServiceMonitor", source)
+        if resource["metadata"]["name"] == expected_name
+    )
+    assert service_monitor["spec"]["endpoints"][0]["relabelings"] == [
+        {
+            "action": "replace",
+            "targetLabel": "job",
+            "replacement": "integrations/alloy",
+        },
+        {
+            "action": "replace",
+            "targetLabel": "instance",
+            "replacement": release,
+        },
+    ]
+    assert any(
+        resource["metadata"]["name"] == f"{expected_name}-profile"
+        for resource in resources("ConfigMap", source)
+    )
+    assert any(
+        resource["metadata"]["name"] == expected_name
+        for resource in resources("ServiceAccount", source)
+    )
+    deployment = next(iter(resources("Deployment", source)))
+    assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == expected_name
+
+assert_hub_identity(documents, "alloy")
+assert_hub_identity(collector_documents, "collector")
 
 deployments = resources("Deployment")
 assert len(deployments) == 1, "hub profile must render exactly one Deployment"
@@ -122,7 +167,12 @@ assert endpoint["relabelings"] == [
         "action": "replace",
         "targetLabel": "job",
         "replacement": "integrations/alloy",
-    }
+    },
+    {
+        "action": "replace",
+        "targetLabel": "instance",
+        "replacement": "alloy",
+    },
 ]
 metric_relabelings = endpoint["metricRelabelings"]
 assert len(metric_relabelings) == 1
