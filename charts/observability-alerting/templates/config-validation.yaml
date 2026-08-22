@@ -1,0 +1,30 @@
+{{/* Fail before rendering resources when a cross-field invariant is invalid. */}}
+{{- if and .Values.delivery.enabled (or (not .Values.delivery.webhook.secretName) (not .Values.delivery.webhook.secretKey)) -}}
+{{- fail "delivery.webhook.secretName and secretKey are required when delivery.enabled=true" -}}
+{{- end -}}
+{{- if not (hasPrefix "v0.42." .Values.thanosRuler.version) -}}
+{{- fail "thanosRuler.version must remain in the reviewed v0.42 release line" -}}
+{{- end -}}
+{{- if or (le .Values.cinder.dataCriticalPercent .Values.cinder.dataWarningPercent) (le .Values.cinder.metadataCriticalPercent .Values.cinder.metadataWarningPercent) -}}
+{{- fail "Cinder critical thresholds must be greater than warning thresholds" -}}
+{{- end -}}
+{{- $requiredGroupLabels := list "alertname" "severity" "scope" -}}
+{{- range $requiredGroupLabels -}}
+{{- if not (has . $.Values.routing.groupBy) -}}
+{{- fail (printf "routing.groupBy must include %s" .) -}}
+{{- end -}}
+{{- end -}}
+{{- $hubTargetNames := dict -}}
+{{- range .Values.telemetry.expectedHubTargets -}}
+{{- if hasKey $hubTargetNames .name -}}
+{{- fail (printf "telemetry.expectedHubTargets contains duplicate name %q" .name) -}}
+{{- end -}}
+{{- $_ := set $hubTargetNames .name true -}}
+{{- end -}}
+{{- $ai1TargetNames := dict -}}
+{{- range .Values.telemetry.expectedAi1Targets -}}
+{{- if hasKey $ai1TargetNames .name -}}
+{{- fail (printf "telemetry.expectedAi1Targets contains duplicate name %q" .name) -}}
+{{- end -}}
+{{- $_ := set $ai1TargetNames .name true -}}
+{{- end -}}

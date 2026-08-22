@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: {{ include "observability-alerting.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+spec:
+  route:
+    receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+    groupBy:
+      {{- toYaml .Values.routing.groupBy | nindent 6 }}
+    groupWait: {{ .Values.routing.groupWait }}
+    groupInterval: {{ .Values.routing.groupInterval }}
+    repeatInterval: {{ .Values.routing.repeatInterval }}
+    routes:
+      - receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+        matchers:
+          - name: severity
+            matchType: "="
+            value: critical
+        groupWait: 15s
+        repeatInterval: {{ .Values.routing.criticalRepeatInterval }}
+      - receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+        matchers:
+          - name: severity
+            matchType: "="
+            value: warning
+        repeatInterval: {{ .Values.routing.warningRepeatInterval }}
+  receivers:
+    - name: "null"
+    {{- if .Values.delivery.enabled }}
+    - name: external-webhook
+      webhookConfigs:
+        - urlSecret:
+            name: {{ .Values.delivery.webhook.secretName | quote }}
+            key: {{ .Values.delivery.webhook.secretKey | quote }}
+          sendResolved: true
+          maxAlerts: {{ .Values.delivery.webhook.maxAlerts }}
+    {{- end }}
+  inhibitRules:
+    - sourceMatch:
+        - name: severity
+          matchType: "="
+          value: critical
+      targetMatch:
+        - name: severity
+          matchType: "="
+          value: warning
+      equal: [service, component, scope, alert_family, incident_key, cluster, infra]

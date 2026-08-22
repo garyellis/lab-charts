@@ -1,0 +1,42 @@
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: {{ include "observability-alerting.alertmanagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+spec:
+  version: {{ .Values.alertmanager.version | quote }}
+  replicas: {{ .Values.alertmanager.replicas }}
+  serviceAccountName: {{ include "observability-alerting.alertmanagerName" . }}
+  logLevel: {{ .Values.alertmanager.logLevel }}
+  retention: {{ .Values.alertmanager.retention }}
+  externalUrl: {{ .Values.alertmanager.externalUrl | quote }}
+  alertmanagerConfigMatcherStrategy:
+    type: None
+  alertmanagerConfigSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: observability-alerting
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  resources:
+    {{- toYaml .Values.alertmanager.resources | nindent 4 }}
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.alertmanager.storage.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.alertmanager.storage.size }}
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "observability-alerting.alertmanagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+automountServiceAccountToken: false

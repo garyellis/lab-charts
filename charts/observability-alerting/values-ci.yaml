@@ -1,0 +1,49 @@
+identity:
+  tenantId: ci
+  hub:
+    cluster: chart-manager
+    clusterRole: hub
+    lane: test
+    stage: ci
+    region: kind
+    cloud: kubernetes
+    tenant: platform
+  ai1:
+    infra: test
+
+links:
+  runbookBaseUrl: https://runbooks.example.com/observability
+  dashboardBaseUrl: https://grafana.example.com/d
+
+thanosRuler:
+  evaluationInterval: 30s
+  storage:
+    storageClassName: standard
+
+alertmanager:
+  externalUrl: http://alertmanager-operated.observability.svc:9093
+  storage:
+    storageClassName: standard
+
+telemetry:
+  # Keep the stale-timestamp branch inside Prometheus' five-minute lookback so
+  # promtool can distinguish it from complete series absence.
+  staleAfterSeconds: 60
+  expectedHubTargets:
+    - name: ci-alloy
+      job: integrations/alloy
+      instance: ci-host:12345
+      component: alloy
+  expectedAi1Targets: []
+
+openstack:
+  expectedFamilies: [identity, placement, loadbalancer, designate, nova, neutron, glance]
+
+alerts:
+  watchdog:
+    enabled: true
+    for: 1m
+
+tests:
+  queryFixture:
+    enabled: true

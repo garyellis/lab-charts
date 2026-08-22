@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": {"type": "string", "maxLength": 63},
+    "fullnameOverride": {"type": "string", "maxLength": 63},
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tenantId", "hub", "ai1"],
+      "properties": {
+        "tenantId": {"$ref": "#/definitions/boundedLabel"},
+        "hub": {
+          "type": "object", "additionalProperties": false,
+          "required": ["cluster", "clusterRole", "lane", "stage", "region", "cloud", "tenant"],
+          "properties": {
+            "cluster": {"$ref": "#/definitions/boundedLabel"},
+            "clusterRole": {"$ref": "#/definitions/boundedLabel"},
+            "lane": {"$ref": "#/definitions/boundedLabel"},
+            "stage": {"$ref": "#/definitions/boundedLabel"},
+            "region": {"$ref": "#/definitions/boundedLabel"},
+            "cloud": {"$ref": "#/definitions/boundedLabel"},
+            "tenant": {"$ref": "#/definitions/boundedLabel"}
+          }
+        },
+        "ai1": {
+          "type": "object", "additionalProperties": false, "required": ["infra"],
+          "properties": {"infra": {"$ref": "#/definitions/boundedLabel"}}
+        }
+      }
+    },
+    "links": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runbookBaseUrl", "dashboardBaseUrl"],
+      "properties": {
+        "runbookBaseUrl": {"$ref": "#/definitions/environmentUrl"},
+        "dashboardBaseUrl": {"$ref": "#/definitions/environmentUrl"}
+      }
+    },
+    "thanosRuler": {"$ref": "#/definitions/thanosRuler"},
+    "alertmanager": {"$ref": "#/definitions/alertmanager"},
+    "delivery": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "webhook"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "webhook": {
+          "type": "object", "additionalProperties": false,
+          "required": ["secretName", "secretKey", "maxAlerts"],
+          "properties": {
+            "secretName": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$"},
+            "secretKey": {"type": "string", "maxLength": 253, "pattern": "^$|^[-._a-zA-Z0-9]+$"},
+            "maxAlerts": {"type": "integer", "minimum": 0, "maximum": 1000}
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["groupBy", "groupWait", "groupInterval", "repeatInterval", "criticalRepeatInterval", "warningRepeatInterval"],
+      "properties": {
+        "groupBy": {"type": "array", "minItems": 3, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["alertname", "severity", "scope", "incident_key"]}},
+        "groupWait": {"enum": ["15s", "30s", "45s", "1m"]},
+        "groupInterval": {"enum": ["5m", "10m", "15m"]},
+        "repeatInterval": {"enum": ["4h", "8h", "12h", "24h"]},
+        "criticalRepeatInterval": {"enum": ["1h", "2h", "4h"]},
+        "warningRepeatInterval": {"enum": ["4h", "8h", "12h", "24h"]}
+      }
+    },
+    "monitoring": {"$ref": "#/definitions/monitoring"},
+    "telemetry": {"$ref": "#/definitions/telemetry"},
+    "openstack": {
+      "type": "object", "additionalProperties": false, "required": ["expectedFamilies"],
+      "properties": {
+        "expectedFamilies": {
+          "type": "array", "minItems": 7, "maxItems": 7, "uniqueItems": true,
+          "items": {"enum": ["identity", "glance", "nova", "neutron", "loadbalancer", "designate", "placement"]}
+        }
+      }
+    },
+    "libvirt": {"$ref": "#/definitions/jobOnly"},
+    "cinder": {
+      "type": "object", "additionalProperties": false,
+      "required": ["staleAfterSeconds", "dataWarningPercent", "dataCriticalPercent", "metadataWarningPercent", "metadataCriticalPercent"],
+      "properties": {
+        "staleAfterSeconds": {"type": "integer", "minimum": 60, "maximum": 3600},
+        "dataWarningPercent": {"type": "number", "minimum": 1, "maximum": 99},
+        "dataCriticalPercent": {"type": "number", "minimum": 1, "maximum": 100},
+        "metadataWarningPercent": {"type": "number", "minimum": 1, "maximum": 99},
+        "metadataCriticalPercent": {"type": "number", "minimum": 1, "maximum": 100}
+      }
+    },
+    "hostSaturation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeExporterJob", "window", "pressurePercent"],
+      "properties": {
+        "nodeExporterJob": {"$ref": "#/definitions/job"},
+        "window": {"$ref": "#/definitions/observationWindow"},
+        "pressurePercent": {
+          "type": "object", "additionalProperties": false, "required": ["cpu", "memory", "io"],
+          "properties": {
+            "cpu": {"type": "number", "minimum": 0.1, "maximum": 100},
+            "memory": {"type": "number", "minimum": 0.1, "maximum": 100},
+            "io": {"type": "number", "minimum": 0.1, "maximum": 100}
+          }
+        }
+      }
+    },
+    "thanosCompactor": {"$ref": "#/definitions/jobOnly"},
+    "alertingHealth": {
+      "type": "object", "additionalProperties": false, "required": ["window", "maxEvaluationSeconds"],
+      "properties": {
+        "window": {"$ref": "#/definitions/observationWindow"},
+        "maxEvaluationSeconds": {"type": "integer", "minimum": 1, "maximum": 60}
+      }
+    },
+    "alerts": {
+      "type": "object", "additionalProperties": false, "required": ["owner", "watchdog", "for"],
+      "properties": {
+        "owner": {"type": "string", "enum": ["platform", "openstack", "storage", "sre"]},
+        "watchdog": {
+          "type": "object", "additionalProperties": false, "required": ["enabled", "for"],
+          "properties": {"enabled": {"type": "boolean"}, "for": {"$ref": "#/definitions/watchdogFor"}}
+        },
+        "for": {
+          "type": "object", "additionalProperties": false,
+          "required": ["telemetry", "remoteWrite", "remoteWriteLag", "openstackFamily", "libvirtInventory", "cinderCollector", "cinderCapacity", "hostSaturation", "compactor", "alertingComponent", "evaluationFailure", "evaluationSlow", "alertmanagerConfig", "notificationFailure"],
+          "properties": {
+            "telemetry": {"$ref": "#/definitions/alertFor"},
+            "remoteWrite": {"$ref": "#/definitions/alertFor"},
+            "remoteWriteLag": {"$ref": "#/definitions/alertFor"},
+            "openstackFamily": {"$ref": "#/definitions/alertFor"},
+            "libvirtInventory": {"$ref": "#/definitions/alertFor"},
+            "cinderCollector": {"$ref": "#/definitions/alertFor"},
+            "cinderCapacity": {"$ref": "#/definitions/alertFor"},
+            "hostSaturation": {"$ref": "#/definitions/alertFor"},
+            "compactor": {"$ref": "#/definitions/alertFor"},
+            "alertingComponent": {"$ref": "#/definitions/alertFor"},
+            "evaluationFailure": {"$ref": "#/definitions/alertFor"},
+            "evaluationSlow": {"$ref": "#/definitions/alertFor"},
+            "alertmanagerConfig": {"$ref": "#/definitions/alertFor"},
+            "notificationFailure": {"$ref": "#/definitions/alertFor"}
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object", "additionalProperties": false, "required": ["image", "promtoolImage", "queryFixture"],
+      "properties": {
+        "image": {"$ref": "#/definitions/image"},
+        "promtoolImage": {"$ref": "#/definitions/image"},
+        "queryFixture": {
+          "type": "object", "additionalProperties": false, "required": ["enabled"],
+          "properties": {"enabled": {"type": "boolean"}}
+        }
+      }
+    }
+  },
+  "required": ["identity", "links", "thanosRuler", "alertmanager", "delivery", "routing", "monitoring", "telemetry", "openstack", "libvirt", "cinder", "hostSaturation", "thanosCompactor", "alertingHealth", "alerts", "tests"],
+  "definitions": {
+    "boundedLabel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+    "targetName": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,45}$"},
+    "environmentUrl": {"type": "string", "minLength": 1, "allOf": [{"pattern": "^https://[^/]+/.+"}, {"not": {"pattern": "[.]invalid(/|$)"}}]},
+    "alertFor": {"enum": ["5m", "10m", "15m", "30m", "1h"]},
+    "watchdogFor": {"enum": ["1m", "5m", "10m"]},
+    "observationWindow": {"enum": ["5m", "10m", "15m", "30m"]},
+    "job": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_./-]{0,126}$"},
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "tag"],
+      "properties": {"repository": {"type": "string", "minLength": 1}, "tag": {"type": "string", "minLength": 1}}
+    },
+    "thanosRulerResources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": {"cpu": {"enum": ["50m", "100m"]}, "memory": {"enum": ["128Mi", "256Mi"]}}},
+        "limits": {"type": "object", "additionalProperties": false, "required": ["memory"], "properties": {"memory": {"enum": ["512Mi", "768Mi"]}}}
+      }
+    },
+    "alertmanagerResources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": {"cpu": {"enum": ["25m"]}, "memory": {"enum": ["64Mi"]}}},
+        "limits": {"type": "object", "additionalProperties": false, "required": ["memory"], "properties": {"memory": {"enum": ["128Mi", "256Mi"]}}}
+      }
+    },
+    "thanosRulerStorage": {
+      "type": "object", "additionalProperties": false, "required": ["size", "storageClassName"],
+      "properties": {"size": {"enum": ["5Gi"]}, "storageClassName": {"type": "string", "maxLength": 253}}
+    },
+    "alertmanagerStorage": {
+      "type": "object", "additionalProperties": false, "required": ["size", "storageClassName"],
+      "properties": {"size": {"enum": ["2Gi"]}, "storageClassName": {"type": "string", "maxLength": 253}}
+    },
+    "thanosRuler": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "replicas", "queryEndpoint", "alertmanagerEndpoint", "evaluationInterval", "retention", "logLevel", "resources", "storage"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^v0\\.42\\.[0-9]+$"},
+        "replicas": {"enum": [1]},
+        "queryEndpoint": {"type": "string", "pattern": "^http://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.svc)?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"},
+        "alertmanagerEndpoint": {"type": "string", "pattern": "^$|^http://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.svc)?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"},
+        "evaluationInterval": {"enum": ["30s", "1m"]},
+        "retention": {"enum": ["24h"]},
+        "logLevel": {"enum": ["debug", "info", "warn", "error"]},
+        "resources": {"$ref": "#/definitions/thanosRulerResources"},
+        "storage": {"$ref": "#/definitions/thanosRulerStorage"}
+      }
+    },
+    "alertmanager": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "replicas", "externalUrl", "retention", "logLevel", "resources", "storage"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^v0\\.[0-9]+\\.[0-9]+$"},
+        "replicas": {"enum": [1]},
+        "externalUrl": {"type": "string", "minLength": 1, "allOf": [{"pattern": "^https?://[^/]+"}, {"not": {"pattern": "[.]invalid(/|$)"}}]},
+        "retention": {"enum": ["120h"]},
+        "logLevel": {"enum": ["debug", "info", "warn", "error"]},
+        "resources": {"$ref": "#/definitions/alertmanagerResources"},
+        "storage": {"$ref": "#/definitions/alertmanagerStorage"}
+      }
+    },
+    "monitoring": {
+      "type": "object", "additionalProperties": false,
+      "required": ["interval", "scrapeTimeout", "sampleLimit", "targetLimit", "rulerJob", "alertmanagerJob"],
+      "properties": {
+        "interval": {"enum": ["30s"]},
+        "scrapeTimeout": {"enum": ["10s"]},
+        "sampleLimit": {"enum": [1000]},
+        "targetLimit": {"enum": [2]},
+        "rulerJob": {"$ref": "#/definitions/job"},
+        "alertmanagerJob": {"$ref": "#/definitions/job"}
+      }
+    },
+    "telemetry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["staleAfterSeconds", "expectedHubTargets", "expectedAi1Targets", "remoteWrite"],
+      "properties": {
+        "staleAfterSeconds": {"type": "integer", "minimum": 60, "maximum": 3600},
+        "expectedHubTargets": {"$ref": "#/definitions/expectedTargets"},
+        "expectedAi1Targets": {"$ref": "#/definitions/expectedTargets"},
+        "remoteWrite": {
+          "type": "object", "additionalProperties": false, "required": ["job", "window", "maxLagSeconds"],
+          "properties": {"job": {"$ref": "#/definitions/job"}, "window": {"$ref": "#/definitions/observationWindow"}, "maxLagSeconds": {"type": "integer", "minimum": 30, "maximum": 600}}
+        }
+      }
+    },
+    "expectedTargets": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "job", "instance", "component"],
+        "properties": {
+          "name": {"$ref": "#/definitions/targetName"},
+          "job": {"$ref": "#/definitions/job"},
+          "instance": {"type": "string", "minLength": 1, "maxLength": 253},
+          "component": {"enum": ["alloy", "node-exporter", "openstack-exporter", "libvirt-exporter", "cinder-metrics", "thanos"]}
+        }
+      }
+    },
+    "jobOnly": {"type": "object", "additionalProperties": false, "required": ["job"], "properties": {"job": {"$ref": "#/definitions/job"}}}
+  }
+}

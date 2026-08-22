@@ -1,0 +1,53 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ThanosRuler
+metadata:
+  name: {{ include "observability-alerting.rulerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+spec:
+  version: {{ .Values.thanosRuler.version | quote }}
+  replicas: {{ .Values.thanosRuler.replicas }}
+  serviceAccountName: {{ include "observability-alerting.rulerName" . }}
+  logLevel: {{ .Values.thanosRuler.logLevel }}
+  evaluationInterval: {{ .Values.thanosRuler.evaluationInterval }}
+  retention: {{ .Values.thanosRuler.retention }}
+  queryEndpoints:
+    - {{ include "observability-alerting.queryEndpoint" . | quote }}
+  alertQueryUrl: {{ include "observability-alerting.queryEndpoint" . | quote }}
+  alertmanagersUrl:
+    - {{ include "observability-alerting.alertmanagerUrl" . | quote }}
+  labels:
+    cluster: {{ .Values.identity.hub.cluster | quote }}
+    cluster_role: {{ .Values.identity.hub.clusterRole | quote }}
+    lane: {{ .Values.identity.hub.lane | quote }}
+    stage: {{ .Values.identity.hub.stage | quote }}
+    region: {{ .Values.identity.hub.region | quote }}
+    cloud: {{ .Values.identity.hub.cloud | quote }}
+    tenant: {{ .Values.identity.hub.tenant | quote }}
+  ruleSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: observability-alerting
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  resources:
+    {{- toYaml .Values.thanosRuler.resources | nindent 4 }}
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.thanosRuler.storage.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.thanosRuler.storage.size }}
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "observability-alerting.rulerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+automountServiceAccountToken: false

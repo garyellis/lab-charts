@@ -1,0 +1,155 @@
+nameOverride: ""
+fullnameOverride: ""
+
+identity:
+  tenantId: platform
+  hub:
+    cluster: observability
+    clusterRole: hub
+    lane: stable
+    stage: lab
+    region: local
+    cloud: kubernetes
+    tenant: platform
+  ai1:
+    infra: lab
+
+links:
+  # Required environment-owned locations. The chart has no knowingly broken
+  # URL defaults; values-ci.yaml supplies non-production contract fixtures.
+  runbookBaseUrl: ""
+  dashboardBaseUrl: ""
+
+thanosRuler:
+  version: v0.42.4
+  replicas: 1
+  queryEndpoint: http://thanos-query:9090
+  alertmanagerEndpoint: ""
+  evaluationInterval: 1m
+  retention: 24h
+  logLevel: info
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+  storage:
+    size: 5Gi
+    storageClassName: ""
+
+alertmanager:
+  version: v0.30.0
+  replicas: 1
+  # Required environment-owned URL used in generated notification links.
+  externalUrl: ""
+  retention: 120h
+  logLevel: info
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  storage:
+    size: 2Gi
+    storageClassName: ""
+
+delivery:
+  enabled: false
+  webhook:
+    # When enabled, this is a reference to a separately managed SOPS Secret.
+    # This chart never accepts or creates notification credentials.
+    secretName: ""
+    secretKey: ""
+    maxAlerts: 0
+
+routing:
+  groupBy: [alertname, severity, scope]
+  groupWait: 30s
+  groupInterval: 5m
+  repeatInterval: 4h
+  criticalRepeatInterval: 1h
+  warningRepeatInterval: 4h
+
+monitoring:
+  interval: 30s
+  scrapeTimeout: 10s
+  # These singleton services can briefly expose two targets during a rollout.
+  # Raising either bound requires baseline evidence and a chart contract change.
+  sampleLimit: 1000
+  targetLimit: 2
+  rulerJob: integrations/thanos-ruler
+  alertmanagerJob: integrations/alertmanager
+
+telemetry:
+  staleAfterSeconds: 300
+  # Exact producer inventory is supplied by each environment. `name` and
+  # `component` become bounded alert labels; job/instance remain in PromQL only.
+  expectedHubTargets: []
+  expectedAi1Targets: []
+  remoteWrite:
+    job: integrations/alloy
+    window: 10m
+    maxLagSeconds: 120
+
+openstack:
+  # Cinder is deliberately absent: its capacity collector is host-local and
+  # has dedicated metrics below, not an OpenStack API exporter family.
+  expectedFamilies: [identity, glance, nova, neutron, loadbalancer, designate, placement]
+
+libvirt:
+  job: integrations/libvirt_exporter
+
+cinder:
+  staleAfterSeconds: 600
+  dataWarningPercent: 80
+  dataCriticalPercent: 90
+  metadataWarningPercent: 70
+  metadataCriticalPercent: 85
+
+hostSaturation:
+  nodeExporterJob: integrations/node_exporter
+  window: 10m
+  pressurePercent:
+    cpu: 20
+    memory: 10
+    io: 20
+
+thanosCompactor:
+  job: integrations/thanos-compactor
+
+alertingHealth:
+  window: 10m
+  maxEvaluationSeconds: 30
+
+alerts:
+  owner: platform
+  watchdog:
+    enabled: false
+    for: 5m
+  for:
+    telemetry: 10m
+    remoteWrite: 5m
+    remoteWriteLag: 10m
+    openstackFamily: 10m
+    libvirtInventory: 15m
+    cinderCollector: 10m
+    cinderCapacity: 15m
+    hostSaturation: 15m
+    compactor: 10m
+    alertingComponent: 5m
+    evaluationFailure: 5m
+    evaluationSlow: 10m
+    alertmanagerConfig: 5m
+    notificationFailure: 5m
+
+tests:
+  image:
+    repository: registry.k8s.io/kubectl
+    tag: v1.36.3
+  promtoolImage:
+    repository: quay.io/prometheus/prometheus
+    tag: v3.7.3
+  queryFixture:
+    enabled: false
