@@ -1,0 +1,56 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "observability-alerting.rulerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+    observability.garyellis.io/hub-health: "true"
+spec:
+  sampleLimit: {{ .Values.monitoring.sampleLimit }}
+  targetLimit: {{ .Values.monitoring.targetLimit }}
+  selector:
+    matchLabels:
+      operated-thanos-ruler: "true"
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: web
+      interval: {{ .Values.monitoring.interval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      metricRelabelings:
+        - action: keep
+          sourceLabels: [__name__]
+          regex: '^(?:prometheus_rule_evaluation_failures_total|prometheus_rule_group_last_duration_seconds|prometheus_rule_group_last_evaluation_timestamp_seconds|thanos_alert_queue_alerts_dropped_total|thanos_alert_sender_alerts_dropped_total|thanos_rule_evaluation_with_warnings_total)$'
+        - action: replace
+          targetLabel: job
+          replacement: {{ .Values.monitoring.rulerJob | quote }}
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "observability-alerting.alertmanagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+    observability.garyellis.io/hub-health: "true"
+spec:
+  sampleLimit: {{ .Values.monitoring.sampleLimit }}
+  targetLimit: {{ .Values.monitoring.targetLimit }}
+  selector:
+    matchLabels:
+      operated-alertmanager: "true"
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: web
+      interval: {{ .Values.monitoring.interval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      metricRelabelings:
+        - action: keep
+          sourceLabels: [__name__]
+          regex: '^(?:alertmanager_config_last_reload_successful|alertmanager_notification_latency_seconds_bucket|alertmanager_notifications_failed_total|alertmanager_notifications_total)$'
+        - action: replace
+          targetLabel: job
+          replacement: {{ .Values.monitoring.alertmanagerJob | quote }}

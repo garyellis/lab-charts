@@ -1,0 +1,9 @@
+apiVersion: v2
+name: observability-alerting
+description: Operator-managed Thanos Ruler and Alertmanager with bounded platform alerts
+type: application
+version: 0.1.0
+appVersion: "v0.42.4"
+kubeVersion: ">=1.25.0-0"
+annotations:
+  prometheus-operator.version: "0.87.1"

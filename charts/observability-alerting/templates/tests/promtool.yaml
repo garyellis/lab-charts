@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "observability-alerting.fullname" . }}-promtool
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  rules.yaml: |
+    groups:
+{{ include "observability-alerting.ruleGroups" . | replace "      partial_response_strategy: abort\n" "" | indent 4 }}
+  tests.yaml: |
+    rule_files:
+      - /rules/rules.yaml
+    evaluation_interval: 1m
+    {{- if gt (len .Values.telemetry.expectedHubTargets) 0 }}
+    {{- $target := index .Values.telemetry.expectedHubTargets 0 }}
+    tests:
+      - name: expected target stays healthy
+        interval: 1m
+        input_series:
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ $target.job | quote }},instance={{ $target.instance | quote }}}'
+            values: '1x20'
+        alert_rule_test:
+          - eval_time: 15m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts: []
+      - name: missing target fires after the pending interval
+        interval: 1m
+        alert_rule_test:
+          - eval_time: 9m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts: []
+          - eval_time: 11m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts:
+              - exp_labels:
+                  alertname: TelemetryTargetMissingOrStale
+                  severity: critical
+                  owner: {{ .Values.alerts.owner }}
+                  service: observability
+                  component: {{ $target.component }}
+                  scope: target
+                  alert_family: telemetry
+                  expected_target: {{ $target.name }}
+                  telemetry_source: hub
+                exp_annotations:
+                  summary: Telemetry target {{ $target.name }} is missing, down, or stale
+                  description: The exact expected scrape target is not producing a fresh successful sample.
+                  impact: Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero.
+                  runbook_url: {{ include "observability-alerting.runbook" (dict "root" . "slug" "telemetry-target-missing") }}
+                  dashboard_url: {{ include "observability-alerting.dashboard" (dict "root" . "slug" "telemetry-integrity") }}
+      - name: down target resolves after recovery
+        interval: 1m
+        input_series:
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ $target.job | quote }},instance={{ $target.instance | quote }}}'
+            values: '0x12 1x10'
+        alert_rule_test:
+          - eval_time: 11m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts:
+              - exp_labels:
+                  alertname: TelemetryTargetMissingOrStale
+                  severity: critical
+                  owner: {{ .Values.alerts.owner }}
+                  service: observability
+                  component: {{ $target.component }}
+                  scope: target
+                  alert_family: telemetry
+                  expected_target: {{ $target.name }}
+                  telemetry_source: hub
+                exp_annotations:
+                  summary: Telemetry target {{ $target.name }} is missing, down, or stale
+                  description: The exact expected scrape target is not producing a fresh successful sample.
+                  impact: Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero.
+                  runbook_url: {{ include "observability-alerting.runbook" (dict "root" . "slug" "telemetry-target-missing") }}
+                  dashboard_url: {{ include "observability-alerting.dashboard" (dict "root" . "slug" "telemetry-integrity") }}
+          - eval_time: 15m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts: []
+    {{- else }}
+    tests: []
+    {{- end }}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "observability-alerting.fullname" . }}-promtool
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: promtool
+      image: "{{ .Values.tests.promtoolImage.repository }}:{{ .Values.tests.promtoolImage.tag }}"
+      imagePullPolicy: IfNotPresent
+      command: [/bin/promtool]
+      args: [test, rules, /tests/tests.yaml]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+      volumeMounts:
+        - name: rules
+          mountPath: /rules
+        - name: tests
+          mountPath: /tests
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: rules
+      configMap:
+        name: {{ include "observability-alerting.fullname" . }}-promtool
+        items:
+          - key: rules.yaml
+            path: rules.yaml
+    - name: tests
+      configMap:
+        name: {{ include "observability-alerting.fullname" . }}-promtool
+        items:
+          - key: tests.yaml
+            path: tests.yaml
+    - name: tmp
+      emptyDir: {}

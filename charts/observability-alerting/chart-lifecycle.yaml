@@ -1,0 +1,40 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: observability-alerting
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: observability-alerting
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml": [ci]
+      "values.yaml": [ci]
+      "values-ci.yaml": [ci]
+      "values.schema.json": [ci]
+      "templates/**": [ci]
+      "chart-lifecycle.yaml": [ci]
+      "README.md": [ci]
+      "tests/**": [ci]
+    unmatchedChanges: all-environments
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: Install operator-managed Ruler and Alertmanager, then run readiness and promtool rule tests.
+        namespace: observability
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 15m
+    dependentTests: []

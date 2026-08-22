@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: {{ include "observability-alerting.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+spec:
+  route:
+    receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+    groupBy:
+      {{- toYaml .Values.routing.groupBy | nindent 6 }}
+    groupWait: {{ .Values.routing.groupWait }}
+    groupInterval: {{ .Values.routing.groupInterval }}
+    repeatInterval: {{ .Values.routing.repeatInterval }}
+  receivers:
+    - name: "null"
+    {{- if .Values.delivery.enabled }}
+    - name: external-webhook
+      webhookConfigs:
+        - urlSecret:
+            name: {{ .Values.delivery.webhook.secretName }}
+            key: {{ .Values.delivery.webhook.secretKey }}
+          sendResolved: true
+          maxAlerts: {{ .Values.delivery.webhook.maxAlerts }}
+    {{- end }}
+  inhibitRules:
+    - sourceMatch:
+        - name: severity
+          matchType: "="
+          value: critical
+      targetMatch:
+        - name: severity
+          matchType: "="
+          value: warning
+      equal: [service, component, scope]

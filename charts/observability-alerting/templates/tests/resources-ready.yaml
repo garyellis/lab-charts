@@ -1,0 +1,110 @@
+{{- $testName := printf "%s-resources" (include "observability-alerting.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [monitoring.coreos.com]
+    resources: [thanosrulers, alertmanagers, alertmanagerconfigs, prometheusrules, servicemonitors]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $testName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $testName }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $testName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $testName }}
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: ruler
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: IfNotPresent
+      command: [kubectl]
+      args:
+        - rollout
+        - status
+        - --timeout=300s
+        - statefulset/thanos-ruler-{{ include "observability-alerting.rulerName" . }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+    - name: alertmanager
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: IfNotPresent
+      command: [kubectl]
+      args:
+        - rollout
+        - status
+        - --timeout=300s
+        - statefulset/alertmanager-{{ include "observability-alerting.alertmanagerName" . }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+    - name: storeapi
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: IfNotPresent
+      command: [kubectl]
+      args:
+        - wait
+        - --for=jsonpath={.spec.ports[?(@.name=="grpc")].port}=10901
+        - --timeout=300s
+        - service/thanos-ruler-operated
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true

@@ -1,0 +1,7 @@
+Thanos Ruler StoreAPI:
+  Service: thanos-ruler-operated.{{ .Release.Namespace }}.svc
+  Port: 10901 (grpc)
+  Query endpoint form: dnssrv+_grpc._tcp.thanos-ruler-operated.{{ .Release.Namespace }}.svc.cluster.local
+
+Add this StoreAPI endpoint to the environment-owned Thanos Query configuration.
+The Ruler stores rule results locally; it does not remote-write them to Receive.

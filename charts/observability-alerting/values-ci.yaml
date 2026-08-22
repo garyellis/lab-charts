@@ -1,0 +1,37 @@
+identity:
+  tenantId: ci
+  hub:
+    cluster: chart-manager
+    clusterRole: hub
+    lane: test
+    stage: ci
+    region: kind
+    cloud: kubernetes
+    tenant: platform
+  ai1:
+    infra: test
+
+links:
+  runbookBaseUrl: https://runbooks.example.invalid/observability
+  dashboardBaseUrl: https://grafana.example.invalid/d
+
+thanosRuler:
+  queryEndpoint: http://thanos-query.invalid:9090
+  storage:
+    storageClassName: standard
+
+alertmanager:
+  externalUrl: http://alertmanager.invalid
+  storage:
+    storageClassName: standard
+
+telemetry:
+  expectedHubTargets:
+    - name: ci-alloy
+      job: integrations/alloy
+      instance: ci-host:12345
+      component: alloy
+  expectedAi1Targets: []
+
+openstack:
+  expectedFamilies: [identity]
