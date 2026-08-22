@@ -50,7 +50,10 @@ owner.
 - capacity, freshness, lag, evaluation, and PSI thresholds are bounded typed
   inputs. Arbitrary PromQL and arbitrary rule metadata are not accepted.
 - runbook, dashboard, and Alertmanager external URLs are required environment
-  inputs; the chart has no knowingly broken placeholder defaults. Every alert
+  inputs; the chart has no knowingly broken placeholder defaults.
+  `links.runbookPathSuffix` optionally appends one bounded, safe file suffix to
+  every runbook slug. It defaults to empty for compatibility with 0.1.0 and
+  accepts values such as `.md`; it never changes dashboard URLs. Every alert
   supplies `severity`, `owner`, `service`, `component`, `scope`,
   `alert_family`, `incident_key`, `summary`, `description`, `impact`,
   `runbook_url`, and `dashboard_url`. `obs-w` alerts also carry `cluster`;
@@ -61,6 +64,8 @@ At minimum, an environment supplies its real link targets:
 ```yaml
 links:
   runbookBaseUrl: https://runbooks.example.com/observability
+  # Set only when the runbook host requires a file extension.
+  runbookPathSuffix: .md
   dashboardBaseUrl: https://grafana.example.com/d
 alertmanager:
   externalUrl: https://alerts.example.com

@@ -18,6 +18,9 @@ links:
   # Required environment-owned locations. The chart has no knowingly broken
   # URL defaults; values-ci.yaml supplies non-production contract fixtures.
   runbookBaseUrl: ""
+  # Optional safe file suffix for repositories that serve runbook source files.
+  # Empty preserves the extensionless URL contract shipped in chart 0.1.0.
+  runbookPathSuffix: ""
   dashboardBaseUrl: ""
 
 thanosRuler:
