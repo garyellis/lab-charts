@@ -56,6 +56,14 @@ def test_thanos_defaults_are_infrastructure_only_with_monitoring_definitions() -
     }
 
 
+def test_observability_alerting_runbook_suffix_is_backward_compatible() -> None:
+    chart = _yaml("charts/observability-alerting/Chart.yaml")
+    values = _yaml("charts/observability-alerting/values.yaml")
+
+    assert chart["version"] == "0.1.1"
+    assert values["links"]["runbookPathSuffix"] == ""
+
+
 def test_rustfs_defaults_require_external_secrets_and_one_data_disk() -> None:
     chart = _yaml("charts/rustfs/Chart.yaml")
     values_path = REPO_ROOT / "charts/rustfs/values.yaml"

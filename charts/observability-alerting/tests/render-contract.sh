@@ -9,7 +9,9 @@ rules_file="$(mktemp)"
 delivery_file="$(mktemp)"
 long_name_file="$(mktemp)"
 scalar_file="$(mktemp)"
-trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}" "${long_name_file}" "${scalar_file}"' EXIT
+suffix_file="$(mktemp)"
+suffix_rules_file="$(mktemp)"
+trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}" "${long_name_file}" "${scalar_file}" "${suffix_file}" "${suffix_rules_file}"' EXIT
 
 helm template observability-alerting "${chart_dir}" \
   --namespace observability \
@@ -30,6 +32,12 @@ helm template observability-alerting "${chart_dir}" \
   --set delivery.enabled=true \
   --set-string delivery.webhook.secretName=null \
   --set-string delivery.webhook.secretKey=true >"${scalar_file}"
+helm template observability-alerting "${chart_dir}" \
+  --namespace observability \
+  -f "${chart_dir}/values-ci.yaml" \
+  -f "${chart_dir}/values-runbook-markdown.yaml" \
+  --set-string links.runbookBaseUrl=https://runbooks.example.com/observability/ \
+  >"${suffix_file}"
 
 yq -e 'select(.kind == "AlertmanagerConfig") | .spec.receivers[] | select(.name == "external-webhook") | .webhookConfigs[0].sendResolved == true' \
   "${delivery_file}" >/dev/null
@@ -123,6 +131,19 @@ render_must_fail "a sub-minute production alert duration was accepted" \
   --set alerts.for.telemetry=30s
 render_must_fail "a knowingly broken runbook URL was accepted" \
   --set links.runbookBaseUrl=https://runbooks.example.invalid/observability
+for invalid_suffix in \
+  md \
+  /md \
+  ../md \
+  .md/child \
+  '.m d' \
+  '.md?raw=1' \
+  '.md#section' \
+  .MD \
+  .abcdefghij; do
+  render_must_fail "unsafe runbook path suffix ${invalid_suffix} was accepted" \
+    --set-string "links.runbookPathSuffix=${invalid_suffix}"
+done
 render_must_fail "a knowingly broken Alertmanager external URL was accepted" \
   --set alertmanager.externalUrl=http://alertmanager.example.invalid
 render_must_fail "duplicate hub target names were accepted" \
@@ -147,6 +168,38 @@ if yq -e 'select(.kind == "PrometheusRule") | .spec.groups[] | select(.partial_r
 fi
 yq -o=json -I=0 'select(.kind == "PrometheusRule") | .spec.groups[].rules[]' \
   "${rendered_file}" >"${rules_file}"
+yq -o=json -I=0 'select(.kind == "PrometheusRule") | .spec.groups[].rules[]' \
+  "${suffix_file}" >"${suffix_rules_file}"
+
+default_rule_count="$(wc -l <"${rules_file}" | tr -d ' ')"
+suffix_rule_count="$(wc -l <"${suffix_rules_file}" | tr -d ' ')"
+if [[ "${default_rule_count}" -eq 0 || "${suffix_rule_count}" != "${default_rule_count}" ]]; then
+  echo "the runbook suffix changed the rendered alert inventory" >&2
+  exit 1
+fi
+
+if ! jq -s -e '
+  all(.[].annotations.runbook_url;
+    test("^https://runbooks[.]example[.]com/observability/[a-z0-9-]+[.]md$") and
+    (sub("^https://"; "") | contains("//") | not))
+' "${suffix_rules_file}" >/dev/null; then
+  echo "not every suffixed runbook URL is a single-slash .md path" >&2
+  exit 1
+fi
+
+default_runbooks="$(jq -s -c '[.[].annotations.runbook_url] | sort' "${rules_file}")"
+suffix_runbooks="$(jq -s -c '[.[].annotations.runbook_url | sub("[.]md$"; "")] | sort' "${suffix_rules_file}")"
+if [[ "${suffix_runbooks}" != "${default_runbooks}" ]]; then
+  echo "the .md suffix changed more than the runbook path ending" >&2
+  exit 1
+fi
+
+default_dashboards="$(jq -s -c '[.[].annotations.dashboard_url] | sort' "${rules_file}")"
+suffix_dashboards="$(jq -s -c '[.[].annotations.dashboard_url] | sort' "${suffix_rules_file}")"
+if [[ "${suffix_dashboards}" != "${default_dashboards}" ]]; then
+  echo "the runbook path suffix changed dashboard URLs" >&2
+  exit 1
+fi
 
 rule_count=0
 allowed_label_pattern='^(severity|owner|service|component|scope|alert_family|incident_key|cluster|infra|collector_family|expected_target|telemetry_source|pressure_type|metric_family)$'

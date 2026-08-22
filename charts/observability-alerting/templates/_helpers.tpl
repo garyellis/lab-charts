@@ -56,7 +56,11 @@ app.kubernetes.io/part-of: observability-alerting
 {{- end -}}
 
 {{- define "observability-alerting.runbook" -}}
-{{- printf "%s/%s" (trimSuffix "/" .root.Values.links.runbookBaseUrl) .slug -}}
+{{- $suffix := .root.Values.links.runbookPathSuffix -}}
+{{- if not (regexMatch `^$|^\.[a-z][a-z0-9]{0,7}$` $suffix) -}}
+{{- fail "links.runbookPathSuffix must be empty or a safe dot-prefixed file suffix" -}}
+{{- end -}}
+{{- printf "%s/%s%s" (trimSuffix "/" .root.Values.links.runbookBaseUrl) .slug $suffix -}}
 {{- end -}}
 
 {{- define "observability-alerting.dashboard" -}}

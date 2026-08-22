@@ -31,9 +31,10 @@
     },
     "links": {
       "type": "object", "additionalProperties": false,
-      "required": ["runbookBaseUrl", "dashboardBaseUrl"],
+      "required": ["runbookBaseUrl", "runbookPathSuffix", "dashboardBaseUrl"],
       "properties": {
         "runbookBaseUrl": {"$ref": "#/definitions/environmentUrl"},
+        "runbookPathSuffix": {"$ref": "#/definitions/runbookPathSuffix"},
         "dashboardBaseUrl": {"$ref": "#/definitions/environmentUrl"}
       }
     },
@@ -160,6 +161,7 @@
     "boundedLabel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
     "targetName": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,45}$"},
     "environmentUrl": {"type": "string", "minLength": 1, "allOf": [{"pattern": "^https://[^/]+/.+"}, {"not": {"pattern": "[.]invalid(/|$)"}}]},
+    "runbookPathSuffix": {"type": "string", "maxLength": 9, "pattern": "^$|^\\.[a-z][a-z0-9]{0,7}$"},
     "alertFor": {"enum": ["5m", "10m", "15m", "30m", "1h"]},
     "watchdogFor": {"enum": ["1m", "5m", "10m"]},
     "observationWindow": {"enum": ["5m", "10m", "15m", "30m"]},

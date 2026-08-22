@@ -13,15 +13,21 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
+      ci-runbook-markdown:
+        values:
+          - values.yaml
+          - values-ci.yaml
+          - values-runbook-markdown.yaml
     triggers:
-      "Chart.yaml": [ci]
-      "values.yaml": [ci]
-      "values-ci.yaml": [ci]
-      "values.schema.json": [ci]
-      "templates/**": [ci]
-      "chart-lifecycle.yaml": [ci]
-      "README.md": [ci]
-      "tests/**": [ci]
+      "Chart.yaml": [ci, ci-runbook-markdown]
+      "values.yaml": [ci, ci-runbook-markdown]
+      "values-ci.yaml": [ci, ci-runbook-markdown]
+      "values-runbook-markdown.yaml": [ci-runbook-markdown]
+      "values.schema.json": [ci, ci-runbook-markdown]
+      "templates/**": [ci, ci-runbook-markdown]
+      "chart-lifecycle.yaml": [ci, ci-runbook-markdown]
+      "README.md": [ci, ci-runbook-markdown]
+      "tests/**": [ci, ci-runbook-markdown]
     unmatchedChanges: all-environments
   clusterTest:
     enabled: true
