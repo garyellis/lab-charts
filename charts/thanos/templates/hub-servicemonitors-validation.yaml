@@ -1,0 +1,52 @@
+{{- if .Values.hubServiceMonitors.enabled -}}
+{{- if .Values.thanos.global.serviceMonitor.enabled -}}
+{{- fail "hubServiceMonitors requires thanos.global.serviceMonitor.enabled=false" -}}
+{{- end -}}
+{{- if .Values.thanos.global.thanosRules.enabled -}}
+{{- fail "hubServiceMonitors requires thanos.global.thanosRules.enabled=false; the bounded allowlists do not satisfy the upstream rule portfolio" -}}
+{{- end -}}
+{{- $reservedLabels := list "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component" -}}
+{{- range $label := $reservedLabels -}}
+{{- if hasKey ($.Values.thanos.global.commonLabels | default dict) $label -}}
+{{- fail (printf "hubServiceMonitors reserves thanos.global.commonLabels[%s]" $label) -}}
+{{- end -}}
+{{- end -}}
+{{- range $component := list "query" "receive" "storegateway" "compactor" -}}
+{{- if not (dig $component "enabled" false $.Values.thanos) -}}
+{{- fail (printf "hubServiceMonitors requires thanos.%s.enabled=true" $component) -}}
+{{- end -}}
+{{- if dig $component "serviceMonitor" "enabled" false $.Values.thanos -}}
+{{- fail (printf "hubServiceMonitors requires thanos.%s.serviceMonitor.enabled=false" $component) -}}
+{{- end -}}
+{{- range $label := $reservedLabels -}}
+{{- if hasKey (dig $component "service" "labels" dict $.Values.thanos) $label -}}
+{{- fail (printf "hubServiceMonitors reserves thanos.%s.service.labels[%s]" $component $label) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if ne .Values.thanos.receive.mode "standalone" -}}
+{{- fail "hubServiceMonitors supports the reviewed standalone Receive topology only" -}}
+{{- end -}}
+{{- if dig "storegateway" "sharded" "enabled" false .Values.thanos -}}
+{{- fail "hubServiceMonitors requires thanos.storegateway.sharded.enabled=false" -}}
+{{- end -}}
+{{- if dig "query" "autoscaling" "enabled" false .Values.thanos -}}
+{{- fail "hubServiceMonitors requires thanos.query.autoscaling.enabled=false so targetLimit remains bounded" -}}
+{{- end -}}
+{{- if dig "storegateway" "autoscaling" "enabled" false .Values.thanos -}}
+{{- fail "hubServiceMonitors requires thanos.storegateway.autoscaling.enabled=false so targetLimit remains bounded" -}}
+{{- end -}}
+{{- if ne (.Values.thanos.compactor.replicaCount | int) 1 -}}
+{{- fail "hubServiceMonitors requires the Compactor singleton topology" -}}
+{{- end -}}
+{{- $targetLimit := .Values.hubServiceMonitors.targetLimit | int -}}
+{{- if lt $targetLimit (add (.Values.thanos.query.replicaCount | int) 1) -}}
+{{- fail "hubServiceMonitors.targetLimit must allow the Query replica count plus one rolling-surge target" -}}
+{{- end -}}
+{{- if lt $targetLimit (.Values.thanos.receive.replicaCount | int) -}}
+{{- fail "hubServiceMonitors.targetLimit must cover every standalone Receive replica" -}}
+{{- end -}}
+{{- if lt $targetLimit (.Values.thanos.storegateway.replicaCount | int) -}}
+{{- fail "hubServiceMonitors.targetLimit must cover every Store Gateway replica" -}}
+{{- end -}}
+{{- end -}}

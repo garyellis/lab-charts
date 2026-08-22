@@ -1,0 +1,14 @@
+---
+# Replace the upstream unbounded component monitors with wrapper-owned,
+# hub-discoverable monitors. Layer environment-specific Thanos values normally.
+hubServiceMonitors:
+  enabled: true
+
+thanos:
+  global:
+    serviceMonitor:
+      enabled: false
+    # The lab-owned alerting chart owns the bounded alert portfolio. The
+    # upstream rules require families intentionally excluded by this profile.
+    thanosRules:
+      enabled: false

@@ -37,7 +37,7 @@ def test_thanos_defaults_are_infrastructure_only_with_monitoring_definitions() -
     chart = _yaml("charts/thanos/Chart.yaml")
     values = _yaml("charts/thanos/values.yaml")["thanos"]
 
-    assert chart["version"] == "0.1.1"
+    assert chart["version"] == "0.2.0"
     assert values["global"]["serviceMonitor"]["enabled"] is True
     assert values["global"]["thanosRules"]["enabled"] is True
     assert values["ruler"]["enabled"] is False

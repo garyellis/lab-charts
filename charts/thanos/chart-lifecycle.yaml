@@ -29,16 +29,24 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
+      hub:
+        values:
+          - values.yaml
+          - values-hub-observability.yaml
     triggers:
-      "Chart.yaml":       [dev, test, uat, prod, ci]
-      "values.yaml":      [dev, test, uat, prod, ci]
+      "Chart.yaml":       [dev, test, uat, prod, ci, hub]
+      "Chart.lock":       [dev, test, uat, prod, ci, hub]
+      "values.schema.json": [dev, test, uat, prod, ci, hub]
+      "values.yaml":      [dev, test, uat, prod, ci, hub]
       "values-dev.yaml":  [dev]
       "values-test.yaml": [test]
       "values-uat.yaml":  [uat]
       "values-prod.yaml": [prod]
       "values-ci.yaml":   [ci]
-      "templates/**":     [dev, test, uat, prod, ci]
-      "chart-lifecycle.yaml": [dev, test, uat, prod, ci]
+      "values-hub-observability.yaml": [hub]
+      "templates/**":     [dev, test, uat, prod, ci, hub]
+      "tests/**":         [dev, test, uat, prod, ci, hub]
+      "chart-lifecycle.yaml": [dev, test, uat, prod, ci, hub]
     unmatchedChanges: warn
 
   clusterTest:

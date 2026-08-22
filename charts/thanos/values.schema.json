@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["hubServiceMonitors"],
+  "properties": {
+    "hubServiceMonitors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "interval", "scrapeTimeout", "sampleLimit", "targetLimit"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "interval": {"type": "string", "enum": ["30s", "60s"]},
+        "scrapeTimeout": {"type": "string", "enum": ["5s", "10s"]},
+        "sampleLimit": {"type": "integer", "minimum": 100, "maximum": 3000},
+        "targetLimit": {"type": "integer", "minimum": 1, "maximum": 5}
+      }
+    }
+  }
+}
