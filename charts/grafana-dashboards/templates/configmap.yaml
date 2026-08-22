@@ -7,7 +7,7 @@ truncation, so equal basenames and long names cannot collide silently.
 {{- if eq (len $groups) 0 -}}
   {{- fail "enabledGroups must select at least one dashboard group" -}}
 {{- end -}}
-{{- $available := list "ai1-openstack" "networking" "platform" "slo" -}}
+{{- $available := list "ai1-openstack" "networking" "obs-w-alerting" "platform" "slo" -}}
 {{- range $group := $groups -}}
   {{- if not (has $group $available) -}}
     {{- fail (printf "enabledGroups contains unknown dashboard group %q" $group) -}}
@@ -33,6 +33,8 @@ truncation, so equal basenames and long names cannot collide silently.
       {{- $folder = "SLO" -}}
     {{- else if eq $group "ai1-openstack" -}}
       {{- $folder = "OpenStack · ai1" -}}
+    {{- else if eq $group "obs-w-alerting" -}}
+      {{- $folder = "Observability · Alerting" -}}
     {{- end }}
 ---
 apiVersion: v1

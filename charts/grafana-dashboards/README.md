@@ -26,7 +26,13 @@ The `ai1-openstack` group maps to the Grafana folder `OpenStack · ai1`.
 Dashboard payloads above 900 KiB fail before approaching the ConfigMap limit.
 Additional labels cannot replace chart-owned identity or discovery labels.
 
-The group contains five deliberately separate operator views:
+The `obs-w-alerting` group maps to `Observability · Alerting` and contains the
+single `obs-w-alerting-health` dashboard. It follows the alert path from Thanos
+Ruler evaluation through Alertmanager delivery, hub Alloy remote write, and
+the backing Thanos services. Consumers opt into it independently from the
+OpenStack dashboards so its deployment lifecycle can follow the alerting stack.
+
+The `ai1-openstack` group contains five deliberately separate operator views:
 
 - `AI1 / OpenStack — Overview`: concise host and bounded-dataplane landing page;
 - `AI1 — Host Health, Power and Thermals`: node-exporter CPU, memory, storage,
@@ -62,6 +68,15 @@ For `ai1-openstack`, every PromQL expression must scope both
 `tenant_id="$tenant_id"` and `infra="$infra"`. Keep operator notes short:
 state what the panel proves, how to interpret missing data, and the next
 drilldown.
+
+For `obs-w-alerting`, scope every query to its bounded producer identity:
+`tenant_id`, `infra`, and `cluster` for the alerting stack, or `tenant` and
+`cluster` for the hub Alloy profile. Its datasource variable defaults to the
+stable `thanos` UID while panel bindings remain portable through
+`${DS_PROMETHEUS}`. The dashboard deliberately has no dynamic pod, instance,
+alert name, receiver, metric-name, or other unbounded identity variable.
+Integration must confirm ServiceMonitor job labels and the exact metrics
+exposed by the deployed Thanos, Alertmanager, and Alloy versions before rollout.
 
 `tenant_id` is the Thanos receive tenant and must never be overloaded with an
 OpenStack project. Cloud-resource panels use normalized

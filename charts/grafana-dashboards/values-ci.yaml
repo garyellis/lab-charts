@@ -4,5 +4,6 @@
 enabledGroups:
   - ai1-openstack
   - networking
+  - obs-w-alerting
   - platform
   - slo

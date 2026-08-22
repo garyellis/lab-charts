@@ -2,8 +2,8 @@ apiVersion: v2
 name: grafana-dashboards
 description: Custom Grafana dashboards for observability stack
 type: application
-version: 2.2.0
-appVersion: "2.2"
+version: 2.3.0
+appVersion: "2.3"
 keywords:
   - grafana
   - dashboards
