@@ -1,0 +1,84 @@
+{{- if .Values.profiles.hubObservability.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-hub-observability-profile" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: hub-metrics-collector
+data:
+  config.alloy: |
+    logging {
+      level  = "warn"
+      format = "logfmt"
+    }
+
+    prometheus.remote_write "thanos" {
+      external_labels = {
+        cluster      = {{ .Values.profiles.hubObservability.externalLabels.cluster | quote }},
+        cluster_role = {{ .Values.profiles.hubObservability.externalLabels.clusterRole | quote }},
+        lane         = {{ .Values.profiles.hubObservability.externalLabels.lane | quote }},
+        stage        = {{ .Values.profiles.hubObservability.externalLabels.stage | quote }},
+        region       = {{ .Values.profiles.hubObservability.externalLabels.region | quote }},
+        cloud        = {{ .Values.profiles.hubObservability.externalLabels.cloud | quote }},
+        tenant       = {{ .Values.profiles.hubObservability.externalLabels.tenant | quote }},
+      }
+      endpoint {
+        url            = {{ .Values.profiles.hubObservability.receiver.url | quote }}
+        name           = "thanos-receive"
+        remote_timeout = "30s"
+        headers = {
+          {{ .Values.profiles.hubObservability.receiver.tenantHeader | quote }} = {{ .Values.profiles.hubObservability.receiver.tenant | quote }},
+        }
+        send_exemplars = false
+        queue_config {
+          capacity             = 2500
+          max_samples_per_send = 500
+          batch_send_deadline  = "10s"
+          min_shards           = 1
+          max_shards           = 2
+          min_backoff          = "1s"
+          max_backoff          = {{ .Values.profiles.hubObservability.wal.maxBackoff | quote }}
+          retry_on_http_429    = true
+          sample_age_limit     = {{ .Values.profiles.hubObservability.wal.sampleAgeLimit | quote }}
+        }
+        metadata_config {
+          send = false
+        }
+      }
+      wal {
+        truncate_frequency = "1h"
+        min_keepalive_time = "5m"
+        max_keepalive_time = {{ .Values.profiles.hubObservability.wal.maxKeepalive | quote }}
+      }
+    }
+
+    // This is a positive metric-family allowlist. ServiceMonitors without the
+    // approval label cannot enter the pipeline, and unexpected metric families
+    // from approved components are discarded here.
+    prometheus.relabel "hub_health" {
+      forward_to    = [prometheus.remote_write.thanos.receiver]
+      max_cache_size = 10000
+      rule {
+        source_labels = ["__name__"]
+        action        = "keep"
+        regex         = "(up|alloy_(build_info|component_controller_running_components|config_(last_load_success_timestamp_seconds|last_load_successful|load_failures_total)|prometheus_relabel_metrics_(processed|written)|resources_process_(cpu_seconds_total|resident_memory_bytes))|go_goroutines|process_cpu_seconds_total|process_resident_memory_bytes|prometheus_forwarded_samples_total|prometheus_remote_storage_(enqueue_retries_total|highest_timestamp_in_seconds|samples_(dropped_total|failed_total|pending|retried_total|total)|queue_highest_(sent_)?timestamp_seconds)|prometheus_remote_write_wal_(out_of_order_samples_total|storage_active_series)|prometheus_target_(interval_length_seconds|scrape_pool_sync_total|scrapes_exceeded_sample_limit_total|sync_failed_total)|prometheus_rule_(evaluation_failures_total|evaluations_total|group_iterations_missed_total|group_last_duration_seconds|group_last_evaluation_timestamp_seconds|group_rules)|prometheus_notifications_(dropped_total|errors_total|sent_total)|thanos_(alert_sender_alerts_dropped_total|compact_(halted|last_successful_run_timestamp_seconds)|receive_(forward_requests_total|hashring_nodes|replications_total|request_duration_seconds_(bucket|count|sum))|rule_evaluation_with_warnings_total)|alertmanager_(alerts_received_total|build_info|cluster_failed_peers|cluster_members|config_last_reload_successful|notifications_failed_total|notifications_total|silences))"
+      }
+    }
+
+    prometheus.operator.servicemonitors "hub_health" {
+      forward_to      = [prometheus.relabel.hub_health.receiver]
+      kubernetes_role = "endpointslice"
+      namespaces      = [{{ .Release.Namespace | quote }}]
+      selector {
+        match_labels = {
+          "observability.garyellis.io/hub-health" = "true",
+        }
+      }
+      scrape {
+        default_scrape_interval = {{ .Values.profiles.hubObservability.scrapeInterval | quote }}
+      }
+    }
+{{- end }}

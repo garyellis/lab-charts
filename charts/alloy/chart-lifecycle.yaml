@@ -31,13 +31,23 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
+      hub:
+        values:
+          - values.yaml
+          - values-hub-observability.yaml
+          - tests/values-hub-observability.yaml
     triggers:
-      "values.yaml":      [dev, test, uat, prod, ci]
+      "Chart.yaml":       [dev, test, uat, prod, ci, hub]
+      "values.schema.json": [dev, test, uat, prod, ci, hub]
+      "templates/**":     [dev, test, uat, prod, ci, hub]
+      "values.yaml":      [dev, test, uat, prod, ci, hub]
+      "values-hub-observability.yaml": [hub]
       "values-dev.yaml":  [dev]
       "values-test.yaml": [test]
       "values-uat.yaml":  [uat]
       "values-prod.yaml": [prod]
       "values-ci.yaml":   [ci]
+      "tests/**":         [dev, test, uat, prod, ci, hub]
     unmatchedChanges: warn
 
   clusterTest:
@@ -51,6 +61,18 @@ spec:
         values:
           - values.yaml
           - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+      hub-observability:
+        description: Install the single-pod, metrics-only hub collector with fixture-safe internal Receive values.
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-hub-observability.yaml
+          - tests/values-hub-observability.yaml
         helmTest: true
         timeout: 10m
 
@@ -84,4 +106,8 @@ spec:
         helmTest: true
         timeout: 20m
 
-    dependentTests: []
+    dependentTests:
+      # CI's default `minimal` profile preserves the legacy combined pipeline.
+      # This explicit second case keeps the opt-in hub profile installed too.
+      - chart: alloy
+        profile: hub-observability

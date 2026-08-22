@@ -5,7 +5,7 @@
     "profiles": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["default", "thanos", "custom"],
+      "required": ["default", "thanos", "hubObservability", "custom"],
       "properties": {
         "default": {"$ref": "#/definitions/profileToggle"},
         "custom": {
@@ -32,16 +32,77 @@
                 },
                 "externalLabels": {"type": "object"},
                 "clusterDomain": {"type": "string", "minLength": 1},
-                "scrapeInterval": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+                "scrapeInterval": {"$ref": "#/definitions/duration"},
                 "wal": {"type": "object"}
               }
             }
           ]
+        },
+        "hubObservability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "receiver", "externalLabels", "scrapeInterval", "sampleLimit", "targetLimit", "wal"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "receiver": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "tenantHeader", "tenant"],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^$|^http://[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.svc(\\.[a-z0-9.-]+)?(:[0-9]+)?/.+"
+                },
+                "tenantHeader": {
+                  "type": "string",
+                  "enum": ["THANOS-TENANT", "X-Scope-OrgID"]
+                },
+                "tenant": {"$ref": "#/definitions/labelValue"}
+              }
+            },
+            "externalLabels": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cluster", "clusterRole", "lane", "stage", "region", "cloud", "tenant"],
+              "properties": {
+                "cluster": {"$ref": "#/definitions/labelValue"},
+                "clusterRole": {"$ref": "#/definitions/labelValue"},
+                "lane": {"$ref": "#/definitions/labelValue"},
+                "stage": {"$ref": "#/definitions/labelValue"},
+                "region": {"$ref": "#/definitions/labelValue"},
+                "cloud": {"$ref": "#/definitions/labelValue"},
+                "tenant": {"$ref": "#/definitions/labelValue"}
+              }
+            },
+            "scrapeInterval": {"$ref": "#/definitions/duration"},
+            "sampleLimit": {"type": "integer", "minimum": 1, "maximum": 5000},
+            "targetLimit": {"type": "integer", "minimum": 1, "maximum": 50},
+            "wal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["maxKeepalive", "sampleAgeLimit", "maxBackoff"],
+              "properties": {
+                "maxKeepalive": {"$ref": "#/definitions/duration"},
+                "sampleAgeLimit": {"$ref": "#/definitions/duration"},
+                "maxBackoff": {"$ref": "#/definitions/duration"}
+              }
+            }
+          }
         }
       }
     }
   },
   "definitions": {
+    "duration": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(ms|s|m|h)$"
+    },
+    "labelValue": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^$|^[A-Za-z0-9](?:[-_.A-Za-z0-9]*[A-Za-z0-9])?$"
+    },
     "profileToggle": {
       "type": "object",
       "required": ["enabled"],
