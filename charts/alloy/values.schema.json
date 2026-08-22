@@ -41,7 +41,7 @@
         "hubObservability": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled", "receiver", "externalLabels", "scrapeInterval", "sampleLimit", "targetLimit", "wal"],
+          "required": ["enabled", "receiver", "externalLabels", "clusterDomain", "scrapeInterval", "sampleLimit", "targetLimit", "wal"],
           "properties": {
             "enabled": {"type": "boolean"},
             "receiver": {
@@ -52,7 +52,7 @@
                 "url": {
                   "type": "string",
                   "maxLength": 512,
-                  "pattern": "^$|^http://[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.svc(\\.[a-z0-9.-]+)?(:[0-9]+)?/.+"
+                  "pattern": "^$|^http://[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.svc(\\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?(:[0-9]+)?/[^?#]+$"
                 },
                 "tenantHeader": {
                   "type": "string",
@@ -74,6 +74,12 @@
                 "cloud": {"$ref": "#/definitions/labelValue"},
                 "tenant": {"$ref": "#/definitions/labelValue"}
               }
+            },
+            "clusterDomain": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
             },
             "scrapeInterval": {"$ref": "#/definitions/duration"},
             "sampleLimit": {"type": "integer", "minimum": 1, "maximum": 5000},

@@ -16,3 +16,5 @@ alloy:
   alloy:
     configMap:
       name: alloy-hub-observability-profile
+  serviceAccount:
+    name: alloy-hub-observability

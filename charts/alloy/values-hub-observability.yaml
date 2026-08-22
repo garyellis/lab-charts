@@ -8,6 +8,10 @@ profiles:
     enabled: true
 
 alloy:
+  crds:
+    # ServiceMonitor CRDs are owned by the Prometheus Operator lifecycle.
+    create: false
+
   controller:
     type: deployment
     replicas: 1
@@ -17,6 +21,7 @@ alloy:
     tolerations: []
     affinity: {}
     topologySpreadConstraints: []
+    podAnnotations: {}
     volumes:
       extra: []
     initContainers: []
@@ -93,22 +98,9 @@ alloy:
     enabled: false
 
   rbac:
-    create: true
-    namespaces: []
-    rules:
-      - apiGroups: [""]
-        resources: ["endpoints", "pods", "services"]
-        verbs: ["get", "list", "watch"]
-      - apiGroups: ["discovery.k8s.io"]
-        resources: ["endpointslices"]
-        verbs: ["get", "list", "watch"]
-      - apiGroups: ["monitoring.coreos.com"]
-        resources: ["servicemonitors"]
-        verbs: ["get", "list", "watch"]
-    clusterRules:
-      - apiGroups: [""]
-        resources: ["namespaces"]
-        verbs: ["get", "list", "watch"]
+    # The wrapper owns a namespace-scoped Role and RoleBinding for this
+    # profile. Disable the dependency's ClusterRole/ClusterRoleBinding path.
+    create: false
 
   serviceAccount:
     create: true

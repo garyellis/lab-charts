@@ -31,6 +31,7 @@ run = "uv run --extra dev pytest"
 description = "Run the same fast workflow, lint, type, and unit-test gates as CI."
 run = [
   "actionlint .github/workflows/ci.yaml",
+  "scripts/check-chart-source-contracts",
   "uv run --extra dev ruff check src/ tests/",
   "uv run --extra dev mypy src/chart_manager",
   "uv run chart-manager grafana dashboard lint -o table",

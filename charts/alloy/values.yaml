@@ -49,6 +49,7 @@ profiles:
       region: ""
       cloud: ""
       tenant: ""
+    clusterDomain: cluster.local
     scrapeInterval: 60s
     sampleLimit: 500
     targetLimit: 1

@@ -15,8 +15,13 @@ spec:
   endpoints:
     - port: http-metrics
       scheme: http
-      honorLabels: true
+      honorLabels: false
       interval: {{ .Values.profiles.hubObservability.scrapeInterval }}
+      metricRelabelings:
+        - action: keep
+          sourceLabels:
+            - __name__
+          regex: {{ include "alloy.hubObservability.metricAllowlist" . | quote }}
       relabelings:
         - action: replace
           targetLabel: job

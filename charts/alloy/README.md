@@ -40,6 +40,7 @@ Use the structural profile and an environment-owned values file together:
 # hub-values.yaml
 profiles:
   hubObservability:
+    clusterDomain: cluster.local
     receiver:
       url: http://thanos-receive.observability.svc:19291/api/v1/receive
       tenant: platform
@@ -56,6 +57,8 @@ alloy:
   alloy:
     configMap:
       name: alloy-hub-observability-profile
+  serviceAccount:
+    name: alloy-hub-observability
 ```
 
 ```bash
@@ -86,11 +89,14 @@ The deployment contract is intentionally narrow:
   kube-state-metrics, PodMonitor, Probe, or annotation-wide discovery;
 - only ServiceMonitors in the release namespace carrying
   `observability.garyellis.io/hub-health: "true"` are discovered;
-- one positive metric-name allowlist admits the reviewed component health,
-  rule evaluation, notification, Compactor, Receive, and remote-write families;
+- one positive metric-name allowlist, enforced before the ServiceMonitor sample
+  limit and again before remote write, admits only the reviewed component
+  health, rule evaluation, notification, Compactor, Receive, and remote-write
+  families;
 - RBAC is limited to read-only ServiceMonitor, Service, EndpointSlice,
-  Endpoint, Pod, and Namespace discovery; and
-- the Receive URL must resolve through an in-cluster `*.svc` HTTP address.
+  Endpoint, and Pod discovery in the release namespace; and
+- the Receive URL must use an exact in-cluster `.svc` or
+  `.svc.<clusterDomain>` HTTP address.
 
 The approval label is necessary but not sufficient for a new ServiceMonitor.
 Each selected endpoint must also declare reviewed `sampleLimit` and
@@ -105,7 +111,7 @@ remote write to Thanos Receive while denying unrelated egress.
 Run the offline contract and lifecycle validation with:
 
 ```bash
-charts/alloy/tests/profile-contract.sh charts/alloy
+scripts/check-chart-source-contracts
 uv run chart-manager chart validate alloy --env hub
 ```
 
@@ -124,6 +130,8 @@ specific to the cluster.
 
 The pinned Alloy 1.12.1 component API does not yet expose TTL mode on
 `prometheus.relabel` or a default sample limit on the operator discovery
-components. This profile therefore uses the bounded 100,000-entry relabel LRU
-and leaves per-monitor sample limits to each ServiceMonitor/PodMonitor. A later
-Alloy upgrade may move those guards into the profile after its own review.
+components. The fleet Thanos profile uses a bounded 100,000-entry relabel LRU;
+the smaller hub profile uses 10,000 entries and enforces its own ServiceMonitor
+limit before samples enter Alloy. Other monitors remain responsible for their
+reviewed per-target limits. A later Alloy upgrade may move those guards into
+the profile after its own review.

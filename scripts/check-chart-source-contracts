@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run every chart-owned, offline source contract in deterministic path order.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+contracts=()
+while IFS= read -r contract; do
+  contracts+=("$contract")
+done < <(find "$repo_root/charts" -mindepth 3 -maxdepth 3 -type f \
+  -path '*/tests/source-contract.sh' -print | LC_ALL=C sort)
+
+for contract in "${contracts[@]}"; do
+  chart_root="$(dirname "$(dirname "$contract")")"
+  relative_contract="${contract#"$repo_root/"}"
+  printf '==> %s\n' "$relative_contract"
+  "$contract" "$chart_root"
+done

@@ -94,6 +94,9 @@ jobs:
           uv run --extra dev pytest -q -m integration
           tests/integration/test_chart_lifecycle_packaging.py
 
+      - name: Chart source contracts
+        run: scripts/check-chart-source-contracts
+
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
