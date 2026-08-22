@@ -35,7 +35,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Read left to right:** evaluator → alert state → notification → telemetry path → Thanos backend. A blank panel is **unknown**, not healthy. Confirm target discovery and sample freshness before interpreting an empty result.\n\n**Thresholds:** evaluation should finish inside its 60-second interval; notification failures and dropped samples should remain absent; remote-write lag above 120 seconds needs investigation; Query p95 above 5 seconds breaches the initial budget. Use the alert list link for acknowledgement and silencing.",
+        "content": "**Read left to right:** evaluator → alert state → notification → telemetry path → Thanos backend. A blank panel is **unknown**, not healthy. Confirm target discovery and sample freshness before interpreting an empty result.\n\n**Identity:** `ALERTS` rule-result series arrive through the Ruler StoreAPI and are scoped by `cluster`; scraped component metrics arrive through Receive and are scoped by `tenant_id` plus `cluster`.\n\n**Thresholds:** evaluation should finish inside its 60-second interval; notification failures and dropped samples should remain absent; remote-write lag above 120 seconds needs investigation; Query p95 above 5 seconds breaches the initial budget. Use the alert list link for acknowledgement and silencing.",
         "mode": "markdown"
       },
       "title": "Operator note",
@@ -59,7 +59,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Current pending and firing rule series. No result means no alert series were returned; it does not prove that Ruler evaluation or ingestion is healthy.",
+      "description": "Current pending and firing rule-result series from the Ruler StoreAPI, scoped by cluster because Ruler external labels must not claim Receive-owned tenant_id. No result does not prove Ruler evaluation is healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -112,7 +112,7 @@
       },
       "targets": [
         {
-          "expr": "count by (alertstate) (ALERTS{tenant_id=\"$tenant_id\",cluster=\"$cluster\",alertstate=~\"pending|firing\"})",
+          "expr": "count by (alertstate) (ALERTS{cluster=\"$cluster\",alertstate=~\"pending|firing\"})",
           "instant": true,
           "legendFormat": "{{alertstate}}",
           "refId": "A"
@@ -126,7 +126,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Firing alert series grouped by the bounded portfolio labels. Alert details, acknowledgement, and silences remain in the alerting UI.",
+      "description": "Firing rule-result series from the Ruler StoreAPI, scoped by cluster and grouped by the bounded portfolio labels. Alert details, acknowledgement, and silences remain in the alerting UI.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -181,7 +181,7 @@
       },
       "targets": [
         {
-          "expr": "max by (alertname, severity, owner, service, component, scope, alert_family) (ALERTS{tenant_id=\"$tenant_id\",cluster=\"$cluster\",alertstate=\"firing\"})",
+          "expr": "max by (alertname, severity, owner, service, component, scope, alert_family) (ALERTS{cluster=\"$cluster\",alertstate=\"firing\"})",
           "format": "table",
           "instant": true,
           "legendFormat": "{{alertname}}",

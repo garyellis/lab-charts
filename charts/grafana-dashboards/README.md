@@ -69,15 +69,16 @@ For `ai1-openstack`, every PromQL expression must scope both
 state what the panel proves, how to interpret missing data, and the next
 drilldown.
 
-For `obs-w-alerting`, scope every query to the post-Receive `tenant_id` and the
-producer-owned `cluster`. Hub producers must not emit `tenant_id`; Thanos
-Receive adds it from the authenticated tenant header. The datasource variable
-defaults to the stable `thanos` UID while panel bindings remain portable
-through `${DS_PROMETHEUS}`. The dashboard deliberately has no dynamic pod,
-instance, alert name, receiver, metric-name, or other unbounded identity
-variable. Integration must confirm ServiceMonitor job labels and the exact
-metrics exposed by the deployed Thanos, Alertmanager, and Alloy versions before
-rollout.
+For `obs-w-alerting`, scope scraped component metrics to the post-Receive
+`tenant_id` and producer-owned `cluster`. Hub producers must not emit
+`tenant_id`; Thanos Receive adds it from the authenticated tenant header.
+`ALERTS` rule-result series instead arrive through the Ruler StoreAPI and scope
+only by Ruler's `cluster` external label. The datasource variable defaults to
+the stable `thanos` UID while panel bindings remain portable through
+`${DS_PROMETHEUS}`. The dashboard deliberately has no dynamic pod, instance,
+alert name, receiver, metric-name, or other unbounded identity variable.
+Integration must confirm ServiceMonitor job labels and the exact metrics
+exposed by the deployed Thanos, Alertmanager, and Alloy versions before rollout.
 
 `tenant_id` is the Thanos Receive tenant and must never be overloaded with an
 OpenStack project. Cloud-resource panels use normalized
