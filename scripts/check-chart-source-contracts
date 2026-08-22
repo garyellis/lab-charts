@@ -3,6 +3,62 @@ set -euo pipefail
 
 # Run every chart-owned, offline source contract in deterministic path order.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+helm_state_dir=""
+repository_count=0
+
+cleanup() {
+  if [[ -n "$helm_state_dir" ]]; then
+    rm -rf "$helm_state_dir"
+  fi
+}
+trap cleanup EXIT
+
+prepare_locked_dependencies() {
+  local chart_root="$1"
+  local dependency_status lock_checksum repository repository_name
+
+  [[ -f "$chart_root/Chart.lock" ]] || return 0
+  dependency_status="$(helm dependency list "$chart_root")"
+  if ! awk 'NR > 1 && NF && $NF != "ok" { needs_build = 1 } END { exit(needs_build ? 0 : 1) }' \
+    <<<"$dependency_status"; then
+    return 0
+  fi
+
+  if [[ -z "$helm_state_dir" ]]; then
+    helm_state_dir="$(mktemp -d)"
+    export HELM_REPOSITORY_CONFIG="$helm_state_dir/repositories.yaml"
+    export HELM_REPOSITORY_CACHE="$helm_state_dir/cache"
+    mkdir -p "$HELM_REPOSITORY_CACHE"
+  fi
+
+  while IFS= read -r repository; do
+    case "$repository" in
+      http://* | https://*)
+        repository_count=$((repository_count + 1))
+        repository_name="source-contract-${repository_count}"
+        helm repo add "$repository_name" "$repository" >/dev/null
+        ;;
+      oci://*) ;;
+      *)
+        printf 'unsupported locked Helm repository %q in %s\n' \
+          "$repository" "$chart_root/Chart.lock" >&2
+        return 1
+        ;;
+    esac
+  done < <(
+    awk '$1 == "repository:" {gsub(/^['\''\"]|['\''\"]$/, "", $2); print $2}' \
+      "$chart_root/Chart.lock" | LC_ALL=C sort -u
+  )
+
+  lock_checksum="$(cksum "$chart_root/Chart.lock")"
+  helm dependency build "$chart_root" >/dev/null
+  if [[ "$(cksum "$chart_root/Chart.lock")" != "$lock_checksum" ]]; then
+    printf 'helm dependency build modified locked dependency metadata: %s\n' \
+      "$chart_root/Chart.lock" >&2
+    return 1
+  fi
+}
+
 contracts=()
 while IFS= read -r contract; do
   contracts+=("$contract")
@@ -13,12 +69,9 @@ for contract in "${contracts[@]}"; do
   chart_root="$(dirname "$(dirname "$contract")")"
   relative_contract="${contract#"$repo_root/"}"
   printf '==> %s\n' "$relative_contract"
-  if [[ -f "$chart_root/Chart.lock" ]]; then
-    dependency_status="$(helm dependency list "$chart_root")"
-    if awk 'NR > 1 && NF && $NF != "ok" { needs_build = 1 } END { exit(needs_build ? 0 : 1) }' \
-      <<<"$dependency_status"; then
-      helm dependency build "$chart_root" >/dev/null
-    fi
-  fi
-  "$contract" "$chart_root"
+  prepare_locked_dependencies "$chart_root"
+  (
+    cd "$repo_root"
+    "$contract" "$chart_root"
+  )
 done
