@@ -1,0 +1,54 @@
+{{- if .Values.hubServiceMonitors.enabled -}}
+{{- $root := . -}}
+{{- $fullname := include "lab-thanos.upstreamFullname" . -}}
+{{- $appName := include "lab-thanos.upstreamName" . -}}
+{{- $namespace := default .Release.Namespace .Values.thanos.namespaceOverride -}}
+{{- $components := list
+      (dict "name" "query" "job" "integrations/thanos-query" "metrics" (include "lab-thanos.hubMetricAllowlist.query" .))
+      (dict "name" "receive" "job" "integrations/thanos-receive" "metrics" (include "lab-thanos.hubMetricAllowlist.receive" .))
+      (dict "name" "storegateway" "job" "integrations/thanos-storegateway" "metrics" (include "lab-thanos.hubMetricAllowlist.storegateway" .))
+      (dict "name" "compactor" "job" "integrations/thanos-compactor" "metrics" (include "lab-thanos.hubMetricAllowlist.compactor" .)) -}}
+{{- range $component := $components }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ printf "%s-%s" $fullname $component.name }}
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $appName }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $component.name }}
+    app.kubernetes.io/part-of: thanos
+    observability.garyellis.io/hub-health: "true"
+spec:
+  sampleLimit: {{ $root.Values.hubServiceMonitors.sampleLimit }}
+  targetLimit: {{ $root.Values.hubServiceMonitors.targetLimit }}
+  namespaceSelector:
+    matchNames:
+      - {{ $namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $appName }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component.name }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $root.Values.hubServiceMonitors.interval | quote }}
+      scrapeTimeout: {{ $root.Values.hubServiceMonitors.scrapeTimeout | quote }}
+      honorLabels: false
+      relabelings:
+        - action: replace
+          targetLabel: job
+          replacement: {{ $component.job | quote }}
+        - action: replace
+          targetLabel: instance
+          replacement: {{ printf "%s-%s" $fullname $component.name | quote }}
+      metricRelabelings:
+        - action: keep
+          sourceLabels:
+            - __name__
+          regex: {{ $component.metrics | quote }}
+---
+{{- end }}
+{{- end }}
