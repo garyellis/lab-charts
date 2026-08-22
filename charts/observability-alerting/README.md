@@ -23,12 +23,14 @@ owner.
   `identity.ai1` selects OpenStack-host metrics with `tenant_id` + `infra`.
   Ruler external labels use the cluster-style hub labels and deliberately omit
   reserved `tenant_id`, `job`, and `instance`. The schema rejects those fields.
-  ServiceMonitors set `job` and leave identity to the producer plus Thanos
-  Receive tenant enforcement. Both operator monitors retain exact self-metric
-  allowlists and are fixed at `sampleLimit: 1000` and `targetLimit: 2`; the
-  second target is only rollout headroom. Ruler and Alertmanager are singleton
-  workloads in this phase and their PVCs are fixed at 5 Gi and 2 Gi. Changing
-  that reviewed 7 Gi envelope requires a chart contract change.
+  ServiceMonitors set `job` during target relabeling so Prometheus-generated
+  `up` and retained samples share the same identity; metric relabeling only
+  enforces the self-metric allowlist. Producer identity plus Thanos Receive
+  enforce the remaining labels. Both operator monitors are fixed at
+  `sampleLimit: 1000` and `targetLimit: 2`; the second target is only rollout
+  headroom. Ruler and Alertmanager are singleton workloads in this phase and
+  their PVCs are fixed at 5 Gi and 2 Gi. Changing that reviewed 7 Gi envelope
+  requires a chart contract change.
 - `thanosRuler.queryEndpoint` and the optional Alertmanager endpoint are
   restricted to exact in-cluster service URLs; hostnames that only resemble a
   `.svc` name and ports outside 1-65535 are rejected. The Alertmanager endpoint

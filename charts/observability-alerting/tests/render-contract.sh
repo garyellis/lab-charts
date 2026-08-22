@@ -8,7 +8,8 @@ rendered_file="$(mktemp)"
 rules_file="$(mktemp)"
 delivery_file="$(mktemp)"
 long_name_file="$(mktemp)"
-trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}" "${long_name_file}"' EXIT
+scalar_file="$(mktemp)"
+trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}" "${long_name_file}" "${scalar_file}"' EXIT
 
 helm template observability-alerting "${chart_dir}" \
   --namespace observability \
@@ -23,9 +24,17 @@ helm template observability-alerting "${chart_dir}" \
   --namespace observability \
   -f "${chart_dir}/values-ci.yaml" \
   --set fullnameOverride=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"${long_name_file}"
+helm template observability-alerting "${chart_dir}" \
+  --namespace observability \
+  -f "${chart_dir}/values-ci.yaml" \
+  --set delivery.enabled=true \
+  --set-string delivery.webhook.secretName=null \
+  --set-string delivery.webhook.secretKey=true >"${scalar_file}"
 
 yq -e 'select(.kind == "AlertmanagerConfig") | .spec.receivers[] | select(.name == "external-webhook") | .webhookConfigs[0].sendResolved == true' \
   "${delivery_file}" >/dev/null
+yq -o=json -I=0 'select(.kind == "AlertmanagerConfig")' "${scalar_file}" |
+  jq -e '.spec.receivers[] | select(.name == "external-webhook") | .webhookConfigs[0].urlSecret | .name == "null" and (.name | type == "string") and .key == "true" and (.key | type == "string")' >/dev/null
 
 for monitor in observability-alerting-ruler observability-alerting-alertmanager; do
   yq -e \
@@ -36,13 +45,22 @@ done
 ruler_allowlist='^(?:prometheus_rule_evaluation_failures_total|prometheus_rule_group_last_duration_seconds|prometheus_rule_group_last_evaluation_timestamp_seconds|thanos_alert_queue_alerts_dropped_total|thanos_alert_sender_alerts_dropped_total|thanos_rule_evaluation_with_warnings_total)$'
 alertmanager_allowlist='^(?:alertmanager_config_last_reload_successful|alertmanager_notification_latency_seconds_bucket|alertmanager_notifications_failed_total|alertmanager_notifications_total)$'
 
-yq -e \
-  "select(.kind == \"ServiceMonitor\" and .metadata.name == \"observability-alerting-ruler\") | .spec.endpoints[0].metricRelabelings[] | select(.action == \"keep\" and (.sourceLabels | length) == 1 and .sourceLabels[0] == \"__name__\" and .regex == \"${ruler_allowlist}\")" \
-  "${rendered_file}" >/dev/null
+assert_monitor_relabel_contract() {
+  local monitor_name="$1"
+  local expected_job="$2"
+  local expected_allowlist="$3"
 
-yq -e \
-  "select(.kind == \"ServiceMonitor\" and .metadata.name == \"observability-alerting-alertmanager\") | .spec.endpoints[0].metricRelabelings[] | select(.action == \"keep\" and (.sourceLabels | length) == 1 and .sourceLabels[0] == \"__name__\" and .regex == \"${alertmanager_allowlist}\")" \
-  "${rendered_file}" >/dev/null
+  yq -o=json -I=0 'select(.kind == "ServiceMonitor")' "${rendered_file}" |
+    jq -e --arg monitor_name "${monitor_name}" --arg expected_job "${expected_job}" --arg expected_allowlist "${expected_allowlist}" '
+      select(.metadata.name == $monitor_name) |
+      .spec.endpoints[0] |
+      .relabelings == [{"action": "replace", "targetLabel": "job", "replacement": $expected_job}] and
+      .metricRelabelings == [{"action": "keep", "sourceLabels": ["__name__"], "regex": $expected_allowlist}]
+    ' >/dev/null
+}
+
+assert_monitor_relabel_contract observability-alerting-ruler integrations/thanos-ruler "${ruler_allowlist}"
+assert_monitor_relabel_contract observability-alerting-alertmanager integrations/alertmanager "${alertmanager_allowlist}"
 
 yq -e 'select(.kind == "ThanosRuler") | .spec.replicas == 1 and .spec.storage.volumeClaimTemplate.spec.resources.requests.storage == "5Gi" and .spec.queryEndpoints[0] == "http://observability-alerting-query-fixture.observability.svc:9090"' \
   "${rendered_file}" >/dev/null
