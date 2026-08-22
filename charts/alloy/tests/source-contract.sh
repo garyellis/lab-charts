@@ -22,7 +22,7 @@ helm template alloy "$chart_dir" \
   -f "$chart_dir/values-hub-observability.yaml" \
   -f "$chart_dir/tests/values-hub-observability.yaml" >"$hub_render_file"
 
-python3 - "$hub_render_file" <<'PY'
+uv run --extra dev python - "$hub_render_file" <<'PY'
 from pathlib import Path
 import re
 import sys

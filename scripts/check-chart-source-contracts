@@ -13,5 +13,12 @@ for contract in "${contracts[@]}"; do
   chart_root="$(dirname "$(dirname "$contract")")"
   relative_contract="${contract#"$repo_root/"}"
   printf '==> %s\n' "$relative_contract"
+  if [[ -f "$chart_root/Chart.lock" ]]; then
+    dependency_status="$(helm dependency list "$chart_root")"
+    if awk 'NR > 1 && NF && $NF != "ok" { needs_build = 1 } END { exit(needs_build ? 0 : 1) }' \
+      <<<"$dependency_status"; then
+      helm dependency build "$chart_root" >/dev/null
+    fi
+  fi
   "$contract" "$chart_root"
 done
