@@ -341,7 +341,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(thanos_rule_evaluation_failures_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_rule_evaluation_failures_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
           "instant": true,
           "legendFormat": "failed evaluations",
           "refId": "A"
@@ -485,8 +485,8 @@
       },
       "targets": [
         {
-          "expr": "time() - max by (group) (prometheus_rule_group_last_evaluation_timestamp_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
-          "legendFormat": "{{group}}",
+          "expr": "time() - max by (rule_group) (prometheus_rule_group_last_evaluation_timestamp_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
+          "legendFormat": "{{rule_group}}",
           "refId": "A"
         }
       ],
