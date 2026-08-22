@@ -62,6 +62,12 @@ assert_monitor_relabel_contract() {
 assert_monitor_relabel_contract observability-alerting-ruler integrations/thanos-ruler "${ruler_allowlist}"
 assert_monitor_relabel_contract observability-alerting-alertmanager integrations/alertmanager "${alertmanager_allowlist}"
 
+yq -o=json -I=0 'select(.kind == "Role" and .metadata.name == "observability-alerting-resources")' "${rendered_file}" |
+  jq -e '
+    [.rules[] | select(.resources | index("services"))] ==
+    [{"apiGroups": [""], "resources": ["services"], "verbs": ["get", "list", "watch"]}]
+  ' >/dev/null
+
 yq -e 'select(.kind == "ThanosRuler") | .spec.replicas == 1 and .spec.storage.volumeClaimTemplate.spec.resources.requests.storage == "5Gi" and .spec.queryEndpoints[0] == "http://observability-alerting-query-fixture.observability.svc:9090"' \
   "${rendered_file}" >/dev/null
 yq -e 'select(.kind == "Alertmanager") | .spec.replicas == 1 and .spec.storage.volumeClaimTemplate.spec.resources.requests.storage == "2Gi"' \
