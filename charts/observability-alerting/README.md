@@ -25,29 +25,54 @@ owner.
   reserved `tenant_id`, `job`, and `instance`. The schema rejects those fields.
   ServiceMonitors set `job` and leave identity to the producer plus Thanos
   Receive tenant enforcement. Both operator monitors retain exact self-metric
-  allowlists and default to `sampleLimit: 1000` and `targetLimit: 2`; the
-  second target is only rollout headroom. Raising these bounded inputs requires
-  baseline evidence and a chart contract change.
+  allowlists and are fixed at `sampleLimit: 1000` and `targetLimit: 2`; the
+  second target is only rollout headroom. Ruler and Alertmanager are singleton
+  workloads in this phase and their PVCs are fixed at 5 Gi and 2 Gi. Changing
+  that reviewed 7 Gi envelope requires a chart contract change.
 - `thanosRuler.queryEndpoint` and the optional Alertmanager endpoint are
-  internal service URLs. The Alertmanager endpoint defaults to the operator's
-  `alertmanager-operated` service. Ruler is pinned to the reviewed Thanos
-  v0.42 line.
+  restricted to exact in-cluster service URLs; hostnames that only resemble a
+  `.svc` name are rejected. The Alertmanager endpoint defaults to the
+  operator's `alertmanager-operated` service. Ruler is pinned to the reviewed
+  Thanos v0.42 line.
 - `telemetry.expectedHubTargets` and `expectedAi1Targets` are separate exact,
-  bounded producer inventories. An alert exposes only its reviewed name,
-  component, and source; job and instance remain query matchers.
-- `openstack.expectedFamilies` is an enum. Cinder is intentionally excluded:
-  the chart alerts on the host-local Cinder collector and thin-pool metrics,
-  not a disabled OpenStack exporter API family.
+  bounded producer inventories with unique names inside each inventory. An
+  alert exposes only its reviewed name, component, and source; job and instance
+  remain query matchers.
+- `openstack.expectedFamilies` contains the seven reviewed exporter families:
+  Identity, Glance, Nova, Neutron, Octavia (`loadbalancer`), Designate, and
+  Placement. Cinder is intentionally excluded: the chart alerts on the
+  host-local Cinder collector and thin-pool metrics, not a disabled OpenStack
+  exporter API family.
 - capacity, freshness, lag, evaluation, and PSI thresholds are bounded typed
   inputs. Arbitrary PromQL and arbitrary rule metadata are not accepted.
-- runbook and dashboard base URLs are environment inputs. Every alert supplies
-  `severity`, `owner`, `service`, `component`, `scope`, `alert_family`,
-  `summary`, `description`, `impact`, `runbook_url`, and `dashboard_url`.
+- runbook, dashboard, and Alertmanager external URLs are required environment
+  inputs; the chart has no knowingly broken placeholder defaults. Every alert
+  supplies `severity`, `owner`, `service`, `component`, `scope`,
+  `alert_family`, `incident_key`, `summary`, `description`, `impact`,
+  `runbook_url`, and `dashboard_url`. `obs-w` alerts also carry `cluster`;
+  `ai1` alerts carry `infra`.
+
+At minimum, an environment supplies its real link targets:
+
+```yaml
+links:
+  runbookBaseUrl: https://runbooks.example.com/observability
+  dashboardBaseUrl: https://grafana.example.com/d
+alertmanager:
+  externalUrl: https://alerts.example.com
+```
 
 ## Receiver custody
 
 External delivery is off by default and the explicit `null` receiver is the
-only route. Enabling the generic webhook requires only a `SecretKeySelector`:
+only receiver. Critical and warning child routes group by `alertname`,
+`severity`, and `scope`; critical notifications wait 15 seconds and repeat no
+more often than hourly, while warnings repeat no more often than every four
+hours. Resolved delivery remains enabled. A critical alert inhibits a warning
+only when service, component, scope, family, incident key, cluster, and infra
+all identify the same incident.
+
+Enabling the generic webhook requires only a `SecretKeySelector`:
 
 ```yaml
 delivery:
@@ -84,12 +109,15 @@ asserts that the operator service exposes the `grpc` port at 10901.
 - Cinder collector failure/staleness and thin-pool data/metadata pressure;
 - CPU, memory, and I/O PSI saturation plus missing-PSI integrity alerts;
 - Thanos Compactor halted or missing;
-- Ruler absence, failed/slow evaluation, dropped alerts between Ruler and
-  Alertmanager, Alertmanager absence, rejected config, and notification failures.
+- Ruler absence, failed/warning/slow evaluation, dropped alerts between Ruler
+  and Alertmanager, Alertmanager absence, rejected config, and notification
+  failures.
 
 Missing-data branches are explicit where absence is actionable. Counter rules
 use `increase()` so process restarts and counter resets do not manufacture a
-negative or hide a positive delta.
+negative or hide a positive delta. `ThanosRulerMissing` provides best-effort
+dashboard coverage from retained telemetry; it is not independent detection of
+an evaluator outage until the deferred dead-man receiver exists.
 
 ## Validation
 
@@ -101,8 +129,15 @@ uv run chart-manager chart validate observability-alerting --env ci
 uv run chart-manager chart test observability-alerting --profile minimal
 ```
 
-The Helm test suite mounts the rendered production groups into `promtool` and
-tests the healthy, pending, firing, missing-data, and recovery lifecycle for an
-exact telemetry target. Because all groups share the same rendered rule file,
-`promtool` also parses every production expression. A second hook verifies the
-operator-created Ruler and Alertmanager StatefulSets roll out.
+The offline `promtool` suite parses all 46 rendered production rules and covers
+healthy, pending, firing, missing-primary-data, overlap, counter-reset, and
+recovery behavior across hub and AI1 target inventories. The render contract
+also simulates critical/warning route selection and proves inhibition cannot
+cross any bounded incident-identity field.
+
+The Helm test verifies the operator-created Ruler and Alertmanager StatefulSets
+and Ruler StoreAPI, then uses a test-only Query fixture to prove both scrape
+targets are healthy, at least one rule group evaluated, evaluations produced no
+failures or warnings, Ruler queues and senders dropped no alerts, and
+Alertmanager received the Watchdog. The fixture is disabled by default and
+derives its service address from the release name and namespace when enabled.

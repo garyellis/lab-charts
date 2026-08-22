@@ -15,8 +15,10 @@ identity:
     infra: lab
 
 links:
-  runbookBaseUrl: https://runbooks.example.invalid/observability
-  dashboardBaseUrl: https://grafana.example.invalid/d
+  # Required environment-owned locations. The chart has no knowingly broken
+  # URL defaults; values-ci.yaml supplies non-production contract fixtures.
+  runbookBaseUrl: ""
+  dashboardBaseUrl: ""
 
 thanosRuler:
   version: v0.42.4
@@ -39,7 +41,8 @@ thanosRuler:
 alertmanager:
   version: v0.30.0
   replicas: 1
-  externalUrl: http://alertmanager.example.invalid
+  # Required environment-owned URL used in generated notification links.
+  externalUrl: ""
   retention: 120h
   logLevel: info
   resources:
@@ -62,10 +65,12 @@ delivery:
     maxAlerts: 0
 
 routing:
-  groupBy: [alertname, severity, service, component, scope]
+  groupBy: [alertname, severity, scope]
   groupWait: 30s
   groupInterval: 5m
   repeatInterval: 4h
+  criticalRepeatInterval: 1h
+  warningRepeatInterval: 4h
 
 monitoring:
   interval: 30s
@@ -91,7 +96,7 @@ telemetry:
 openstack:
   # Cinder is deliberately absent: its capacity collector is host-local and
   # has dedicated metrics below, not an OpenStack API exporter family.
-  expectedFamilies: [identity, placement, loadbalancer, designate]
+  expectedFamilies: [identity, glance, nova, neutron, loadbalancer, designate, placement]
 
 libvirt:
   job: integrations/libvirt_exporter
@@ -146,3 +151,5 @@ tests:
   promtoolImage:
     repository: quay.io/prometheus/prometheus
     tag: v3.7.3
+  queryFixture:
+    enabled: false

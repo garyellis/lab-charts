@@ -13,8 +13,8 @@ spec:
   evaluationInterval: {{ .Values.thanosRuler.evaluationInterval }}
   retention: {{ .Values.thanosRuler.retention }}
   queryEndpoints:
-    - {{ required "thanosRuler.queryEndpoint is required" .Values.thanosRuler.queryEndpoint | quote }}
-  alertQueryUrl: {{ .Values.thanosRuler.queryEndpoint | quote }}
+    - {{ include "observability-alerting.queryEndpoint" . | quote }}
+  alertQueryUrl: {{ include "observability-alerting.queryEndpoint" . | quote }}
   alertmanagersUrl:
     - {{ include "observability-alerting.alertmanagerUrl" . | quote }}
   labels:

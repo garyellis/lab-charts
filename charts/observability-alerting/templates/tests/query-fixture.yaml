@@ -1,0 +1,121 @@
+{{- if .Values.tests.queryFixture.enabled }}
+{{- $name := printf "%s-query-fixture" (include "observability-alerting.fullname" .) | trunc 63 | trimSuffix "-" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query-fixture
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 2s
+      scrape_timeout: 1s
+    scrape_configs:
+      - job_name: test-thanos-ruler
+        static_configs:
+          - targets:
+              - thanos-ruler-operated.{{ .Release.Namespace }}.svc:10902
+      - job_name: test-alertmanager
+        static_configs:
+          - targets:
+              - alertmanager-operated.{{ .Release.Namespace }}.svc:9093
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query-fixture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: "{{ .Values.tests.promtoolImage.repository }}:{{ .Values.tests.promtoolImage.tag }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --web.listen-address=:9090
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability-alerting.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query-fixture
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP
+{{- end }}

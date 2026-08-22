@@ -27,7 +27,10 @@ spec:
     enabled: true
     profiles:
       minimal:
-        description: Install operator-managed Ruler and Alertmanager, then run readiness and promtool rule tests.
+        description: >-
+          Install operator-managed Ruler and Alertmanager with a chart-owned
+          query fixture, then verify evaluation, alert delivery, and promtool
+          rules.
         namespace: observability
         requires:
           - chart: prometheus-operator

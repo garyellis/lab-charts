@@ -108,3 +108,59 @@ spec:
         capabilities:
           drop: [ALL]
         readOnlyRootFilesystem: true
+    {{- if .Values.tests.queryFixture.enabled }}
+    - name: alerting-path
+      image: "{{ .Values.tests.promtoolImage.repository }}:{{ .Values.tests.promtoolImage.tag }}"
+      imagePullPolicy: IfNotPresent
+      command: [/bin/sh, -ec]
+      args:
+        - |
+          fixture=http://{{ include "observability-alerting.fullname" . }}-query-fixture:9090
+          remaining=75
+
+          wait_for() {
+            check_name="$1"
+            expression="$2"
+            output=""
+            while [ "$remaining" -gt 0 ]; do
+              output="$(/bin/promtool query instant "$fixture" "$expression" 2>&1 || true)"
+              if printf '%s\n' "$output" | grep -Eq '=> 1([ @]|$)'; then
+                printf 'PASS: %s\n' "$check_name"
+                return 0
+              fi
+              remaining=$((remaining - 1))
+              sleep 2
+            done
+            printf 'FAIL: %s exhausted the shared 150s deadline\nexpression: %s\nlast output:\n%s\n' \
+              "$check_name" "$expression" "$output" >&2
+            /bin/promtool query instant "$fixture" '{job=~"test-(thanos-ruler|alertmanager)"}' >&2 || true
+            exit 1
+          }
+
+          wait_for "query fixture is ready" 'vector(1)'
+          wait_for "Thanos Ruler target is up" \
+            'max(up{job="test-thanos-ruler"}) == bool 1'
+          wait_for "Alertmanager target is up" \
+            'max(up{job="test-alertmanager"}) == bool 1'
+          wait_for "at least one rule group completed evaluation" \
+            'max(prometheus_rule_group_last_evaluation_timestamp_seconds{job="test-thanos-ruler"}) > bool 0'
+          wait_for "rule evaluations have no failures" \
+            '(sum(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) or vector(0)) == bool 0'
+          wait_for "rule evaluations have no warnings" \
+            '(sum(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) or vector(0)) == bool 0'
+          wait_for "Ruler alert queues and senders have no drops" \
+            '(sum({__name__=~"thanos_alert_(queue|sender)_alerts_dropped_total",job="test-thanos-ruler"}) or vector(0)) == bool 0'
+          wait_for "Alertmanager received the Watchdog from Thanos Ruler" \
+            'sum(alertmanager_alerts_received_total{job="test-alertmanager"}) > bool 0'
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+    {{- end }}

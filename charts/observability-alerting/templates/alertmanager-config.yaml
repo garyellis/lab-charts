@@ -13,6 +13,20 @@ spec:
     groupWait: {{ .Values.routing.groupWait }}
     groupInterval: {{ .Values.routing.groupInterval }}
     repeatInterval: {{ .Values.routing.repeatInterval }}
+    routes:
+      - receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+        matchers:
+          - name: severity
+            matchType: "="
+            value: critical
+        groupWait: 15s
+        repeatInterval: {{ .Values.routing.criticalRepeatInterval }}
+      - receiver: {{ ternary "external-webhook" "null" .Values.delivery.enabled | quote }}
+        matchers:
+          - name: severity
+            matchType: "="
+            value: warning
+        repeatInterval: {{ .Values.routing.warningRepeatInterval }}
   receivers:
     - name: "null"
     {{- if .Values.delivery.enabled }}
@@ -33,4 +47,4 @@ spec:
         - name: severity
           matchType: "="
           value: warning
-      equal: [service, component, scope]
+      equal: [service, component, scope, alert_family, incident_key, cluster, infra]

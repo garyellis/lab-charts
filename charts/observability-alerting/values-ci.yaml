@@ -12,16 +12,16 @@ identity:
     infra: test
 
 links:
-  runbookBaseUrl: https://runbooks.example.invalid/observability
-  dashboardBaseUrl: https://grafana.example.invalid/d
+  runbookBaseUrl: https://runbooks.example.com/observability
+  dashboardBaseUrl: https://grafana.example.com/d
 
 thanosRuler:
-  queryEndpoint: http://thanos-query.invalid:9090
+  evaluationInterval: 30s
   storage:
     storageClassName: standard
 
 alertmanager:
-  externalUrl: http://alertmanager.invalid
+  externalUrl: http://alertmanager-operated.observability.svc:9093
   storage:
     storageClassName: standard
 
@@ -34,4 +34,13 @@ telemetry:
   expectedAi1Targets: []
 
 openstack:
-  expectedFamilies: [identity]
+  expectedFamilies: [identity, placement, loadbalancer, designate, nova, neutron, glance]
+
+alerts:
+  watchdog:
+    enabled: true
+    for: 1m
+
+tests:
+  queryFixture:
+    enabled: true

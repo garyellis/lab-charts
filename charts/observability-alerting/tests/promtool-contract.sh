@@ -11,6 +11,9 @@ trap 'rm -rf "${test_dir}"' EXIT
 helm template observability-alerting "${chart_dir}" \
   --namespace observability \
   -f "${chart_dir}/values-ci.yaml" \
+  --set-json 'telemetry.expectedHubTargets=[{"name":"ci-alloy","job":"integrations/alloy","instance":"ci-hub:12345","component":"alloy"},{"name":"ci-query","job":"integrations/thanos-query","instance":"ci-query:10902","component":"thanos"}]' \
+  --set-json 'telemetry.expectedAi1Targets=[{"name":"ci-node","job":"integrations/node_exporter","instance":"ci-ai1:9100","component":"node-exporter"},{"name":"ci-openstack","job":"integrations/openstack_exporter","instance":"ci-ai1:9180","component":"openstack-exporter"}]' \
+  --set-json 'openstack.expectedFamilies=["identity","placement","loadbalancer","designate","nova","neutron","glance"]' \
   --show-only templates/tests/promtool.yaml >"${test_dir}/rendered.yaml"
 
 yq -r 'select(.kind == "ConfigMap") | .data."rules.yaml"' \

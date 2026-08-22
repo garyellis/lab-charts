@@ -24,11 +24,11 @@ spec:
             or sum(absent(up{ {{- $selector -}} })) > 0
           for: {{ $.Values.alerts.for.telemetry }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" $ "severity" "critical" "component" .component "scope" "target" "family" "telemetry") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" $ "severity" "critical" "service" "telemetry" "component" .component "scope" "obs-w" "family" "telemetry" "incidentKey" (printf "telemetry-target-%s" .name)) | nindent 12 }}
             expected_target: {{ .name | quote }}
             telemetry_source: hub
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Telemetry target %s is missing, down, or stale" .name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "slug" "telemetry-target-missing" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Telemetry target %s is missing, down, or stale" .name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "slug" "telemetry-path-stale" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         {{- end }}
         {{- range .Values.telemetry.expectedAi1Targets }}
         {{- $selector := printf "%s,job=%q,instance=%q" $ai1Identity .job .instance }}
@@ -39,46 +39,46 @@ spec:
             or sum(absent(up{ {{- $selector -}} })) > 0
           for: {{ $.Values.alerts.for.telemetry }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "component" .component "scope" "target" "family" "telemetry") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "service" "telemetry" "component" .component "scope" "ai1" "family" "telemetry" "incidentKey" (printf "telemetry-target-%s" .name)) | nindent 12 }}
             expected_target: {{ .name | quote }}
             telemetry_source: ai1
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Telemetry target %s is missing, down, or stale" .name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "slug" "telemetry-target-missing" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Telemetry target %s is missing, down, or stale" .name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "slug" "telemetry-path-stale" "dashboard" "ai1-telemetry-integrity") | nindent 12 }}
         {{- end }}
         - alert: RemoteWriteSamplesFailed
           expr: >-
             sum(increase(prometheus_remote_storage_samples_failed_total{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}[{{ .Values.telemetry.remoteWrite.window }}])) > 0
           for: {{ .Values.alerts.for.remoteWrite }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "remote-write" "scope" "fleet" "family" "remote-write") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "remote-write" "incidentKey" "remote-write-failed") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is failing samples" "description" "The remote-write client reported failed samples during the observation window." "impact" "Telemetry may be delayed or lost, weakening detection and diagnosis." "slug" "remote-write-failures" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is failing samples" "description" "The remote-write client reported failed samples during the observation window." "impact" "Telemetry may be delayed or lost, weakening detection and diagnosis." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: RemoteWriteSamplesDropped
           expr: >-
             sum(increase(prometheus_remote_storage_samples_dropped_total{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}[{{ .Values.telemetry.remoteWrite.window }}])) > 0
             or sum(increase(prometheus_remote_write_wal_out_of_order_samples_total{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}[{{ .Values.telemetry.remoteWrite.window }}])) > 0
           for: {{ .Values.alerts.for.remoteWrite }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "remote-write" "scope" "fleet" "family" "remote-write") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "remote-write" "incidentKey" "remote-write-dropped") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is dropping samples" "description" "The remote-write client reported discarded samples during the observation window." "impact" "Telemetry has been lost and historical queries may contain permanent gaps." "slug" "remote-write-dropped-samples" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is dropping samples" "description" "The remote-write client reported discarded samples during the observation window." "impact" "Telemetry has been lost and historical queries may contain permanent gaps." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: RemoteWriteMetricsMissing
           expr: >-
             max(up{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}} == 1)
             unless on() count(prometheus_remote_storage_queue_highest_sent_timestamp_seconds{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}) > 0
           for: {{ .Values.alerts.for.telemetry }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "remote-write" "scope" "fleet" "family" "telemetry") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "telemetry" "incidentKey" "remote-write-metrics") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote-write self-metrics are missing" "description" "The Alloy scrape target is healthy but its remote-write progress metric is absent." "impact" "A missing queue metric must not make a stalled or disabled telemetry path appear healthy." "slug" "remote-write-lag" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote-write self-metrics are missing" "description" "The Alloy scrape target is healthy but its remote-write progress metric is absent." "impact" "A missing queue metric must not make a stalled or disabled telemetry path appear healthy." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: RemoteWriteLagging
           expr: >-
             max(time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}) > {{ .Values.telemetry.remoteWrite.maxLagSeconds }}
           for: {{ .Values.alerts.for.remoteWriteLag }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "warning" "component" "remote-write" "scope" "fleet" "family" "remote-write") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "warning" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "remote-write" "incidentKey" "remote-write-lag") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is behind ingestion" "description" "The newest successfully sent sample is older than the configured lag budget." "impact" "Detection and dashboard data are delayed even if samples eventually arrive." "slug" "remote-write-lag" "dashboard" "telemetry-integrity") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is behind ingestion" "description" "The newest successfully sent sample is older than the configured lag budget." "impact" "Detection and dashboard data are delayed even if samples eventually arrive." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
 
     - name: observability-alerting.openstack-integrity
       interval: {{ .Values.thanosRuler.evaluationInterval }}
@@ -90,18 +90,18 @@ spec:
           expr: sum(absent({{ $metric }}{ {{- $ai1Identity -}} })) > 0
           for: {{ $.Values.alerts.for.openstackFamily }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "component" "openstack-exporter" "scope" "fleet" "family" "openstack") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "service" "openstack" "component" "openstack-exporter" "scope" "ai1" "family" "openstack" "incidentKey" (printf "openstack-%s" .)) | nindent 12 }}
             collector_family: {{ . | quote }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "OpenStack %s collector family is missing" .) "description" "A required OpenStack exporter family has no current series." "impact" "Failures in this OpenStack API family cannot be detected from telemetry." "slug" "openstack-collector-family" "dashboard" "openstack-cloud-services") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "OpenStack %s collector family is missing" .) "description" "A required OpenStack exporter family has no current series." "impact" "Failures in this OpenStack API family cannot be detected from telemetry." "slug" "openstack-collector-failure" "dashboard" "ai1-openstack-cloud-services") | nindent 12 }}
         - alert: OpenStackCollectorFamilyFailing
           expr: min({{ $metric }}{ {{- $ai1Identity -}} }) == 0
           for: {{ $.Values.alerts.for.openstackFamily }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "component" "openstack-exporter" "scope" "fleet" "family" "openstack") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "critical" "service" "openstack" "component" "openstack-exporter" "scope" "ai1" "family" "openstack" "incidentKey" (printf "openstack-%s" .)) | nindent 12 }}
             collector_family: {{ . | quote }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "OpenStack %s collector family is failing" .) "description" "The exporter reports that a required OpenStack API collector is unhealthy." "impact" "Metrics for this OpenStack API family are unreliable or unavailable." "slug" "openstack-collector-family" "dashboard" "openstack-cloud-services") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "OpenStack %s collector family is failing" .) "description" "The exporter reports that a required OpenStack API collector is unhealthy." "impact" "Metrics for this OpenStack API family are unreliable or unavailable." "slug" "openstack-collector-failure" "dashboard" "ai1-openstack-cloud-services") | nindent 12 }}
         {{- end }}
         - alert: LibvirtInventoryUnexpectedlyEmpty
           expr: >-
@@ -109,53 +109,53 @@ spec:
             unless on() count(libvirt_domain_openstack_info{ {{- $ai1Identity -}} }) > 0
           for: {{ .Values.alerts.for.libvirtInventory }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "component" "libvirt-exporter" "scope" "fleet" "family" "libvirt") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "service" "openstack" "component" "libvirt-exporter" "scope" "ai1" "family" "libvirt" "incidentKey" "libvirt-inventory") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Libvirt inventory is unexpectedly empty" "description" "The libvirt exporter is healthy but no OpenStack-correlated domains are present." "impact" "Guest-level visibility is absent and inventory reconciliation may be broken." "slug" "libvirt-inventory-empty" "dashboard" "libvirt-hypervisor") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Libvirt inventory is unexpectedly empty" "description" "The libvirt exporter is healthy but no OpenStack-correlated domains are present." "impact" "Guest-level visibility is absent and inventory reconciliation may be broken." "slug" "libvirt-inventory-empty" "dashboard" "ai1-libvirt-hypervisor") | nindent 12 }}
         - alert: CinderCollectorFailing
           expr: max(openstack_telemetry_cinder_scrape_error{ {{- $ai1Identity -}} }) > 0
           for: {{ .Values.alerts.for.cinderCollector }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "component" "cinder-metrics" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "service" "storage" "component" "cinder-metrics" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-collector-error") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder capacity collector is failing" "description" "The host-local Cinder metrics collector reports a scrape error." "impact" "Capacity alerts may become stale; storage exhaustion can go undetected." "slug" "cinder-collector" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder capacity collector is failing" "description" "The host-local Cinder metrics collector reports a scrape error." "impact" "Capacity alerts may become stale; storage exhaustion can go undetected." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
         - alert: CinderCollectorStale
           expr: >-
             max(time() - openstack_telemetry_cinder_last_success_unixtime{ {{- $ai1Identity -}} }) > {{ .Values.cinder.staleAfterSeconds }}
             or sum(absent(openstack_telemetry_cinder_last_success_unixtime{ {{- $ai1Identity -}} })) > 0
           for: {{ .Values.alerts.for.cinderCollector }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "component" "cinder-metrics" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "service" "storage" "component" "cinder-metrics" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-collector-stale") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder capacity telemetry is stale or missing" "description" "The Cinder collector has not completed successfully within its freshness budget." "impact" "Capacity state is unknown and must not be treated as zero utilization." "slug" "cinder-collector" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder capacity telemetry is stale or missing" "description" "The Cinder collector has not completed successfully within its freshness budget." "impact" "Capacity state is unknown and must not be treated as zero utilization." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
         - alert: CinderThinPoolDataCapacityLow
           expr: max(cinder_thin_pool_data_percent{ {{- $ai1Identity -}} }) > {{ .Values.cinder.dataWarningPercent }}
           for: {{ .Values.alerts.for.cinderCapacity }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "warning" "component" "cinder" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "warning" "service" "storage" "component" "cinder" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-data") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool data capacity is nearing exhaustion" "description" "Thin-pool data utilization exceeds the reviewed warning threshold." "impact" "New volume allocations and writes may fail if capacity is exhausted." "slug" "cinder-capacity" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool data capacity is nearing exhaustion" "description" "Thin-pool data utilization exceeds the reviewed warning threshold." "impact" "New volume allocations and writes may fail if capacity is exhausted." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
         - alert: CinderThinPoolDataExhaustionImminent
           expr: max(cinder_thin_pool_data_percent{ {{- $ai1Identity -}} }) > {{ .Values.cinder.dataCriticalPercent }}
           for: {{ .Values.alerts.for.cinderCapacity }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "component" "cinder" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "service" "storage" "component" "cinder" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-data") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool data exhaustion is imminent" "description" "Thin-pool data utilization exceeds the reviewed critical threshold." "impact" "Volume allocation or writes can fail without immediate capacity recovery." "slug" "cinder-capacity" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool data exhaustion is imminent" "description" "Thin-pool data utilization exceeds the reviewed critical threshold." "impact" "Volume allocation or writes can fail without immediate capacity recovery." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
         - alert: CinderThinPoolMetadataCapacityLow
           expr: max(cinder_thin_pool_metadata_percent{ {{- $ai1Identity -}} }) > {{ .Values.cinder.metadataWarningPercent }}
           for: {{ .Values.alerts.for.cinderCapacity }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "warning" "component" "cinder" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "warning" "service" "storage" "component" "cinder" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-metadata") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool metadata is nearing exhaustion" "description" "Thin-pool metadata utilization exceeds the reviewed warning threshold." "impact" "The pool can become unavailable even when data extents remain." "slug" "cinder-capacity" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool metadata is nearing exhaustion" "description" "Thin-pool metadata utilization exceeds the reviewed warning threshold." "impact" "The pool can become unavailable even when data extents remain." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
         - alert: CinderThinPoolMetadataExhaustionImminent
           expr: max(cinder_thin_pool_metadata_percent{ {{- $ai1Identity -}} }) > {{ .Values.cinder.metadataCriticalPercent }}
           for: {{ .Values.alerts.for.cinderCapacity }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "component" "cinder" "scope" "storage" "family" "capacity") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" . "severity" "critical" "service" "storage" "component" "cinder" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-metadata") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool metadata exhaustion is imminent" "description" "Thin-pool metadata utilization exceeds the reviewed critical threshold." "impact" "The thin pool can fail even when data extents remain; immediate recovery is required." "slug" "cinder-capacity" "dashboard" "openstack-overview") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Cinder thin-pool metadata exhaustion is imminent" "description" "Thin-pool metadata utilization exceeds the reviewed critical threshold." "impact" "The thin pool can fail even when data extents remain; immediate recovery is required." "slug" "cinder-capacity" "dashboard" "ai1-openstack-overview") | nindent 12 }}
 
     - name: observability-alerting.host-saturation
       interval: {{ .Values.thanosRuler.evaluationInterval }}
@@ -167,20 +167,20 @@ spec:
             100 * max(rate(node_pressure_{{ $kind }}_waiting_seconds_total{ {{- $ai1Identity -}} }[{{ $.Values.hostSaturation.window }}])) > {{ $threshold }}
           for: {{ $.Values.alerts.for.hostSaturation }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "warning" "component" "host" "scope" "host" "family" "saturation") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "warning" "service" "host" "component" "host" "scope" "ai1" "family" "saturation" "incidentKey" (printf "host-pressure-%s" $kind)) | nindent 12 }}
             pressure_type: {{ $kind | quote }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Host %s pressure is sustained" $kind) "description" "PSI full-stall time exceeds the reviewed saturation threshold." "impact" "Workloads may experience increasing latency or throughput collapse." "slug" "host-saturation" "dashboard" "host-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Host %s pressure is sustained" $kind) "description" "PSI full-stall time exceeds the reviewed saturation threshold." "impact" "Workloads may experience increasing latency or throughput collapse." "slug" "host-saturation" "dashboard" "ai1-host-health") | nindent 12 }}
         - alert: Host{{ title $kind }}PressureMetricMissing
           expr: >-
             max(up{ {{- $ai1Identity -}},job={{ $.Values.hostSaturation.nodeExporterJob | quote }}} == 1)
             unless on() count(node_pressure_{{ $kind }}_waiting_seconds_total{ {{- $ai1Identity -}} }) > 0
           for: {{ $.Values.alerts.for.telemetry }}
           labels:
-            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "warning" "component" "node-exporter" "scope" "fleet" "family" "telemetry") | nindent 12 }}
+            {{- include "observability-alerting.ai1RuleLabels" (dict "root" $ "severity" "warning" "service" "host" "component" "node-exporter" "scope" "ai1" "family" "telemetry" "incidentKey" (printf "host-pressure-metric-%s" $kind)) | nindent 12 }}
             pressure_type: {{ $kind | quote }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Host %s pressure metric is missing" $kind) "description" "The node exporter is healthy but the expected PSI metric is absent." "impact" "A missing PSI series must not make host saturation appear healthy." "slug" "host-saturation" "dashboard" "host-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Host %s pressure metric is missing" $kind) "description" "The node exporter is healthy but the expected PSI metric is absent." "impact" "A missing PSI series must not make host saturation appear healthy." "slug" "host-saturation" "dashboard" "ai1-host-health") | nindent 12 }}
         {{- end }}
 
     - name: observability-alerting.thanos-and-alerting
@@ -191,83 +191,91 @@ spec:
           expr: max(thanos_compact_halted{ {{- $hubIdentity -}},job={{ .Values.thanosCompactor.job | quote }}}) == 1
           for: {{ .Values.alerts.for.compactor }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "thanos-compactor" "scope" "storage" "family" "thanos") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "thanos-compactor-halted") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor is halted" "description" "The Compactor has entered its halted state and requires operator diagnosis." "impact" "Downsampling, retention, and block compaction stop; object storage grows and query performance degrades." "slug" "thanos-compactor" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor is halted" "description" "The Compactor has entered its halted state and requires operator diagnosis." "impact" "Downsampling, retention, and block compaction stop; object storage grows and query performance degrades." "slug" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosCompactorMissing
           expr: >-
             sum(up{ {{- $hubIdentity -}},job={{ .Values.thanosCompactor.job | quote }}} == bool 0) > 0
             or sum(absent(up{ {{- $hubIdentity -}},job={{ .Values.thanosCompactor.job | quote }}})) > 0
           for: {{ .Values.alerts.for.compactor }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "thanos-compactor" "scope" "storage" "family" "thanos") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "thanos-compactor-missing") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor telemetry is missing" "description" "The exact Compactor scrape job is absent or down." "impact" "Compactor health and retention enforcement cannot be verified." "slug" "thanos-compactor" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor telemetry is missing" "description" "The exact Compactor scrape job is absent or down." "impact" "Compactor health and retention enforcement cannot be verified." "slug" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosRulerMissing
           expr: >-
             sum(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}} == bool 0) > 0
             or sum(absent(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}})) > 0
           for: {{ .Values.alerts.for.alertingComponent }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "thanos-ruler" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "thanos-ruler-missing") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler telemetry is missing" "description" "The alert evaluator scrape target is absent or down." "impact" "Alert evaluation may have stopped; use the independent dead-man receiver once configured." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler telemetry is missing" "description" "The alert evaluator scrape target is absent or down." "impact" "Alert evaluation may have stopped; use the independent dead-man receiver once configured." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosRulerEvaluationFailures
           expr: >-
             sum(increase(prometheus_rule_evaluation_failures_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
           for: {{ .Values.alerts.for.evaluationFailure }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "thanos-ruler" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "rule-evaluation") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler evaluations are failing" "description" "One or more rule evaluations failed during the observation window." "impact" "Individual alerts may fail to transition even while the evaluator is running." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler evaluations are failing" "description" "One or more rule evaluations failed during the observation window." "impact" "Individual alerts may fail to transition even while the evaluator is running." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        - alert: ThanosRulerEvaluationWarnings
+          expr: >-
+            sum(increase(thanos_rule_evaluation_with_warnings_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
+          for: {{ .Values.alerts.for.evaluationFailure }}
+          labels:
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "warning" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "rule-evaluation") | nindent 12 }}
+          annotations:
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler evaluations returned warnings" "description" "One or more rule evaluations completed with partial-response or query warnings during the observation window." "impact" "Alert results may be incomplete even when evaluation succeeds." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosRulerAlertDeliveryFailures
           expr: >-
             sum(increase(thanos_alert_sender_alerts_dropped_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
             or sum(increase(thanos_alert_queue_alerts_dropped_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
           for: {{ .Values.alerts.for.notificationFailure }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "thanos-ruler" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "ruler-alert-delivery") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler is dropping alerts before Alertmanager" "description" "The Ruler alert queue or sender dropped alerts during the observation window." "impact" "Correctly evaluated alerts may never reach Alertmanager for routing and delivery." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler is dropping alerts before Alertmanager" "description" "The Ruler alert queue or sender dropped alerts during the observation window." "impact" "Correctly evaluated alerts may never reach Alertmanager for routing and delivery." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosRulerEvaluationTooSlow
           expr: >-
             max(prometheus_rule_group_last_duration_seconds{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}) > {{ .Values.alertingHealth.maxEvaluationSeconds }}
           for: {{ .Values.alerts.for.evaluationSlow }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "warning" "component" "thanos-ruler" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "warning" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "rule-evaluation-slow") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler evaluation duration exceeds budget" "description" "A rule group's latest evaluation duration exceeds the configured reliability budget." "impact" "Evaluations may miss their interval and delay incident detection." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler evaluation duration exceeds budget" "description" "A rule group's latest evaluation duration exceeds the configured reliability budget." "impact" "Evaluations may miss their interval and delay incident detection." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: AlertmanagerMissing
           expr: >-
             sum(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}} == bool 0) > 0
             or sum(absent(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}})) > 0
           for: {{ .Values.alerts.for.alertingComponent }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "alertmanager" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-missing") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager telemetry is missing" "description" "The alert delivery component scrape target is absent or down." "impact" "Firing alerts may not be grouped, silenced, or delivered." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager telemetry is missing" "description" "The alert delivery component scrape target is absent or down." "impact" "Firing alerts may not be grouped, silenced, or delivered." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: AlertmanagerConfigReloadFailed
           expr: max(alertmanager_config_last_reload_successful{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}}) == 0
           for: {{ .Values.alerts.for.alertmanagerConfig }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "alertmanager" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-config") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager rejected its latest configuration" "description" "Alertmanager could not reload the configuration generated by the operator." "impact" "Routing, grouping, inhibition, or receivers may remain on stale configuration." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager rejected its latest configuration" "description" "Alertmanager could not reload the configuration generated by the operator." "impact" "Routing, grouping, inhibition, or receivers may remain on stale configuration." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: AlertmanagerNotificationFailures
           expr: >-
             sum(increase(alertmanager_notifications_failed_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
           for: {{ .Values.alerts.for.notificationFailure }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "component" "alertmanager" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-notifications") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager notifications are failing" "description" "Alertmanager reported failed delivery attempts during the observation window." "impact" "Responders may not receive otherwise correctly evaluated and routed alerts." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager notifications are failing" "description" "Alertmanager reported failed delivery attempts during the observation window." "impact" "Responders may not receive otherwise correctly evaluated and routed alerts." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         {{- if .Values.alerts.watchdog.enabled }}
         - alert: Watchdog
           expr: vector(1)
           for: {{ .Values.alerts.watchdog.for }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "none" "component" "alerting" "scope" "alerting" "family" "alerting") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "info" "service" "alerting" "component" "alerting" "scope" "obs-w" "family" "alerting" "incidentKey" "watchdog") | nindent 12 }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alerting pipeline watchdog" "description" "This alert is intentionally always firing for an independent dead-man receiver." "impact" "Absence at the independent receiver indicates a failure somewhere in evaluation, routing, or delivery." "slug" "alerting-pipeline" "dashboard" "alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alerting pipeline watchdog" "description" "This alert is intentionally always firing for an independent dead-man receiver." "impact" "Absence at the independent receiver indicates a failure somewhere in evaluation, routing, or delivery." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         {{- end }}
 {{- end }}

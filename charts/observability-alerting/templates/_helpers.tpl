@@ -43,6 +43,14 @@ app.kubernetes.io/part-of: observability-alerting
 {{- end -}}
 {{- end -}}
 
+{{- define "observability-alerting.queryEndpoint" -}}
+{{- if .Values.tests.queryFixture.enabled -}}
+{{- printf "http://%s-query-fixture.%s.svc:9090" (include "observability-alerting.fullname" .) .Release.Namespace -}}
+{{- else -}}
+{{- required "thanosRuler.queryEndpoint is required" .Values.thanosRuler.queryEndpoint -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "observability-alerting.runbook" -}}
 {{- printf "%s/%s" (trimSuffix "/" .root.Values.links.runbookBaseUrl) .slug -}}
 {{- end -}}
@@ -52,17 +60,37 @@ app.kubernetes.io/part-of: observability-alerting
 {{- end -}}
 
 {{- define "observability-alerting.ruleLabels" -}}
+{{- if not (hasKey . "service") -}}
+{{- fail "ruleLabels requires service" -}}
+{{- end -}}
+{{- if not (has .service (list "telemetry" "openstack" "storage" "host" "thanos" "alerting")) -}}
+{{- fail (printf "unsupported alert service %q" .service) -}}
+{{- end -}}
+{{- if not (has .scope (list "ai1" "obs-w" "fleet")) -}}
+{{- fail (printf "unsupported alert scope %q" .scope) -}}
+{{- end -}}
+{{- if not (hasKey . "incidentKey") -}}
+{{- fail "ruleLabels requires incidentKey" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,62}$" .incidentKey) -}}
+{{- fail (printf "invalid bounded incidentKey %q" .incidentKey) -}}
+{{- end -}}
 severity: {{ .severity }}
 owner: {{ .root.Values.alerts.owner }}
-service: observability
+service: {{ .service }}
 component: {{ .component }}
 scope: {{ .scope }}
 alert_family: {{ .family }}
+incident_key: {{ .incidentKey }}
+{{- if eq .scope "obs-w" }}
+cluster: {{ .root.Values.identity.hub.cluster | quote }}
+{{- else if eq .scope "ai1" }}
+infra: {{ .root.Values.identity.ai1.infra | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "observability-alerting.ai1RuleLabels" -}}
 {{- include "observability-alerting.ruleLabels" . }}
-infra: {{ .root.Values.identity.ai1.infra | quote }}
 {{- end -}}
 
 {{- define "observability-alerting.ruleAnnotations" -}}
