@@ -69,16 +69,17 @@ For `ai1-openstack`, every PromQL expression must scope both
 state what the panel proves, how to interpret missing data, and the next
 drilldown.
 
-For `obs-w-alerting`, scope every query to its bounded producer identity:
-`tenant_id`, `infra`, and `cluster` for the alerting stack, or `tenant` and
-`cluster` for the hub Alloy profile. Its datasource variable defaults to the
-stable `thanos` UID while panel bindings remain portable through
-`${DS_PROMETHEUS}`. The dashboard deliberately has no dynamic pod, instance,
-alert name, receiver, metric-name, or other unbounded identity variable.
-Integration must confirm ServiceMonitor job labels and the exact metrics
-exposed by the deployed Thanos, Alertmanager, and Alloy versions before rollout.
+For `obs-w-alerting`, scope every query to the post-Receive `tenant_id` and the
+producer-owned `cluster`. Hub producers must not emit `tenant_id`; Thanos
+Receive adds it from the authenticated tenant header. The datasource variable
+defaults to the stable `thanos` UID while panel bindings remain portable
+through `${DS_PROMETHEUS}`. The dashboard deliberately has no dynamic pod,
+instance, alert name, receiver, metric-name, or other unbounded identity
+variable. Integration must confirm ServiceMonitor job labels and the exact
+metrics exposed by the deployed Thanos, Alertmanager, and Alloy versions before
+rollout.
 
-`tenant_id` is the Thanos receive tenant and must never be overloaded with an
+`tenant_id` is the Thanos Receive tenant and must never be overloaded with an
 OpenStack project. Cloud-resource panels use normalized
 `openstack_project_id`, `openstack_project_name`, and `openstack_region` labels.
 The two project variables are single-select, project-bounded queries. VM names

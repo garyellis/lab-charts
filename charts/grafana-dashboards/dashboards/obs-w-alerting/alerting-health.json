@@ -112,7 +112,7 @@
       },
       "targets": [
         {
-          "expr": "count by (alertstate) (ALERTS{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",alertstate=~\"pending|firing\"})",
+          "expr": "count by (alertstate) (ALERTS{tenant_id=\"$tenant_id\",cluster=\"$cluster\",alertstate=~\"pending|firing\"})",
           "instant": true,
           "legendFormat": "{{alertstate}}",
           "refId": "A"
@@ -181,7 +181,7 @@
       },
       "targets": [
         {
-          "expr": "max by (alertname, severity, owner, service, component, scope, alert_family) (ALERTS{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",alertstate=\"firing\"})",
+          "expr": "max by (alertname, severity, owner, service, component, scope, alert_family) (ALERTS{tenant_id=\"$tenant_id\",cluster=\"$cluster\",alertstate=\"firing\"})",
           "format": "table",
           "instant": true,
           "legendFormat": "{{alertname}}",
@@ -278,7 +278,7 @@
       },
       "targets": [
         {
-          "expr": "max by (rule_group) (prometheus_rule_group_last_duration_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
+          "expr": "max by (rule_group) (prometheus_rule_group_last_duration_seconds{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
           "legendFormat": "{{rule_group}}",
           "refId": "A"
         }
@@ -341,7 +341,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(prometheus_rule_evaluation_failures_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_rule_evaluation_failures_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
           "instant": true,
           "legendFormat": "failed evaluations",
           "refId": "A"
@@ -405,7 +405,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(thanos_rule_evaluation_with_warnings_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
+          "expr": "sum(rate(thanos_rule_evaluation_with_warnings_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"}[$__rate_interval]))",
           "legendFormat": "warnings/s",
           "refId": "A"
         }
@@ -485,7 +485,7 @@
       },
       "targets": [
         {
-          "expr": "time() - max by (rule_group) (prometheus_rule_group_last_evaluation_timestamp_seconds{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
+          "expr": "time() - max by (rule_group) (prometheus_rule_group_last_evaluation_timestamp_seconds{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-ruler\"})",
           "legendFormat": "{{rule_group}}",
           "refId": "A"
         }
@@ -577,12 +577,12 @@
       },
       "targets": [
         {
-          "expr": "sum by (integration) (rate(alertmanager_notifications_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])) - sum by (integration) (rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
+          "expr": "sum by (integration) (rate(alertmanager_notifications_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])) - sum by (integration) (rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
           "legendFormat": "{{integration}} successful/s",
           "refId": "A"
         },
         {
-          "expr": "sum by (integration) (rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
+          "expr": "sum by (integration) (rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
           "legendFormat": "{{integration}} failed/s",
           "refId": "B"
         }
@@ -645,7 +645,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])) / sum(rate(alertmanager_notifications_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
+          "expr": "100 * sum(rate(alertmanager_notifications_failed_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])) / sum(rate(alertmanager_notifications_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval]))",
           "instant": true,
           "legendFormat": "notification failures",
           "refId": "A"
@@ -709,7 +709,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (integration, le) (rate(alertmanager_notification_latency_seconds_bucket{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (integration, le) (rate(alertmanager_notification_latency_seconds_bucket{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alertmanager\"}[$__rate_interval])))",
           "legendFormat": "{{integration}} p95",
           "refId": "A"
         }
@@ -801,12 +801,12 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(prometheus_remote_storage_samples_failed_total{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_remote_storage_samples_failed_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"}[$__rate_interval]))",
           "legendFormat": "failed/s",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(prometheus_remote_storage_samples_dropped_total{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_remote_storage_samples_dropped_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"}[$__rate_interval]))",
           "legendFormat": "dropped/s",
           "refId": "B"
         }
@@ -868,7 +868,7 @@
       },
       "targets": [
         {
-          "expr": "time() - max(prometheus_remote_storage_queue_highest_sent_timestamp_seconds{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
+          "expr": "time() - max(prometheus_remote_storage_queue_highest_sent_timestamp_seconds{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
           "instant": true,
           "legendFormat": "lag",
           "refId": "A"
@@ -932,7 +932,7 @@
       },
       "targets": [
         {
-          "expr": "sum(prometheus_remote_storage_samples_pending{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
+          "expr": "sum(prometheus_remote_storage_samples_pending{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
           "legendFormat": "pending samples",
           "refId": "A"
         }
@@ -1013,7 +1013,7 @@
       },
       "targets": [
         {
-          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=~\"integrations/(alertmanager|thanos-(query|receive|storegateway|compactor|ruler))\"})",
+          "expr": "max by (job) (up{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=~\"integrations/(alertmanager|thanos-(query|receive|storegateway|compactor|ruler))\"})",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -1082,7 +1082,7 @@
       },
       "targets": [
         {
-          "expr": "max(thanos_compact_halted{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-compactor\"})",
+          "expr": "max(thanos_compact_halted{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-compactor\"})",
           "instant": true,
           "legendFormat": "compactor",
           "refId": "A"
@@ -1146,7 +1146,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum by (job) (rate(thanos_objstore_bucket_operation_failures_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=~\"integrations/thanos-.*\"}[$__rate_interval])) / sum by (job) (rate(thanos_objstore_bucket_operations_total{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=~\"integrations/thanos-.*\"}[$__rate_interval]))",
+          "expr": "100 * sum by (job) (rate(thanos_objstore_bucket_operation_failures_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=~\"integrations/thanos-.*\"}[$__rate_interval])) / sum by (job) (rate(thanos_objstore_bucket_operations_total{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=~\"integrations/thanos-.*\"}[$__rate_interval]))",
           "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
@@ -1227,7 +1227,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (handler, le) (rate(http_request_duration_seconds_bucket{tenant_id=\"$tenant_id\",infra=\"$infra\",cluster=\"$cluster\",job=\"integrations/thanos-query\",handler=~\"query|query_range\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (handler, le) (rate(http_request_duration_seconds_bucket{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/thanos-query\",handler=~\"query|query_range\"}[$__rate_interval])))",
           "legendFormat": "{{handler}} p95",
           "refId": "A"
         }
@@ -1302,7 +1302,7 @@
       },
       "targets": [
         {
-          "expr": "count({tenant=\"$tenant\",cluster=\"$cluster\"})",
+          "expr": "count({tenant_id=\"$tenant_id\",cluster=\"$cluster\"})",
           "instant": true,
           "interval": "5m",
           "legendFormat": "visible series",
@@ -1371,7 +1371,7 @@
       },
       "targets": [
         {
-          "expr": "topk(15, count by (__name__) ({tenant=\"$tenant\",cluster=\"$cluster\"}))",
+          "expr": "topk(15, count by (__name__) ({tenant_id=\"$tenant_id\",cluster=\"$cluster\"}))",
           "format": "table",
           "instant": true,
           "interval": "5m",
@@ -1437,12 +1437,12 @@
       },
       "targets": [
         {
-          "expr": "sum(prometheus_remote_write_wal_storage_active_series{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
+          "expr": "sum(prometheus_remote_write_wal_storage_active_series{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
           "legendFormat": "WAL active series",
           "refId": "A"
         },
         {
-          "expr": "sum(prometheus_remote_storage_samples_pending{tenant=\"$tenant\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
+          "expr": "sum(prometheus_remote_storage_samples_pending{tenant_id=\"$tenant_id\",cluster=\"$cluster\",job=\"integrations/alloy\"})",
           "legendFormat": "pending samples",
           "refId": "B"
         }
@@ -1493,48 +1493,6 @@
           }
         ],
         "query": "lab",
-        "type": "custom"
-      },
-      {
-        "current": {
-          "selected": true,
-          "text": "obs-w",
-          "value": "obs-w"
-        },
-        "hide": 2,
-        "includeAll": false,
-        "label": "Infrastructure",
-        "multi": false,
-        "name": "infra",
-        "options": [
-          {
-            "selected": true,
-            "text": "obs-w",
-            "value": "obs-w"
-          }
-        ],
-        "query": "obs-w",
-        "type": "custom"
-      },
-      {
-        "current": {
-          "selected": true,
-          "text": "platform",
-          "value": "platform"
-        },
-        "hide": 2,
-        "includeAll": false,
-        "label": "Tenant",
-        "multi": false,
-        "name": "tenant",
-        "options": [
-          {
-            "selected": true,
-            "text": "platform",
-            "value": "platform"
-          }
-        ],
-        "query": "platform",
         "type": "custom"
       },
       {
