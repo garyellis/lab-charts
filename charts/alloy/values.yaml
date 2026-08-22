@@ -32,6 +32,31 @@ profiles:
       maxKeepalive: 2h
       sampleAgeLimit: 2h
       maxBackoff: 5m
+  # Metrics-only collector for the observability hub. Use together with
+  # values-hub-observability.yaml; the split keeps environment identity and the
+  # Receive service address out of the reusable deployment/security profile.
+  hubObservability:
+    enabled: false
+    receiver:
+      url: ""
+      tenantHeader: THANOS-TENANT
+      tenant: ""
+    externalLabels:
+      cluster: ""
+      clusterRole: ""
+      lane: ""
+      stage: ""
+      region: ""
+      cloud: ""
+      tenant: ""
+    clusterDomain: cluster.local
+    scrapeInterval: 60s
+    sampleLimit: 500
+    targetLimit: 1
+    wal:
+      maxKeepalive: 2h
+      sampleAgeLimit: 2h
+      maxBackoff: 5m
   custom:
     enabled: false
     # Required when enabled. The wrapper validates that the dependency uses

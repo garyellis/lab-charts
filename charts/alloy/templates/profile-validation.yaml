@@ -1,12 +1,14 @@
 {{- $default := .Values.profiles.default.enabled -}}
 {{- $thanos := .Values.profiles.thanos.enabled -}}
+{{- $hub := .Values.profiles.hubObservability.enabled -}}
 {{- $custom := .Values.profiles.custom.enabled -}}
 {{- $enabled := 0 -}}
 {{- if $default }}{{- $enabled = add $enabled 1 -}}{{- end -}}
 {{- if $thanos }}{{- $enabled = add $enabled 1 -}}{{- end -}}
+{{- if $hub }}{{- $enabled = add $enabled 1 -}}{{- end -}}
 {{- if $custom }}{{- $enabled = add $enabled 1 -}}{{- end -}}
 {{- if ne ($enabled | int) 1 -}}
-{{- fail "exactly one Alloy profile must be enabled: profiles.default, profiles.thanos, or profiles.custom" -}}
+{{- fail "exactly one Alloy profile must be enabled: profiles.default, profiles.thanos, profiles.hubObservability, or profiles.custom" -}}
 {{- end -}}
 {{- if $thanos -}}
 {{- $profileName := printf "%s-thanos-profile" .Release.Name -}}
@@ -30,6 +32,128 @@
       "externalLabels.cloud" .Values.profiles.thanos.externalLabels.cloud
       "externalLabels.tenant" .Values.profiles.thanos.externalLabels.tenant -}}
 {{- if not $value }}{{- fail (printf "profiles.thanos.%s must be non-empty" $path) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $hub -}}
+{{- $profileName := printf "%s-hub-observability-profile" .Release.Name -}}
+{{- if .Values.alloy.alloy.configMap.create -}}
+{{- fail "profiles.hubObservability requires alloy.alloy.configMap.create=false" -}}
+{{- end -}}
+{{- if ne (.Values.alloy.alloy.configMap.name | default "") $profileName -}}
+{{- fail (printf "profiles.hubObservability requires alloy.alloy.configMap.name=%s" $profileName) -}}
+{{- end -}}
+{{- $clusterDomain := .Values.profiles.hubObservability.clusterDomain -}}
+{{- $receiverPattern := printf "^http://[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.svc(\\.%s)?(:[0-9]+)?/[^?#]+$" (regexQuoteMeta $clusterDomain) -}}
+{{- if not (regexMatch $receiverPattern .Values.profiles.hubObservability.receiver.url) -}}
+{{- fail "profiles.hubObservability.receiver.url must be an exact in-cluster HTTP Service URL using .svc or .svc.<clusterDomain>, with a path" -}}
+{{- end -}}
+{{- if not (has .Values.profiles.hubObservability.receiver.tenantHeader (list "THANOS-TENANT" "X-Scope-OrgID")) -}}
+{{- fail "profiles.hubObservability.receiver.tenantHeader must be THANOS-TENANT or X-Scope-OrgID" -}}
+{{- end -}}
+{{- range $path, $value := dict
+      "receiver.tenant" .Values.profiles.hubObservability.receiver.tenant
+      "externalLabels.cluster" .Values.profiles.hubObservability.externalLabels.cluster
+      "externalLabels.clusterRole" .Values.profiles.hubObservability.externalLabels.clusterRole
+      "externalLabels.lane" .Values.profiles.hubObservability.externalLabels.lane
+      "externalLabels.stage" .Values.profiles.hubObservability.externalLabels.stage
+      "externalLabels.region" .Values.profiles.hubObservability.externalLabels.region
+      "externalLabels.cloud" .Values.profiles.hubObservability.externalLabels.cloud
+      "externalLabels.tenant" .Values.profiles.hubObservability.externalLabels.tenant -}}
+{{- if not $value }}{{- fail (printf "profiles.hubObservability.%s must be non-empty" $path) -}}{{- end -}}
+{{- end -}}
+{{- if ne (dig "controller" "type" "" .Values.alloy) "deployment" -}}
+{{- fail "profiles.hubObservability requires alloy.controller.type=deployment" -}}
+{{- end -}}
+{{- if ne (dig "controller" "replicas" 0 .Values.alloy | int) 1 -}}
+{{- fail "profiles.hubObservability requires exactly one Alloy replica" -}}
+{{- end -}}
+{{- if or (dig "controller" "hostPID" true .Values.alloy) (dig "controller" "hostNetwork" true .Values.alloy) -}}
+{{- fail "profiles.hubObservability forbids hostPID and hostNetwork" -}}
+{{- end -}}
+{{- if or
+      (not (empty (dig "controller" "tolerations" (list) .Values.alloy)))
+      (not (empty (dig "controller" "volumes" "extra" (list) .Values.alloy)))
+      (not (empty (dig "controller" "initContainers" (list) .Values.alloy)))
+      (not (empty (dig "controller" "extraContainers" (list) .Values.alloy)))
+      (not (empty (dig "controller" "podAnnotations" dict .Values.alloy))) -}}
+{{- fail "profiles.hubObservability forbids tolerations, extra volumes, init containers, extra containers, and pod annotations" -}}
+{{- end -}}
+{{- if or
+      (dig "controller" "autoscaling" "enabled" true .Values.alloy)
+      (dig "controller" "autoscaling" "horizontal" "enabled" true .Values.alloy)
+      (dig "controller" "autoscaling" "vertical" "enabled" true .Values.alloy) -}}
+{{- fail "profiles.hubObservability forbids horizontal and vertical autoscaling" -}}
+{{- end -}}
+{{- if dig "alloy" "clustering" "enabled" true .Values.alloy -}}
+{{- fail "profiles.hubObservability requires Alloy clustering to be disabled" -}}
+{{- end -}}
+{{- $expectedMounts := dict "varlog" false "dockercontainers" false "extra" (list) -}}
+{{- if not (deepEqual (dig "alloy" "mounts" dict .Values.alloy) $expectedMounts) -}}
+{{- fail "profiles.hubObservability forbids host and extra Alloy mounts" -}}
+{{- end -}}
+{{- if not (empty (dig "alloy" "extraPorts" (list) .Values.alloy)) -}}
+{{- fail "profiles.hubObservability forbids telemetry receiver ports" -}}
+{{- end -}}
+{{- if not (empty (dig "extraObjects" (list) .Values.alloy)) -}}
+{{- fail "profiles.hubObservability forbids alloy.extraObjects" -}}
+{{- end -}}
+{{- $expectedResources := dict "requests" (dict "cpu" "50m" "memory" "128Mi") "limits" (dict "memory" "384Mi") -}}
+{{- if not (deepEqual (dig "alloy" "resources" dict .Values.alloy) $expectedResources) -}}
+{{- fail "profiles.hubObservability requires the reviewed 50m/128Mi request, 384Mi memory limit, and no CPU limit" -}}
+{{- end -}}
+{{- $podSecurityContext := dig "global" "podSecurityContext" dict .Values.alloy -}}
+{{- if or
+      (ne (len $podSecurityContext) 5)
+      (ne (dig "fsGroup" 0 $podSecurityContext | int) 473)
+      (ne (dig "runAsGroup" 0 $podSecurityContext | int) 473)
+      (not (dig "runAsNonRoot" false $podSecurityContext))
+      (ne (dig "runAsUser" 0 $podSecurityContext | int) 473)
+      (ne (dig "seccompProfile" "type" "" $podSecurityContext) "RuntimeDefault") -}}
+{{- fail "profiles.hubObservability requires the reviewed non-root pod security context with RuntimeDefault seccomp" -}}
+{{- end -}}
+{{- $securityContext := dig "alloy" "securityContext" dict .Values.alloy -}}
+{{- if or
+      (ne (len $securityContext) 5)
+      (ne (dig "runAsUser" 0 $securityContext | int) 473)
+      (ne (dig "runAsGroup" 0 $securityContext | int) 473)
+      (not (dig "runAsNonRoot" false $securityContext))
+      (dig "allowPrivilegeEscalation" true $securityContext)
+      (not (deepEqual (dig "capabilities" "drop" (list) $securityContext) (list "ALL"))) -}}
+{{- fail "profiles.hubObservability requires non-root Alloy with privilege escalation disabled and all capabilities dropped" -}}
+{{- end -}}
+{{- $reloaderSecurityContext := dig "configReloader" "securityContext" dict .Values.alloy -}}
+{{- if or
+      (not (dig "configReloader" "enabled" false .Values.alloy))
+      (ne (len $reloaderSecurityContext) 5)
+      (ne (dig "runAsUser" 0 $reloaderSecurityContext | int) 473)
+      (ne (dig "runAsGroup" 0 $reloaderSecurityContext | int) 473)
+      (not (dig "runAsNonRoot" false $reloaderSecurityContext))
+      (dig "allowPrivilegeEscalation" true $reloaderSecurityContext)
+      (not (deepEqual (dig "capabilities" "drop" (list) $reloaderSecurityContext) (list "ALL"))) -}}
+{{- fail "profiles.hubObservability requires an unprivileged config reloader" -}}
+{{- end -}}
+{{- $serviceAccountName := printf "%s-hub-observability" .Release.Name -}}
+{{- if or
+      (dig "rbac" "create" true .Values.alloy)
+      (not (dig "serviceAccount" "create" false .Values.alloy))
+      (ne (dig "serviceAccount" "name" "" .Values.alloy) $serviceAccountName)
+      (not (dig "serviceAccount" "automountServiceAccountToken" false .Values.alloy))
+      (not (empty (dig "serviceAccount" "annotations" dict .Values.alloy))) -}}
+{{- fail (printf "profiles.hubObservability requires wrapper-owned namespaced RBAC and service account %s with token automount enabled and no annotations" $serviceAccountName) -}}
+{{- end -}}
+{{- if or
+      (not (dig "service" "enabled" false .Values.alloy))
+      (ne (dig "service" "type" "" .Values.alloy) "ClusterIP") -}}
+{{- fail "profiles.hubObservability requires the internal ClusterIP Alloy service" -}}
+{{- end -}}
+{{- if dig "crds" "create" true .Values.alloy -}}
+{{- fail "profiles.hubObservability requires Prometheus Operator-owned CRDs" -}}
+{{- end -}}
+{{- if dig "networkPolicy" "enabled" true .Values.alloy -}}
+{{- fail "profiles.hubObservability reserves network-policy ownership for the consuming GitOps repository" -}}
+{{- end -}}
+{{- if dig "serviceMonitor" "enabled" true .Values.alloy -}}
+{{- fail "profiles.hubObservability requires the wrapper-owned bounded ServiceMonitor" -}}
 {{- end -}}
 {{- end -}}
 {{- if $custom -}}

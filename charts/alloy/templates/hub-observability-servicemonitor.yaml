@@ -1,0 +1,33 @@
+{{- if .Values.profiles.hubObservability.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ printf "%s-hub-observability" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics
+    observability.garyellis.io/hub-health: "true"
+spec:
+  sampleLimit: {{ .Values.profiles.hubObservability.sampleLimit }}
+  targetLimit: {{ .Values.profiles.hubObservability.targetLimit }}
+  endpoints:
+    - port: http-metrics
+      scheme: http
+      honorLabels: false
+      interval: {{ .Values.profiles.hubObservability.scrapeInterval }}
+      metricRelabelings:
+        - action: keep
+          sourceLabels:
+            - __name__
+          regex: {{ include "alloy.hubObservability.metricAllowlist" . | quote }}
+      relabelings:
+        - action: replace
+          targetLabel: job
+          replacement: integrations/alloy
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alloy
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

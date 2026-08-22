@@ -1,0 +1,20 @@
+profiles:
+  hubObservability:
+    receiver:
+      url: http://thanos-receive.observability.svc:19291/api/v1/receive
+      tenant: hub-test
+    externalLabels:
+      cluster: obs-test
+      clusterRole: observability-hub
+      lane: "01"
+      stage: test
+      region: west
+      cloud: lab
+      tenant: hub-test
+
+alloy:
+  alloy:
+    configMap:
+      name: alloy-hub-observability-profile
+  serviceAccount:
+    name: alloy-hub-observability

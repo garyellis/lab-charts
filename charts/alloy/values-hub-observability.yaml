@@ -1,0 +1,111 @@
+# Reusable security and lifecycle profile for a single observability-hub Alloy
+# Deployment. Layer environment-specific receiver and external-label values on
+# top; tests/values-hub-observability.yaml is a non-production example.
+profiles:
+  default:
+    enabled: false
+  hubObservability:
+    enabled: true
+
+alloy:
+  crds:
+    # ServiceMonitor CRDs are owned by the Prometheus Operator lifecycle.
+    create: false
+
+  controller:
+    type: deployment
+    replicas: 1
+    hostPID: false
+    hostNetwork: false
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    podAnnotations: {}
+    volumes:
+      extra: []
+    initContainers: []
+    extraContainers: []
+    podDisruptionBudget:
+      enabled: false
+    autoscaling:
+      enabled: false
+      horizontal:
+        enabled: false
+      vertical:
+        enabled: false
+
+  global:
+    podSecurityContext:
+      fsGroup: 473
+      runAsGroup: 473
+      runAsNonRoot: true
+      runAsUser: 473
+      seccompProfile:
+        type: RuntimeDefault
+
+  alloy:
+    enableReporting: false
+    clustering:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 384Mi
+    securityContext:
+      runAsUser: 473
+      runAsGroup: 473
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+    mounts:
+      varlog: false
+      dockercontainers: false
+      extra: []
+    extraPorts: []
+    configMap:
+      create: false
+
+  configReloader:
+    enabled: true
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
+    securityContext:
+      runAsUser: 473
+      runAsGroup: 473
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+
+  service:
+    enabled: true
+    type: ClusterIP
+    internalTrafficPolicy: Cluster
+
+  serviceMonitor:
+    # The wrapper creates the bounded hub ServiceMonitor because the pinned
+    # upstream chart does not expose sampleLimit or targetLimit.
+    enabled: false
+
+  rbac:
+    # The wrapper owns a namespace-scoped Role and RoleBinding for this
+    # profile. Disable the dependency's ClusterRole/ClusterRoleBinding path.
+    create: false
+
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: true
+
+  networkPolicy:
+    # Network-policy ownership remains with the consuming GitOps repository.
+    enabled: false

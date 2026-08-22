@@ -1,0 +1,89 @@
+{{- if .Values.profiles.hubObservability.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-hub-observability-profile" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: hub-metrics-collector
+data:
+  config.alloy: |
+    logging {
+      level  = "warn"
+      format = "logfmt"
+    }
+
+    prometheus.remote_write "thanos" {
+      external_labels = {
+        cluster      = {{ .Values.profiles.hubObservability.externalLabels.cluster | quote }},
+        cluster_role = {{ .Values.profiles.hubObservability.externalLabels.clusterRole | quote }},
+        lane         = {{ .Values.profiles.hubObservability.externalLabels.lane | quote }},
+        stage        = {{ .Values.profiles.hubObservability.externalLabels.stage | quote }},
+        region       = {{ .Values.profiles.hubObservability.externalLabels.region | quote }},
+        cloud        = {{ .Values.profiles.hubObservability.externalLabels.cloud | quote }},
+        tenant       = {{ .Values.profiles.hubObservability.externalLabels.tenant | quote }},
+      }
+      endpoint {
+        url            = {{ .Values.profiles.hubObservability.receiver.url | quote }}
+        name           = "thanos-receive"
+        remote_timeout = "30s"
+        headers = {
+          {{ .Values.profiles.hubObservability.receiver.tenantHeader | quote }} = {{ .Values.profiles.hubObservability.receiver.tenant | quote }},
+        }
+        send_exemplars = false
+        queue_config {
+          capacity             = 2500
+          max_samples_per_send = 500
+          batch_send_deadline  = "10s"
+          min_shards           = 1
+          max_shards           = 2
+          min_backoff          = "1s"
+          max_backoff          = {{ .Values.profiles.hubObservability.wal.maxBackoff | quote }}
+          retry_on_http_429    = true
+          sample_age_limit     = {{ .Values.profiles.hubObservability.wal.sampleAgeLimit | quote }}
+        }
+        metadata_config {
+          send = false
+        }
+      }
+      wal {
+        truncate_frequency = "1h"
+        min_keepalive_time = "5m"
+        max_keepalive_time = {{ .Values.profiles.hubObservability.wal.maxKeepalive | quote }}
+      }
+    }
+
+    // ServiceMonitor metric relabeling applies the same positive allowlist
+    // before its sampleLimit. This second boundary is defense in depth for all
+    // approved targets and sanitizes labels reserved for Receive or other
+    // infrastructure producers before adding this collector's external labels.
+    prometheus.relabel "hub_health" {
+      forward_to    = [prometheus.remote_write.thanos.receiver]
+      max_cache_size = 10000
+      rule {
+        action = "labeldrop"
+        regex  = "^(tenant_id|infra)$"
+      }
+      rule {
+        source_labels = ["__name__"]
+        action        = "keep"
+        regex         = {{ include "alloy.hubObservability.metricAllowlist" . | quote }}
+      }
+    }
+
+    prometheus.operator.servicemonitors "hub_health" {
+      forward_to      = [prometheus.relabel.hub_health.receiver]
+      kubernetes_role = "endpointslice"
+      namespaces      = [{{ .Release.Namespace | quote }}]
+      selector {
+        match_labels = {
+          "observability.garyellis.io/hub-health" = "true",
+        }
+      }
+      scrape {
+        default_scrape_interval = {{ .Values.profiles.hubObservability.scrapeInterval | quote }}
+      }
+    }
+{{- end }}
