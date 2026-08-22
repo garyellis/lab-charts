@@ -115,7 +115,7 @@ spec:
       command: [/bin/sh, -ec]
       args:
         - |
-          fixture=http://{{ include "observability-alerting.fullname" . }}-query-fixture:9090
+          fixture=http://{{ include "observability-alerting.queryFixtureName" . }}:9090
           remaining=75
 
           wait_for() {
@@ -142,14 +142,34 @@ spec:
             'max(up{job="test-thanos-ruler"}) == bool 1'
           wait_for "Alertmanager target is up" \
             'max(up{job="test-alertmanager"}) == bool 1'
+          wait_for "Ruler last-evaluation metric family exists" \
+            'count(prometheus_rule_group_last_evaluation_timestamp_seconds{job="test-thanos-ruler"}) > bool 0'
           wait_for "at least one rule group completed evaluation" \
             'max(prometheus_rule_group_last_evaluation_timestamp_seconds{job="test-thanos-ruler"}) > bool 0'
+          wait_for "Ruler evaluation-failure metric family exists" \
+            'count(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) > bool 0'
           wait_for "rule evaluations have no failures" \
-            '(sum(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) or vector(0)) == bool 0'
+            'sum(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) == bool 0'
+          wait_for "Ruler evaluation-warning metric family exists" \
+            'count(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) > bool 0'
           wait_for "rule evaluations have no warnings" \
-            '(sum(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) or vector(0)) == bool 0'
-          wait_for "Ruler alert queues and senders have no drops" \
-            '(sum({__name__=~"thanos_alert_(queue|sender)_alerts_dropped_total",job="test-thanos-ruler"}) or vector(0)) == bool 0'
+            'sum(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) == bool 0'
+          wait_for "Ruler alert-queue drop metric family exists" \
+            'count(thanos_alert_queue_alerts_dropped_total{job="test-thanos-ruler"}) > bool 0'
+          wait_for "Ruler alert queue has no drops" \
+            'sum(thanos_alert_queue_alerts_dropped_total{job="test-thanos-ruler"}) == bool 0'
+          wait_for "Ruler alert-sender drop metric family exists" \
+            'count(thanos_alert_sender_alerts_dropped_total{job="test-thanos-ruler"}) > bool 0'
+          wait_for "Ruler alert sender has no drops" \
+            'sum(thanos_alert_sender_alerts_dropped_total{job="test-thanos-ruler"}) == bool 0'
+          wait_for "Ruler evaluation-duration metric family exists" \
+            'count(prometheus_rule_group_last_duration_seconds{job="test-thanos-ruler"}) > bool 0'
+          wait_for "Ruler evaluation duration is within budget" \
+            'max(prometheus_rule_group_last_duration_seconds{job="test-thanos-ruler"}) < bool {{ .Values.alertingHealth.maxEvaluationSeconds }}'
+          wait_for "Alertmanager config-reload metric family exists" \
+            'count(alertmanager_config_last_reload_successful{job="test-alertmanager"}) > bool 0'
+          wait_for "Alertmanager accepted its generated configuration" \
+            'min(alertmanager_config_last_reload_successful{job="test-alertmanager"}) == bool 1'
           wait_for "Alertmanager received the Watchdog from Thanos Ruler" \
             'sum(alertmanager_alerts_received_total{job="test-alertmanager"}) > bool 0'
       securityContext:

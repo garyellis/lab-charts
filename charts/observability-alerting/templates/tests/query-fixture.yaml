@@ -1,5 +1,5 @@
 {{- if .Values.tests.queryFixture.enabled }}
-{{- $name := printf "%s-query-fixture" (include "observability-alerting.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $name := include "observability-alerting.queryFixtureName" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

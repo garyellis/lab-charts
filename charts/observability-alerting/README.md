@@ -31,11 +31,13 @@ owner.
   that reviewed 7 Gi envelope requires a chart contract change.
 - `thanosRuler.queryEndpoint` and the optional Alertmanager endpoint are
   restricted to exact in-cluster service URLs; hostnames that only resemble a
-  `.svc` name are rejected. The Alertmanager endpoint defaults to the
-  operator's `alertmanager-operated` service. Ruler is pinned to the reviewed
-  Thanos v0.42 line.
+  `.svc` name and ports outside 1-65535 are rejected. The Alertmanager endpoint
+  defaults to the operator's `alertmanager-operated` service. Ruler is pinned
+  to the reviewed Thanos v0.42 line.
 - `telemetry.expectedHubTargets` and `expectedAi1Targets` are separate exact,
-  bounded producer inventories with unique names inside each inventory. An
+  bounded producer inventories with unique names inside each inventory. Target
+  names are limited to 46 characters so the derived `telemetry-target-...`
+  incident key remains a valid 63-character Kubernetes label. An
   alert exposes only its reviewed name, component, and source; job and instance
   remain query matchers.
 - `openstack.expectedFamilies` contains the seven reviewed exporter families:
@@ -85,7 +87,9 @@ delivery:
 The referenced Secret must already exist in the release namespace. A GitOps
 consumer can manage its ciphertext with SOPS/age; this chart never accepts a
 URL, token, key, decrypted payload, or Secret manifest. The concrete receiver
-and independent dead-man service are intentionally deferred decisions.
+and independent dead-man service are intentionally deferred decisions. Secret
+names and data keys are schema-checked against Kubernetes identifier rules
+before any resource is rendered.
 
 `Watchdog` is disabled until that independent path exists. Enabling it without
 an independently observed receiver does not prove end-to-end delivery.
@@ -103,19 +107,29 @@ asserts that the operator service exposes the `grpc` port at 10901.
 ## Alert portfolio
 
 - exact target missing, down, or stale;
-- remote-write failed, dropped/out-of-order, lagging, or missing self-metrics;
+- remote-write failed, dropped/out-of-order, lagging, or missing required
+  self-metric families;
 - required OpenStack exporter family missing or failing;
 - healthy libvirt exporter with empty correlated inventory;
 - Cinder collector failure/staleness and thin-pool data/metadata pressure;
 - CPU, memory, and I/O PSI saturation plus missing-PSI integrity alerts;
-- Thanos Compactor halted or missing;
+- Thanos Compactor halted, missing, or missing its halted-state metric family;
 - Ruler absence, failed/warning/slow evaluation, dropped alerts between Ruler
-  and Alertmanager, Alertmanager absence, rejected config, and notification
+  and Alertmanager, required Ruler self-metric families missing, Alertmanager
+  absence, its config-reload family missing, rejected config, and notification
   failures.
 
 Missing-data branches are explicit where absence is actionable. Counter rules
 use `increase()` so process restarts and counter resets do not manufacture a
-negative or hide a positive delta. `ThanosRulerMissing` provides best-effort
+negative or hide a positive delta. Missing-family alerts are guarded by a
+healthy component target, keeping component-down and telemetry-contract
+incidents distinct. The reason-labelled
+`prometheus_remote_storage_samples_dropped_total` CounterVec can be absent
+until a drop occurs, so it is consumed opportunistically but is not required
+without baseline evidence of a stable healthy-state child. Alertmanager
+notification counters and histograms are likewise not required before a real
+receiver initializes them; config reload is the startup-required family.
+`ThanosRulerMissing` provides best-effort
 dashboard coverage from retained telemetry; it is not independent detection of
 an evaluator outage until the deferred dead-man receiver exists.
 
@@ -129,15 +143,20 @@ uv run chart-manager chart validate observability-alerting --env ci
 uv run chart-manager chart test observability-alerting --profile minimal
 ```
 
-The offline `promtool` suite parses all 46 rendered production rules and covers
+The offline `promtool` suite parses all 56 rendered production rules and covers
 healthy, pending, firing, missing-primary-data, overlap, counter-reset, and
-recovery behavior across hub and AI1 target inventories. The render contract
-also simulates critical/warning route selection and proves inhibition cannot
-cross any bounded incident-identity field.
+recovery behavior across hub and AI1 target inventories. It separately proves
+target absence, `up == 0`, stale timestamps, required-family absence/recovery,
+and suppression of family alerts while the owning component is down. The render
+contract also simulates critical/warning route selection and proves inhibition
+cannot cross any bounded incident-identity field.
 
 The Helm test verifies the operator-created Ruler and Alertmanager StatefulSets
 and Ruler StoreAPI, then uses a test-only Query fixture to prove both scrape
 targets are healthy, at least one rule group evaluated, evaluations produced no
-failures or warnings, Ruler queues and senders dropped no alerts, and
-Alertmanager received the Watchdog. The fixture is disabled by default and
+failures or warnings, every required Ruler family exists before its healthy
+value is asserted, Ruler queues and senders dropped no alerts, Alertmanager
+accepted its generated configuration, and Alertmanager received the Watchdog.
+Notification-specific family presence is not asserted before external delivery
+is configured. The fixture is disabled by default and
 derives its service address from the release name and namespace when enabled.

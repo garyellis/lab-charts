@@ -26,6 +26,9 @@ alertmanager:
     storageClassName: standard
 
 telemetry:
+  # Keep the stale-timestamp branch inside Prometheus' five-minute lookback so
+  # promtool can distinguish it from complete series absence.
+  staleAfterSeconds: 60
   expectedHubTargets:
     - name: ci-alloy
       job: integrations/alloy

@@ -11,6 +11,19 @@ spec:
 {{- define "observability-alerting.ruleGroups" }}
 {{- $hubIdentity := include "observability-alerting.hubIdentityMatcher" . }}
 {{- $ai1Identity := include "observability-alerting.ai1IdentityMatcher" . }}
+{{- $remoteWriteRequiredMetrics := list
+  (dict "name" "prometheus_remote_storage_samples_failed_total" "incidentKey" "remote-write-metric-failures")
+  (dict "name" "prometheus_remote_write_wal_out_of_order_samples_total" "incidentKey" "remote-write-metric-wal")
+  (dict "name" "prometheus_remote_storage_queue_highest_sent_timestamp_seconds" "incidentKey" "remote-write-metric-progress")
+-}}
+{{- $rulerRequiredMetrics := list
+  (dict "name" "prometheus_rule_evaluation_failures_total" "incidentKey" "ruler-metric-evaluation-failures")
+  (dict "name" "thanos_rule_evaluation_with_warnings_total" "incidentKey" "ruler-metric-evaluation-warnings")
+  (dict "name" "thanos_alert_queue_alerts_dropped_total" "incidentKey" "ruler-metric-alert-queue-drops")
+  (dict "name" "thanos_alert_sender_alerts_dropped_total" "incidentKey" "ruler-metric-alert-sender-drops")
+  (dict "name" "prometheus_rule_group_last_duration_seconds" "incidentKey" "ruler-metric-evaluation-duration")
+  (dict "name" "prometheus_rule_group_last_evaluation_timestamp_seconds" "incidentKey" "ruler-metric-last-evaluation")
+}}
     - name: observability-alerting.telemetry-integrity
       interval: {{ .Values.thanosRuler.evaluationInterval }}
       partial_response_strategy: abort
@@ -62,15 +75,18 @@ spec:
             {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "remote-write" "incidentKey" "remote-write-dropped") | nindent 12 }}
           annotations:
             {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote write is dropping samples" "description" "The remote-write client reported discarded samples during the observation window." "impact" "Telemetry has been lost and historical queries may contain permanent gaps." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
-        - alert: RemoteWriteMetricsMissing
+        {{- range $metric := $remoteWriteRequiredMetrics }}
+        - alert: RemoteWriteMetricFamilyMissing
           expr: >-
-            max(up{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}} == 1)
-            unless on() count(prometheus_remote_storage_queue_highest_sent_timestamp_seconds{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}) > 0
-          for: {{ .Values.alerts.for.telemetry }}
+            max(up{ {{- $hubIdentity -}},job={{ $.Values.telemetry.remoteWrite.job | quote }}} == 1)
+            unless on() count({{ $metric.name }}{ {{- $hubIdentity -}},job={{ $.Values.telemetry.remoteWrite.job | quote }}}) > 0
+          for: {{ $.Values.alerts.for.telemetry }}
           labels:
-            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "telemetry" "incidentKey" "remote-write-metrics") | nindent 12 }}
+            {{- include "observability-alerting.ruleLabels" (dict "root" $ "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "telemetry" "incidentKey" $metric.incidentKey) | nindent 12 }}
+            metric_family: {{ $metric.name | quote }}
           annotations:
-            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Remote-write self-metrics are missing" "description" "The Alloy scrape target is healthy but its remote-write progress metric is absent." "impact" "A missing queue metric must not make a stalled or disabled telemetry path appear healthy." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Remote-write metric family %s is missing" $metric.name) "description" "The Alloy scrape target is healthy but a required remote-write self-metric family is absent." "impact" "Remote-write failures or stalls may be hidden; missing telemetry must not be interpreted as a healthy zero." "slug" "remote-write-failure" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        {{- end }}
         - alert: RemoteWriteLagging
           expr: >-
             max(time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds{ {{- $hubIdentity -}},job={{ .Values.telemetry.remoteWrite.job | quote }}}) > {{ .Values.telemetry.remoteWrite.maxLagSeconds }}
@@ -203,6 +219,16 @@ spec:
             {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "thanos-compactor-missing") | nindent 12 }}
           annotations:
             {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor telemetry is missing" "description" "The exact Compactor scrape job is absent or down." "impact" "Compactor health and retention enforcement cannot be verified." "slug" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        - alert: ThanosCompactorMetricFamilyMissing
+          expr: >-
+            max(up{ {{- $hubIdentity -}},job={{ .Values.thanosCompactor.job | quote }}} == 1)
+            unless on() count(thanos_compact_halted{ {{- $hubIdentity -}},job={{ .Values.thanosCompactor.job | quote }}}) > 0
+          for: {{ .Values.alerts.for.compactor }}
+          labels:
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "compactor-metric-halted") | nindent 12 }}
+            metric_family: thanos_compact_halted
+          annotations:
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Compactor halted metric family is missing" "description" "The Compactor scrape target is healthy but its required halted-state metric is absent." "impact" "A halted Compactor may be hidden; missing telemetry must not be interpreted as a healthy zero." "slug" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: ThanosRulerMissing
           expr: >-
             sum(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}} == bool 0) > 0
@@ -212,6 +238,18 @@ spec:
             {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "thanos-ruler-missing") | nindent 12 }}
           annotations:
             {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Thanos Ruler telemetry is missing" "description" "The alert evaluator scrape target is absent or down." "impact" "Alert evaluation may have stopped; use the independent dead-man receiver once configured." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        {{- range $metric := $rulerRequiredMetrics }}
+        - alert: ThanosRulerMetricFamilyMissing
+          expr: >-
+            max(up{ {{- $hubIdentity -}},job={{ $.Values.monitoring.rulerJob | quote }}} == 1)
+            unless on() count({{ $metric.name }}{ {{- $hubIdentity -}},job={{ $.Values.monitoring.rulerJob | quote }}}) > 0
+          for: {{ $.Values.alerts.for.alertingComponent }}
+          labels:
+            {{- include "observability-alerting.ruleLabels" (dict "root" $ "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" $metric.incidentKey) | nindent 12 }}
+            metric_family: {{ $metric.name | quote }}
+          annotations:
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" $ "summary" (printf "Thanos Ruler metric family %s is missing" $metric.name) "description" "The Ruler scrape target is healthy but a required evaluation or delivery metric family is absent." "impact" "Ruler failures may be hidden; missing telemetry must not be interpreted as a healthy zero." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        {{- end }}
         - alert: ThanosRulerEvaluationFailures
           expr: >-
             sum(increase(prometheus_rule_evaluation_failures_total{ {{- $hubIdentity -}},job={{ .Values.monitoring.rulerJob | quote }}}[{{ .Values.alertingHealth.window }}])) > 0
@@ -254,6 +292,16 @@ spec:
             {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-missing") | nindent 12 }}
           annotations:
             {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager telemetry is missing" "description" "The alert delivery component scrape target is absent or down." "impact" "Firing alerts may not be grouped, silenced, or delivered." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
+        - alert: AlertmanagerMetricFamilyMissing
+          expr: >-
+            max(up{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}} == 1)
+            unless on() count(alertmanager_config_last_reload_successful{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}}) > 0
+          for: {{ .Values.alerts.for.alertingComponent }}
+          labels:
+            {{- include "observability-alerting.ruleLabels" (dict "root" . "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-metric-config-reload") | nindent 12 }}
+            metric_family: alertmanager_config_last_reload_successful
+          annotations:
+            {{- include "observability-alerting.ruleAnnotations" (dict "root" . "summary" "Alertmanager config-reload metric family is missing" "description" "The Alertmanager scrape target is healthy but its required config-reload metric family is absent." "impact" "A rejected or stale routing configuration may be hidden; missing telemetry must not be interpreted as a healthy zero." "slug" "alerting-pipeline" "dashboard" "obs-w-alerting-health") | nindent 12 }}
         - alert: AlertmanagerConfigReloadFailed
           expr: max(alertmanager_config_last_reload_successful{ {{- $hubIdentity -}},job={{ .Values.monitoring.alertmanagerJob | quote }}}) == 0
           for: {{ .Values.alerts.for.alertmanagerConfig }}

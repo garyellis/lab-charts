@@ -7,7 +7,8 @@ chart_dir="${1:-charts/observability-alerting}"
 rendered_file="$(mktemp)"
 rules_file="$(mktemp)"
 delivery_file="$(mktemp)"
-trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}"' EXIT
+long_name_file="$(mktemp)"
+trap 'rm -f "${rendered_file}" "${rules_file}" "${delivery_file}" "${long_name_file}"' EXIT
 
 helm template observability-alerting "${chart_dir}" \
   --namespace observability \
@@ -18,6 +19,10 @@ helm template observability-alerting "${chart_dir}" \
   --set delivery.enabled=true \
   --set delivery.webhook.secretName=alertmanager-receiver \
   --set delivery.webhook.secretKey=webhook-url >"${delivery_file}"
+helm template observability-alerting "${chart_dir}" \
+  --namespace observability \
+  -f "${chart_dir}/values-ci.yaml" \
+  --set fullnameOverride=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"${long_name_file}"
 
 yq -e 'select(.kind == "AlertmanagerConfig") | .spec.receivers[] | select(.name == "external-webhook") | .webhookConfigs[0].sendResolved == true' \
   "${delivery_file}" >/dev/null
@@ -43,6 +48,13 @@ yq -e 'select(.kind == "ThanosRuler") | .spec.replicas == 1 and .spec.storage.vo
   "${rendered_file}" >/dev/null
 yq -e 'select(.kind == "Alertmanager") | .spec.replicas == 1 and .spec.storage.volumeClaimTemplate.spec.resources.requests.storage == "2Gi"' \
   "${rendered_file}" >/dev/null
+
+fixture_service="$(yq -r 'select(.kind == "Service" and .metadata.labels."app.kubernetes.io/component" == "query-fixture") | .metadata.name' "${long_name_file}")"
+fixture_endpoint="$(yq -r 'select(.kind == "ThanosRuler") | .spec.queryEndpoints[0]' "${long_name_file}")"
+if [[ -z "${fixture_service}" || "${fixture_endpoint}" != "http://${fixture_service}.observability.svc:9090" ]]; then
+  echo "the truncated query-fixture name and Ruler endpoint diverge" >&2
+  exit 1
+fi
 
 render_must_fail() {
   local failure="$1"
@@ -78,6 +90,11 @@ render_must_fail "an endpoint that only resembles in-cluster DNS was accepted" \
   --set thanosRuler.queryEndpoint=http://thanos-query.observability.svc.evil:9090
 render_must_fail "an Alertmanager endpoint that only resembles in-cluster DNS was accepted" \
   --set thanosRuler.alertmanagerEndpoint=http://alertmanager.observability.svc.evil:9093
+render_must_fail "a Query endpoint port above 65535 was accepted" \
+  --set tests.queryFixture.enabled=false \
+  --set thanosRuler.queryEndpoint=http://thanos-query:65536
+render_must_fail "an Alertmanager endpoint port above 65535 was accepted" \
+  --set thanosRuler.alertmanagerEndpoint=http://alertmanager:99999
 render_must_fail "a sub-minute production alert duration was accepted" \
   --set alerts.for.telemetry=30s
 render_must_fail "a knowingly broken runbook URL was accepted" \
@@ -88,6 +105,16 @@ render_must_fail "duplicate hub target names were accepted" \
   --set-json 'telemetry.expectedHubTargets=[{"name":"duplicate","job":"integrations/alloy","instance":"one:1234","component":"alloy"},{"name":"duplicate","job":"integrations/thanos","instance":"two:1234","component":"thanos"}]'
 render_must_fail "duplicate AI1 target names were accepted" \
   --set-json 'telemetry.expectedAi1Targets=[{"name":"duplicate","job":"integrations/node_exporter","instance":"one:9100","component":"node-exporter"},{"name":"duplicate","job":"integrations/openstack_exporter","instance":"two:9180","component":"openstack-exporter"}]'
+render_must_fail "a target name that overflows the derived incident key was accepted" \
+  --set-json 'telemetry.expectedHubTargets=[{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"integrations/alloy","instance":"one:1234","component":"alloy"}]'
+render_must_fail "an invalid Kubernetes Secret name was accepted" \
+  --set delivery.enabled=true \
+  --set delivery.webhook.secretName=Invalid_Secret \
+  --set delivery.webhook.secretKey=webhook-url
+render_must_fail "an invalid Kubernetes Secret key was accepted" \
+  --set delivery.enabled=true \
+  --set delivery.webhook.secretName=alertmanager-receiver \
+  --set delivery.webhook.secretKey=webhook/url
 
 if yq -e 'select(.kind == "PrometheusRule") | .spec.groups[] | select(.partial_response_strategy != "abort")' \
   "${rendered_file}" >/dev/null 2>&1; then
@@ -98,7 +125,7 @@ yq -o=json -I=0 'select(.kind == "PrometheusRule") | .spec.groups[].rules[]' \
   "${rendered_file}" >"${rules_file}"
 
 rule_count=0
-allowed_label_pattern='^(severity|owner|service|component|scope|alert_family|incident_key|cluster|infra|collector_family|expected_target|telemetry_source|pressure_type)$'
+allowed_label_pattern='^(severity|owner|service|component|scope|alert_family|incident_key|cluster|infra|collector_family|expected_target|telemetry_source|pressure_type|metric_family)$'
 runbook_pattern='^https://runbooks[.]example[.]com/observability/(alerting-pipeline|cinder-capacity|host-saturation|libvirt-inventory-empty|openstack-collector-failure|remote-write-failure|telemetry-path-stale|thanos-compactor-halted)$'
 dashboard_pattern='^https://grafana[.]example[.]com/d/(ai1-host-health|ai1-libvirt-hypervisor|ai1-openstack-cloud-services|ai1-openstack-overview|obs-w-alerting-health)$'
 
@@ -172,6 +199,75 @@ while IFS= read -r rule; do
       ;;
   esac
 done <"${rules_file}"
+
+assert_integrity_rule() {
+  local alert_name="$1"
+  local metric_family="$2"
+  local match_count
+  local expression
+
+  match_count="$(jq -s --arg alert_name "${alert_name}" --arg metric_family "${metric_family}" \
+    '[.[] | select(.alert == $alert_name and .labels.metric_family == $metric_family)] | length' "${rules_file}")"
+  if [[ "${match_count}" != "1" ]]; then
+    echo "${alert_name}: expected exactly one integrity rule for ${metric_family}, found ${match_count}" >&2
+    exit 1
+  fi
+
+  expression="$(jq -rs --arg alert_name "${alert_name}" --arg metric_family "${metric_family}" \
+    '[.[] | select(.alert == $alert_name and .labels.metric_family == $metric_family)][0].expr' "${rules_file}")"
+  if [[ "${expression}" != *'max(up{'* ]] || [[ "${expression}" != *' == 1)'* ]] || \
+    [[ "${expression}" != *"unless on() count(${metric_family}{"* ]]; then
+    echo "${alert_name}: ${metric_family} is not guarded by target up == 1 and exact family presence" >&2
+    exit 1
+  fi
+}
+
+for family_contract in \
+  'RemoteWriteMetricFamilyMissing:prometheus_remote_storage_samples_failed_total' \
+  'RemoteWriteMetricFamilyMissing:prometheus_remote_write_wal_out_of_order_samples_total' \
+  'RemoteWriteMetricFamilyMissing:prometheus_remote_storage_queue_highest_sent_timestamp_seconds' \
+  'ThanosCompactorMetricFamilyMissing:thanos_compact_halted' \
+  'ThanosRulerMetricFamilyMissing:prometheus_rule_evaluation_failures_total' \
+  'ThanosRulerMetricFamilyMissing:thanos_rule_evaluation_with_warnings_total' \
+  'ThanosRulerMetricFamilyMissing:thanos_alert_queue_alerts_dropped_total' \
+  'ThanosRulerMetricFamilyMissing:thanos_alert_sender_alerts_dropped_total' \
+  'ThanosRulerMetricFamilyMissing:prometheus_rule_group_last_duration_seconds' \
+  'ThanosRulerMetricFamilyMissing:prometheus_rule_group_last_evaluation_timestamp_seconds' \
+  'AlertmanagerMetricFamilyMissing:alertmanager_config_last_reload_successful'; do
+  assert_integrity_rule "${family_contract%%:*}" "${family_contract#*:}"
+done
+
+if jq -s -e '[.[] | .labels.metric_family? | select(type == "string") | select(. == "prometheus_remote_storage_samples_dropped_total" or startswith("alertmanager_notification"))] | length > 0' \
+  "${rules_file}" >/dev/null; then
+  echo "a lazy remote-write or notification-specific family was made unconditionally required" >&2
+  exit 1
+fi
+
+if rg -q 'or vector\(0\)' "${chart_dir}/templates/tests/resources-ready.yaml"; then
+  echo "the Kind hook still masks absent metric families as healthy zero" >&2
+  exit 1
+fi
+
+alerting_hook="$(yq -r 'select(.kind == "Pod") | .spec.containers[] | select(.name == "alerting-path") | .args[0]' "${rendered_file}")"
+for hook_contract in \
+  'count(prometheus_rule_group_last_evaluation_timestamp_seconds{job="test-thanos-ruler"}) > bool 0' \
+  'count(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) > bool 0' \
+  'sum(prometheus_rule_evaluation_failures_total{job="test-thanos-ruler"}) == bool 0' \
+  'count(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) > bool 0' \
+  'sum(thanos_rule_evaluation_with_warnings_total{job="test-thanos-ruler"}) == bool 0' \
+  'count(thanos_alert_queue_alerts_dropped_total{job="test-thanos-ruler"}) > bool 0' \
+  'sum(thanos_alert_queue_alerts_dropped_total{job="test-thanos-ruler"}) == bool 0' \
+  'count(thanos_alert_sender_alerts_dropped_total{job="test-thanos-ruler"}) > bool 0' \
+  'sum(thanos_alert_sender_alerts_dropped_total{job="test-thanos-ruler"}) == bool 0' \
+  'count(prometheus_rule_group_last_duration_seconds{job="test-thanos-ruler"}) > bool 0' \
+  'max(prometheus_rule_group_last_duration_seconds{job="test-thanos-ruler"}) < bool 30' \
+  'count(alertmanager_config_last_reload_successful{job="test-alertmanager"}) > bool 0' \
+  'min(alertmanager_config_last_reload_successful{job="test-alertmanager"}) == bool 1'; do
+  if [[ "${alerting_hook}" != *"${hook_contract}"* ]]; then
+    echo "the Kind alerting-path hook lacks contract: ${hook_contract}" >&2
+    exit 1
+  fi
+done
 
 if ((rule_count < 20)); then
   echo "expected a substantive alert portfolio, rendered only ${rule_count} rules" >&2

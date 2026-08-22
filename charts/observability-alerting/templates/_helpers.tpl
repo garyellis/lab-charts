@@ -35,6 +35,10 @@ app.kubernetes.io/part-of: observability-alerting
 {{- printf "%s-alertmanager" (include "observability-alerting.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "observability-alerting.queryFixtureName" -}}
+{{- printf "%s-query-fixture" (include "observability-alerting.fullname" . | trunc 49 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "observability-alerting.alertmanagerUrl" -}}
 {{- if .Values.thanosRuler.alertmanagerEndpoint -}}
 {{- .Values.thanosRuler.alertmanagerEndpoint -}}
@@ -45,7 +49,7 @@ app.kubernetes.io/part-of: observability-alerting
 
 {{- define "observability-alerting.queryEndpoint" -}}
 {{- if .Values.tests.queryFixture.enabled -}}
-{{- printf "http://%s-query-fixture.%s.svc:9090" (include "observability-alerting.fullname" .) .Release.Namespace -}}
+{{- printf "http://%s.%s.svc:9090" (include "observability-alerting.queryFixtureName" .) .Release.Namespace -}}
 {{- else -}}
 {{- required "thanosRuler.queryEndpoint is required" .Values.thanosRuler.queryEndpoint -}}
 {{- end -}}

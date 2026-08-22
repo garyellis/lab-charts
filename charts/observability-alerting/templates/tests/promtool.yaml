@@ -124,6 +124,8 @@ data:
             values: '0x50'
           - series: 'prometheus_rule_group_last_duration_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
             values: '0x50'
+          - series: 'prometheus_rule_group_last_evaluation_timestamp_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '0+60x50'
           - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
             values: '1x50'
           - series: 'alertmanager_config_last_reload_successful{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
@@ -131,7 +133,7 @@ data:
           - series: 'alertmanager_notifications_failed_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
             values: '0x50'
         alert_rule_test:
-          {{- $alertNames := list "TelemetryTargetMissingOrStale" "RemoteWriteSamplesFailed" "RemoteWriteSamplesDropped" "RemoteWriteMetricsMissing" "RemoteWriteLagging" "OpenStackCollectorFamilyMissing" "OpenStackCollectorFamilyFailing" "LibvirtInventoryUnexpectedlyEmpty" "CinderCollectorFailing" "CinderCollectorStale" "CinderThinPoolDataCapacityLow" "CinderThinPoolDataExhaustionImminent" "CinderThinPoolMetadataCapacityLow" "CinderThinPoolMetadataExhaustionImminent" "ThanosCompactorHalted" "ThanosCompactorMissing" "ThanosRulerMissing" "ThanosRulerEvaluationFailures" "ThanosRulerEvaluationWarnings" "ThanosRulerAlertDeliveryFailures" "ThanosRulerEvaluationTooSlow" "AlertmanagerMissing" "AlertmanagerConfigReloadFailed" "AlertmanagerNotificationFailures" -}}
+          {{- $alertNames := list "TelemetryTargetMissingOrStale" "RemoteWriteSamplesFailed" "RemoteWriteSamplesDropped" "RemoteWriteMetricFamilyMissing" "RemoteWriteLagging" "OpenStackCollectorFamilyMissing" "OpenStackCollectorFamilyFailing" "LibvirtInventoryUnexpectedlyEmpty" "CinderCollectorFailing" "CinderCollectorStale" "CinderThinPoolDataCapacityLow" "CinderThinPoolDataExhaustionImminent" "CinderThinPoolMetadataCapacityLow" "CinderThinPoolMetadataExhaustionImminent" "ThanosCompactorHalted" "ThanosCompactorMissing" "ThanosCompactorMetricFamilyMissing" "ThanosRulerMissing" "ThanosRulerMetricFamilyMissing" "ThanosRulerEvaluationFailures" "ThanosRulerEvaluationWarnings" "ThanosRulerAlertDeliveryFailures" "ThanosRulerEvaluationTooSlow" "AlertmanagerMissing" "AlertmanagerMetricFamilyMissing" "AlertmanagerConfigReloadFailed" "AlertmanagerNotificationFailures" -}}
           {{- range $kind, $_ := .Values.hostSaturation.pressurePercent }}
           {{- $alertNames = append $alertNames (printf "Host%sPressureHigh" (title $kind)) -}}
           {{- $alertNames = append $alertNames (printf "Host%sPressureMetricMissing" (title $kind)) -}}
@@ -155,6 +157,54 @@ data:
         alert_rule_test:
           {{ $expected := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "TelemetryTargetMissingOrStale" "severity" "critical" "service" "telemetry" "component" $selected.component "scope" "obs-w" "family" "telemetry" "incidentKey" (printf "telemetry-target-%s" $selected.name) "extraLabels" (dict "expected_target" $selected.name "telemetry_source" "hub") "summary" (printf "Telemetry target %s is missing, down, or stale" $selected.name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "runbook" "telemetry-path-stale" "dashboard" "obs-w-alerting-health") }}
 {{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "TelemetryTargetMissingOrStale" "expected" $expected) | indent 10 }}
+      {{- end }}
+
+      {{- if gt (len .Values.telemetry.expectedHubTargets) 0 }}
+      {{- $branchTarget := index .Values.telemetry.expectedHubTargets 0 }}
+      - name: hub target up zero branch fires and recovers
+        interval: 1m
+        input_series:
+          {{- range .Values.telemetry.expectedHubTargets }}
+          - series: 'up{cluster={{ $.Values.identity.hub.cluster | quote }},tenant_id={{ $.Values.identity.tenantId | quote }},job={{ .job | quote }},instance={{ .instance | quote }}}'
+            values: {{ ternary "0x3 1x12 0x25 1x20" "1x65" (eq .name $branchTarget.name) | quote }}
+          {{- end }}
+          {{- range .Values.telemetry.expectedAi1Targets }}
+          - series: 'up{infra={{ $.Values.identity.ai1.infra | quote }},tenant_id={{ $.Values.identity.tenantId | quote }},job={{ .job | quote }},instance={{ .instance | quote }}}'
+            values: '1x65'
+          {{- end }}
+        alert_rule_test:
+          {{ $downExpected := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "TelemetryTargetMissingOrStale" "severity" "critical" "service" "telemetry" "component" $branchTarget.component "scope" "obs-w" "family" "telemetry" "incidentKey" (printf "telemetry-target-%s" $branchTarget.name) "extraLabels" (dict "expected_target" $branchTarget.name "telemetry_source" "hub") "summary" (printf "Telemetry target %s is missing, down, or stale" $branchTarget.name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "runbook" "telemetry-path-stale" "dashboard" "obs-w-alerting-health") }}
+{{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "TelemetryTargetMissingOrStale" "expected" $downExpected) | indent 10 }}
+
+      - name: hub target stale timestamp branch fires and recovers
+        interval: 1m
+        input_series:
+          {{- range .Values.telemetry.expectedHubTargets }}
+          - series: 'up{cluster={{ $.Values.identity.hub.cluster | quote }},tenant_id={{ $.Values.identity.tenantId | quote }},job={{ .job | quote }},instance={{ .instance | quote }}}'
+            values: {{ ternary "1 _x14 1x20" "1x35" (eq .name $branchTarget.name) | quote }}
+          {{- end }}
+          {{- range .Values.telemetry.expectedAi1Targets }}
+          - series: 'up{infra={{ $.Values.identity.ai1.infra | quote }},tenant_id={{ $.Values.identity.tenantId | quote }},job={{ .job | quote }},instance={{ .instance | quote }}}'
+            values: '1x35'
+          {{- end }}
+        promql_expr_test:
+          - expr: 'sum((time() - timestamp(up{tenant_id={{ .Values.identity.tenantId | quote }},cluster={{ .Values.identity.hub.cluster | quote }},job={{ $branchTarget.job | quote }},instance={{ $branchTarget.instance | quote }}})) > bool {{ .Values.telemetry.staleAfterSeconds }})'
+            eval_time: 3m
+            exp_samples:
+              - labels: '{}'
+                value: 1
+        alert_rule_test:
+          - eval_time: 1m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts: []
+          - eval_time: 13m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts:
+          {{ $staleExpected := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "TelemetryTargetMissingOrStale" "severity" "critical" "service" "telemetry" "component" $branchTarget.component "scope" "obs-w" "family" "telemetry" "incidentKey" (printf "telemetry-target-%s" $branchTarget.name) "extraLabels" (dict "expected_target" $branchTarget.name "telemetry_source" "hub") "summary" (printf "Telemetry target %s is missing, down, or stale" $branchTarget.name) "description" "The exact expected scrape target is not producing a fresh successful sample." "impact" "Alerts and dashboards depending on this producer may be incomplete; missing data must not be interpreted as a healthy zero." "runbook" "telemetry-path-stale" "dashboard" "obs-w-alerting-health") }}
+{{ $staleExpected | indent 14 }}
+          - eval_time: 20m
+            alertname: TelemetryTargetMissingOrStale
+            exp_alerts: []
       {{- end }}
 
       - name: primary signals cover pending firing overlap and recovery
@@ -214,6 +264,8 @@ data:
             values: '0x50'
           - series: 'prometheus_rule_group_last_duration_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
             values: '60x3 0x12 60x25 0x20'
+          - series: 'prometheus_rule_group_last_evaluation_timestamp_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '0+60x50'
           - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
             values: '1x50'
           - series: 'alertmanager_config_last_reload_successful{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
@@ -296,6 +348,8 @@ data:
             values: '0x50'
           - series: 'prometheus_rule_group_last_duration_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
             values: '0x50'
+          - series: 'prometheus_rule_group_last_evaluation_timestamp_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '0+60x50'
           - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
             values: '_x3 1x12 _x25 1x20'
           - series: 'alertmanager_config_last_reload_successful{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
@@ -304,7 +358,6 @@ data:
             values: '0x50'
         alert_rule_test:
 {{ $missingCases := list }}
-          {{- $missingCases = append $missingCases (dict "alertname" "RemoteWriteMetricsMissing" "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "telemetry" "incidentKey" "remote-write-metrics" "extraLabels" (dict) "summary" "Remote-write self-metrics are missing" "description" "The Alloy scrape target is healthy but its remote-write progress metric is absent." "impact" "A missing queue metric must not make a stalled or disabled telemetry path appear healthy." "runbook" "remote-write-failure" "dashboard" "obs-w-alerting-health") -}}
           {{- $missingCases = append $missingCases (dict "alertname" "CinderCollectorStale" "severity" "critical" "service" "storage" "component" "cinder-metrics" "scope" "ai1" "family" "capacity" "incidentKey" "cinder-collector-stale" "extraLabels" (dict) "summary" "Cinder capacity telemetry is stale or missing" "description" "The Cinder collector has not completed successfully within its freshness budget." "impact" "Capacity state is unknown and must not be treated as zero utilization." "runbook" "cinder-capacity" "dashboard" "ai1-openstack-overview") -}}
           {{- $missingCases = append $missingCases (dict "alertname" "ThanosCompactorMissing" "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "thanos-compactor-missing" "extraLabels" (dict) "summary" "Thanos Compactor telemetry is missing" "description" "The exact Compactor scrape job is absent or down." "impact" "Compactor health and retention enforcement cannot be verified." "runbook" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") -}}
           {{- $missingCases = append $missingCases (dict "alertname" "ThanosRulerMissing" "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" "thanos-ruler-missing" "extraLabels" (dict) "summary" "Thanos Ruler telemetry is missing" "description" "The alert evaluator scrape target is absent or down." "impact" "Alert evaluation may have stopped; use the independent dead-man receiver once configured." "runbook" "alerting-pipeline" "dashboard" "obs-w-alerting-health") -}}
@@ -322,6 +375,90 @@ data:
 {{ $alertName := printf "Host%sPressureMetricMissing" (title $kind) }}
 {{ include "observability-alerting.promtoolLifecycle" (dict "alertname" $alertName "expected" (include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" $alertName "severity" "warning" "service" "host" "component" "node-exporter" "scope" "ai1" "family" "telemetry" "incidentKey" (printf "host-pressure-metric-%s" $kind) "extraLabels" (dict "pressure_type" $kind) "summary" (printf "Host %s pressure metric is missing" $kind) "description" "The node exporter is healthy but the expected PSI metric is absent." "impact" "A missing PSI series must not make host saturation appear healthy." "runbook" "host-saturation" "dashboard" "ai1-host-health"))) | indent 10 }}
 {{ end }}
+
+      - name: required self-metric families fail closed and recover
+        interval: 1m
+        input_series:
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }},instance="integrity-remote-write:12345"}'
+            values: '1x65'
+          - series: 'prometheus_remote_storage_samples_failed_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'prometheus_remote_storage_samples_dropped_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'prometheus_remote_write_wal_out_of_order_samples_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'prometheus_remote_storage_queue_highest_sent_timestamp_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }}}'
+            values: '_x3 180+60x12 _x25 2580+60x20'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.thanosCompactor.job | quote }}}'
+            values: '1x65'
+          - series: 'thanos_compact_halted{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.thanosCompactor.job | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '1x65'
+          - series: 'prometheus_rule_evaluation_failures_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'thanos_rule_evaluation_with_warnings_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'thanos_alert_queue_alerts_dropped_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'thanos_alert_sender_alerts_dropped_total{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'prometheus_rule_group_last_duration_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 0x12 _x25 0x20'
+          - series: 'prometheus_rule_group_last_evaluation_timestamp_seconds{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '_x3 180+60x12 _x25 2580+60x20'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
+            values: '1x65'
+          - series: 'alertmanager_config_last_reload_successful{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
+            values: '_x3 1x12 _x25 1x20'
+        alert_rule_test:
+{{ $remoteMetricExpected := "" }}
+{{ $remoteMetricCases := list
+  (dict "name" "prometheus_remote_storage_samples_failed_total" "incidentKey" "remote-write-metric-failures")
+  (dict "name" "prometheus_remote_write_wal_out_of_order_samples_total" "incidentKey" "remote-write-metric-wal")
+  (dict "name" "prometheus_remote_storage_queue_highest_sent_timestamp_seconds" "incidentKey" "remote-write-metric-progress")
+}}
+{{ range $metric := $remoteMetricCases }}
+{{ $one := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "RemoteWriteMetricFamilyMissing" "severity" "critical" "service" "telemetry" "component" "remote-write" "scope" "obs-w" "family" "telemetry" "incidentKey" $metric.incidentKey "extraLabels" (dict "metric_family" $metric.name) "summary" (printf "Remote-write metric family %s is missing" $metric.name) "description" "The Alloy scrape target is healthy but a required remote-write self-metric family is absent." "impact" "Remote-write failures or stalls may be hidden; missing telemetry must not be interpreted as a healthy zero." "runbook" "remote-write-failure" "dashboard" "obs-w-alerting-health") }}
+{{ $remoteMetricExpected = printf "%s%s\n" $remoteMetricExpected $one }}
+{{ end }}
+{{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "RemoteWriteMetricFamilyMissing" "expected" $remoteMetricExpected) | indent 10 }}
+          {{ $compactorMetricExpected := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "ThanosCompactorMetricFamilyMissing" "severity" "critical" "service" "thanos" "component" "thanos-compactor" "scope" "obs-w" "family" "thanos" "incidentKey" "compactor-metric-halted" "extraLabels" (dict "metric_family" "thanos_compact_halted") "summary" "Thanos Compactor halted metric family is missing" "description" "The Compactor scrape target is healthy but its required halted-state metric is absent." "impact" "A halted Compactor may be hidden; missing telemetry must not be interpreted as a healthy zero." "runbook" "thanos-compactor-halted" "dashboard" "obs-w-alerting-health") }}
+{{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "ThanosCompactorMetricFamilyMissing" "expected" $compactorMetricExpected) | indent 10 }}
+{{ $rulerMetricExpected := "" }}
+{{ $rulerMetricCases := list
+  (dict "name" "prometheus_rule_evaluation_failures_total" "incidentKey" "ruler-metric-evaluation-failures")
+  (dict "name" "thanos_rule_evaluation_with_warnings_total" "incidentKey" "ruler-metric-evaluation-warnings")
+  (dict "name" "thanos_alert_queue_alerts_dropped_total" "incidentKey" "ruler-metric-alert-queue-drops")
+  (dict "name" "thanos_alert_sender_alerts_dropped_total" "incidentKey" "ruler-metric-alert-sender-drops")
+  (dict "name" "prometheus_rule_group_last_duration_seconds" "incidentKey" "ruler-metric-evaluation-duration")
+  (dict "name" "prometheus_rule_group_last_evaluation_timestamp_seconds" "incidentKey" "ruler-metric-last-evaluation")
+}}
+{{ range $metric := $rulerMetricCases }}
+{{ $one := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "ThanosRulerMetricFamilyMissing" "severity" "critical" "service" "alerting" "component" "thanos-ruler" "scope" "obs-w" "family" "alerting" "incidentKey" $metric.incidentKey "extraLabels" (dict "metric_family" $metric.name) "summary" (printf "Thanos Ruler metric family %s is missing" $metric.name) "description" "The Ruler scrape target is healthy but a required evaluation or delivery metric family is absent." "impact" "Ruler failures may be hidden; missing telemetry must not be interpreted as a healthy zero." "runbook" "alerting-pipeline" "dashboard" "obs-w-alerting-health") }}
+{{ $rulerMetricExpected = printf "%s%s\n" $rulerMetricExpected $one }}
+{{ end }}
+{{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "ThanosRulerMetricFamilyMissing" "expected" $rulerMetricExpected) | indent 10 }}
+          {{ $alertmanagerMetricExpected := include "observability-alerting.promtoolExpectedAlert" (dict "root" $ "alertname" "AlertmanagerMetricFamilyMissing" "severity" "critical" "service" "alerting" "component" "alertmanager" "scope" "obs-w" "family" "alerting" "incidentKey" "alertmanager-metric-config-reload" "extraLabels" (dict "metric_family" "alertmanager_config_last_reload_successful") "summary" "Alertmanager config-reload metric family is missing" "description" "The Alertmanager scrape target is healthy but its required config-reload metric family is absent." "impact" "A rejected or stale routing configuration may be hidden; missing telemetry must not be interpreted as a healthy zero." "runbook" "alerting-pipeline" "dashboard" "obs-w-alerting-health") }}
+{{ include "observability-alerting.promtoolLifecycle" (dict "alertname" "AlertmanagerMetricFamilyMissing" "expected" $alertmanagerMetricExpected) | indent 10 }}
+
+      - name: required metric-family alerts defer to component-down alerts
+        interval: 1m
+        input_series:
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.telemetry.remoteWrite.job | quote }}}'
+            values: '0x30'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.thanosCompactor.job | quote }}}'
+            values: '0x30'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.rulerJob | quote }}}'
+            values: '0x30'
+          - series: 'up{cluster={{ .Values.identity.hub.cluster | quote }},tenant_id={{ .Values.identity.tenantId | quote }},job={{ .Values.monitoring.alertmanagerJob | quote }}}'
+            values: '0x30'
+        alert_rule_test:
+          {{- range $alertName := list "RemoteWriteMetricFamilyMissing" "ThanosCompactorMetricFamilyMissing" "ThanosRulerMetricFamilyMissing" "AlertmanagerMetricFamilyMissing" }}
+          - eval_time: 20m
+            alertname: {{ $alertName }}
+            exp_alerts: []
+          {{- end }}
 
       - name: counter resets do not manufacture failures
         interval: 1m
