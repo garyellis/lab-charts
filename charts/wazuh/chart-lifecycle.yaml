@@ -1,0 +1,65 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: wazuh
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    validators:
+      # The wazuh-manager image runs s6-overlay as root (it chowns its data
+      # tree and drops privileges per daemon), so the manager StatefulSets
+      # cannot satisfy require-non-root, and the pipeline has no per-resource
+      # exception. tests/render-contract.sh re-asserts the policy intent for
+      # every other workload (non-root) and for Services (no LoadBalancer by
+      # default) so the exemption stays scoped to the manager.
+      policy: false
+    releaseName: wazuh
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+      ci-sso:
+        values:
+          - values.yaml
+          - values-ci.yaml
+          - values-ci-sso.yaml
+    triggers:
+      "Chart.yaml": [ci, ci-sso]
+      "values.yaml": [ci, ci-sso]
+      "values-ci.yaml": [ci, ci-sso]
+      "values-ci-sso.yaml": [ci-sso]
+      "values.schema.json": [ci, ci-sso]
+      "templates/**": [ci, ci-sso]
+      "files/**": [ci, ci-sso]
+      "chart-lifecycle.yaml": [ci, ci-sso]
+      "README.md": [ci]
+      "tests/**": [ci, ci-sso]
+    unmatchedChanges: all-environments
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Install a single-node indexer, a manager master plus one worker, and
+          the dashboard with cert-manager-issued TLS, exposed at
+          https://wazuh.kind.local through a chart-owned Istio Gateway on the
+          local ingress gateway. Helm tests verify indexer health, a Wazuh API
+          login as wazuh-wui, dashboard status over verified TLS, and the
+          dashboard route through the ingress gateway.
+        namespace: wazuh
+        requires:
+          # Pulls cert-manager, istio-base and istiod as its own requirements.
+          - chart: istio-gateway
+            profile: minimal
+          # Rolls workloads when certificates renew or credentials rotate.
+          - chart: reloader
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 25m
+    dependentTests: []

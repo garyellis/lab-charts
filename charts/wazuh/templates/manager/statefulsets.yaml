@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "wazuh.componentName" (dict "root" . "component" "manager") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "manager") | nindent 4 }}
+automountServiceAccountToken: false
+---
+{{ include "wazuh.manager.statefulset" (dict "root" . "type" "master") }}
+{{- if gt (int .Values.manager.workers.replicas) 0 }}
+---
+{{ include "wazuh.manager.statefulset" (dict "root" . "type" "worker") }}
+{{- end }}

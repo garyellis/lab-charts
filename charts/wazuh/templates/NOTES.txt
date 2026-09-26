@@ -1,0 +1,15 @@
+Wazuh {{ .Chart.AppVersion }} is installing in namespace {{ .Release.Namespace }}.
+
+Indexer:       {{ include "wazuh.indexer.url" . }}
+Wazuh API:     {{ include "wazuh.manager.apiUrl" . }}:55000 (user wazuh-wui)
+Agent events:  {{ include "wazuh.manager.eventsService" . }}:1514 ({{ .Values.manager.agentServices.type }})
+Enrollment:    {{ include "wazuh.manager.registrationService" . }}:1515 ({{ .Values.manager.agentServices.type }})
+{{- if .Values.istio.enabled }}
+Dashboard:     https://{{ include "wazuh.dashboard.host" . }}/
+{{- else }}
+Dashboard:     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wazuh.dashboard.name" . }} 5601
+               then open https://localhost:5601/
+{{- end }}
+
+Log in as "admin" with the indexer-admin-password key of Secret {{ include "wazuh.credentialsSecret" . }}.
+Run the in-cluster checks with: helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

@@ -1,0 +1,45 @@
+{{- $sso := .Values.sso -}}
+{{- $authTypes := list -}}
+{{- if $sso.oidc.enabled }}{{ $authTypes = append $authTypes "openid" }}{{ end -}}
+{{- if $sso.saml.enabled }}{{ $authTypes = append $authTypes "saml" }}{{ end -}}
+{{- $authTypes = append $authTypes "basicauth" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wazuh.dashboard.name" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+data:
+  opensearch_dashboards.yml: |
+    server.host: 0.0.0.0
+    server.port: 5601
+    server.ssl.enabled: true
+    server.ssl.certificate: /usr/share/wazuh-dashboard/certs/tls.crt
+    server.ssl.key: /usr/share/wazuh-dashboard/certs/tls.key
+    opensearch.hosts: {{ include "wazuh.indexer.url" . | quote }}
+    opensearch.ssl.verificationMode: full
+    opensearch.ssl.certificateAuthorities: ["/usr/share/wazuh-dashboard/certs/ca.crt"]
+    opensearch.requestHeadersWhitelist: ["securitytenant", "Authorization"]
+    opensearch_security.multitenancy.enabled: false
+    # Session cookie: key from the credentials Secret, HTTPS-only.
+    opensearch_security.cookie.password: ${DASHBOARD_COOKIE_PASSWORD}
+    opensearch_security.cookie.secure: true
+    opensearch_security.readonly_mode.roles: ["kibana_read_only"]
+    # Lets probes and helm tests read status without credentials.
+    opensearch_security.auth.unauthenticated_routes: ["/api/status"]
+    opensearch_security.auth.type: {{ $authTypes | toJson }}
+    opensearch_security.auth.multiple_auth_enabled: {{ gt (len $authTypes) 1 }}
+    uiSettings.overrides.defaultRoute: /app/wz-home
+    {{- if $sso.oidc.enabled }}
+    opensearch_security.openid.connect_url: {{ $sso.oidc.connectUrl | quote }}
+    opensearch_security.openid.logout_url: {{ required "sso.oidc.logoutUrl is required when sso.oidc.enabled" $sso.oidc.logoutUrl | quote }}
+    opensearch_security.openid.base_redirect_url: {{ include "wazuh.dashboard.publicUrl" . | quote }}
+    opensearch_security.openid.scope: {{ $sso.oidc.scope | quote }}
+    opensearch_security.openid.client_id: ${OIDC_CLIENT_ID}
+    opensearch_security.openid.client_secret: ${OIDC_CLIENT_SECRET}
+    opensearch_security.ui.openid.login.buttonname: {{ $sso.oidc.loginButtonText | quote }}
+    {{- end }}
+    {{- if $sso.saml.enabled }}
+    server.xsrf.allowlist: ["/_opendistro/_security/saml/acs", "/_opendistro/_security/saml/acs/idpinitiated", "/_opendistro/_security/saml/logout", "/_plugins/_security/saml/acs", "/_plugins/_security/saml/acs/idpinitiated", "/_plugins/_security/saml/logout"]
+    {{- end }}

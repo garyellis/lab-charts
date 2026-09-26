@@ -1,0 +1,55 @@
+{{- /*
+Self-signed bootstrap chain, used only when no external issuer is given:
+selfsigned Issuer -> root CA Certificate -> CA Issuer -> leaf certificates.
+*/ -}}
+{{- if not .Values.certificates.issuerRef.name }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "wazuh.componentName" (dict "root" . "component" "selfsigned") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "wazuh.componentName" (dict "root" . "component" "root-ca") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  secretName: {{ include "wazuh.secret.rootCA" . }}
+  commonName: {{ printf "%s-root-ca" (include "wazuh.fullname" .) | quote }}
+  subject:
+    organizations:
+      - {{ .Values.certificates.subject.organization | quote }}
+    organizationalUnits:
+      - {{ include "wazuh.certs.ou" . | quote }}
+  duration: {{ .Values.certificates.caDuration }}
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    # Keep the CA key across renewals. Leaves issued just before or after a
+    # renewal then still verify against either CA certificate; re-keying the
+    # CA races every leaf's ca.crt and splits trust until all are reissued.
+    rotationPolicy: Never
+  issuerRef:
+    name: {{ include "wazuh.componentName" (dict "root" . "component" "selfsigned") }}
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "wazuh.componentName" (dict "root" . "component" "ca") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "wazuh.secret.rootCA" . }}
+{{- end }}

@@ -1,0 +1,81 @@
+# kind / CI profile: one indexer, master plus one worker, small volumes, and
+# the dashboard exposed at https://wazuh.kind.local through the local
+# istio-gateway release (the minimal profile requires it).
+appsDomain: kind.local
+
+# CI-only throwaway credentials. Real environments set
+# credentials.existingSecret (ExternalSecrets) instead.
+credentials:
+  create: true
+  values:
+    indexerAdminPassword: Ci-Admin-Passw0rd
+    indexerDashboardPassword: Ci-Dashboard-Passw0rd
+    indexerWriterPassword: Ci-Writer-Passw0rd
+    # At least 32 characters.
+    dashboardCookiePassword: ci-dashboard-cookie-password-0123456789
+    apiPassword: Ci-Wui-Passw0rd.1
+    authdPassword: ci-enrollment-password
+    # Exactly 32 characters.
+    clusterKey: c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1
+
+indexer:
+  replicas: 1
+  javaOpts: "-Xms512m -Xmx512m"
+  # kind shares the laptop disk; watermarks would block shard allocation.
+  diskThresholdEnabled: false
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+  storage:
+    size: 2Gi
+    storageClassName: standard
+  # kind nodes inherit vm.max_map_count=262144 from the Docker VM.
+  sysctlInitContainer:
+    enabled: false
+
+manager:
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    storage:
+      size: 2Gi
+      storageClassName: standard
+  # One worker exercises cluster join (1516, cluster key) and per-pod node names.
+  workers:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 384Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    storage:
+      size: 2Gi
+      storageClassName: standard
+  # The CVE feed is several GB; not useful on a laptop.
+  vulnerabilityDetection:
+    enabled: false
+
+dashboard:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+istio:
+  enabled: true
+  # Bind to the shared istio-ingress/apps-gateway (the default): its
+  # *.kind.local wildcard already covers wazuh.kind.local.

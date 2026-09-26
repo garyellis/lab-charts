@@ -1,0 +1,113 @@
+{{- /*
+Dashboard exposure through an Istio ingress gateway: either the shared
+gateway named by istio.gateway.existing, or a chart-owned Gateway. The
+gateway terminates client TLS and originates a new TLS session to the
+dashboard's HTTPS port (5601), configured by the DestinationRule below.
+*/ -}}
+{{- if .Values.istio.enabled }}
+{{- $name := include "wazuh.dashboard.name" . -}}
+{{- $backend := printf "%s.%s.svc.cluster.local" $name .Release.Namespace -}}
+{{- $hosts := include "wazuh.dashboard.hosts" . | fromYamlArray -}}
+{{- if .Values.istio.gateway.create }}
+{{- $gw := .Values.istio.gateway }}
+{{- $portSuffix := include "wazuh.istio.gatewayName" . | trunc 50 | trimSuffix "-" }}
+# Chart-owned Gateway, mirroring the shared apps-gateway (HTTP redirect + HTTPS).
+# credentialName is resolved in the ingress gateway workload's namespace.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "wazuh.istio.gatewayName" . }}
+  namespace: {{ include "wazuh.istio.gatewayNamespace" . }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  selector:
+    {{- toYaml $gw.selector | nindent 4 }}
+  servers:
+    # Port names are unique per gateway workload so they cannot collide with
+    # other Gateways (for example apps-gateway) merged onto the same ports.
+    - hosts:
+        {{- range $hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      port:
+        name: http-{{ $portSuffix }}
+        number: 80
+        protocol: HTTP
+      tls:
+        httpsRedirect: true
+    - hosts:
+        {{- range $hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      port:
+        name: https-{{ $portSuffix }}
+        number: 443
+        protocol: HTTPS
+      tls:
+        mode: {{ $gw.tls.mode }}
+        credentialName: {{ required "istio.gateway.tls.credentialName is required when istio.gateway.create=true" $gw.tls.credentialName | quote }}
+---
+{{- end }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  hosts:
+    {{- range $hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  gateways:
+    - {{ include "wazuh.istio.gatewayRef" . | quote }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: {{ $backend }}
+            port:
+              number: 5601
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  host: {{ $backend }}
+  {{- /* Visible only here and to the ingress gateway's namespace. With a
+  chart-owned Gateway that is the gateway workload's namespace, which the
+  chart cannot know from the Gateway resource: istio.gateway.existing's
+  namespace (default istio-ingress) is used for both modes. */}}
+  {{- $gwNamespace := regexReplaceAll "/.*$" (.Values.istio.gateway.existing | default "istio-ingress/x") "" }}
+  exportTo:
+    - "."
+    {{- if ne $gwNamespace .Release.Namespace }}
+    - {{ $gwNamespace | quote }}
+    {{- end }}
+  trafficPolicy:
+    portLevelSettings:
+      - port:
+          number: 5601
+        tls:
+          mode: SIMPLE
+          sni: {{ $backend }}
+          {{- with .Values.istio.dashboard.backendTLS.credentialName }}
+          # CA bundle (ca.crt) from a Secret in the gateway's namespace.
+          credentialName: {{ . }}
+          subjectAltNames:
+            - {{ $backend }}
+          {{- else }}
+          # Encrypted but unauthenticated hop: the gateway cannot read this
+          # chart's CA from another namespace. Set backendTLS.credentialName
+          # to verify.
+          insecureSkipVerify: true
+          {{- end }}
+{{- end }}

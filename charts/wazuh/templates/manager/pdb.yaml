@@ -1,0 +1,15 @@
+{{- if and .Values.manager.workers.pdb.enabled (gt (int .Values.manager.workers.replicas) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wazuh.manager.workerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "manager") | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.manager.workers.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "manager") | nindent 6 }}
+      wazuh.com/node-type: worker
+{{- end }}

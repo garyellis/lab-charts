@@ -1,0 +1,192 @@
+{{- $indexer := include "wazuh.indexer.name" . -}}
+{{- $v := .Values.indexer -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $indexer }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $indexer }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 4 }}
+  {{- /* OpenSearch loads its node certificate only at startup. Credentials are
+  not listed: the pod reads them only to seed the security index on first
+  boot; the security-config Deployment applies later changes. */}}
+  {{- include "wazuh.reloaderAnnotations" (dict "root" . "secrets" (list (include "wazuh.secret.indexerTLS" .))) | nindent 2 }}
+spec:
+  serviceName: {{ include "wazuh.indexer.nodesService" . }}
+  replicas: {{ $v.replicas }}
+  # Nodes must discover each other to form a cluster; ordered startup would
+  # deadlock the initial cluster-manager election.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "indexer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 8 }}
+      annotations:
+        # Only opensearch.yml is read at runtime. Security files are applied by
+        # the security-config Deployment; certificates roll via Reloader.
+        checksum/config: {{ include "wazuh.indexer.opensearchYml" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $indexer }}
+      automountServiceAccountToken: false
+      {{- include "wazuh.imagePullSecrets" . | nindent 6 }}
+      {{- include "wazuh.scheduling" (omit $v "affinity") | nindent 6 }}
+      {{- include "wazuh.affinity" (dict "affinity" $v.affinity "root" . "component" "indexer") | nindent 6 }}
+      securityContext:
+        # The optional sysctl init container runs as root, so runAsNonRoot is
+        # asserted per container instead of pod-wide.
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        {{- if $v.sysctlInitContainer.enabled }}
+        - name: sysctl
+          image: {{ include "wazuh.image" .Values.images.indexer | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              current="$(cat /proc/sys/vm/max_map_count)"
+              if [ "${current}" -lt 262144 ]; then
+                echo 262144 > /proc/sys/vm/max_map_count
+              fi
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            runAsNonRoot: false
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        {{- end }}
+        {{- include "wazuh.indexer.securityInitContainer" . | nindent 8 }}
+      containers:
+        - name: indexer
+          image: {{ include "wazuh.image" .Values.images.indexer | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPENSEARCH_JAVA_OPTS
+              value: {{ $v.javaOpts | quote }}
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "true"
+            {{- if .Values.sso.saml.enabled }}
+            - name: SAML_EXCHANGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "sso.saml.exchangeKeySecret.name is required when sso.saml.enabled" .Values.sso.saml.exchangeKeySecret.name }}
+                  key: {{ .Values.sso.saml.exchangeKeySecret.key }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          startupProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+            failureThreshold: 60
+          # Ready only once this node has joined a cluster with an elected
+          # cluster manager and the security index is initialized (otherwise
+          # 503). A TCP check passes before that, which would let a rolling
+          # update restart the next node while this one is still rejoining.
+          # Authenticates with the node certificate (CN mapped to
+          # wazuh_node_monitor: cluster_monitor only), not a password.
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - --silent
+                - --fail
+                - --output
+                - /dev/null
+                - --max-time
+                - "5"
+                - --cacert
+                - /usr/share/wazuh-indexer/config/certs/ca.crt
+                - --cert
+                - /usr/share/wazuh-indexer/config/certs/tls.crt
+                - --key
+                - /usr/share/wazuh-indexer/config/certs/tls.key
+                - --connect-to
+                - {{ printf "%s:9200:127.0.0.1:9200" $indexer | quote }}
+                - {{ printf "https://%s:9200/_cluster/health?local=true" $indexer | quote }}
+            periodSeconds: 10
+            timeoutSeconds: 6
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: transport
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            {{- include "wazuh.restrictedContainerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/wazuh-indexer
+            - name: config
+              mountPath: /usr/share/wazuh-indexer/config/opensearch.yml
+              subPath: opensearch.yml
+              readOnly: true
+            - name: security
+              mountPath: /usr/share/wazuh-indexer/config/opensearch-security
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-indexer/config/certs
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $indexer }}-config
+        - name: security-static
+          configMap:
+            name: {{ $indexer }}-security
+        - name: security
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
+        - name: certs
+          secret:
+            secretName: {{ include "wazuh.secret.indexerTLS" . }}
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+        labels:
+          {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "indexer") | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- with $v.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.storage.size }}

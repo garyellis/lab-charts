@@ -1,0 +1,148 @@
+{{- $name := include "wazuh.dashboard.name" . -}}
+{{- $v := .Values.dashboard -}}
+{{- $credentials := include "wazuh.credentialsSecret" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+  {{- $reload := list (include "wazuh.secret.dashboardTLS" .) $credentials }}
+  {{- with .Values.sso.oidc.enabled }}{{ $reload = append $reload $.Values.sso.oidc.clientSecret.name }}{{ end }}
+  {{- include "wazuh.reloaderAnnotations" (dict "root" . "secrets" $reload) | nindent 2 }}
+spec:
+  replicas: {{ $v.replicas }}
+  selector:
+    matchLabels:
+      {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "dashboard") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/dashboard/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.reloader.enabled }}
+        checksum/credentials: {{ include (print $.Template.BasePath "/credentials-secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- include "wazuh.imagePullSecrets" . | nindent 6 }}
+      {{- include "wazuh.scheduling" $v | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: {{ include "wazuh.image" .Values.images.dashboard | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          env:
+            # Written into the dashboard keystore by the image entrypoint.
+            - name: DASHBOARD_USERNAME
+              value: kibanaserver
+            - name: DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: indexer-dashboard-password
+            # Written into data/wazuh/config/wazuh.yml by the image entrypoint.
+            - name: WAZUH_API_URL
+              value: {{ include "wazuh.manager.apiUrl" . | quote }}
+            - name: API_PORT
+              value: "55000"
+            - name: API_USERNAME
+              value: wazuh-wui
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: api-password
+            # Encrypts the session cookie (opensearch_security.cookie.password).
+            - name: DASHBOARD_COOKIE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: dashboard-cookie-password
+            {{- if .Values.sso.oidc.enabled }}
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "sso.oidc.clientSecret.name is required when sso.oidc.enabled" .Values.sso.oidc.clientSecret.name }}
+                  key: {{ .Values.sso.oidc.clientSecret.clientIdKey }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sso.oidc.clientSecret.name }}
+                  key: {{ .Values.sso.oidc.clientSecret.clientSecretKey }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: 5601
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /api/status
+              port: https
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /api/status
+              port: https
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            {{- include "wazuh.restrictedContainerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+              subPath: opensearch_dashboards.yml
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-dashboard/certs
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}-config
+        - name: certs
+          secret:
+            secretName: {{ include "wazuh.secret.dashboardTLS" . }}
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "dashboard") | nindent 4 }}
+  ports:
+    - name: https
+      port: 5601
+      targetPort: https
+      appProtocol: https

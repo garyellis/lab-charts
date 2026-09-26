@@ -1,0 +1,29 @@
+{{- /*
+End-to-end route check through the Istio ingress gateway: connect to the
+gateway Service with the dashboard host as SNI and Host header, exactly as
+an external client would. The gateway presents its own (wildcard)
+certificate, whose CA this pod cannot read, so TLS is not verified here;
+the check proves Gateway + VirtualService + DestinationRule wiring.
+*/ -}}
+{{- if .Values.istio.enabled }}
+{{- $host := include "wazuh.dashboard.host" . -}}
+{{- $gw := .Values.tests.ingressGateway -}}
+{{- $script := printf `
+host='%s'
+target='%s:%v'
+for attempt in $(seq 1 24); do
+  code="$(curl -sS --max-time 20 --insecure --connect-to "${host}:443:${target}" \
+    -o /tmp/status.json -w '%%{http_code}' "https://${host}/api/status" || true)"
+  if [[ "${code}" == "200" ]]; then
+    state="$(python3 -c 'import json; print(json.load(open("/tmp/status.json"))["status"]["overall"]["state"])' 2>/dev/null || echo unknown)"
+    echo "https://${host}/api/status via ${target}: http ${code}, overall state ${state}"
+    exit 0
+  fi
+  echo "attempt ${attempt}: http ${code}"
+  sleep 5
+done
+echo "dashboard not reachable through the ingress gateway" >&2
+exit 1
+` $host $gw.service $gw.port -}}
+{{ include "wazuh.test.pod" (dict "root" . "name" "dashboard-ingress" "caSecret" (include "wazuh.secret.dashboardTLS" .) "script" $script) }}
+{{- end }}

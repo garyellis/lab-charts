@@ -1,0 +1,239 @@
+# Wazuh 4.14 server stack: indexer (OpenSearch), manager cluster, dashboard.
+# values.schema.json bounds every key below; unknown keys fail rendering.
+
+nameOverride: ""
+# Capped at 36 characters so derived StatefulSet names stay within 52.
+fullnameOverride: ""
+
+appsDomain: k8s.home.lab.io
+
+# All credentials come from one Secret. See README "Credentials Secret".
+# No defaults exist: rendering fails unless existingSecret is set, or
+# create=true is set together with every value (CI/kind only).
+credentials:
+  existingSecret: ""
+  create: false
+  values:
+    indexerAdminPassword: ""
+    indexerDashboardPassword: ""
+    indexerWriterPassword: ""
+    dashboardCookiePassword: ""
+    apiPassword: ""
+    authdPassword: ""
+    clusterKey: ""
+
+# Stakater Reloader (charts/reloader) rolls each workload when a Secret it
+# consumes changes: renewed cert-manager certificates and rotated
+# credentials. The annotations are inert without Reloader; production needs
+# it, otherwise renewed certificates are only picked up by a manual restart.
+reloader:
+  enabled: true
+
+# cert-manager must already be installed (charts/cert-manager).
+# With issuerRef.name empty the chart creates a self-signed root CA and a
+# namespaced CA Issuer. Otherwise every leaf certificate is issued by the
+# referenced CA-type issuer, which must populate ca.crt.
+certificates:
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+  # Subject of every leaf certificate. plugins.security.admin_dn / nodes_dn
+  # are derived from it, so anyone who can get a certificate with this
+  # subject from the issuer is an indexer admin or node. See README
+  # "Certificates and trust".
+  subject:
+    organization: Wazuh
+    # Empty: "<fullname>.<namespace>", unique per release.
+    organizationalUnit: ""
+  duration: 8760h
+  renewBefore: 720h
+  caDuration: 87600h
+
+images:
+  pullPolicy: IfNotPresent
+  indexer:
+    repository: docker.io/wazuh/wazuh-indexer
+    tag: 4.14.7
+  manager:
+    repository: docker.io/wazuh/wazuh-manager
+    tag: 4.14.7
+  dashboard:
+    repository: docker.io/wazuh/wazuh-dashboard
+    tag: 4.14.7
+
+imagePullSecrets: []
+
+indexer:
+  # 1 selects single-node discovery. Changing between 1 and >1 after install
+  # requires a fresh cluster; scale 3 -> 5 is safe.
+  replicas: 3
+  clusterName: wazuh-cluster
+  javaOpts: "-Xms2g -Xmx2g"
+  # Disk watermarks. Disable only on throwaway clusters (kind) where the host
+  # disk may already be above the 85% low watermark.
+  diskThresholdEnabled: true
+  resources:
+    requests:
+      cpu: 500m
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  storage:
+    size: 50Gi
+    storageClassName: ""
+  # vm.max_map_count >= 262144 is a node-level prerequisite. This opt-in
+  # privileged init container raises it when the node cannot be configured.
+  sysctlInitContainer:
+    enabled: false
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  nodeSelector: {}
+  tolerations: []
+  # Empty: preferred anti-affinity across nodes (kubernetes.io/hostname).
+  affinity: {}
+
+manager:
+  master:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    storage:
+      size: 20Gi
+      storageClassName: ""
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  workers:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    storage:
+      size: 20Gi
+      storageClassName: ""
+    pdb:
+      enabled: true
+      maxUnavailable: 1
+    nodeSelector: {}
+    tolerations: []
+    # Empty: preferred anti-affinity across nodes (kubernetes.io/hostname).
+    affinity: {}
+  # Agent-facing Services (1514 events, 1515 enrollment). The API (55000)
+  # and cluster (1516) Services are always ClusterIP. LoadBalancer requires
+  # loadBalancerSourceRanges.
+  agentServices:
+    type: ClusterIP
+    annotations: {}
+    loadBalancerSourceRanges: []
+  # Store every event (archives) and ship wazuh-archives-* to the indexer.
+  archives:
+    enabled: false
+  # Downloads the CVE feed (several GB) and indexes vulnerability state.
+  vulnerabilityDetection:
+    enabled: true
+  # Custom rules/decoders. Empty uses files/manager/local_*.xml. Mounted on
+  # every start: Git is the source of truth, UI edits are overwritten.
+  localRules: ""
+  localDecoders: ""
+
+dashboard:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+istio:
+  enabled: true
+  gateway:
+    # false: attach to the shared gateway named by `existing`.
+    # true: render a chart-owned Gateway (in the release namespace) bound to
+    # the ingress workload matched by `selector`.
+    create: false
+    existing: istio-ingress/apps-gateway
+    # Chart-owned Gateway name. Empty: the chart fullname.
+    name: ""
+    # Chart-owned Gateway namespace. Empty: the release namespace.
+    namespace: ""
+    selector:
+      istio: gateway-internal
+    tls:
+      mode: SIMPLE
+      # Required with create=true. Istio resolves it in the ingress gateway
+      # *workload's* namespace (istio-ingress), not the Gateway's namespace.
+      credentialName: ""
+  dashboard:
+    hostPrefix: wazuh
+    hosts: []
+    # The gateway originates TLS to the dashboard (5601). With credentialName
+    # empty the upstream certificate is not verified (encrypted, not
+    # authenticated). Set it to a Secret in the gateway's namespace whose
+    # ca.crt is this chart's CA to verify. See README "Istio exposure".
+    backendTLS:
+      credentialName: ""
+
+# Dashboard single sign-on. Basic auth against the internal users stays
+# enabled as the break-glass path.
+sso:
+  # Public dashboard URL for redirects. Empty: https://<dashboard host>.
+  publicUrl: ""
+  oidc:
+    enabled: false
+    # IdP discovery document, e.g. https://idp.example.com/.well-known/openid-configuration
+    connectUrl: ""
+    logoutUrl: ""
+    scope: "openid profile email"
+    subjectKey: preferred_username
+    rolesKey: groups
+    loginButtonText: "Log in with single sign-on"
+    # Secret holding the OIDC client id and secret for the dashboard.
+    clientSecret:
+      name: ""
+      clientIdKey: client-id
+      clientSecretKey: client-secret
+  saml:
+    enabled: false
+    idpMetadataUrl: ""
+    idpEntityId: ""
+    spEntityId: wazuh-saml
+    rolesKey: Roles
+    # Secret holding the SAML exchange key (at least 32 characters).
+    exchangeKeySecret:
+      name: ""
+      key: exchange-key
+  # Backend roles (IdP groups) mapped onto OpenSearch security roles, in
+  # addition to the chart's fixed mappings (admin -> all_access, kibanaserver).
+  roleMappings: {}
+  #   all_access: ["wazuh-admins"]
+  #   kibana_user: ["wazuh-users"]
+  #   readall: ["wazuh-readers"]
+
+tests:
+  # Ingress gateway Service the routed dashboard test connects to (with the
+  # dashboard host as SNI and Host header). Rendered only with istio.enabled.
+  ingressGateway:
+    service: istio-gateway.istio-ingress.svc.cluster.local
+    port: 443
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
