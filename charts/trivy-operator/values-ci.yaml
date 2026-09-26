@@ -1,0 +1,10 @@
+# CI overlay for kind. The base values already fit kind; this pins the
+# settings the helm test depends on so a base-values change cannot silently
+# break it.
+trivy-operator:
+  operator:
+    vulnerabilityScannerEnabled: true
+    metricsFindingsEnabled: true
+  # The minimal profile installs prometheus-operator for the CRD.
+  serviceMonitor:
+    enabled: true
