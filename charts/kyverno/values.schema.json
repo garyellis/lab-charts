@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "description": "This wrapper owns no values of its own; every setting is upstream and nested under `kyverno`. The schema is deliberately narrow: it locks the top level so a stray key (most often overrides that forgot to nest under `kyverno:`) is rejected, but it does not tighten the `kyverno` subtree, whose large surface belongs to the vendored chart and changes across versions.",
+  "additionalProperties": false,
+  "properties": {
+    "kyverno": { "type": "object" },
+    "global": { "type": "object" }
+  }
+}

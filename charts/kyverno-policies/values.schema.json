@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "description": "Wrapper-owned values. Upstream values under `kyverno-policies` are passed through to the vendored chart.",
+  "properties": {
+    "repositoryPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enforce"],
+      "properties": {
+        "enforce": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "kyverno-policies": { "type": "object" }
+  }
+}

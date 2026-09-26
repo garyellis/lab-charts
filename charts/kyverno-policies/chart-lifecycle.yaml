@@ -1,0 +1,45 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: kyverno-policies
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: kyverno-policies
+    namespaceTemplate: "lab-${env}"
+    # No values-ci.yaml: the policies are cluster-scoped and nothing about
+    # them differs on kind. Changes under policies/ already revalidate every
+    # chart, this one included.
+    environments:
+      ci:
+        namespace: kyverno
+        values:
+          - values.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "Chart.lock":           [ci]
+      "values.yaml":          [ci]
+      "values.schema.json":   [ci]
+      "templates/**":         [ci]
+      "chart-lifecycle.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Install the repository's policies/ and the Pod Security Standards
+          baseline, all in Audit mode, and prove Kyverno reports every one
+          Ready. Existing workloads get PolicyReports from the background scan.
+        namespace: kyverno
+        requires:
+          - chart: kyverno
+            profile: minimal
+        values:
+          - values.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []

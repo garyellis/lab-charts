@@ -1,0 +1,14 @@
+# Wrapper-owned: the repository's ClusterPolicies, read from files/policies (a
+# symlink to the repository's policies/, which `chart-manager validate` also
+# runs in CI). Every policy is installed in Audit mode; list a policy name
+# here to block violating requests instead.
+repositoryPolicies:
+  enforce: []
+
+# Upstream Pod Security Standards policies are nested under the dependency
+# name. Baseline, as ValidatingPolicies, in Audit mode. Set
+# validationFailureAction: Enforce (all) or
+# validationFailureActionByPolicy.<name>: Enforce (one) to block.
+kyverno-policies:
+  podSecurityStandard: baseline
+  validationFailureAction: Audit

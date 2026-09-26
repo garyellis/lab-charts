@@ -1,0 +1,88 @@
+{{- /*
+Proves Kyverno accepted every policy this release installs: Ready means the
+policy compiled and its webhook rules are registered. Admission decisions
+themselves are proven by the kyverno chart's helm test.
+
+fromYaml reads only the FIRST YAML document in a file, matching how
+repository-policies.yaml renders them, so each file under policies/ must hold
+exactly one ClusterPolicy.
+*/ -}}
+{{- $name := printf "%s-ready-test" .Release.Name | trunc 50 | trimSuffix "-" -}}
+{{- $repositoryPolicies := list -}}
+{{- range $path, $_ := .Files.Glob "files/policies/*.yaml" }}
+{{- $repositoryPolicies = append $repositoryPolicies (printf "clusterpolicy/%s" ($.Files.Get $path | fromYaml).metadata.name) }}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["kyverno.io"]
+    resources: ["clusterpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policies.kyverno.io"]
+    resources: ["validatingpolicies"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $name }}
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: repository-policies
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "wait", {{ range $repositoryPolicies }}{{ . | quote }}, {{ end }}"--for=condition=Ready", "--timeout=120s"]
+      securityContext: &containerSecurityContext
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+    - name: pod-security-standards
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "wait", "validatingpolicy", "--selector=app.kubernetes.io/instance={{ .Release.Name }}", "--for=jsonpath={.status.conditionStatus.ready}=true", "--timeout=120s"]
+      securityContext: *containerSecurityContext
