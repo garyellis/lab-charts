@@ -21,6 +21,16 @@
         "image:\\s*[\"']?(?<depName>[A-Za-z0-9._/:-]+):(?<currentValue>[A-Za-z0-9._-]+)[\"']?"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)charts/reloader/values\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "repository:\\s*(?<depName>ghcr\\.io/stakater/reloader)\\s+tag:\\s*(?<currentValue>v[0-9][^\\s#]*)[\\s\\S]*?digest:\\s*(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
     }
   ]
 }

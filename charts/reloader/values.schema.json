@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Wrapper-owned values. Upstream values under `reloader` are validated by the vendored chart's own schema.",
+  "properties": {
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workloadImage", "kubectlImage", "timeout"],
+      "properties": {
+        "workloadImage": { "$ref": "#/definitions/image" },
+        "kubectlImage": { "$ref": "#/definitions/image" },
+        "timeout": { "type": "string", "pattern": "^[0-9]+(s|m)$" }
+      }
+    },
+    "reloader": { "type": "object" }
+  },
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
