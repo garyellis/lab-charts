@@ -1,0 +1,11 @@
+# CI overlay for kind. The base values already fit kind; this pins the
+# settings CI depends on so a base-values change cannot silently break them.
+reloader:
+  reloader:
+    # The kind minimal profile installs no prometheus-operator CRDs.
+    podMonitor:
+      enabled: false
+    serviceMonitor:
+      enabled: false
+    # Verbose enough to show each reload decision in test failure logs.
+    logLevel: debug

@@ -1,0 +1,110 @@
+# Wrapper-owned values for the chart's helm test (templates/tests/).
+tests:
+  # Long-running workload image for the throwaway Deployments the test rolls.
+  workloadImage:
+    repository: curlimages/curl
+    tag: 8.17.0
+  # Distroless kubectl image that mutates the Secret and asserts the rollout.
+  kubectlImage:
+    repository: registry.k8s.io/kubectl
+    tag: v1.36.3
+  # Upper bound for Reloader to patch the workload and for the rollout.
+  timeout: 120s
+
+# Upstream Reloader values are nested under the dependency name. The upstream
+# chart itself nests controller settings under a second `reloader:` key.
+reloader:
+  image:
+    repository: ghcr.io/stakater/reloader
+    tag: v1.4.22
+    # Multi-architecture OCI index digest for the tag above. When set, the
+    # upstream template renders repository@digest; bump both together.
+    digest: sha256:def2480040adc164b3a57340e77674eadfd88fb7f0593df25e93297f29c7fd7c
+    pullPolicy: IfNotPresent
+
+  reloader:
+    # Opt-in only. A workload is reloaded only when it carries one of:
+    #   reloader.stakater.com/auto: "true"          (every Secret/ConfigMap it references)
+    #   secret.reloader.stakater.com/auto: "true"   (every Secret it references)
+    #   secret.reloader.stakater.com/reload: a,b    (named Secrets only)
+    # Reloading everything would restart unrelated workloads on any change.
+    autoReloadAll: false
+
+    # Pod-template annotation (reloader.stakater.com/last-reloaded-from)
+    # instead of the default injected STAKATER_* env var. The annotation is a
+    # field Helm/Flux/Argo never render, so a consumer chart's own upgrades
+    # do not fight it, and container specs stay identical to what Git renders.
+    reloadStrategy: annotations
+
+    # Reload on Secret/ConfigMap updates only. reloadOnCreate would restart
+    # workloads when a referenced object is first created (e.g. an
+    # ExternalSecret materializing); those pods are not running yet anyway.
+    # syncAfterRestart only acts with reloadOnCreate, and with the annotations
+    # strategy it has no "already applied" check: every Reloader restart would
+    # roll every annotated workload. Tradeoff: a change made while Reloader is
+    # down is not replayed (see README "Failure modes").
+    reloadOnCreate: false
+    reloadOnDelete: false
+    syncAfterRestart: false
+
+    # Both kinds stay watched; annotations still gate every reload.
+    ignoreSecrets: false
+    ignoreConfigMaps: false
+
+    # One cluster-wide instance: consumers (wazuh, ...) live in many
+    # namespaces and adding a namespace must not require changing this chart.
+    watchGlobally: true
+    namespaces: []
+    ignoreNamespaces: ""
+    namespaceSelector: ""
+    resourceLabelSelector: ""
+
+    isArgoRollouts: false
+    isOpenshift: false
+    logFormat: json
+    logLevel: info
+
+    # Single replica is sufficient for the lab: a missed restart window is
+    # seconds. For HA set enableHA: true and deployment.replicas >= 2, which
+    # adds Lease-based leader election.
+    enableHA: false
+
+    # Adds an emptyDir at /tmp and sets readOnlyRootFilesystem.
+    readOnlyRootFileSystem: true
+
+    deployment:
+      replicas: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containerSecurityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        seccompProfile:
+          type: RuntimeDefault
+      # Memory scales with the number of Secrets and ConfigMaps cached
+      # cluster-wide; GOMEMLIMIT/GOMAXPROCS are derived from the limits.
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+
+    # Metrics (:9090/metrics, reloader_reload_executed_total) via PodMonitor,
+    # which upstream prefers over the deprecated ServiceMonitor. Off by
+    # default so the chart installs without the prometheus-operator CRDs;
+    # enable per environment where the CRDs exist. Alloy discovers
+    # PodMonitors cluster-wide.
+    podMonitor:
+      enabled: false
+      labels:
+        release: alloy
+    serviceMonitor:
+      enabled: false

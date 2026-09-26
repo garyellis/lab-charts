@@ -1,0 +1,44 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: reloader
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: reloader
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: reloader
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "values.yaml":          [ci]
+      "values-ci.yaml":       [ci]
+      "values.schema.json":   [ci]
+      "templates/**":         [ci]
+      "tests/**":             [ci]
+      "chart-lifecycle.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Install Reloader cluster-wide and prove opt-in reloads: mutating a
+          Secret rolls the Deployment annotated with
+          secret.reloader.stakater.com/reload and leaves an unannotated
+          Deployment referencing the same Secret untouched.
+        namespace: reloader
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []
