@@ -1,0 +1,54 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: wazuh-agent
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    validators:
+      # The wazuh-agent image runs s6-overlay as root (it chowns its tree
+      # and the daemons drop to the wazuh user), and reading root-owned host
+      # files for FIM/logcollector needs root, so the DaemonSet cannot satisfy
+      # require-non-root; the pipeline has no per-resource exception.
+      # tests/render-contract.sh re-asserts what the exemption would otherwise
+      # hide: no privileged mode, no host namespaces, no privilege escalation,
+      # capabilities dropped to an explicit allow list, every host path
+      # read-only except the dedicated identity directory, a non-root helm
+      # test, and no Services.
+      policy: false
+    releaseName: wazuh-agent
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml": [ci]
+      "values.yaml": [ci]
+      "values-ci.yaml": [ci]
+      "values.schema.json": [ci]
+      "templates/**": [ci]
+      "chart-lifecycle.yaml": [ci]
+      "README.md": [ci]
+      "tests/**": [ci]
+    unmatchedChanges: all-environments
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Run one agent per node against the wazuh minimal release, reusing
+          its credentials Secret, and verify through the Wazuh API that the
+          node's agent is registered once and active.
+        namespace: wazuh
+        requires:
+          - chart: wazuh
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+    dependentTests: []
