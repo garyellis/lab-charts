@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kyverno-policies
+description: Cluster admission policies - the repository's policies/ plus Kyverno's Pod Security Standards
+type: application
+version: 0.1.0
+appVersion: "v1.19.1"
+dependencies:
+  - name: kyverno-policies
+    version: 3.9.1
+    repository: https://kyverno.github.io/kyverno/

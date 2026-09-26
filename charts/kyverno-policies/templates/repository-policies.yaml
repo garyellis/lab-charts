@@ -1,0 +1,26 @@
+{{- /*
+Renders each ClusterPolicy under files/policies unchanged except for
+spec.validationFailureAction, which the chart owns so the cluster can run a
+policy in Audit or Enforce independently of how CI evaluates it.
+
+fromYaml reads only the FIRST YAML document in a file, so each file under
+policies/ must hold exactly one ClusterPolicy; a multi-document file would
+silently drop all but the first.
+*/ -}}
+{{- if not (.Files.Glob "files/policies/*.yaml") -}}
+{{- fail "no policies found under files/policies (is the files/policies -> ../../../policies symlink resolved? a symlink-disabled checkout renders zero repository policies)" -}}
+{{- end -}}
+{{- $enforce := .Values.repositoryPolicies.enforce -}}
+{{- $names := list -}}
+{{- range $path, $_ := .Files.Glob "files/policies/*.yaml" }}
+{{- $policy := $.Files.Get $path | fromYaml }}
+{{- $names = append $names $policy.metadata.name }}
+{{- $_ := set $policy.spec "validationFailureAction" (ternary "Enforce" "Audit" (has $policy.metadata.name $enforce)) }}
+---
+{{ toYaml $policy }}
+{{- end }}
+{{- range $enforce }}
+{{- if not (has . $names) }}
+{{- fail (printf "repositoryPolicies.enforce: %q is not a policy in policies/ (have: %s)" . (join ", " $names)) }}
+{{- end }}
+{{- end }}
