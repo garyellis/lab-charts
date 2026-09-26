@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "description": "Wrapper-owned values. Upstream values under `falco` are passed through; the upstream chart ships no schema.",
+  "properties": {
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "timeoutSeconds"],
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 }
+          }
+        },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "falco": {
+      "type": "object",
+      "properties": {
+        "falco": {
+          "type": "object",
+          "properties": {
+            "file_output": {
+              "type": "object",
+              "properties": {
+                "filename": { "type": "string", "pattern": "^/[^/]+(/[^/]+)*/[^/]+$" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

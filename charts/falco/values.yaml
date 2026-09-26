@@ -1,0 +1,136 @@
+# Wrapper-owned values for the chart's helm test (templates/tests/).
+tests:
+  # Shell with find and grep: triggers a default rule and reads the node file.
+  image:
+    repository: docker.io/library/busybox
+    tag: 1.37.0
+  # Upper bound for the alert to reach the node JSON file.
+  timeoutSeconds: 60
+
+# Upstream Falco values are nested under the dependency name. The upstream
+# chart itself nests falco.yaml settings under a second `falco:` key.
+falco:
+  image:
+    registry: docker.io
+    repository: falcosecurity/falco
+    tag: 0.45.0
+
+  # CO-RE eBPF probe compiled into the Falco binary: needs kernel >= 5.8 with
+  # BTF, no kernel headers, no module build and no driver-loader init
+  # container. leastPrivileged swaps privileged mode for BPF, PERFMON,
+  # SYS_RESOURCE and SYS_PTRACE.
+  driver:
+    kind: modern_ebpf
+    modernEbpf:
+      leastPrivileged: true
+
+  # Full container securityContext. The upstream helper REPLACES its computed
+  # value with this when set (it does not merge), so the leastPrivileged
+  # capability set is re-declared here. Adds the hardening the helper omits:
+  # no privilege escalation and the runtime's default seccomp profile (the
+  # kind node's containerd default profile permits bpf()/perf_event_open with
+  # CAP_BPF/CAP_PERFMON, so the probe still loads).
+  containerSecurityContext:
+    privileged: false
+    allowPrivilegeEscalation: false
+    capabilities:
+      add:
+        - BPF
+        - SYS_RESOURCE
+        - PERFMON
+        - SYS_PTRACE
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Survive node-pressure eviction: a security sensor going away under load is
+  # a monitoring blind spot exactly when it matters most.
+  podPriorityClassName: system-node-critical
+
+  # Node gate. modern_ebpf requires a Linux node; this hard requirement keeps
+  # the DaemonSet off non-Linux nodes. The real driver prerequisite is kernel
+  # >= 5.8 with BTF, which has no standard node label, so a stricter gate must
+  # be operator-driven: label BTF-capable nodes (e.g. `falco.org/driver=
+  # modern_ebpf`) and override this affinity to require that label on
+  # heterogeneous or mixed-kernel clusters (see README "Node scheduling").
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                  - linux
+
+  # The image ships the default ruleset and the container plugin. Skipping
+  # falcoctl keeps rules pinned to the image tag and removes the runtime
+  # download from the internet; rules update with image bumps.
+  falcoctl:
+    artifact:
+      install:
+        enabled: false
+      follow:
+        enabled: false
+
+  # Kubernetes nodes run containerd through CRI; the other engines' sockets
+  # would only add host mounts.
+  collectors:
+    containerEngine:
+      engines:
+        docker:
+          enabled: false
+        podman:
+          enabled: false
+        containerd:
+          enabled: false
+        cri:
+          enabled: true
+          sockets:
+            - /run/containerd/containerd.sock
+        lxc:
+          enabled: false
+        libvirt_lxc:
+          enabled: false
+        bpm:
+          enabled: false
+
+  # Alert file for the node's Wazuh agent (charts/wazuh-agent reads it as
+  # /host/var/log/falco/events.json). Mounted at the same path it has on the
+  # node; the helm test relies on that.
+  mounts:
+    volumes:
+      - name: alerts
+        hostPath:
+          path: /var/log/falco
+          type: DirectoryOrCreate
+    volumeMounts:
+      - name: alerts
+        mountPath: /var/log/falco
+
+  # Measured on kind with the default ruleset: ~100Mi working set (8 MiB
+  # ring buffer per 2 CPUs), near-idle CPU. Memory grows with node CPUs and
+  # the thread table; CPU with the node's syscall rate.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  falco:
+    # Minimum rule priority emitted. The default ruleset has one
+    # Informational rule; everything else is Notice or above.
+    priority: notice
+    json_output: true
+    # Falco opens, appends and closes the file per alert (keep_alive: false),
+    # so a rename or truncate by node log rotation is safe. Falco itself never
+    # rotates it (see README "File growth").
+    file_output:
+      enabled: true
+      keep_alive: false
+      filename: /var/log/falco/events.json
+    # No syslog daemon in the container.
+    syslog_output:
+      enabled: false
+    log_syslog: false

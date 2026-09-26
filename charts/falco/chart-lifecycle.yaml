@@ -1,0 +1,52 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: falco
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    validators:
+      # Falco reads kernel events through eBPF and host /proc, which needs
+      # root with BPF, PERFMON, SYS_RESOURCE and SYS_PTRACE, so the DaemonSet
+      # cannot satisfy require-non-root; the pipeline has no per-resource
+      # exception. tests/render-contract.sh re-asserts the boundary instead:
+      # not privileged, that exact capability set, no host namespaces, no init
+      # containers, and the alert directory as the only writable host path.
+      policy: false
+    releaseName: falco
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: falco
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "values.yaml":          [ci]
+      "values-ci.yaml":       [ci]
+      "values.schema.json":   [ci]
+      "templates/**":         [ci]
+      "tests/**":             [ci]
+      "chart-lifecycle.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Run Falco on every node with the modern eBPF probe and prove a
+          default-ruleset alert is written as JSON to the node file the Wazuh
+          agent reads. Independent of Wazuh: the file is the contract between
+          the two charts, and the Wazuh stack is too heavy to require here.
+        namespace: falco
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 10m
+
+    dependentTests: []
