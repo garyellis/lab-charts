@@ -1,0 +1,201 @@
+{{- /*
+Proves the admission webhook actually decides, not just that its pod is Ready.
+A test-only ValidatingPolicy in Deny mode matches only this test's Pods and
+admits them when they carry verdict=allow. Two ReplicaSets, identical except
+for that label, are scaled up once the policy is ready:
+  1. "allow" gets its Pod created;
+  2. "deny" reports ReplicaFailure, because Kyverno rejected its Pod.
+A controller creates the Pods so the rejection is observable as a condition;
+a distroless kubectl cannot assert that its own request failed.
+The objects live in `default` because the webhooks skip the kyverno namespace.
+Helm runs test hooks in weight order; init containers serialize the steps.
+*/ -}}
+{{- $name := printf "%s-admission-test" .Release.Name | trunc 50 | trimSuffix "-" -}}
+{{- $target := "default" -}}
+{{- $timeout := "--timeout=120s" -}}
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+    objectSelector:
+      matchLabels:
+        app.kubernetes.io/part-of: {{ $name }}
+  validations:
+    - expression: "object.metadata.labels[?'verdict'].orValue('') == 'allow'"
+      message: Pods of the Kyverno admission test must carry verdict=allow.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["policies.kyverno.io"]
+    resources: ["validatingpolicies"]
+    resourceNames: [{{ $name | quote }}]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $target }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "replicasets/scale"]
+    resourceNames: [{{ printf "%s-allow" $name | quote }}, {{ printf "%s-deny" $name | quote }}]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $target }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- range $verdict := list "allow" "deny" }}
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: {{ printf "%s-%s" $name $verdict }}
+  namespace: {{ $target }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  # Scaled to 1 by the test Pod once the policy is ready.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: {{ $name }}
+      verdict: {{ $verdict }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: {{ $name }}
+        verdict: {{ $verdict }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65535
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 1m
+              memory: 4Mi
+            limits:
+              memory: 8Mi
+{{- end }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $name }}
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    # Ready means Kyverno compiled the policy and registered its webhook rule.
+    - name: wait-policy-ready
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "wait", "validatingpolicy/{{ $name }}", "--for=jsonpath={.status.conditionStatus.ready}=true", {{ $timeout | quote }}]
+      securityContext: &containerSecurityContext
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+    - name: scale-up
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "scale", "replicaset/{{ $name }}-allow", "replicaset/{{ $name }}-deny", "--namespace={{ $target }}", "--replicas=1"]
+      securityContext: *containerSecurityContext
+  containers:
+    - name: assert-allowed
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "wait", "replicaset/{{ $name }}-allow", "--namespace={{ $target }}", "--for=jsonpath={.status.replicas}=1", {{ $timeout | quote }}]
+      securityContext: *containerSecurityContext
+    - name: assert-denied
+      image: registry.k8s.io/kubectl:v1.36.3
+      command: ["kubectl", "wait", "replicaset/{{ $name }}-deny", "--namespace={{ $target }}", "--for=condition=ReplicaFailure", {{ $timeout | quote }}]
+      securityContext: *containerSecurityContext

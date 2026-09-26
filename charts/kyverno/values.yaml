@@ -1,0 +1,68 @@
+# Upstream Kyverno values are nested under the dependency name. Controller
+# images default to the chart appVersion (v1.19.1), so the dependency version
+# pins them; bump both through Chart.yaml.
+kyverno:
+  features:
+    # Every resource webhook fails open, whatever a policy's failurePolicy
+    # says: an unavailable Kyverno skips admission checks instead of blocking
+    # every Pod create/update in the lab. Tradeoff: Enforce policies are not
+    # enforced while Kyverno is down.
+    forceFailurePolicyIgnore:
+      enabled: true
+    # Exceptions may only be created in the kyverno namespace, so granting an
+    # exemption requires write access there rather than in the workload's
+    # own namespace.
+    policyExceptions:
+      enabled: true
+      namespace: kyverno
+
+  # Webhook exclusions are the upstream defaults: the namespaceSelector skips
+  # kube-system, excludeKyvernoNamespace skips kyverno itself, and
+  # resourceFilters skip kube-public, kube-node-lease, Events, Nodes, etc.
+
+  admissionController:
+    replicas: 1
+    container:
+      resources:
+        requests:
+          cpu: 25m
+          memory: 128Mi
+    # Metrics (:8000/metrics) via ServiceMonitor. Off by default so the chart
+    # installs without the prometheus-operator CRDs; enable per environment
+    # where they exist. Alloy discovers ServiceMonitors cluster-wide.
+    serviceMonitor:
+      enabled: false
+      additionalLabels:
+        release: alloy
+
+  # Writes PolicyReports, including background scans of existing resources.
+  reportsController:
+    replicas: 1
+    # Measured ~70Mi after the first background scan of the lab; upstream's
+    # 128Mi limit leaves too little headroom as workloads are added.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 96Mi
+      limits:
+        memory: 256Mi
+    serviceMonitor:
+      enabled: false
+      additionalLabels:
+        release: alloy
+
+  # Only generate and mutate-existing policies use the background controller,
+  # and only cleanup policies and the cleanup.kyverno.io/ttl label use the
+  # cleanup controller. The lab has neither.
+  backgroundController:
+    enabled: false
+  cleanupController:
+    enabled: false
+
+  # Upstream's own helm tests (controller probes and metrics endpoints)
+  # default this image to :latest.
+  test:
+    image:
+      registry: ghcr.io
+      repository: kyverno/readiness-checker
+      tag: v1.19.1

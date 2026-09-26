@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kyverno
+description: Kyverno admission controller vendor/deployment chart
+type: application
+version: 0.1.0
+appVersion: "v1.19.1"
+dependencies:
+  - name: kyverno
+    version: 3.9.1
+    repository: https://kyverno.github.io/kyverno/

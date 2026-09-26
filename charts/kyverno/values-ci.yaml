@@ -1,0 +1,10 @@
+# CI overlay for kind. The base values already fit kind; this pins the
+# settings CI depends on so a base-values change cannot silently break them.
+kyverno:
+  # The kind minimal profile installs no prometheus-operator CRDs.
+  admissionController:
+    serviceMonitor:
+      enabled: false
+  reportsController:
+    serviceMonitor:
+      enabled: false
