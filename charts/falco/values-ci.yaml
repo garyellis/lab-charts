@@ -1,0 +1,11 @@
+# CI overlay for kind. The base values already fit kind (kernel 5.8+ with
+# BTF); this pins what the helm test depends on so a base-values change
+# cannot silently break it.
+falco:
+  falco:
+    # Notice threshold. The helm test's rule ("Search Private Keys or
+    # Passwords") is Warning, which is above notice, so it is emitted.
+    priority: notice
+    file_output:
+      enabled: true
+      filename: /var/log/falco/events.json

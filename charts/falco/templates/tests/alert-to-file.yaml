@@ -1,0 +1,67 @@
+{{- /*
+Proves the delivery contract Wazuh depends on: a default-ruleset alert lands
+as a JSON line in the node file. The pod triggers "Search Private Keys or
+Passwords" (a `find` for an id_rsa name, no privileges needed) and reads the
+file on its own node, so trigger and evidence are always the same node.
+*/ -}}
+{{- $file := .Values.falco.falco.file_output.filename -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ printf "%s-test-alert-to-file" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  tolerations:
+    {{- toYaml .Values.falco.tolerations | nindent 4 }}
+  containers:
+    - name: alert-to-file
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      command:
+        - sh
+        - -ec
+        - |
+          # Unique per run: earlier runs' lines must not satisfy this one.
+          marker="id_rsa.helm-test.$(cat /proc/sys/kernel/random/uuid)"
+          find /tmp -name "${marker}"
+          deadline=$(( $(date +%s) + {{ .Values.tests.timeoutSeconds }} ))
+          until line=$(grep -F "${marker}" {{ $file }} 2>/dev/null | grep -F '"rule":"Search Private Keys or Passwords"'); do
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "no Falco alert for ${marker} in {{ $file }} after {{ .Values.tests.timeoutSeconds }}s" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "${line}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 5m
+          memory: 8Mi
+        limits:
+          cpu: 50m
+          memory: 16Mi
+      volumeMounts:
+        - name: alerts
+          mountPath: {{ dir $file }}
+          readOnly: true
+  volumes:
+    - name: alerts
+      hostPath:
+        path: {{ dir $file }}
+        type: Directory

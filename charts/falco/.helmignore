@@ -1,0 +1,32 @@
+# VCS
+.git/
+.gitignore
+.helmignore
+
+# Offline render contract (not a helm test)
+/tests/
+
+# OS/editor artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environments and logs
+.venv/
+venv/
+*.log
