@@ -1,0 +1,149 @@
+{{- /*
+Proves the scan-to-metrics contract, not just a Ready operator pod:
+  1. a workload running a pinned image gets a VulnerabilityReport for it;
+  2. the operator's /metrics exposes trivy_image_vulnerabilities for it, the
+     series the ServiceMonitor ships and the CVE dashboard reads.
+The target is a bare ReplicaSet: Helm waits for a Pod hook to complete, and a
+ReplicaSet (unlike a Deployment) has a known name, hence a known report name.
+Deleting it garbage-collects its Pod and report through ownerReferences.
+*/ -}}
+{{- $name := printf "%s-scan-test" .Release.Name | trunc 35 | trimSuffix "-" -}}
+{{- $target := printf "%s-target" $name -}}
+{{- /* <kind>-<name>-<container>; the operator hashes names over 63 chars. */ -}}
+{{- $report := printf "replicaset-%s-target" $target -}}
+{{- $service := required "trivy-operator.fullnameOverride is required by the helm test" (index .Values "trivy-operator" "fullnameOverride") -}}
+{{- $curl := printf "%s:%s" .Values.tests.curlImage.repository .Values.tests.curlImage.tag -}}
+{{- $kubectl := printf "%s:%s" .Values.tests.kubectlImage.repository .Values.tests.kubectlImage.tag -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["aquasecurity.github.io"]
+    resources: ["vulnerabilityreports"]
+    resourceNames: [{{ $report | quote }}]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: {{ $target }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $target }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $target }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: target
+          image: {{ $curl }}
+          command: ["sleep", "86400"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 16Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $name }}
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    - name: wait-report
+      image: {{ $kubectl }}
+      command: ["kubectl", "wait", "vulnerabilityreport/{{ $report }}", "--namespace={{ .Release.Namespace }}", "--for=create", "--timeout={{ .Values.tests.timeout }}"]
+      securityContext: &containerSecurityContext
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+    - name: assert-report-image
+      image: {{ $kubectl }}
+      command: ["kubectl", "wait", "vulnerabilityreport/{{ $report }}", "--namespace={{ .Release.Namespace }}", "--for=jsonpath={.report.artifact.tag}={{ .Values.tests.curlImage.tag }}", "--timeout=5s"]
+      securityContext: *containerSecurityContext
+  containers:
+    # The headless Service resolves to the operator pod; 8080 is its metrics
+    # port, the endpoint the ServiceMonitor scrapes.
+    - name: assert-metrics
+      image: {{ $curl }}
+      command:
+        - sh
+        - -ec
+        - >-
+          curl -fsS --max-time 10 http://{{ $service }}.{{ .Release.Namespace }}.svc:8080/metrics
+          | grep '^trivy_image_vulnerabilities{'
+          | grep -q 'resource_name="{{ $target }}"'
+      securityContext: *containerSecurityContext

@@ -1,0 +1,149 @@
+# Wrapper-owned values for the chart's helm test (templates/tests/).
+tests:
+  # Pinned scan target, and the shell that fetches the operator's /metrics.
+  curlImage:
+    repository: curlimages/curl
+    tag: 8.17.0
+  # Distroless kubectl image that waits for the VulnerabilityReport.
+  kubectlImage:
+    repository: registry.k8s.io/kubectl
+    tag: v1.36.3
+  # Upper bound for the target's scan. On a fresh install it queues behind
+  # the first scan of every running image (scanJobsConcurrentLimit at a time).
+  timeout: 10m
+
+# Upstream Trivy Operator values are nested under the dependency name.
+trivy-operator:
+  # Stable Service name (`trivy-operator`) for the helm test and README.
+  fullnameOverride: trivy-operator
+
+  image:
+    tag: 0.34.0
+
+  operator:
+    # Scanners. The goal is CVEs of what is running; CI and the registry scan
+    # images at push time, this rescans them against CVEs published since.
+    vulnerabilityScannerEnabled: true
+    # Config audit and RBAC assessment run in-process (no scan jobs), so they
+    # are nearly free. They overlap Kyverno PolicyReports; see README.
+    configAuditScannerEnabled: true
+    rbacAssessmentScannerEnabled: true
+    # Secrets baked into an image do not change after push; CI and registry
+    # scans already cover them, and secret scanning is the costliest part of
+    # a scan job.
+    exposedSecretScannerEnabled: false
+    # Node CIS checks need a node-collector job with hostPath mounts, and on
+    # kind they report on kind's node image. Compliance builds on them.
+    infraAssessmentScannerEnabled: false
+    clusterComplianceEnabled: false
+    # SBOMReports only feed ClusterVulnerabilityReports and are the largest
+    # objects the operator writes to etcd.
+    sbomGenerationEnabled: false
+
+    # Reports expire after 24h and the image is rescanned: this is what picks
+    # up newly published CVEs for images that have not changed.
+    scannerReportTTL: 24h
+
+    # At most two scan jobs at once: bounds the install-time wave and any
+    # rollout storm to ~1 CPU / 1Gi of scan jobs (see trivy.resources).
+    scanJobsConcurrentLimit: 2
+    # The 5m default kills scans of large images before they finish, and the
+    # retry loop then holds both slots. A Java image such as wazuh-indexer
+    # pulls ~1 GB of layers plus the ~0.9 GiB Java DB, which every scan job
+    # downloads itself (it is client-side even in client/server mode).
+    # Keep trivy.timeout below this.
+    scanJobTimeout: 30m
+
+    # One trivy server StatefulSet holds the vulnerability DB; scan jobs run
+    # as thin clients. Standalone mode downloads the DB in every scan job.
+    builtInTrivyServer: true
+
+    # One trivy_vulnerability_id series per (workload, container, CVE,
+    # package). Required for the fixable and CVE drill-down panels; the
+    # ServiceMonitor keeps only High and Critical to bound cardinality.
+    metricsVulnIdEnabled: true
+
+  # Upstream renders these ClusterComplianceReports even with compliance off.
+  compliance:
+    specs: []
+
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Memory scales with the cached pods, workloads and reports cluster-wide:
+  # ~360Mi RSS on the lab cluster with 40 VulnerabilityReports.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  trivy:
+    image:
+      tag: 0.74.0
+    # The server's DB lives in an emptyDir: a restart costs one download, and
+    # the chart needs no StorageClass. (Upstream's empty storageClassName
+    # would also disable dynamic provisioning.)
+    storageClassEnabled: false
+
+    # Trivy's own deadline, inside operator.scanJobTimeout so a slow scan
+    # fails with Trivy's error rather than a killed Job.
+    timeout: 29m0s
+
+    # Scan job (client) container.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    server:
+      # ~110Mi RSS while serving scans; the DB is memory-mapped.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+      podSecurityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+
+  trivyOperator:
+    # Scan jobs run as nobody: image mode pulls from the registry and needs
+    # no root, and the pods then pass Pod Security "restricted".
+    scanJobPodTemplatePodSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      seccompProfile:
+        type: RuntimeDefault
+
+  # Alloy discovers ServiceMonitors cluster-wide; `release: alloy` is the
+  # repo-wide selector label.
+  serviceMonitor:
+    enabled: true
+    interval: 60s
+    labels:
+      release: alloy
+    endpointAdditionalProperties:
+      metricRelabelings:
+        # Per-image counts (trivy_image_vulnerabilities) keep every severity.
+        - sourceLabels: [__name__, severity]
+          regex: trivy_vulnerability_id;(Low|Medium|Unknown)
+          action: drop
+        # Changes whenever an advisory is edited, starting a new series.
+        - regex: last_modified_date
+          action: labeldrop

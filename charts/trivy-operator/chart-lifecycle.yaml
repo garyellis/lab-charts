@@ -1,0 +1,51 @@
+apiVersion: lifecycle.chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: trivy-operator
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: trivy-operator
+    # Every environment pins trivy-system (below), and the README, helm test
+    # and trivy-server Service DNS all assume it; the template is fixed to the
+    # same value so a future env cannot silently deploy to lab-<env>.
+    namespaceTemplate: "trivy-system"
+    environments:
+      ci:
+        namespace: trivy-system
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "values.yaml":          [ci]
+      "values-ci.yaml":       [ci]
+      "values.schema.json":   [ci]
+      "templates/**":         [ci]
+      "tests/**":             [ci]
+      "chart-lifecycle.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      minimal:
+        description: >-
+          Install Trivy Operator cluster-wide in client/server mode with its
+          ServiceMonitor. The helm test starts a pinned Pod, waits for its
+          VulnerabilityReport, and asserts the operator's /metrics exposes
+          trivy_image_vulnerabilities for it.
+        namespace: trivy-system
+        # ServiceMonitor is on by default; prometheus-operator provides the
+        # monitoring.coreos.com CRDs.
+        requires:
+          - chart: prometheus-operator
+            profile: minimal
+        values:
+          - values.yaml
+          - values-ci.yaml
+        helmTest: true
+        timeout: 15m
+
+    dependentTests: []

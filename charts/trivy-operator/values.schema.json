@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "description": "Wrapper-owned values. Upstream values under `trivy-operator` pass through to the vendored chart, which ships no schema.",
+  "additionalProperties": false,
+  "properties": {
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["curlImage", "kubectlImage", "timeout"],
+      "properties": {
+        "curlImage": { "$ref": "#/definitions/image" },
+        "kubectlImage": { "$ref": "#/definitions/image" },
+        "timeout": { "type": "string", "pattern": "^[0-9]+(s|m)$" }
+      }
+    },
+    "trivy-operator": { "type": "object" }
+  },
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
