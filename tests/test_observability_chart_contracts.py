@@ -33,6 +33,12 @@ def test_prometheus_operator_is_controller_and_crds_without_full_stack() -> None
     assert values["serviceMonitors"]["istio"]["enabled"] is True
 
 
+def test_alloy_stable_hub_identity_chart_version() -> None:
+    chart = _yaml("charts/alloy/Chart.yaml")
+
+    assert chart["version"] == "0.2.1"
+
+
 def test_thanos_defaults_are_infrastructure_only_with_monitoring_definitions() -> None:
     chart = _yaml("charts/thanos/Chart.yaml")
     values = _yaml("charts/thanos/values.yaml")["thanos"]

@@ -26,6 +26,9 @@ spec:
         - action: replace
           targetLabel: job
           replacement: integrations/alloy
+        - action: replace
+          targetLabel: instance
+          replacement: {{ .Release.Name | quote }}
   selector:
     matchLabels:
       app.kubernetes.io/name: alloy

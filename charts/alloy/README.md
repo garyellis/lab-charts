@@ -72,6 +72,12 @@ helm template alloy . \
 The release must be `alloy` for the ConfigMap name in the example. For another
 release name, use `<release>-hub-observability-profile`.
 
+The hub ServiceMonitor normalizes scrape identity to
+`job=integrations/alloy` and `instance=<Helm release name>`. The standard lab
+release therefore reports `instance=alloy`. This stable identity deliberately
+excludes pod names and pod IP/port values, so a rollout does not change the
+expected target identity.
+
 The external-label API is deliberately limited to `cluster`, `cluster_role`,
 `lane`, `stage`, `region`, `cloud`, and `tenant`. The Receive header tenant is
 a separate routing value. Thanos Receive owns and adds the downstream
