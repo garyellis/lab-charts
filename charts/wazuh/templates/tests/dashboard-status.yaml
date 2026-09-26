@@ -1,0 +1,10 @@
+{{- $script := printf `
+url='https://%s.%s.svc:5601/api/status'
+# --cacert without --insecure: the dashboard certificate must chain to the
+# chart CA and carry the Service DNS name.
+code="$(curl -sS --max-time 30 --cacert /ca/ca.crt -o /tmp/status.json -w '%%{http_code}' "${url}")"
+state="$(python3 -c 'import json; print(json.load(open("/tmp/status.json"))["status"]["overall"]["state"])' 2>/dev/null || echo unknown)"
+echo "dashboard /api/status: http ${code}, overall state ${state}"
+[[ "${code}" == "200" ]]
+` (include "wazuh.dashboard.name" .) .Release.Namespace -}}
+{{ include "wazuh.test.pod" (dict "root" . "name" "dashboard-status" "caSecret" (include "wazuh.secret.dashboardTLS" .) "script" $script) }}

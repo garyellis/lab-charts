@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wazuh.componentName" (dict "root" . "component" "manager-config") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "manager") | nindent 4 }}
+data:
+  master.conf: |
+    {{- include "wazuh.manager.ossecConf" (dict "root" . "type" "master") | nindent 4 }}
+  worker.conf: |
+    {{- include "wazuh.manager.ossecConf" (dict "root" . "type" "worker") | nindent 4 }}
+  local_rules.xml: |
+    {{- .Values.manager.localRules | default (.Files.Get "files/manager/local_rules.xml") | nindent 4 }}
+  local_decoder.xml: |
+    {{- .Values.manager.localDecoders | default (.Files.Get "files/manager/local_decoder.xml") | nindent 4 }}
+  falco_rules.xml: |
+    {{- .Files.Get "files/manager/falco_rules.xml" | nindent 4 }}
+  {{- include "wazuh.filebeat.configMapData" . | nindent 2 }}

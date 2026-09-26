@@ -1,0 +1,137 @@
+{{- /*
+Security-config reconciler. Applies the OpenSearch security configuration
+(internal users hashed from the credentials Secret, roles, role mappings,
+auth domains) with securityadmin.sh on every start, then idles.
+
+It restarts, and so re-applies, when the security ConfigMap changes
+(checksum), when the credentials Secret is rotated, or when the admin or
+node certificate is renewed (Reloader). That keeps password rotation
+consistent without a helm upgrade: consumers restarted by Reloader retry
+until this has re-hashed their password, typically within a minute.
+
+securityadmin.sh replaces the security index contents: users or mappings
+created through the dashboard are overwritten. Git is the source of truth.
+*/ -}}
+{{- $indexer := include "wazuh.indexer.name" . -}}
+{{- $name := include "wazuh.componentName" (dict "root" . "component" "security-config") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "security-config") | nindent 4 }}
+  {{- include "wazuh.reloaderAnnotations" (dict "root" . "secrets" (list (include "wazuh.credentialsSecret" .) (include "wazuh.secret.adminTLS" .) (include "wazuh.secret.indexerTLS" .))) | nindent 2 }}
+spec:
+  replicas: 1
+  # Never run two appliers at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "security-config") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.componentLabels" (dict "root" . "component" "security-config") | nindent 8 }}
+      annotations:
+        checksum/security: {{ include (print $.Template.BasePath "/indexer/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.reloader.enabled }}
+        checksum/credentials: {{ include (print $.Template.BasePath "/credentials-secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $indexer }}
+      automountServiceAccountToken: false
+      {{- include "wazuh.imagePullSecrets" . | nindent 6 }}
+      {{- include "wazuh.scheduling" (omit .Values.indexer "affinity") | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        {{- include "wazuh.indexer.securityInitContainer" . | nindent 8 }}
+      containers:
+        - name: securityadmin
+          image: {{ include "wazuh.image" .Values.images.indexer | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+              # The headless Service publishes not-ready pods. The indexer's
+              # readiness probe depends on the configuration applied here
+              # (client-cert auth), so waiting on the ClusterIP Service, which
+              # only lists Ready pods, would deadlock an upgrade.
+              host={{ printf "%s.%s.svc.cluster.local" (include "wazuh.indexer.nodesService" .) .Release.Namespace }}
+              rm -f /tmp/applied
+              # Wait for the REST layer; 401/403/503 mean TLS is up.
+              ready=""
+              for i in $(seq 1 60); do
+                code="$(curl -s -o /dev/null -w '%{http_code}' --cacert /certs/ca.crt "https://${host}:9200/" || true)"
+                case "${code}" in 200|401|403|503) ready=1; break ;; esac
+                echo "waiting for ${host}:9200 (attempt ${i}/60, http ${code})"
+                sleep 5
+              done
+              if [ -z "${ready}" ]; then
+                echo "indexer ${host}:9200 not reachable after 5 minutes; exiting so the pod restarts" >&2
+                exit 1
+              fi
+              /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+                -cd /security \
+                -icl \
+                -h "${host}" -p 9200 \
+                -cacert /certs/ca.crt \
+                -cert /admin/tls.crt \
+                -key /admin/tls.key
+              touch /tmp/applied
+              echo "security configuration applied; idling until the next change"
+              exec sleep infinity
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/applied"]
+            periodSeconds: 5
+          securityContext:
+            {{- include "wazuh.restrictedContainerSecurityContext" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: security
+              mountPath: /security
+              readOnly: true
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+            - name: admin
+              mountPath: /admin
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: security-static
+          configMap:
+            name: {{ $indexer }}-security
+        - name: security
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: certs
+          secret:
+            secretName: {{ include "wazuh.secret.indexerTLS" . }}
+            defaultMode: 0440
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: admin
+          secret:
+            secretName: {{ include "wazuh.secret.adminTLS" . }}
+            defaultMode: 0440

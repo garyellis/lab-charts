@@ -1,0 +1,67 @@
+{{- $m := .Values.manager -}}
+{{- $eventsTarget := ternary "worker" "master" (gt (int $m.workers.replicas) 0) -}}
+# Wazuh API: dashboard and tests only, never exposed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wazuh.manager.apiService" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "manager") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "manager") | nindent 4 }}
+    wazuh.com/node-type: master
+  ports:
+    - name: api
+      port: 55000
+      targetPort: api
+      appProtocol: https
+---
+# Headless intra-cluster Service (1516); gives the master a stable DNS name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wazuh.manager.clusterService" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "manager") | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "manager") | nindent 4 }}
+  ports:
+    - name: cluster
+      port: 1516
+      targetPort: cluster
+{{- range $svc := list (dict "name" (include "wazuh.manager.registrationService" .) "port" 1515 "portName" "registration" "target" "master") (dict "name" (include "wazuh.manager.eventsService" .) "port" 1514 "portName" "events" "target" $eventsTarget) }}
+---
+# Agent-facing: {{ $svc.portName }} ({{ $svc.port }}/tcp).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" $ "component" "manager") | nindent 4 }}
+  {{- with $m.agentServices.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $m.agentServices.type }}
+  {{- if and (eq $m.agentServices.type "LoadBalancer") $m.agentServices.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml $m.agentServices.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "wazuh.componentSelectorLabels" (dict "root" $ "component" "manager") | nindent 4 }}
+    wazuh.com/node-type: {{ $svc.target }}
+  ports:
+    - name: {{ $svc.portName }}
+      port: {{ $svc.port }}
+      targetPort: {{ $svc.portName }}
+      protocol: TCP
+{{- end }}

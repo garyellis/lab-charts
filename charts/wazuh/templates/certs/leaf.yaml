@@ -1,0 +1,21 @@
+{{- $indexer := include "wazuh.indexer.name" . -}}
+{{- $nodes := include "wazuh.indexer.nodesService" . -}}
+{{- $indexerDns := include "wazuh.serviceDnsNames" (dict "root" . "services" (list $indexer $nodes)) | fromYamlArray -}}
+{{- /* One wildcard for every pod behind the headless Service, so scaling does
+not change the certificate (and roll every node). Transport hostname
+verification is off; REST clients use the Service names above. */ -}}
+{{- $indexerDns = append $indexerDns (printf "*.%s.%s.svc.cluster.local" $nodes .Release.Namespace) }}
+{{- /* Indexer node certificate: HTTP and transport layers, one CN for all nodes (plugins.security.nodes_dn). */ -}}
+{{ include "wazuh.certs.leaf" (dict "root" . "name" (include "wazuh.secret.indexerTLS" .) "secretName" (include "wazuh.secret.indexerTLS" .) "commonName" $indexer "dnsNames" $indexerDns "usages" (list "server auth" "client auth" "digital signature" "key encipherment")) }}
+---
+{{- /* Security admin client certificate (plugins.security.authcz.admin_dn), used only by the securityadmin Job. */}}
+{{ include "wazuh.certs.leaf" (dict "root" . "name" (include "wazuh.secret.adminTLS" .) "secretName" (include "wazuh.secret.adminTLS" .) "commonName" (printf "%s-admin" (include "wazuh.fullname" .)) "dnsNames" (list) "usages" (list "client auth" "digital signature" "key encipherment")) }}
+---
+{{- $dashboardDns := include "wazuh.serviceDnsNames" (dict "root" . "services" (list (include "wazuh.dashboard.name" .))) | fromYamlArray -}}
+{{- /* Dashboard serving certificate (5601). */}}
+{{ include "wazuh.certs.leaf" (dict "root" . "name" (include "wazuh.secret.dashboardTLS" .) "secretName" (include "wazuh.secret.dashboardTLS" .) "commonName" (include "wazuh.dashboard.name" .) "dnsNames" $dashboardDns "usages" (list "server auth" "client auth" "digital signature" "key encipherment")) }}
+---
+{{- $managerDns := include "wazuh.serviceDnsNames" (dict "root" . "services" (list (include "wazuh.manager.apiService" .) (include "wazuh.manager.registrationService" .) (include "wazuh.manager.eventsService" .))) | fromYamlArray -}}
+{{- $managerDns = append $managerDns (printf "*.%s.%s.svc.cluster.local" (include "wazuh.manager.clusterService" .) .Release.Namespace) -}}
+{{- /* Manager client certificate towards the indexer (<indexer> connector; Filebeat reuses it until 5.0). */}}
+{{ include "wazuh.certs.leaf" (dict "root" . "name" (include "wazuh.secret.managerTLS" .) "secretName" (include "wazuh.secret.managerTLS" .) "commonName" (include "wazuh.componentName" (dict "root" . "component" "manager")) "dnsNames" $managerDns "usages" (list "server auth" "client auth" "digital signature" "key encipherment")) }}

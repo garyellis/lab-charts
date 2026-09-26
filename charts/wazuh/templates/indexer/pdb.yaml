@@ -1,0 +1,14 @@
+{{- if and .Values.indexer.pdb.enabled (gt (int .Values.indexer.replicas) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wazuh.indexer.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.indexer.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "wazuh.componentSelectorLabels" (dict "root" . "component" "indexer") | nindent 6 }}
+{{- end }}

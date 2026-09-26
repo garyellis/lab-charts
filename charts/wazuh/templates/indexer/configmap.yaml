@@ -1,0 +1,77 @@
+{{/* opensearch.yml: the only indexer file read at runtime (hashed into the pod template). */}}
+{{- define "wazuh.indexer.opensearchYml" -}}
+{{- $indexer := include "wazuh.indexer.name" . -}}
+{{- $replicas := int .Values.indexer.replicas -}}
+cluster.name: {{ .Values.indexer.clusterName | quote }}
+node.name: ${NODE_NAME}
+network.host: "0.0.0.0"
+path.data: /var/lib/wazuh-indexer
+path.logs: /var/log/wazuh-indexer
+{{- if eq $replicas 1 }}
+discovery.type: single-node
+{{- else }}
+discovery.seed_hosts: {{ include "wazuh.indexer.nodesService" . }}
+cluster.initial_cluster_manager_nodes:
+  {{- range $i := until $replicas }}
+  - {{ printf "%s-%d" $indexer $i }}
+  {{- end }}
+{{- end }}
+compatibility.override_main_response_version: true
+cluster.routing.allocation.disk.threshold_enabled: {{ .Values.indexer.diskThresholdEnabled }}
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: /usr/share/wazuh-indexer/config/certs/tls.crt
+plugins.security.ssl.http.pemkey_filepath: /usr/share/wazuh-indexer/config/certs/tls.key
+plugins.security.ssl.http.pemtrustedcas_filepath: /usr/share/wazuh-indexer/config/certs/ca.crt
+plugins.security.ssl.transport.pemcert_filepath: /usr/share/wazuh-indexer/config/certs/tls.crt
+plugins.security.ssl.transport.pemkey_filepath: /usr/share/wazuh-indexer/config/certs/tls.key
+plugins.security.ssl.transport.pemtrustedcas_filepath: /usr/share/wazuh-indexer/config/certs/ca.crt
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.transport.resolve_hostname: false
+plugins.security.authcz.admin_dn:
+  - {{ include "wazuh.certs.adminDN" . | quote }}
+plugins.security.nodes_dn:
+  - {{ include "wazuh.certs.nodeDN" . | quote }}
+plugins.security.check_snapshot_restore_write_privileges: true
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.restapi.roles_enabled:
+  - "all_access"
+  - "security_rest_api_access"
+# First boot seeds the security index from config/opensearch-security;
+# the securityadmin hook Job re-applies it on every install/upgrade.
+plugins.security.allow_default_init_securityindex: true
+plugins.security.system_indices.enabled: true
+plugins.security.system_indices.indices: [".opendistro-alerting-config", ".opendistro-alerting-alert*", ".opendistro-anomaly-results*", ".opendistro-anomaly-detector*", ".opendistro-anomaly-checkpoints", ".opendistro-anomaly-detection-state", ".opendistro-reports-*", ".opendistro-notifications-*", ".opendistro-notebooks", ".opensearch-observability", ".opendistro-asynchronous-search-response*", ".replication-metadata-store"]
+{{- end -}}
+
+{{- $indexer := include "wazuh.indexer.name" . -}}
+{{- $replicas := int .Values.indexer.replicas -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $indexer }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 4 }}
+data:
+  opensearch.yml: |
+    {{- include "wazuh.indexer.opensearchYml" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $indexer }}-security
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh.componentLabels" (dict "root" . "component" "indexer") | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/indexer/security/*.yml" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+    {{- if eq (base $path) "roles.yml" }}
+    {{- include "wazuh.indexer.chartRoles" $ | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  config.yml: |
+    {{- include "wazuh.indexer.securityConfig" . | nindent 4 }}
+  roles_mapping.yml: |
+    {{- include "wazuh.indexer.rolesMapping" . | nindent 4 }}

@@ -1,0 +1,17 @@
+{{- $multi := gt (int .Values.indexer.replicas) 1 -}}
+{{- /* A single node cannot allocate replica shards, so yellow is expected there. */ -}}
+{{- $waitFor := ternary "green" "yellow" $multi -}}
+{{- $accepted := ternary "green" "green|yellow" $multi -}}
+{{- $script := printf `
+url='%s/_cluster/health?wait_for_status=%s&timeout=180s'
+body="$(printf 'user = "admin:%%s"\n' "${INDEXER_ADMIN_PASSWORD}" |
+  curl -sS --fail --max-time 200 --cacert /ca/ca.crt -K - "${url}")"
+echo "${body}"
+status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"${body}")"
+if [[ ! "${status}" =~ ^(%s)$ ]]; then
+  echo "cluster health ${status}, expected %s" >&2
+  exit 1
+fi
+echo "indexer cluster health: ${status}"
+` (include "wazuh.indexer.url" .) $waitFor $accepted $accepted -}}
+{{ include "wazuh.test.pod" (dict "root" . "name" "indexer-health" "caSecret" (include "wazuh.secret.indexerTLS" .) "script" $script "env" (list (dict "name" "INDEXER_ADMIN_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" (include "wazuh.credentialsSecret" .) "key" "indexer-admin-password"))))) }}

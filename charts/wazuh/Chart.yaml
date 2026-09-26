@@ -1,0 +1,18 @@
+apiVersion: v2
+name: wazuh
+description: Wazuh SIEM/XDR server stack (indexer, manager cluster, dashboard) with cert-manager TLS and externally supplied credentials
+type: application
+version: 0.1.0
+appVersion: "4.14.7"
+kubeVersion: ">=1.29.0-0"
+home: https://wazuh.com/
+sources:
+  - https://github.com/wazuh/wazuh-docker
+  - https://github.com/wazuh/wazuh-kubernetes
+keywords:
+  - security
+  - siem
+  - wazuh
+annotations:
+  # Wazuh 5.0 removes Filebeat from the manager; see README "5.0 migration seam".
+  wazuh.com/major-version: "4"

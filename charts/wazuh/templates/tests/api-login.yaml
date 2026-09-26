@@ -1,0 +1,21 @@
+{{- /*
+The Wazuh API serves a certificate it generates itself on first start (not
+this chart's CA), so this check authenticates the user but not the server.
+*/ -}}
+{{- $script := printf `
+url='%s:55000/security/user/authenticate'
+for attempt in $(seq 1 24); do
+  body="$(printf 'user = "wazuh-wui:%%s"\n' "${API_PASSWORD}" |
+    curl -sS --max-time 20 --insecure -X POST -K - "${url}" || true)"
+  token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])' <<<"${body}" 2>/dev/null || true)"
+  if [[ -n "${token}" ]]; then
+    echo "wazuh-wui obtained an API token (${#token} bytes)"
+    exit 0
+  fi
+  echo "attempt ${attempt}: no token yet: ${body}"
+  sleep 5
+done
+echo "Wazuh API login as wazuh-wui failed" >&2
+exit 1
+` (include "wazuh.manager.apiUrl" .) -}}
+{{ include "wazuh.test.pod" (dict "root" . "name" "api-login" "caSecret" (include "wazuh.secret.managerTLS" .) "script" $script "env" (list (dict "name" "API_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" (include "wazuh.credentialsSecret" .) "key" "api-password"))))) }}

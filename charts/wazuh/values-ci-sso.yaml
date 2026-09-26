@@ -1,0 +1,47 @@
+# Static-validation only: the production shape (existing credentials Secret,
+# external CA issuer, OIDC + SAML, Istio with verified backend TLS). No IdP
+# exists in CI, so this environment is never installed.
+credentials:
+  create: false
+  existingSecret: wazuh-credentials
+  values:
+    indexerAdminPassword: ""
+    indexerDashboardPassword: ""
+    indexerWriterPassword: ""
+    dashboardCookiePassword: ""
+    apiPassword: ""
+    authdPassword: ""
+    clusterKey: ""
+
+certificates:
+  issuerRef:
+    name: lab-ca-issuer
+    kind: ClusterIssuer
+
+istio:
+  enabled: true
+  # The production shape: attach to the shared apps gateway.
+  gateway:
+    create: false
+    existing: istio-ingress/apps-gateway
+  dashboard:
+    backendTLS:
+      credentialName: wazuh-dashboard-ca
+
+sso:
+  oidc:
+    enabled: true
+    connectUrl: https://idp.example.com/realms/lab/.well-known/openid-configuration
+    logoutUrl: https://idp.example.com/realms/lab/protocol/openid-connect/logout
+    clientSecret:
+      name: wazuh-oidc
+  saml:
+    enabled: true
+    idpMetadataUrl: https://idp.example.com/realms/lab/protocol/saml/descriptor
+    idpEntityId: https://idp.example.com/realms/lab
+    exchangeKeySecret:
+      name: wazuh-saml
+  roleMappings:
+    all_access: ["wazuh-admins"]
+    kibana_user: ["wazuh-users"]
+    readall: ["wazuh-readers"]
