@@ -1,0 +1,7 @@
+Wazuh agent {{ .Chart.AppVersion }} runs on every schedulable node as DaemonSet {{ include "wazuh-agent.fullname" . }}.
+
+Events:     {{ .Values.manager.events.address }}:{{ .Values.manager.events.port }}
+Enrollment: {{ .Values.manager.registration.address }}:{{ .Values.manager.registration.port }}
+Agent name: the node name; identity is kept in {{ .Values.identity.hostStatePath }} on each node.
+
+Check that this cluster's agents are active with: helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

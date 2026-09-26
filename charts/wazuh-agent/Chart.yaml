@@ -1,0 +1,16 @@
+apiVersion: v2
+name: wazuh-agent
+description: Wazuh agent as a DaemonSet (one agent per node) enrolling into the charts/wazuh manager cluster
+type: application
+version: 0.1.0
+# Must not be newer than the Wazuh manager it reports to (charts/wazuh).
+appVersion: "4.14.7"
+kubeVersion: ">=1.29.0-0"
+home: https://wazuh.com/
+sources:
+  - https://github.com/wazuh/wazuh-docker
+  - https://documentation.wazuh.com/current/deployment-options/deploying-with-kubernetes/kubernetes-deployment.html
+keywords:
+  - security
+  - siem
+  - wazuh

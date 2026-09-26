@@ -1,0 +1,140 @@
+{{- $fullname := include "wazuh-agent.fullname" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh-agent.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "wazuh-agent.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.updateStrategy.maxUnavailable }}
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh-agent.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $fullname }}
+      automountServiceAccountToken: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: agent
+          image: {{ include "wazuh-agent.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: WAZUH_MANAGER_SERVER
+              value: {{ .Values.manager.events.address | quote }}
+            - name: WAZUH_MANAGER_PORT
+              value: {{ .Values.manager.events.port | quote }}
+            - name: WAZUH_REGISTRATION_SERVER
+              value: {{ .Values.manager.registration.address | quote }}
+            - name: WAZUH_REGISTRATION_PORT
+              value: {{ .Values.manager.registration.port | quote }}
+            # Written to etc/authd.pass (root:wazuh 0640) by the image.
+            - name: WAZUH_REGISTRATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh-agent.enrollmentSecret" . }}
+                  key: {{ .Values.enrollment.key }}
+            # One agent per node, named after the node.
+            - name: WAZUH_AGENT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: WAZUH_AGENT_GROUP
+              value: {{ join "," .Values.enrollment.groups | quote }}
+          securityContext:
+            # The image runs s6-overlay as root: it chowns its tree and the
+            # agent daemons drop to the wazuh user. Root (with default
+            # capabilities cut to what init and the daemons use) is also what
+            # lets FIM and logcollector read root-owned host files. No
+            # privileged mode, host namespaces or privilege escalation.
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - SETGID
+                - SETUID
+                - KILL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /wazuh-config-mount/etc/ossec.conf
+              subPath: ossec.conf
+              readOnly: true
+            - name: config
+              mountPath: /entrypoint-scripts/10-restore-identity.sh
+              subPath: 10-restore-identity.sh
+              readOnly: true
+            - name: config
+              mountPath: /etc/services.d/identity-sync/run
+              subPath: identity-sync.sh
+              readOnly: true
+            - name: state
+              mountPath: /agent-state
+            {{- range .Values.host.paths }}
+            - name: {{ include "wazuh-agent.hostVolumeName" . }}
+              mountPath: /host{{ . }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}
+            defaultMode: 0755
+        - name: state
+          hostPath:
+            path: {{ .Values.identity.hostStatePath }}
+            type: DirectoryOrCreate
+        {{- range .Values.host.paths }}
+        - name: {{ include "wazuh-agent.hostVolumeName" . }}
+          hostPath:
+            path: {{ . }}
+            type: Directory
+        {{- end }}

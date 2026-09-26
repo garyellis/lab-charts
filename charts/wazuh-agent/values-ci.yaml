@@ -1,0 +1,10 @@
+# kind: agents join the charts/wazuh "minimal" release in namespace wazuh and
+# reuse its CI credentials Secret (no duplicate Secret).
+enrollment:
+  existingSecret: wazuh-credentials
+
+# Realtime FIM on the node's /etc so a change produces an alert within seconds.
+fim:
+  directories:
+    - path: /host/etc
+      realtime: true

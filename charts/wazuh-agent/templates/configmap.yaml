@@ -1,0 +1,127 @@
+{{- $fullname := include "wazuh-agent.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh-agent.labels" . | nindent 4 }}
+data:
+  # The image copies this over /var/ossec/etc/ossec.conf, then replaces the
+  # CHANGE_* placeholders from WAZUH_MANAGER_SERVER, WAZUH_MANAGER_PORT,
+  # WAZUH_REGISTRATION_SERVER, WAZUH_REGISTRATION_PORT, WAZUH_AGENT_NAME and
+  # WAZUH_AGENT_GROUP (/etc/cont-init.d/0-wazuh-init).
+  ossec.conf: |
+    <ossec_config>
+      <client>
+        <server>
+          <address>CHANGE_MANAGER_IP</address>
+          <port>CHANGE_MANAGER_PORT</port>
+          <protocol>tcp</protocol>
+        </server>
+        <notify_time>20</notify_time>
+        <time-reconnect>60</time-reconnect>
+        <auto_restart>yes</auto_restart>
+        <crypto_method>aes</crypto_method>
+        <enrollment>
+          <enabled>yes</enabled>
+          <manager_address>CHANGE_ENROLL_IP</manager_address>
+          <port>CHANGE_ENROLL_PORT</port>
+          <agent_name>CHANGE_AGENT_NAME</agent_name>
+          <groups>CHANGE_AGENT_GROUP</groups>
+          <authorization_pass_path>etc/authd.pass</authorization_pass_path>
+        </enrollment>
+      </client>
+
+      <client_buffer>
+        <disabled>no</disabled>
+        <queue_size>5000</queue_size>
+        <events_per_second>500</events_per_second>
+      </client_buffer>
+
+      <!-- Rootcheck, SCA and syscollector inspect the agent's own container
+           (packages, processes, ports), not the node, so they are off. -->
+      <rootcheck>
+        <disabled>yes</disabled>
+      </rootcheck>
+      <sca>
+        <enabled>no</enabled>
+      </sca>
+      <wodle name="syscollector">
+        <disabled>yes</disabled>
+      </wodle>
+      <wodle name="cis-cat">
+        <disabled>yes</disabled>
+      </wodle>
+      <wodle name="osquery">
+        <disabled>yes</disabled>
+      </wodle>
+
+      <syscheck>
+        <disabled>no</disabled>
+        <frequency>{{ .Values.fim.frequency }}</frequency>
+        <scan_on_start>yes</scan_on_start>
+        {{- range .Values.fim.directories }}
+        {{- include "wazuh-agent.assertUnderHost" (dict "root" $ "path" .path "what" "fim.directories path") }}
+        <directories check_all="yes"{{ if .realtime }} realtime="yes"{{ end }}>{{ .path }}</directories>
+        {{- end }}
+        {{- range .Values.fim.ignore }}
+        <ignore>{{ . }}</ignore>
+        {{- end }}
+        <ignore type="sregex">\.log$|\.swp$</ignore>
+        <skip_nfs>yes</skip_nfs>
+        <skip_dev>yes</skip_dev>
+        <skip_proc>yes</skip_proc>
+        <skip_sys>yes</skip_sys>
+        <process_priority>10</process_priority>
+        <max_eps>50</max_eps>
+      </syscheck>
+      {{- range .Values.logs }}
+      {{- include "wazuh-agent.assertUnderHost" (dict "root" $ "path" .location "what" "logs location") }}
+
+      <localfile>
+        <log_format>{{ .format }}</log_format>
+        <location>{{ .location }}</location>
+      </localfile>
+      {{- end }}
+
+      <!-- Active response would act on the agent container, not the node. -->
+      <active-response>
+        <disabled>yes</disabled>
+      </active-response>
+
+      <logging>
+        <log_format>plain</log_format>
+      </logging>
+    </ossec_config>
+
+  # Agent identity persistence. The agent rewrites etc/client.keys on
+  # enrollment (it replaces the file, so a symlink or bind mount cannot be
+  # used). Restore it from the node before the agent starts, and copy it back
+  # whenever it changes, so a restarted pod keeps its agent ID.
+  #
+  # Runs from /entrypoint-scripts after 0-wazuh-init, before the agent starts.
+  10-restore-identity.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    state=/agent-state
+    install -d -m 0700 -o root -g root "${state}"
+    if [ -s "${state}/client.keys" ]; then
+      install -m 0640 -o root -g wazuh "${state}/client.keys" /var/ossec/etc/client.keys
+      echo "wazuh-agent: restored identity (agent $(cut -d' ' -f1 "${state}/client.keys")) from the node"
+    else
+      echo "wazuh-agent: no stored identity on this node; the agent will enroll"
+    fi
+  # s6-supervised service (/etc/services.d/identity-sync/run).
+  identity-sync.sh: |
+    #!/bin/bash
+    state=/agent-state
+    keys=/var/ossec/etc/client.keys
+    while true; do
+      if [ -s "${keys}" ] && [ "$(sha256sum < "${keys}")" != "$(sha256sum < "${state}/client.keys" 2>/dev/null)" ]; then
+        install -m 0600 -o root -g root "${keys}" "${state}/client.keys.tmp" &&
+          mv -f "${state}/client.keys.tmp" "${state}/client.keys" &&
+          echo "wazuh-agent: stored identity (agent $(cut -d' ' -f1 "${keys}")) on the node"
+      fi
+      sleep 5
+    done

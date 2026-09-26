@@ -1,0 +1,111 @@
+# Wazuh agent DaemonSet. values.schema.json bounds every key below.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: docker.io/wazuh/wazuh-agent
+  # Agent <= manager: upgrade charts/wazuh first, then this tag.
+  tag: 4.14.7
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Where agents connect. Defaults are the in-cluster Services of the
+# charts/wazuh release "wazuh" in namespace "wazuh". For managers outside the
+# cluster use their LoadBalancer/DNS addresses (manager.agentServices).
+manager:
+  # Agent events (wazuh-remoted on the workers, or the master with 0 workers).
+  events:
+    address: wazuh-manager-events.wazuh.svc.cluster.local
+    port: 1514
+  # Enrollment (wazuh-authd on the master).
+  registration:
+    address: wazuh-manager-registration.wazuh.svc.cluster.local
+    port: 1515
+
+enrollment:
+  # Secret holding the manager's enrollment password (charts/wazuh
+  # credentials Secret key authd-password). No default: rendering fails.
+  existingSecret: ""
+  key: authd-password
+  # Agent groups assigned at enrollment; they must exist on the manager.
+  groups:
+    - default
+
+# Enrollment state (client.keys) lives on the node so a restarted pod keeps
+# its agent ID instead of enrolling a duplicate. The agent name is the node
+# name.
+identity:
+  hostStatePath: /var/lib/wazuh-agent
+
+# Host paths mounted read-only at /host<path>. FIM directories and log
+# locations must live under one of them.
+host:
+  paths:
+    - /etc
+    - /var/log
+
+# File integrity monitoring of host paths (as seen in the pod, /host/...).
+fim:
+  # Full scan interval in seconds.
+  frequency: 43200
+  directories:
+    - path: /host/etc
+      # inotify-based alerts on change instead of waiting for the next scan.
+      realtime: false
+  ignore:
+    - /host/etc/mtab
+    - /host/etc/adjtime
+    - /host/etc/resolv.conf
+    - /host/etc/hosts
+
+# Host log files read by the agent's logcollector. Missing files are
+# retried quietly by the agent. Container/pod logs are Alloy's job.
+logs:
+  - location: /host/var/log/syslog
+    format: syslog
+  - location: /host/var/log/auth.log
+    format: syslog
+  # Falco alerts, one JSON object per line (charts/falco file_output).
+  - location: /host/var/log/falco/events.json
+    format: json
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    # No CPU limit: throttling the scan_on_start FIM sweep hurts more than a
+    # brief burst does. The memory limit still bounds the container.
+    memory: 256Mi
+
+updateStrategy:
+  maxUnavailable: 1
+
+# A security agent must outlive the workloads it watches under node pressure.
+priorityClassName: system-node-critical
+
+nodeSelector: {}
+# One agent per node, including control-plane nodes.
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+affinity: {}
+
+tests:
+  # Wazuh API used by the helm test to check this node's agent is active.
+  api:
+    url: https://wazuh-manager-api.wazuh.svc.cluster.local:55000
+    username: wazuh-wui
+    # Empty: enrollment.existingSecret (the charts/wazuh credentials Secret).
+    existingSecret: ""
+    key: api-password
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi

@@ -1,0 +1,90 @@
+{{- /*
+Checks, through the Wazuh API, that the agent named after the node this pod
+runs on is registered exactly once and is active. Every node runs an agent,
+so the node the test lands on is representative; the "exactly once" check
+proves restarts reuse the stored identity instead of enrolling duplicates.
+The API serves a self-generated certificate, so TLS is not verified here.
+The image is this chart's own pinned agent image (it has curl and python3).
+*/ -}}
+{{- $api := .Values.tests.api -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "wazuh-agent.fullname" . }}-test-agent-active
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wazuh-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: {{ include "wazuh-agent.image" . | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command:
+        - python3
+        - -c
+        - |
+          import base64, json, os, ssl, sys, time, urllib.request
+          url = os.environ["API_URL"].rstrip("/")
+          node = os.environ["NODE_NAME"]
+          ctx = ssl._create_unverified_context()
+
+          def call(path, headers):
+              req = urllib.request.Request(url + path, headers=headers, method="POST" if path.startswith("/security") else "GET")
+              with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
+                  return json.load(resp)
+
+          basic = base64.b64encode(f"{os.environ['API_USERNAME']}:{os.environ['API_PASSWORD']}".encode()).decode()
+          for attempt in range(1, 37):
+              try:
+                  token = call("/security/user/authenticate", {"Authorization": f"Basic {basic}"})["data"]["token"]
+                  agents = call(f"/agents?name={node}&select=id,name,status,version", {"Authorization": f"Bearer {token}"})["data"]["affected_items"]
+                  print(f"attempt {attempt}: agents named {node}: {agents}")
+                  if len(agents) > 1:
+                      sys.exit(f"{len(agents)} agents named {node}: identity was not reused")
+                  if len(agents) == 1 and agents[0]["status"] == "active":
+                      print(f"agent {agents[0]['id']} ({node}) is active")
+                      sys.exit(0)
+              except SystemExit:
+                  raise
+              except Exception as exc:  # manager or agent still starting
+                  print(f"attempt {attempt}: {exc}")
+              time.sleep(5)
+          sys.exit(f"agent {node} did not become active")
+      env:
+        - name: API_URL
+          value: {{ $api.url | quote }}
+        - name: API_USERNAME
+          value: {{ $api.username | quote }}
+        - name: API_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ $api.existingSecret | default (include "wazuh-agent.enrollmentSecret" .) }}
+              key: {{ $api.key }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        {{- toYaml .Values.tests.resources | nindent 8 }}
