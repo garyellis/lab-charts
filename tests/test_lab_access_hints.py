@@ -343,6 +343,15 @@ def test_many_annotated_virtualservices_each_read_their_own_namespace(
     assert [c.url for c in hints.credentials] == ["https://a.localhost/", "https://b.localhost/"]
 
 
+def test_empty_credentials_secret_annotation_is_not_an_opt_in(tmp_path: Path) -> None:
+    annotations = {**_CREDENTIAL_ANNOTATIONS, "chartmanager.io/credentials-secret": ""}
+    kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost", annotations=annotations)])
+    hints = _hints(tmp_path, kubectl)
+
+    assert hints.credentials == ()
+    assert kubectl.secret_calls == []
+
+
 @pytest.mark.parametrize(
     "missing",
     ["chartmanager.io/credentials-username", "chartmanager.io/credentials-password-key"],

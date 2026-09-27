@@ -119,7 +119,7 @@ def _credentials(
     """
     secret = vs.annotations.get(CREDENTIALS_SECRET_ANNOTATION)
     urls = virtualservice_urls([vs])
-    if secret is None or not urls:
+    if not secret or not urls:
         return ()
     username = vs.annotations.get(CREDENTIALS_USERNAME_ANNOTATION)
     password_key = vs.annotations.get(CREDENTIALS_PASSWORD_KEY_ANNOTATION)
