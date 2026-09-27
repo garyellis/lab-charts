@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from chart_manager.api.lifecycle.v1alpha1 import (
+    ALL_ENVIRONMENTS,
     MATCH_BY_BASENAME,
     ManifestValidationSpec,
 )
@@ -135,9 +136,19 @@ def test_resolve_namespace_rejects_unknown_environment() -> None:
         resolve_namespace(_spec(), "nope")
 
 
-def test_trigger_string_must_be_match_by_basename() -> None:
-    with pytest.raises(ValidationError, match="match-by-basename"):
+def test_trigger_string_must_be_a_known_alias() -> None:
+    # The TriggerValue Literal rejects an unknown alias before _check_triggers.
+    with pytest.raises(
+        ValidationError,
+        match="Input should be 'match-by-basename' or 'all-environments'",
+    ):
         _spec(triggers={"values.yaml": "bogus"})
+
+
+def test_trigger_accepts_all_environments_alias() -> None:
+    spec = _spec(triggers={"templates/**": "all-environments"})
+
+    assert spec.triggers["templates/**"] == ALL_ENVIRONMENTS
 
 
 def test_trigger_environment_must_exist() -> None:

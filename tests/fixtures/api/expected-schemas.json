@@ -291,7 +291,10 @@
                   "type": "array"
                 },
                 {
-                  "const": "match-by-basename",
+                  "enum": [
+                    "match-by-basename",
+                    "all-environments"
+                  ],
                   "type": "string"
                 }
               ]

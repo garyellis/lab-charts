@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import fnmatch
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 from chart_manager.api.lifecycle.v1alpha1 import (
+    ALL_ENVIRONMENTS,
     MATCH_BY_BASENAME,
     ManifestValidationSpec,
+    TriggerValue,
 )
 from chart_manager.domain.chart_deps import build_helm_dependency_index
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
@@ -20,6 +24,34 @@ from chart_manager.services.manifest_validation.models import (
 )
 from chart_manager.services.manifest_validation.namespaces import resolve_namespace
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
+
+# Repository-wide triggers merged UNDER each chart's authored `triggers`; an
+# authored pattern with the identical spelling replaces the default, so a chart
+# can narrow one (`"templates/**": [ci]`) or opt out (`"templates/**": []`).
+# Every chart was repeating these, and a chart that forgot `templates/**` left
+# template edits unvalidated.
+#
+# Rendering inputs (templates/**, files/**, values.schema.json, Chart.lock)
+# default to all-environments: each env renders -- and schema-validates --
+# them against its own values, so a change can pass under ci and break dev.
+# values-ci.yaml only feeds ci, and tests/** (helm test hooks) is not read by
+# manifest validation, so ci is enough to notice the edit.
+#
+# A default only counts as a match when it selects one of the chart's
+# environments; otherwise the unmatchedChanges policy applies as if the
+# default were absent. `values.yaml` is deliberately not defaulted because
+# charts map it to different environment sets; `Chart.yaml` and
+# `chart-lifecycle.yaml` are chart-wide before triggers are consulted.
+DEFAULT_TRIGGERS: Mapping[str, TriggerValue] = MappingProxyType(
+    {
+        "values-ci.yaml": ["ci"],
+        "templates/**": ALL_ENVIRONMENTS,
+        "tests/**": ["ci"],
+        "files/**": ALL_ENVIRONMENTS,
+        "values.schema.json": ALL_ENVIRONMENTS,
+        "Chart.lock": ALL_ENVIRONMENTS,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -202,17 +234,20 @@ def _envs_for_chart_file(
     path = chart_relative.as_posix()
     environments: set[str] = set()
     matched = False
-    for pattern, value in spec.triggers.items():
+    for pattern, value in {**DEFAULT_TRIGGERS, **spec.triggers}.items():
         if not fnmatch.fnmatchcase(path, pattern):
             continue
-        matched = True
         if value == MATCH_BY_BASENAME:
-            if chart_relative.stem in spec.environments:
-                environments.add(chart_relative.stem)
-        elif isinstance(value, list):
-            environments.update(
-                environment for environment in value if environment in spec.environments
-            )
+            selected = {chart_relative.stem} & spec.environments.keys()
+        elif value == ALL_ENVIRONMENTS:
+            selected = set(spec.environments)
+        else:
+            selected = {environment for environment in value if environment in spec.environments}
+        # Authored patterns match even when they select nothing; a default
+        # only matches when the chart declares one of its environments.
+        if pattern in spec.triggers or selected:
+            matched = True
+        environments.update(selected)
     if not matched and spec.unmatched_changes == "all-environments":
         return sorted(spec.environments), False
     return sorted(environments), matched

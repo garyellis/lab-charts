@@ -35,6 +35,7 @@ spec:
       "Chart.yaml": [ci, dev]
       "values.yaml": [ci]
       "envs/*.yaml": match-by-basename
+      "templates/**": all-environments
     triggerIgnores:
       - README.md
       - docs/**
