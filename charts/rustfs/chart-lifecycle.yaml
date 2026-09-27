@@ -25,7 +25,7 @@ spec:
     enabled: true
     profiles:
       minimal:
-        description: Install standalone RustFS and verify bucket-scoped Thanos credentials.
+        description: Install standalone RustFS and verify bucket-scoped Thanos, Loki, and Mimir credentials.
         requires: []
         values:
           - values.yaml
@@ -35,4 +35,8 @@ spec:
 
     dependentTests:
       - chart: thanos
+        profile: minimal
+      - chart: loki
+        profile: minimal
+      - chart: mimir-distributed
         profile: minimal

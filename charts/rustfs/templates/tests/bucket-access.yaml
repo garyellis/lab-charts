@@ -1,8 +1,11 @@
 {{- if .Values.bootstrap.enabled }}
+{{- range $name, $tenant := (include "lab-rustfs.tenants" . | fromYaml) }}
+{{- with $ }}
+---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ include "lab-rustfs.fullname" . }}-bucket-access
+  name: {{ include "lab-rustfs.fullname" . }}-{{ $name }}-bucket-access
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "lab-rustfs.labels" . | nindent 4 }}
@@ -31,18 +34,18 @@ spec:
       env:
         - name: ENDPOINT
           value: {{ .Values.bootstrap.endpoint | quote }}
-        - name: BUCKET
-          value: {{ required "bootstrap.bucket is required" .Values.bootstrap.bucket | quote }}
+        - name: BUCKETS
+          value: {{ join " " $tenant.buckets | quote }}
         - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.bootstrap.workloadSecret.name }}
-              key: {{ .Values.bootstrap.workloadSecret.accessKeyKey }}
+              name: {{ $tenant.workloadSecret.name }}
+              key: {{ $tenant.workloadSecret.accessKeyKey }}
         - name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.bootstrap.workloadSecret.name }}
-              key: {{ .Values.bootstrap.workloadSecret.secretKeyKey }}
+              name: {{ $tenant.workloadSecret.name }}
+              key: {{ $tenant.workloadSecret.secretKeyKey }}
         - name: AWS_DEFAULT_REGION
           value: us-east-1
         - name: AWS_CONFIG_FILE
@@ -76,38 +79,41 @@ spec:
             done
           }
 
-          retry_aws aws s3api head-bucket \
-            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" >/dev/null
+          # Validated bucket names contain no whitespace or glob characters.
+          for BUCKET in $BUCKETS; do
+            retry_aws aws s3api head-bucket \
+              --endpoint-url "$ENDPOINT" --bucket "$BUCKET" >/dev/null
 
-          object_key="helm-test/${HOSTNAME}-$(date +%s%N)"
-          payload=/tmp/payload
-          downloaded=/tmp/downloaded
-          printf 'rustfs bucket access test: %s\n' "$object_key" > "$payload"
+            object_key="helm-test/${HOSTNAME}-$(date +%s%N)"
+            payload=/tmp/payload
+            downloaded=/tmp/downloaded
+            printf 'rustfs bucket access test: %s\n' "$object_key" > "$payload"
 
-          cleanup() {
-            aws s3api delete-object \
+            cleanup() {
+              aws s3api delete-object \
+                --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT INT TERM
+
+            retry_aws aws s3api put-object \
               --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
-              >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT INT TERM
+              --body "$payload" >/dev/null
+            retry_aws aws s3api get-object \
+              --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+              "$downloaded" >/dev/null
 
-          retry_aws aws s3api put-object \
-            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
-            --body "$payload" >/dev/null
-          retry_aws aws s3api get-object \
-            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
-            "$downloaded" >/dev/null
+            expected_hash="$(sha256sum "$payload")"
+            expected_hash="${expected_hash%% *}"
+            actual_hash="$(sha256sum "$downloaded")"
+            actual_hash="${actual_hash%% *}"
+            test "$actual_hash" = "$expected_hash"
 
-          expected_hash="$(sha256sum "$payload")"
-          expected_hash="${expected_hash%% *}"
-          actual_hash="$(sha256sum "$downloaded")"
-          actual_hash="${actual_hash%% *}"
-          test "$actual_hash" = "$expected_hash"
-
-          retry_aws aws s3api delete-object \
-            --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
-            >/dev/null
-          trap - EXIT INT TERM
+            retry_aws aws s3api delete-object \
+              --endpoint-url "$ENDPOINT" --bucket "$BUCKET" --key "$object_key" \
+              >/dev/null
+            trap - EXIT INT TERM
+          done
       volumeMounts:
         - name: tmp
           mountPath: /tmp
@@ -116,4 +122,6 @@ spec:
   volumes:
     - name: tmp
       emptyDir: {}
+{{- end }}
+{{- end }}
 {{- end }}

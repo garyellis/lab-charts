@@ -77,7 +77,7 @@ def test_rustfs_defaults_require_external_secrets_and_one_data_disk() -> None:
     upstream = values["rustfs"]
     bootstrap = values["bootstrap"]
 
-    assert chart["version"] == "0.1.0"
+    assert chart["version"] == "0.2.0"
     assert chart["dependencies"] == [
         {
             "name": "rustfs",
@@ -97,9 +97,12 @@ def test_rustfs_defaults_require_external_secrets_and_one_data_disk() -> None:
     assert upstream["gatewayApi"]["enabled"] is False
     assert upstream["secret"]["existingSecret"] == "rustfs-root"
 
-    assert bootstrap["bucket"] == "thanos-metrics"
-    assert bootstrap["workloadSecret"]["name"] == "rustfs-thanos"
-    assert bootstrap["workloadSecret"]["create"] is False
+    # Production provisions only Thanos; other tenants are CI-only.
+    assert list(bootstrap["tenants"]) == ["thanos"]
+    thanos = bootstrap["tenants"]["thanos"]
+    assert thanos["buckets"] == ["thanos-metrics"]
+    assert thanos["workloadSecret"]["name"] == "rustfs-thanos"
+    assert thanos["workloadSecret"]["create"] is False
     assert bootstrap["image"]["tag"] != "latest"
     assert "rustfsadmin" not in values_path.read_text(encoding="utf-8")
 
@@ -109,9 +112,9 @@ def test_rustfs_bootstrap_reconciles_the_workload_secret_key() -> None:
         REPO_ROOT / "charts/rustfs/templates/bootstrap-job.yaml"
     ).read_text(encoding="utf-8")
 
-    update_command = """rc admin service-account update store "$WORKLOAD_ACCESS_KEY" \\
-                  --secret-key "$WORKLOAD_SECRET_KEY" \\
-                  --policy /policy/policy.json"""
+    update_command = """rc admin service-account update store "$access_key" \\
+                    --secret-key "$secret_key" \\
+                    --policy "/policy/$tenant.json\""""
     assert update_command in template
 
 
@@ -131,6 +134,7 @@ def test_rustfs_helm_test_uses_only_bucket_scoped_s3_operations() -> None:
     assert "aws s3api get-object" in template
     assert "aws s3api delete-object" in template
     assert "aws s3api head-bucket" in template
+    assert "for BUCKET in $BUCKETS; do" in template
     assert "--bucket \"$BUCKET\"" in template
     assert "rc alias set" not in template
     assert "list-buckets" not in template

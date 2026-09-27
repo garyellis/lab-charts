@@ -1,4 +1,5 @@
 {{- if .Values.bootstrap.enabled }}
+{{- $tenants := include "lab-rustfs.tenants" . | fromYaml }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -42,10 +43,6 @@ spec:
               value: /tmp/rc
             - name: ENDPOINT
               value: {{ .Values.bootstrap.endpoint | quote }}
-            - name: BUCKET
-              value: {{ required "bootstrap.bucket is required" .Values.bootstrap.bucket | quote }}
-            - name: DESCRIPTION
-              value: {{ .Values.bootstrap.description | quote }}
             - name: ADMIN_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -56,16 +53,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.bootstrap.adminSecret.name }}
                   key: {{ .Values.bootstrap.adminSecret.secretKeyKey }}
-            - name: WORKLOAD_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required "bootstrap.workloadSecret.name is required" .Values.bootstrap.workloadSecret.name }}
-                  key: {{ .Values.bootstrap.workloadSecret.accessKeyKey }}
-            - name: WORKLOAD_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.bootstrap.workloadSecret.name }}
-                  key: {{ .Values.bootstrap.workloadSecret.secretKeyKey }}
           command: ["sh", "-c"]
           args:
             - |
@@ -75,21 +62,37 @@ spec:
                 echo "waiting for RustFS readiness"
                 sleep 3
               done
-              rc mb --ignore-existing "store/$BUCKET"
-              if rc admin access-key info store "$WORKLOAD_ACCESS_KEY" >/dev/null 2>&1; then
-                rc admin service-account update store "$WORKLOAD_ACCESS_KEY" \
-                  --secret-key "$WORKLOAD_SECRET_KEY" \
-                  --policy /policy/policy.json --description "$DESCRIPTION"
-              else
-                rc admin service-account create store \
-                  "$WORKLOAD_ACCESS_KEY" "$WORKLOAD_SECRET_KEY" \
-                  --policy /policy/policy.json --description "$DESCRIPTION"
-              fi
+              # Each tenant's workload Secret is projected at /tenants/<tenant>.
+              reconcile_tenant() {
+                tenant="$1"
+                description="$2"
+                shift 2
+                access_key="$(cat "/tenants/$tenant/access-key")"
+                secret_key="$(cat "/tenants/$tenant/secret-key")"
+                for bucket in "$@"; do
+                  rc mb --ignore-existing "store/$bucket"
+                done
+                if rc admin access-key info store "$access_key" >/dev/null 2>&1; then
+                  rc admin service-account update store "$access_key" \
+                    --secret-key "$secret_key" \
+                    --policy "/policy/$tenant.json" --description "$description"
+                else
+                  rc admin service-account create store \
+                    "$access_key" "$secret_key" \
+                    --policy "/policy/$tenant.json" --description "$description"
+                fi
+              }
+              {{- range $name, $tenant := $tenants }}
+              reconcile_tenant {{ $name | squote }} {{ $tenant.description | squote }}{{ range $tenant.buckets }} {{ . | squote }}{{ end }}
+              {{- end }}
           resources:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}
           volumeMounts:
             - name: policy
               mountPath: /policy
+              readOnly: true
+            - name: tenants
+              mountPath: /tenants
               readOnly: true
             - name: tmp
               mountPath: /tmp
@@ -97,6 +100,18 @@ spec:
         - name: policy
           configMap:
             name: {{ include "lab-rustfs.fullname" . }}-bootstrap-policy
+        - name: tenants
+          projected:
+            sources:
+              {{- range $name, $tenant := $tenants }}
+              - secret:
+                  name: {{ $tenant.workloadSecret.name }}
+                  items:
+                    - key: {{ $tenant.workloadSecret.accessKeyKey }}
+                      path: {{ $name }}/access-key
+                    - key: {{ $tenant.workloadSecret.secretKeyKey }}
+                      path: {{ $name }}/secret-key
+              {{- end }}
         - name: tmp
           emptyDir: {}
 {{- end }}
