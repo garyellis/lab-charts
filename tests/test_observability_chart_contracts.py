@@ -113,9 +113,10 @@ def test_rustfs_bootstrap_reconciles_the_workload_secret_key() -> None:
     ).read_text(encoding="utf-8")
 
     update_command = """rc admin service-account update store "$access_key" \\
-                    --secret-key "$secret_key" \\
-                    --policy "/policy/$tenant.json\""""
+                  --secret-key "$secret_key" \\
+                  --policy "/policy/$tenant.json\""""
     assert update_command in template
+    assert "retry_rc upsert_service_account" in template
 
 
 def test_rustfs_helm_test_uses_only_bucket_scoped_s3_operations() -> None:

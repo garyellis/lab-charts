@@ -62,6 +62,32 @@ spec:
                 echo "waiting for RustFS readiness"
                 sleep 3
               done
+              # New connections to the Service fail intermittently while the
+              # pod's networking settles, so every rc call is retried.
+              retry_rc() {
+                attempt=1
+                until "$@"; do
+                  command_status=$?
+                  if [ "$attempt" -ge 10 ]; then
+                    echo "rc operation failed after $attempt attempts" >&2
+                    return "$command_status"
+                  fi
+                  attempt=$((attempt + 1))
+                  sleep 2
+                done
+              }
+
+              # Create, or update when the key already exists. A lost response
+              # can leave either state behind, so the pair converges on retry.
+              upsert_service_account() {
+                rc admin service-account create store \
+                  "$access_key" "$secret_key" \
+                  --policy "/policy/$tenant.json" --description "$description" ||
+                rc admin service-account update store "$access_key" \
+                  --secret-key "$secret_key" \
+                  --policy "/policy/$tenant.json" --description "$description"
+              }
+
               # Each tenant's workload Secret is projected at /tenants/<tenant>.
               reconcile_tenant() {
                 tenant="$1"
@@ -70,17 +96,9 @@ spec:
                 access_key="$(cat "/tenants/$tenant/access-key")"
                 secret_key="$(cat "/tenants/$tenant/secret-key")"
                 for bucket in "$@"; do
-                  rc mb --ignore-existing "store/$bucket"
+                  retry_rc rc mb --ignore-existing "store/$bucket"
                 done
-                if rc admin access-key info store "$access_key" >/dev/null 2>&1; then
-                  rc admin service-account update store "$access_key" \
-                    --secret-key "$secret_key" \
-                    --policy "/policy/$tenant.json" --description "$description"
-                else
-                  rc admin service-account create store \
-                    "$access_key" "$secret_key" \
-                    --policy "/policy/$tenant.json" --description "$description"
-                fi
+                retry_rc upsert_service_account
               }
               {{- range $name, $tenant := $tenants }}
               reconcile_tenant {{ $name | squote }} {{ $tenant.description | squote }}{{ range $tenant.buckets }} {{ . | squote }}{{ end }}
