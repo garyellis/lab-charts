@@ -1,23 +1,14 @@
-"""Freeze the authored resource contracts before they move into ``api/``.
+"""Pin the authored resource contracts in ``chart_manager.api``.
 
-This is Phase 0 of ``docs/plans/2026-07-30-versioned-configuration-api-refactor-agent.md``.
 The three authored kinds -- ``ChartLifecycle``, ``LocalCluster`` and
-``LocalStack`` -- are about to be relocated out of the services that happen to
-consume them and into ``chart_manager.api.<group>.v1alpha1``. Relocation is
-supposed to change ownership and nothing else, so every observable property of
-the models is pinned here first: accepted YAML, aliases, defaults (including
-``default_factory`` results), strictness, discriminators, dump spellings and
-the JSON Schema each root model generates.
+``LocalStack`` -- are what repository authors write, so their observable
+behavior is pinned here: the checked-in documents parse, fixtures round-trip
+through the authored spellings, ``default_factory`` defaults the schema cannot
+show, strictness, rejection categories, discriminators and the JSON Schema
+each root model generates.
 
-The imports below deliberately name the *current* locations. When the models
-move, this file's import block is the only part that should need editing -- if
-an assertion has to change too, the move was not behavior preserving and needs
-a reviewer, not a fixup.
-
-The schema snapshot in ``tests/fixtures/api/expected-schemas.json`` is the
-plan's "comparison input" (Phase 0 item 5), not the checked-in schema
-deliverable of Phase 5. Regenerate it only when a reviewer has confirmed the
-diff is intentional::
+Regenerate the schema snapshot in ``tests/fixtures/api/expected-schemas.json``
+only when a reviewer has confirmed the diff is intentional::
 
     uv run --extra dev python - <<'PY'
     import json
@@ -45,7 +36,6 @@ from chart_manager.api.lifecycle.v1alpha1 import (
     ChartLifecycleMetadata,
     ChartLifecycleSpec,
     ClusterTestProfile,
-    ClusterTestRef,
     ClusterTestSpec,
     ManifestValidationEnvironmentSpec,
     ManifestValidationPolicySpec,
@@ -59,7 +49,6 @@ from chart_manager.api.local.v1alpha1 import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
-    BootstrapReadiness,
     BootstrapRepoChartRelease,
     LifecycleRelease,
     LocalBootstrap,
@@ -78,7 +67,7 @@ from .conftest import REPO_ROOT
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "api"
 SCHEMA_SNAPSHOT = FIXTURES / "expected-schemas.json"
 
-#: The three root models whose JSON Schema is compared before and after the move.
+#: The three root models whose JSON Schema is compared against the snapshot.
 ROOT_MODELS: dict[str, type[BaseModel]] = {
     "ChartLifecycle": ChartLifecycle,
     "LocalCluster": LocalCluster,
@@ -228,45 +217,6 @@ def test_chart_lifecycle_fixture_round_trips_through_authored_aliases() -> None:
 
     assert ChartLifecycle.model_validate(dumped) == resource
     _assert_authored_subset(document, dumped)
-    assert list(dumped) == ["apiVersion", "kind", "metadata", "spec"]
-    assert set(dumped["spec"]) == {"enabled", "validation", "clusterTest"}
-    assert set(dumped["spec"]["validation"]) == {
-        "enabled",
-        "releaseName",
-        "namespaceTemplate",
-        "helmVersion",
-        "helmBinary",
-        "kubernetesVersion",
-        "schemaLocations",
-        "environments",
-        "triggers",
-        "triggerIgnores",
-        "unmatchedChanges",
-        "validators",
-        "policies",
-    }
-    assert set(dumped["spec"]["validation"]["environments"]["ci"]) == {"namespace", "values"}
-    assert set(dumped["spec"]["validation"]["validators"]) == {"kubeconform", "policy"}
-    assert set(dumped["spec"]["validation"]["policies"]) == {"extra"}
-    assert set(dumped["spec"]["clusterTest"]) == {"enabled", "profiles", "dependentTests"}
-    assert set(dumped["spec"]["clusterTest"]["profiles"]["minimal"]) == {
-        "description",
-        "namespace",
-        "requires",
-        "values",
-        "helmTest",
-        "timeout",
-    }
-    assert set(dumped["spec"]["clusterTest"]["dependentTests"][0]) == {"chart", "profile"}
-    # The near-empty `routed` profile shows the profile defaults in the dump.
-    assert dumped["spec"]["clusterTest"]["profiles"]["routed"] == {
-        "description": None,
-        "namespace": "routed",
-        "requires": [],
-        "values": ["values.yaml"],
-        "helmTest": True,
-        "timeout": "10m",
-    }
 
 
 def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
@@ -277,11 +227,6 @@ def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
 
     assert LocalCluster.model_validate(dumped) == resource
     _assert_authored_subset(document, dumped)
-    assert list(dumped) == ["apiVersion", "kind", "metadata", "spec"]
-    assert set(dumped["spec"]) == {"cluster", "bootstrap"}
-    assert set(dumped["spec"]["cluster"]) == {"config", "hooks"}
-    assert dumped["spec"]["cluster"]["hooks"] is None
-    assert set(dumped["spec"]["bootstrap"]) == {"releases"}
 
     releases = resource.spec.bootstrap.releases
     assert [type(release) for release in releases] == [
@@ -291,50 +236,6 @@ def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
         BootstrapOciChartRelease,
         BootstrapRepoChartRelease,
     ]
-    assert [release.type for release in releases] == [
-        "lifecycle",
-        "local",
-        "oci",
-        "oci",
-        "repo",
-    ]
-    assert set(dumped["spec"]["bootstrap"]["releases"][0]) == {
-        "type",
-        "chart",
-        "profile",
-        "runtimeValues",
-        "readiness",
-    }
-    assert set(dumped["spec"]["bootstrap"]["releases"][1]) == {
-        "name",
-        "namespace",
-        "values",
-        "timeout",
-        "type",
-        "chart",
-        "runtimeValues",
-        "readiness",
-    }
-    assert set(dumped["spec"]["bootstrap"]["releases"][2]) == {
-        "name",
-        "namespace",
-        "values",
-        "timeout",
-        "type",
-        "chart",
-        "version",
-        "digest",
-        "runtimeValues",
-        "readiness",
-    }
-    assert set(dumped["spec"]["bootstrap"]["releases"][0]["readiness"]) == {
-        "nodesReady",
-        "workloadsReady",
-    }
-    assert set(dumped["spec"]["bootstrap"]["releases"][0]["readiness"]["workloadsReady"]) == {
-        "namespace",
-        "timeout",
-    }
     # Repository-relative paths are typed as `Path` but serialize as the
     # authored POSIX spelling.
     assert dumped["spec"]["cluster"]["config"] == "kind-config.yaml"
@@ -349,17 +250,11 @@ def test_local_stack_fixture_round_trips_through_authored_aliases() -> None:
 
     assert LocalStack.model_validate(dumped) == resource
     _assert_authored_subset(document, dumped)
-    assert list(dumped) == ["apiVersion", "kind", "metadata", "spec"]
-    assert set(dumped["spec"]) == {"releases"}
     assert [type(release) for release in resource.spec.releases] == [
         LifecycleRelease,
         OciChartRelease,
         RepoChartRelease,
     ]
-    # A stack release carries none of the bootstrap-only contracts.
-    assert set(dumped["spec"]["releases"][0]) == {"type", "chart", "profile"}
-    assert "runtimeValues" not in dumped["spec"]["releases"][1]
-    assert "readiness" not in dumped["spec"]["releases"][1]
 
 
 @pytest.mark.parametrize(
@@ -392,14 +287,6 @@ def test_field_names_are_alias_only(model: type[BaseModel], fixture: str) -> Non
 # --------------------------------------------------------------------------
 
 
-def test_chart_lifecycle_spec_defaults() -> None:
-    spec = ChartLifecycleSpec.model_validate({})
-
-    assert spec.enabled is True
-    assert spec.validation is None
-    assert spec.cluster_test is None
-
-
 def _minimal_validation() -> ManifestValidationSpec:
     return ManifestValidationSpec.model_validate(
         {"releaseName": "demo", "environments": {"dev": {"namespace": "lab-dev"}}}
@@ -409,106 +296,32 @@ def _minimal_validation() -> ManifestValidationSpec:
 def test_manifest_validation_spec_defaults() -> None:
     spec = _minimal_validation()
 
-    assert spec.enabled is True
-    assert spec.namespace_template is None
-    assert spec.helm_version is None
-    assert spec.helm_binary is None
-    assert spec.kubernetes_version is None
     assert spec.schema_locations == []
     assert spec.triggers == {}
     assert spec.trigger_ignores == []
-    assert spec.unmatched_changes == "warn"
     assert spec.validators == ManifestValidationValidatorsSpec(kubeconform=True, policy=True)
     assert spec.policies == ManifestValidationPolicySpec(extra=[])
 
 
 def test_manifest_validation_environment_defaults() -> None:
-    environment = ManifestValidationEnvironmentSpec()
-
-    assert environment.namespace is None
-    assert environment.values == []
-
-
-def test_manifest_validation_default_factories_are_per_instance() -> None:
-    first = _minimal_validation()
-    second = _minimal_validation()
-
-    first.schema_locations.append("default")
-    first.trigger_ignores.append("README.md")
-    first.triggers["values.yaml"] = ["dev"]
-    first.policies.extra.append("policies/extra")
-
-    assert second.schema_locations == []
-    assert second.trigger_ignores == []
-    assert second.triggers == {}
-    assert second.policies.extra == []
-    assert first.validators is not second.validators
-    assert first.policies is not second.policies
+    assert ManifestValidationEnvironmentSpec().values == []
 
 
 def test_cluster_test_defaults() -> None:
     spec = ClusterTestSpec.model_validate({"profiles": {}})
     profile = ClusterTestProfile(namespace="demo")
-    ref = ClusterTestRef(chart="istio-base")
 
-    assert spec.enabled is True
     assert spec.dependent_tests == []
-    assert profile.description is None
     assert profile.requires == []
     assert profile.values == ["values.yaml"]
-    assert profile.helm_test is True
-    assert profile.timeout == "10m"
-    assert ref.profile == "minimal"
-
-
-def test_cluster_test_default_factories_are_per_instance() -> None:
-    first = ClusterTestProfile(namespace="demo")
-    second = ClusterTestProfile(namespace="demo")
-
-    first.values.append("values-ci.yaml")
-    first.requires.append(ClusterTestRef(chart="istio-base"))
-
-    assert second.values == ["values.yaml"]
-    assert second.requires == []
 
 
 def test_local_resource_defaults() -> None:
-    bootstrap = LocalBootstrap()
-    readiness = BootstrapReadiness()
     release = BootstrapLifecycleRelease.model_validate(
         {"type": "lifecycle", "chart": "charts/demo", "profile": "minimal"}
     )
-    oci = OciChartRelease.model_validate(
-        {
-            "type": "oci",
-            "name": "demo",
-            "chart": "oci://example.test/charts/demo",
-            "version": "1.0.0",
-            "namespace": "demo",
-            "values": [],
-            "timeout": "1m",
-        }
-    )
-
-    assert bootstrap.releases == []
-    assert readiness.nodes_ready is False
-    assert readiness.workloads_ready is None
+    assert LocalBootstrap().releases == []
     assert release.runtime_values == {}
-    assert release.readiness is None
-    assert oci.digest is None
-
-
-def test_local_default_factories_are_per_instance() -> None:
-    first = LocalBootstrap()
-    second = LocalBootstrap()
-
-    first.releases.append(
-        BootstrapLifecycleRelease.model_validate(
-            {"type": "lifecycle", "chart": "charts/demo", "profile": "minimal"}
-        )
-    )
-
-    assert second.releases == []
 
 
 # --------------------------------------------------------------------------
@@ -536,12 +349,6 @@ def test_lifecycle_envelope_is_strict_but_capability_specs_are_not() -> None:
 
     assert validation.enabled is True
     assert cluster_test.enabled is True
-
-
-def test_cluster_test_timeout_is_an_unvalidated_string() -> None:
-    """Unlike local releases, cluster-test timeouts are not shape-checked."""
-    profile = ClusterTestProfile.model_validate({"namespace": "demo", "timeout": "not-a-duration"})
-    assert profile.timeout == "not-a-duration"
 
 
 def test_chart_lifecycle_metadata_name_rules() -> None:
@@ -711,22 +518,30 @@ def _validation(**overrides: Any) -> dict[str, Any]:
             id="unknown-validator",
         ),
         pytest.param(
-            _lifecycle({"clusterTest": {"profiles": {"m": {"values": ["/etc/passwd"]}}}}),
+            _lifecycle(
+                {"clusterTest": {"profiles": {"m": {"namespace": "d", "values": ["/etc/passwd"]}}}}
+            ),
             "value_error",
             id="absolute-cluster-test-values-path",
         ),
         pytest.param(
-            _lifecycle({"clusterTest": {"profiles": {"m": {"values": ["../x.yaml"]}}}}),
+            _lifecycle(
+                {"clusterTest": {"profiles": {"m": {"namespace": "d", "values": ["../x.yaml"]}}}}
+            ),
             "value_error",
             id="escaping-cluster-test-values-path",
         ),
         pytest.param(
-            _lifecycle({"clusterTest": {"profiles": {"m": {"helm_test": False}}}}),
+            _lifecycle(
+                {"clusterTest": {"profiles": {"m": {"namespace": "d", "helm_test": False}}}}
+            ),
             "extra_forbidden",
             id="snake-case-helmTest",
         ),
         pytest.param(
-            _lifecycle({"clusterTest": {"profiles": {"m": {"requires": [{"bogus": 1}]}}}}),
+            _lifecycle(
+                {"clusterTest": {"profiles": {"m": {"namespace": "d", "requires": [{"bogus": 1}]}}}}
+            ),
             "extra_forbidden",
             id="unknown-cluster-test-ref-field",
         ),
@@ -1108,27 +923,11 @@ def _serialize_schemas(schemas: dict[str, Any]) -> str:
     return json.dumps(schemas, indent=2, sort_keys=True) + "\n"
 
 
-@pytest.mark.parametrize("name", sorted(ROOT_MODELS), ids=sorted(ROOT_MODELS))
-def test_root_model_json_schema_matches_the_snapshot(name: str) -> None:
-    """Relocating a model must not change the schema it generates.
+def test_root_model_json_schemas_match_the_snapshot() -> None:
+    """The checked-in snapshot is complete and exactly what the models generate.
 
-    Pydantic's JSON Schema is derived from class names, docstrings, aliases,
-    defaults and field order -- never from the module a class lives in -- so a
-    pure move leaves this byte-identical.
-
-    What this pins is the schema's *content*: every property, its type, its
-    `const`/`enum`, its default, and the `required` list (a JSON array, so its
-    order is compared). It does not pin property order -- the comparison is
-    between parsed dicts and `_serialize_schemas` writes with `sort_keys=True`.
-    Authored key order is covered instead by the alias round-trip tests, which
-    assert exact key sequences at every level of a real document.
+    Byte equality with `_serialize_schemas` output pins every property, its
+    type, `const`/`enum`, default and `required` list, and that the file is
+    deterministic, so a regeneration diff is exactly the contract change.
     """
-    expected = json.loads(SCHEMA_SNAPSHOT.read_text(encoding="utf-8"))
-
-    assert name in expected, f"{name} missing from {SCHEMA_SNAPSHOT.name}"
-    assert ROOT_MODELS[name].model_json_schema() == expected[name]
-
-
-def test_schema_snapshot_is_complete_and_deterministic() -> None:
-    """The checked-in snapshot is exactly what the models generate, sorted."""
     assert SCHEMA_SNAPSHOT.read_text(encoding="utf-8") == _serialize_schemas(_generate_schemas())

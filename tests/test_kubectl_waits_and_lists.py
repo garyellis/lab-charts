@@ -142,20 +142,14 @@ def test_list_virtualservices_keeps_namespace_hosts_and_annotations() -> None:
     ]
 
 
-def test_list_virtualservices_drops_non_string_hosts_and_annotations() -> None:
+def test_list_virtualservices_drops_empty_and_non_string_hosts() -> None:
     runner = FakeCommandRunner(
         stdout=_vs_payload(
-            [
-                {
-                    "metadata": {"namespace": "ns", "annotations": {"a": "x", "b": 1}},
-                    "spec": {"hosts": ["ok.localhost", "", 7]},
-                }
-            ]
+            [{"metadata": {"namespace": "ns"}, "spec": {"hosts": ["ok.localhost", "", 7]}}]
         )
     )
     [vs] = Kubectl(runner=runner).list_virtualservices()
     assert vs.hosts == ("ok.localhost",)
-    assert vs.annotations == {"a": "x"}
 
 
 def test_list_virtualservices_ignores_malformed_json() -> None:

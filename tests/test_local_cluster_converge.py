@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
-from chart_manager.api.local.v1alpha1 import RepoChartRelease
+from chart_manager.api.local.v1alpha1 import LifecycleRelease, RepoChartRelease
 from chart_manager.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -31,7 +31,9 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
     RunSummary,
 )
+from chart_manager.services.clusters.development.service import _TargetLocalExecution
 from chart_manager.services.clusters.environment import BoundClients
+from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 
 
 class _Helm:
@@ -40,6 +42,7 @@ class _Helm:
     def __init__(self, context: str, calls: list[tuple[str, str]]) -> None:
         self.context = context
         self.calls = calls
+        self.namespaces: list[str] = []
 
     def list_releases(
         self, *, all_namespaces: bool = True, namespace: str | None = None
@@ -50,9 +53,10 @@ class _Helm:
         return False
 
     def upgrade_install(
-        self, release: str, _chart: Any, **_kwargs: Any
+        self, release: str, _chart: Any, *, namespace: str, **_kwargs: Any
     ) -> UpgradeResult:
         self.calls.append((self.context, release))
+        self.namespaces.append(namespace)
         return UpgradeResult(status="applied", revision_before=0, revision_after=1, output="")
 
 
@@ -118,6 +122,29 @@ def _stub_chart(name: str, *, namespace: str) -> ClusterTestChart:
             },
             dependentTests=[],
         ),
+    )
+
+
+class _Catalog:
+    """The two-method slice of ClusterTestCatalog that `_install_plan` reads."""
+
+    def __init__(self, charts: dict[str, ClusterTestChart]) -> None:
+        self._charts = charts
+
+    def get(self, name: str) -> ClusterTestChart:
+        return self._charts[name]
+
+    def value_paths(self, _chart: Any, _profile: str) -> list[Path]:
+        return []
+
+
+def _service(root: Path, *, helm: _Helm | None = None) -> DevelopmentClusterService:
+    return DevelopmentClusterService(
+        root,
+        helm=helm or _Helm("kind-lab", []),  # type: ignore[arg-type]
+        kind=_Kind(),  # type: ignore[arg-type]
+        kubectl=_Kubectl(),  # type: ignore[arg-type]
+        expose=_Expose(),  # type: ignore[arg-type]
     )
 
 
@@ -240,13 +267,6 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
         "grafana": _stub_chart("grafana", namespace="monitoring"),
     }
 
-    class _Catalog:
-        def get(self, name: str) -> Any:
-            return charts[name]
-
-        def value_paths(self, _chart: Any, _profile: str) -> list[Path]:
-            return []
-
     summary = RunSummary()
     service._install_plan(
         [
@@ -257,7 +277,7 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
         namespaces_created=set(),
         summary=summary,
         skip_installed=False,
-        cluster_tests=_Catalog(),  # type: ignore[arg-type]
+        cluster_tests=_Catalog(charts),  # type: ignore[arg-type]
     )
 
     assert [(f.chart, f.namespace) for f in summary.failed] == [("loki", "observability")]
@@ -290,13 +310,6 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
     )
     charts = {"loki": _stub_chart("loki", namespace="observability")}
 
-    class _Catalog:
-        def get(self, name: str) -> Any:
-            return charts[name]
-
-        def value_paths(self, _chart: Any, _profile: str) -> list[Path]:
-            return []
-
     summary = RunSummary()
     with caplog.at_level("ERROR"):
         service._install_plan(
@@ -305,7 +318,7 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
             namespaces_created=set(),
             summary=summary,
             skip_installed=False,
-            cluster_tests=_Catalog(),  # type: ignore[arg-type]
+            cluster_tests=_Catalog(charts),  # type: ignore[arg-type]
         )
 
     assert [f.chart for f in summary.failed] == ["loki"]
@@ -367,3 +380,84 @@ def test_https_repo_release_stays_out_of_lifecycle_and_preserves_result_semantic
     assert [(row.chart, row.profile) for row in summary.no_change] == [
         ("metrics", "1.2.3")
     ]
+
+
+def test_local_install_uses_the_chart_lifecycle_profile_namespace(tmp_path: Path) -> None:
+    helm = _Helm("kind-lab", [])
+    summary = RunSummary()
+    _service(tmp_path, helm=helm)._install_plan(
+        [InstallPlanEntry(chart="grafana", profile="minimal")],
+        installed_keys=set(),
+        namespaces_created=set(),
+        summary=summary,
+        skip_installed=False,
+        cluster_tests=_Catalog(  # type: ignore[arg-type]
+            {"grafana": _stub_chart("grafana", namespace="monitoring")}
+        ),
+    )
+
+    assert helm.namespaces == ["monitoring"]
+    assert summary.applied[0].namespace == "monitoring"
+
+
+def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
+    tmp_path: Path,
+) -> None:
+    for name, requires in (
+        ("network", ""),
+        ("app", "        requires:\n          - chart: network\n            profile: minimal\n"),
+    ):
+        chart = tmp_path / "charts" / name
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
+            encoding="utf-8",
+        )
+        (chart / "chart-lifecycle.yaml").write_text(
+            (
+                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+                "kind: ChartLifecycle\n"
+                f"metadata: {{name: {name}}}\n"
+                "spec:\n"
+                "  clusterTest:\n"
+                "    profiles:\n"
+                "      minimal:\n"
+                f"{requires}"
+                "        namespace: kube-system\n"
+                "        values: []\n"
+            ),
+            encoding="utf-8",
+        )
+
+    steps = _service(tmp_path)._preflight_target(
+        (LifecycleRelease(type="lifecycle", chart=Path("charts/app"), profile="minimal"),),
+        excluded_lifecycle_identities=frozenset(
+            {
+                ExternallySatisfiedLifecycle(
+                    chart_path=(tmp_path / "charts/network").resolve(),
+                    chart="network",
+                    profile="minimal",
+                    namespace="kube-system",
+                )
+            }
+        ),
+    )
+
+    assert isinstance(steps[0], _TargetLocalExecution)
+    assert [entry.chart for entry in steps[0].plan] == ["app"]
+
+
+def test_relative_repository_root_accepts_an_absolute_resolved_chart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart = tmp_path / "charts/cert-manager"
+    chart.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    releases = _service(Path("."))._target_releases(
+        ResolvedChartTarget(name="cert-manager", path=chart.resolve()),
+        profile=None,
+    )
+
+    assert releases[0].chart == Path("charts/cert-manager")
