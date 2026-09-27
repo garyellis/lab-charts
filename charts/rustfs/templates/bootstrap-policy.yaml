@@ -7,7 +7,14 @@ metadata:
   labels:
     {{- include "lab-rustfs.labels" . | nindent 4 }}
 data:
-  policy.json: |
+  {{- range $name, $tenant := (include "lab-rustfs.tenants" . | fromYaml) }}
+  {{- $bucketArns := list }}
+  {{- $objectArns := list }}
+  {{- range $tenant.buckets }}
+  {{- $bucketArns = append $bucketArns (printf "arn:aws:s3:::%s" .) }}
+  {{- $objectArns = append $objectArns (printf "arn:aws:s3:::%s/*" .) }}
+  {{- end }}
+  {{ $name }}.json: |
     {
       "Version": "2012-10-17",
       "Statement": [
@@ -18,7 +25,7 @@ data:
             "s3:ListBucket",
             "s3:ListBucketMultipartUploads"
           ],
-          "Resource": ["arn:aws:s3:::{{ .Values.bootstrap.bucket }}"]
+          "Resource": {{ toJson $bucketArns }}
         },
         {
           "Effect": "Allow",
@@ -29,8 +36,9 @@ data:
             "s3:ListMultipartUploadParts",
             "s3:PutObject"
           ],
-          "Resource": ["arn:aws:s3:::{{ .Values.bootstrap.bucket }}/*"]
+          "Resource": {{ toJson $objectArns }}
         }
       ]
     }
+  {{- end }}
 {{- end }}

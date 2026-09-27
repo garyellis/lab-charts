@@ -1,26 +1,31 @@
 ---
 # Production credentials are deliberately external to Helm. The root Secret is
-# consumed by RustFS and the bootstrap Job. The workload Secret is consumed only
-# by the bootstrap Job; Thanos receives the same credentials through its own
-# SOPS-managed objstore configuration Secret.
+# consumed by RustFS and the bootstrap Job. Each tenant's workload Secret is
+# consumed only by the bootstrap Job and Helm test; Thanos receives the same
+# credentials through its own SOPS-managed objstore configuration Secret.
 bootstrap:
   enabled: true
   endpoint: http://rustfs-svc:9000
-  bucket: thanos-metrics
-  description: Thanos object-store access
   adminSecret:
     name: rustfs-root
     accessKeyKey: RUSTFS_ACCESS_KEY
     secretKeyKey: RUSTFS_SECRET_KEY
-  workloadSecret:
-    name: rustfs-thanos
-    accessKeyKey: accessKey
-    secretKeyKey: secretKey
-    # Local test environments may ask the wrapper to create this Secret.
-    # Production must leave this false and provision the Secret externally.
-    create: false
-    accessKey: ""
-    secretKey: ""
+  # One entry per consumer. The bootstrap Job creates each tenant's buckets and
+  # one service account whose policy is limited to exactly those buckets.
+  tenants:
+    thanos:
+      description: Thanos object-store access
+      buckets:
+        - thanos-metrics
+      workloadSecret:
+        name: rustfs-thanos
+        accessKeyKey: accessKey
+        secretKeyKey: secretKey
+        # Local test environments may ask the wrapper to create this Secret.
+        # Production must leave this false and provision the Secret externally.
+        create: false
+        accessKey: ""
+        secretKey: ""
   image:
     repository: rustfs/rc
     tag: v0.1.30

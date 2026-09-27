@@ -1,9 +1,41 @@
 mimir-distributed:
   global:
     storageClass: ""
+    # Bucket-scoped credentials created by the rustfs chart's CI mimir tenant.
+    # Mimir components run with -config.expand-env=true.
+    extraEnv:
+      - name: MIMIR_S3_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef:
+            name: rustfs-mimir
+            key: accessKey
+      - name: MIMIR_S3_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: rustfs-mimir
+            key: secretKey
 
   mimir:
     structuredConfig:
+      # The bundled MinIO images are no longer publicly pullable, so CI uses
+      # the standalone RustFS object store that the cluster test requires.
+      common:
+        storage:
+          backend: s3
+          s3:
+            endpoint: rustfs-svc.observability.svc:9000
+            insecure: true
+            access_key_id: ${MIMIR_S3_ACCESS_KEY_ID}
+            secret_access_key: ${MIMIR_S3_SECRET_ACCESS_KEY}
+      blocks_storage:
+        s3:
+          bucket_name: mimir-blocks
+      ruler_storage:
+        s3:
+          bucket_name: mimir-ruler
+      alertmanager_storage:
+        s3:
+          bucket_name: mimir-alertmanager
       ingest_storage:
         enabled: false
       ingester:
@@ -19,13 +51,7 @@ mimir-distributed:
     enabled: false
 
   minio:
-    enabled: true
-    persistence:
-      enabled: false
-      storageClass: ""
-      size: 1Gi
-    nodeSelector: {}
-    tolerations: []
+    enabled: false
 
   kafka:
     enabled: false

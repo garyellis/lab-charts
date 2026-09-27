@@ -32,14 +32,22 @@ managed outside Helm, normally through Flux and SOPS. The separate
 `thanos-objstore` Secret supplies the `rustfs-thanos` credentials to Thanos in
 its `objstore.yml`; this chart does not create that configuration Secret.
 
-The post-install/post-upgrade bootstrap Job waits for readiness, creates
-`thanos-metrics` if absent, and creates or updates a service-account policy
-limited to that bucket. On upgrade it reconciles the policy, description, and
-secret key for an existing workload access key.
+## Tenants
 
-The Helm test uses the bucket-scoped workload credentials to write, read back,
-verify, and delete a unique object in `thanos-metrics`. It calls those S3 APIs
-directly and does not require account-wide bucket-listing permission.
+`bootstrap.tenants` maps a tenant name to its buckets, a description, and the
+workload Secret that holds its service-account credentials. The production
+defaults define only the `thanos` tenant shown above. A bucket may belong to
+only one tenant, and the chart fails to render otherwise.
+
+The post-install/post-upgrade bootstrap Job waits for readiness and, for each
+tenant, creates any missing buckets and creates or updates a service account
+whose policy is limited to that tenant's buckets. On upgrade it reconciles the
+policy, description, and secret key for an existing workload access key.
+
+The Helm test runs one pod per tenant. Each pod uses that tenant's workload
+credentials to write, read back, verify, and delete a unique object in every
+bucket the tenant owns. It calls those S3 APIs directly and does not require
+account-wide bucket-listing permission.
 
 ## Usage
 
@@ -63,5 +71,7 @@ mise run kind-test -- rustfs --profile minimal
 ```
 
 The CI overlay creates deterministic, non-default local credentials and a
-small ephemeral-sized PVC. Those credentials are test-only and must never be
-used in a deployed environment.
+small ephemeral-sized PVC. It also adds `loki` and `mimir` tenants, because the
+Loki and Mimir cluster tests use this chart as their object store in place of
+the MinIO images that are no longer publicly pullable. Those credentials are
+test-only and must never be used in a deployed environment.
