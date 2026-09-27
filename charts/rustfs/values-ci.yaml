@@ -3,10 +3,39 @@ bootstrap:
   adminSecret:
     # With no existingSecret, the upstream chart creates this CI-only Secret.
     name: rustfs-secret
-  workloadSecret:
-    create: true
-    accessKey: ci-thanos
-    secretKey: ci-thanos-secret-not-for-production
+  # Cluster tests install this chart as the shared object store for every
+  # consumer that requires it, so CI provisions all of their tenants.
+  tenants:
+    thanos:
+      workloadSecret:
+        create: true
+        accessKey: ci-thanos
+        secretKey: ci-thanos-secret-not-for-production
+    loki:
+      description: Loki object-store access
+      buckets:
+        - loki-chunks
+        - loki-ruler
+      workloadSecret:
+        name: rustfs-loki
+        accessKeyKey: accessKey
+        secretKeyKey: secretKey
+        create: true
+        accessKey: ci-loki
+        secretKey: ci-loki-secret-not-for-production
+    mimir:
+      description: Mimir object-store access
+      buckets:
+        - mimir-blocks
+        - mimir-ruler
+        - mimir-alertmanager
+      workloadSecret:
+        name: rustfs-mimir
+        accessKeyKey: accessKey
+        secretKeyKey: secretKey
+        create: true
+        accessKey: ci-mimir
+        secretKey: ci-mimir-secret-not-for-production
   resources:
     requests:
       cpu: 10m

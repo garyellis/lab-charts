@@ -44,9 +44,10 @@ spec:
     enabled: true
     profiles:
       minimal:
-        description: Install Loki with CI-local values.
-        namespace: observability
-        requires: []
+        description: Install Loki with CI-local values and standalone RustFS object storage.
+        requires:
+          - chart: rustfs
+            profile: minimal
         values:
           - values.yaml
           - values-ci.yaml
