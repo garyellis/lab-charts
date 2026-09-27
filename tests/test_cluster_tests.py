@@ -54,7 +54,7 @@ def test_unknown_profile_raises_spec_error() -> None:
 def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
     spec = ClusterTestSpec.model_validate(
         {
-            "profiles": {"minimal": {}},
+            "profiles": {"minimal": {"namespace": "default"}},
             "dependentTests": [{"chart": "grafana", "profile": "with-deps"}],
         }
     )
@@ -66,7 +66,7 @@ def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
     with pytest.raises(ValidationError, match="reverseTests"):
         ClusterTestSpec.model_validate(
             {
-                "profiles": {"minimal": {}},
+                "profiles": {"minimal": {"namespace": "default"}},
                 "reverseTests": [{"chart": "grafana"}],
             }
         )
@@ -84,17 +84,20 @@ def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
 
 
 def test_cluster_test_profile_defaults_to_running_helm_tests() -> None:
-    assert ClusterTestProfile().helm_test is True
+    assert ClusterTestProfile(namespace="default").helm_test is True
 
 
 def test_cluster_test_profile_accepts_disabled_helm_tests() -> None:
-    assert ClusterTestProfile(helmTest=False).helm_test is False
+    assert ClusterTestProfile(namespace="default", helmTest=False).helm_test is False
 
 
 def test_cluster_test_profile_rejects_removed_checks_configuration() -> None:
     with pytest.raises(ValidationError, match="checks"):
         ClusterTestProfile.model_validate(
-            {"checks": [{"name": "pods-ready", "type": "helm-test"}]}
+            {
+                "namespace": "default",
+                "checks": [{"name": "pods-ready", "type": "helm-test"}],
+            }
         )
 
 

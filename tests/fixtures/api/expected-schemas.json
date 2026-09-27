@@ -54,7 +54,7 @@
       },
       "ClusterTestProfile": {
         "additionalProperties": false,
-        "description": "How to install and test a chart under one named profile.",
+        "description": "How to install and test a chart under one named profile.\n\n`namespace` is required: a chart's values routinely address siblings by\nin-cluster DNS name, so where it runs is part of the chart's intent, not\nsomething a command may pick for it.",
         "properties": {
           "description": {
             "anyOf": [
@@ -74,16 +74,9 @@
             "type": "boolean"
           },
           "namespace": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Namespace"
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
           },
           "requires": {
             "items": {
@@ -105,6 +98,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "namespace"
+        ],
         "title": "ClusterTestProfile",
         "type": "object"
       },

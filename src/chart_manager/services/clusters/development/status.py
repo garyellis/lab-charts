@@ -2,7 +2,7 @@
 
 Every lookup here already existed inside the converge path -- `helm list -A`
 is the install-skip snapshot (`service._existing_release_keys`), the URL list
-is `access.urls_and_grafana_host`, the port diff is `drift.port_mapping_drift`.
+is `access.virtualservice_urls`, the port diff is `drift.port_mapping_drift`.
 `status` asks the same questions and keeps the answers instead of consuming
 them, which is why this module composes those helpers rather than reaching
 for the adapters a second time.
@@ -22,7 +22,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters.development.access import urls_and_grafana_host
+from chart_manager.services.clusters.development.access import virtualservice_urls
 from chart_manager.services.clusters.development.drift import port_mapping_drift
 from chart_manager.services.clusters.development.models import (
     DevelopmentClusterRelease,
@@ -113,11 +113,10 @@ def _releases(helm: Helm) -> tuple[tuple[DevelopmentClusterRelease, ...], str | 
 def _urls(kubectl: Kubectl) -> tuple[tuple[str, ...], str | None]:
     """The reachable URLs, through the same projection `local up` prints."""
     try:
-        hosts = kubectl.list_virtualservice_hosts()
+        virtualservices = kubectl.list_virtualservices()
     except ChartManagerError as exc:
         return (), f"could not list VirtualServices ({exc}); skipping URL hints"
-    urls, _grafana_host = urls_and_grafana_host(hosts)
-    return urls, None
+    return virtualservice_urls(virtualservices), None
 
 
 __all__ = ["cluster_status"]

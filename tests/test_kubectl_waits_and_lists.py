@@ -3,10 +3,10 @@
   * `wait_certificate_ready` / `wait_deployment_available`: thin wrappers
     around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
-  * `list_virtualservice_hosts` / `list_gateway_hosts`: best-effort
+  * `list_virtualservices` / `list_gateway_hosts`: best-effort
     listings used by DevelopmentClusterService and access discovery. Empty list
     on missing CRD / parse error is the contract -- callers treat that
-    as "no hosts yet" rather than as a hard error.
+    as "no VirtualServices / hosts yet" rather than as a hard error.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import json
 import pytest
 
 from chart_manager.integrations import kubectl as kubectl_module
-from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner, Reply
 
@@ -98,55 +98,63 @@ def test_wait_deployment_available_surfaces_failure() -> None:
         )
 
 
-# ----- list_virtualservice_hosts --------------------------------------------
+# ----- list_virtualservices -------------------------------------------------
 
 
 def _vs_payload(items: list[dict[str, object]]) -> str:
     return json.dumps({"items": items})
 
 
-def test_list_virtualservice_hosts_empty_when_kubectl_fails() -> None:
-    # Missing CRD -> kubectl exits non-zero -- list_virtualservice_hosts
+def test_list_virtualservices_empty_when_kubectl_fails() -> None:
+    # Missing CRD -> kubectl exits non-zero -- list_virtualservices
     # is best-effort and returns an empty list rather than raising.
     runner = FakeCommandRunner(returncode=1, stderr="error: the server doesn't have a resource type \"virtualservice\"")
-    assert Kubectl(runner=runner).list_virtualservice_hosts() == []
+    assert Kubectl(runner=runner).list_virtualservices() == []
 
 
-def test_list_virtualservice_hosts_empty_when_no_items() -> None:
+def test_list_virtualservices_empty_when_no_items() -> None:
     runner = FakeCommandRunner(stdout=_vs_payload([]))
-    assert Kubectl(runner=runner).list_virtualservice_hosts() == []
+    assert Kubectl(runner=runner).list_virtualservices() == []
 
 
-def test_list_virtualservice_hosts_returns_single_vs() -> None:
-    runner = FakeCommandRunner(
-        stdout=_vs_payload(
-            [{"spec": {"hosts": ["grafana.localhost"]}}]
-        )
-    )
-    assert Kubectl(runner=runner).list_virtualservice_hosts() == ["grafana.localhost"]
-
-
-def test_list_virtualservice_hosts_dedupes_and_sorts_many_vs() -> None:
-    # Two VS, one with multiple hosts, with a duplicate across VS to prove
-    # the dedup. Sorted output keeps printouts byte-stable.
+def test_list_virtualservices_keeps_namespace_hosts_and_annotations() -> None:
     runner = FakeCommandRunner(
         stdout=_vs_payload(
             [
-                {"spec": {"hosts": ["grafana.localhost", "prom.localhost"]}},
-                {"spec": {"hosts": ["loki.localhost", "grafana.localhost"]}},
+                {
+                    "metadata": {
+                        "namespace": "observability",
+                        "annotations": {"chartmanager.io/credentials-secret": "grafana"},
+                    },
+                    "spec": {"hosts": ["grafana.localhost"]},
+                },
+                {"metadata": {"namespace": "logging"}, "spec": {"hosts": ["loki.localhost"]}},
             ]
         )
     )
-    assert Kubectl(runner=runner).list_virtualservice_hosts() == [
-        "grafana.localhost",
-        "loki.localhost",
-        "prom.localhost",
+    assert Kubectl(runner=runner).list_virtualservices() == [
+        VirtualService(
+            namespace="observability",
+            hosts=("grafana.localhost",),
+            annotations={"chartmanager.io/credentials-secret": "grafana"},
+        ),
+        VirtualService(namespace="logging", hosts=("loki.localhost",), annotations={}),
     ]
 
 
-def test_list_virtualservice_hosts_ignores_malformed_json() -> None:
+def test_list_virtualservices_drops_empty_and_non_string_hosts() -> None:
+    runner = FakeCommandRunner(
+        stdout=_vs_payload(
+            [{"metadata": {"namespace": "ns"}, "spec": {"hosts": ["ok.localhost", "", 7]}}]
+        )
+    )
+    [vs] = Kubectl(runner=runner).list_virtualservices()
+    assert vs.hosts == ("ok.localhost",)
+
+
+def test_list_virtualservices_ignores_malformed_json() -> None:
     runner = FakeCommandRunner(stdout="this is not json")
-    assert Kubectl(runner=runner).list_virtualservice_hosts() == []
+    assert Kubectl(runner=runner).list_virtualservices() == []
 
 
 # ----- list_gateway_hosts ---------------------------------------------------
@@ -289,7 +297,7 @@ def _kubectl_argvs(kubectl: Kubectl, runner: FakeCommandRunner) -> list[tuple[st
     kubectl.wait_certificate_ready("apps-wildcard", namespace="istio-ingress")
     kubectl.wait_deployment_available("webhook", namespace="cert-manager")
     kubectl.list_gateway_hosts()
-    kubectl.list_virtualservice_hosts()
+    kubectl.list_virtualservices()
     kubectl.diagnostics("obs")
     return runner.calls
 

@@ -1,5 +1,13 @@
 appsDomain: kind.local
 
+# chart-manager prints these credentials under the Grafana URL after
+# `local up`. The Secret is read from the VirtualService's namespace.
+virtualService:
+  annotations:
+    chartmanager.io/credentials-secret: grafana
+    chartmanager.io/credentials-username: admin
+    chartmanager.io/credentials-password-key: admin-password
+
 grafana:
   deploymentStrategy:
     type: Recreate

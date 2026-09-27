@@ -7,6 +7,11 @@
 # VS host falls under the lab CA leaf cert SANs and the gateway hosts.
 appsDomain: k8s.home.lab.io
 
+# Extra metadata for the wrapper's VirtualService.
+virtualService:
+  labels: {}
+  annotations: {}
+
 replicas: 1
 
 # Use Recreate strategy to avoid PVC mount conflicts during upgrades

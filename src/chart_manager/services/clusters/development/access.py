@@ -11,17 +11,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 from itertools import chain
 
-from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.models import (
     DevelopmentClusterAccessHints,
+    DevelopmentClusterCredentials,
     RunSummary,
 )
 from chart_manager.services.progress import ProgressCallback, step, warn
 
-GRAFANA_RELEASE = "grafana"
-GRAFANA_ADMIN_SECRET_KEY = "admin-password"
-GRAFANA_ADMIN_USER = "admin"
+# A VirtualService opts in to a credential hint under its URLs with these
+# annotations. The Secret is read from the VirtualService's own namespace;
+# the username is a literal; the password is the named key in that Secret.
+CREDENTIALS_SECRET_ANNOTATION = "chartmanager.io/credentials-secret"
+CREDENTIALS_USERNAME_ANNOTATION = "chartmanager.io/credentials-username"
+CREDENTIALS_PASSWORD_KEY_ANNOTATION = "chartmanager.io/credentials-password-key"
 
 # Lab CA Certificate (and the namespace it lives in) issued by the
 # istio-gateway chart's cert-manager-ca.yaml. The wildcard `*.<appsDomain>`
@@ -95,90 +99,88 @@ def wait_apps_wildcard_ready(
         )
 
 
-def urls_and_grafana_host(hosts: Sequence[str]) -> tuple[tuple[str, ...], str | None]:
-    """Turn VirtualService hosts into ordered URLs plus the grafana host, if any.
+def virtualservice_urls(virtualservices: Sequence[VirtualService]) -> tuple[str, ...]:
+    """Turn VirtualService hosts into one sorted, de-duplicated URL each.
 
-    The pure half of `access_hints`. Sorting is defensive even though
-    `list_virtualservice_hosts` already returns sorted output -- keeping
-    the contract local means a future kubectl helper change can't quietly
-    destabilize the rendered URL block. Ordering it once (rather than
-    per-consumer) also removes the second `sorted(hosts)` the two callers
-    used to compute independently.
+    The pure half of `access_hints`, shared with `local status` so both
+    print the same block in the same order regardless of kubectl's.
     """
-    ordered = sorted(hosts)
-    urls = tuple(f"https://{host}/" for host in ordered)
-    grafana_host = next((h for h in ordered if h.startswith(f"{GRAFANA_RELEASE}.")), None)
-    return urls, grafana_host
+    hosts = {host for vs in virtualservices for host in vs.hosts}
+    return tuple(f"https://{host}/" for host in sorted(hosts))
+
+
+def _credentials(
+    vs: VirtualService, *, kubectl: Kubectl
+) -> tuple[DevelopmentClusterCredentials, ...]:
+    """The login for each URL of one VirtualService, if its annotations opt in.
+
+    An incomplete annotation set or a failed Secret read becomes the
+    entry's `error`; nothing here raises.
+    """
+    secret = vs.annotations.get(CREDENTIALS_SECRET_ANNOTATION)
+    urls = virtualservice_urls([vs])
+    if not secret or not urls:
+        return ()
+    username = vs.annotations.get(CREDENTIALS_USERNAME_ANNOTATION)
+    password_key = vs.annotations.get(CREDENTIALS_PASSWORD_KEY_ANNOTATION)
+    password: str | None = None
+    error: str | None = None
+    if not username or not password_key:
+        missing = [
+            name
+            for name, value in (
+                (CREDENTIALS_USERNAME_ANNOTATION, username),
+                (CREDENTIALS_PASSWORD_KEY_ANNOTATION, password_key),
+            )
+            if not value
+        ]
+        error = f"incomplete credential annotations: missing {', '.join(missing)}"
+    else:
+        try:
+            password = kubectl.get_secret_value(secret, password_key, namespace=vs.namespace)
+        except ChartManagerError as exc:
+            error = str(exc)
+    if error is not None:
+        return tuple(DevelopmentClusterCredentials(url=url, error=error) for url in urls)
+    return tuple(
+        DevelopmentClusterCredentials(url=url, username=username, password=password) for url in urls
+    )
 
 
 def access_hints(
     summary: RunSummary,
     *,
     kubectl: Kubectl,
-    namespace: str,
 ) -> DevelopmentClusterAccessHints:
     """Resolve the post-converge advisory data for this run.
 
-    Two halves, both best-effort and both empty when no relevant chart
-    was synced: the CA-trust decision (did the chart that owns the lab
-    CA sync?) and the reachable URLs (one per VirtualService host, with
-    the Grafana admin credentials attached to the grafana host).
+    Two halves, both best-effort: the CA-trust decision (did the chart that
+    owns the lab CA sync?) and the reachable URLs (one per VirtualService
+    host), with a login attached to every URL whose VirtualService carries
+    the `chartmanager.io/credentials-*` annotations.
 
-    Lookup failures are captured as `*_error` strings rather than
-    raised or printed -- the surface renders them inline, in the same
-    position the successful value would have taken.
-
-    Accumulates into locals and constructs `DevelopmentClusterAccessHints` at exactly one
-    exit. There used to be five `return DevelopmentClusterAccessHints(...)` sites, each
-    re-passing `ca_trust_hint`; adding a field meant finding all five, and
-    forgetting one silently dropped it on whichever lookup-failure path
-    was missed.
+    Lookup failures are captured as error strings rather than raised or
+    printed -- the surface renders them inline, in the same position the
+    successful value would have taken.
     """
-    urls: tuple[str, ...] = ()
-    urls_error: str | None = None
-    grafana_url: str | None = None
-    grafana_credentials: tuple[str, str] | None = None
-    grafana_error: str | None = None
-
     try:
-        hosts: Sequence[str] = kubectl.list_virtualservice_hosts()
+        virtualservices: Sequence[VirtualService] = kubectl.list_virtualservices()
+        urls_error: str | None = None
     except ChartManagerError as exc:
-        hosts = ()
+        virtualservices = ()
         urls_error = f"could not list VirtualServices ({exc}); skipping URL hints"
 
-    if hosts:
-        urls, grafana_host = urls_and_grafana_host(hosts)
-        if grafana_host is not None:
-            grafana_url = f"https://{grafana_host}/"
-            # Read the secret from the namespace Grafana actually landed in,
-            # not the run default. A profile may declare its own `namespace:`,
-            # and the two coincide today only because the grafana cluster-test configuration
-            # omits one -- adding that line would silently degrade this to
-            # "secret not found" with no other symptom.
-            grafana_namespace = next(
-                (
-                    entry.namespace
-                    for entry in chain(summary.applied, summary.no_change)
-                    if entry.chart == GRAFANA_RELEASE
-                ),
-                namespace,
-            )
-            try:
-                password = kubectl.get_secret_value(
-                    GRAFANA_RELEASE,
-                    GRAFANA_ADMIN_SECRET_KEY,
-                    namespace=grafana_namespace,
-                )
-            except ChartManagerError as exc:
-                grafana_error = str(exc)
-            else:
-                grafana_credentials = (GRAFANA_ADMIN_USER, password)
+    # One Secret read per VirtualService, attached to each of its URLs. A
+    # host claimed by two VirtualServices keeps the first one's login.
+    by_url: dict[str, DevelopmentClusterCredentials] = {}
+    for vs in virtualservices:
+        for credentials in _credentials(vs, kubectl=kubectl):
+            by_url.setdefault(credentials.url, credentials)
 
+    urls = virtualservice_urls(virtualservices)
     return DevelopmentClusterAccessHints(
         ca_trust_hint=lab_ca_present(summary),
         urls=urls,
-        grafana_url=grafana_url,
-        grafana_credentials=grafana_credentials,
-        grafana_error=grafana_error,
+        credentials=tuple(by_url[url] for url in urls if url in by_url),
         urls_error=urls_error,
     )

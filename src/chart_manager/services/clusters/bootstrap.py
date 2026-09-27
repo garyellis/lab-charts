@@ -27,7 +27,6 @@ from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters._shared import (
-    DEFAULT_NAMESPACE,
     chart_name,
     lifecycle_install_plan,
     oci_chart_ref,
@@ -116,7 +115,7 @@ class LocalBootstrapExecutor:
                 chart = catalog.get(entry.chart)
                 profile = require_cluster_test_profile(chart.spec, entry.profile)
                 values = catalog.value_paths(chart, entry.profile)
-                namespace = profile.namespace or DEFAULT_NAMESPACE
+                namespace = profile.namespace
                 identities.add(
                     ExternallySatisfiedLifecycle(
                         chart_path=chart.path.resolve(),
@@ -144,7 +143,7 @@ class LocalBootstrapExecutor:
         for entry in plan:
             entry_chart = catalog.get(entry.chart)
             profile = require_cluster_test_profile(entry_chart.spec, entry.profile)
-            namespace = profile.namespace or DEFAULT_NAMESPACE
+            namespace = profile.namespace
             is_bootstrap_root = (
                 entry.chart == root_chart and entry.profile == release.profile
             )

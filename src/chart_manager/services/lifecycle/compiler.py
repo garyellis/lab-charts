@@ -52,7 +52,6 @@ class ClusterTestCompiler:
         chart: str,
         profile: str,
         *,
-        default_namespace: str,
         namespace_override: str | None = None,
         lint: bool = False,
     ) -> LifecyclePlan:
@@ -76,7 +75,7 @@ class ClusterTestCompiler:
             namespace = (
                 namespace_override
                 if is_requested_target and namespace_override is not None
-                else profile_spec.namespace or default_namespace
+                else profile_spec.namespace
             )
             target_coordinates = ActionTarget(
                 chart=entry.chart,

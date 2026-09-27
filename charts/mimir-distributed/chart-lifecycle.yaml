@@ -45,6 +45,7 @@ spec:
     profiles:
       minimal:
         description: Install Mimir with CI-local values and standalone RustFS object storage.
+        namespace: observability
         requires:
           - chart: rustfs
             profile: minimal

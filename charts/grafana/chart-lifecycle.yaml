@@ -43,6 +43,7 @@ spec:
     profiles:
       minimal:
         description: Install Grafana with CI-local values. Requires istio-base for the VirtualService CRD.
+        namespace: observability
         requires:
           - chart: istio-base
             profile: minimal
@@ -54,6 +55,7 @@ spec:
 
       with-deps:
         description: Install Grafana with LGTM datasources available.
+        namespace: observability
         requires:
           - chart: istio-base
             profile: minimal

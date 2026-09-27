@@ -35,7 +35,6 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters._shared import (
-    DEFAULT_NAMESPACE,
     kind_config_path,
     lifecycle_install_plan,
     oci_chart_ref,
@@ -264,7 +263,6 @@ class DevelopmentClusterService:
             if isinstance(target_step, _TargetLocalExecution):
                 self._install_plan(
                     list(target_step.plan),
-                    default_namespace=DEFAULT_NAMESPACE,
                     installed_keys=installed_keys,
                     namespaces_created=namespaces_created,
                     summary=summary,
@@ -297,14 +295,6 @@ class DevelopmentClusterService:
 
         self._wait_apps_wildcard_ready(summary)
         self._warn_on_port_mapping_drift(cluster_name, config=config)
-        fallback_namespace = next(
-            (
-                entry.namespace
-                for entry in (*summary.applied, *summary.no_change)
-                if entry.chart != local_cluster.metadata.name
-            ),
-            DEFAULT_NAMESPACE,
-        )
         # `failed` is a count, not a raise: this path is continue-on-error, so
         # the run's exit status alone does not say how much of it converged.
         _LOG.info(
@@ -315,7 +305,7 @@ class DevelopmentClusterService:
             len(summary.failed),
             time.monotonic() - started,
         )
-        return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
+        return summary.freeze(self._access_hints(summary))
 
     def status(self, cluster_name: str) -> DevelopmentClusterStatus:
         """Report the current state of the development cluster.
@@ -445,8 +435,7 @@ class DevelopmentClusterService:
                     DevelopmentClusterPlanEntry(
                         chart=entry.chart,
                         profile=entry.profile,
-                        namespace=require_cluster_test_profile(chart.spec, entry.profile).namespace
-                        or DEFAULT_NAMESPACE,
+                        namespace=require_cluster_test_profile(chart.spec, entry.profile).namespace,
                         source="target",
                     )
                 )
@@ -657,7 +646,7 @@ class DevelopmentClusterService:
                 chart = catalog.get(entry.chart)
                 chart_path = chart.path.resolve()
                 entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
-                effective_namespace = entry_profile.namespace or DEFAULT_NAMESPACE
+                effective_namespace = entry_profile.namespace
                 external_identity = ExternallySatisfiedLifecycle(
                     chart_path=chart_path,
                     chart=entry.chart,
@@ -716,7 +705,6 @@ class DevelopmentClusterService:
         self,
         plan: list[InstallPlanEntry],
         *,
-        default_namespace: str,
         installed_keys: set[tuple[str, str]],
         namespaces_created: set[str],
         summary: RunSummary,
@@ -782,7 +770,7 @@ class DevelopmentClusterService:
                 continue
 
             release = entry.chart
-            namespace = profile.namespace or default_namespace
+            namespace = profile.namespace
             key = (namespace, release)
 
             # Fast-skip path: opt-in only via `--skip-installed`. Default
@@ -1095,11 +1083,9 @@ class DevelopmentClusterService:
         """Wait for the wildcard cert, best-effort (see access.py)."""
         wait_apps_wildcard_ready(summary, kubectl=self.kubectl, progress=self._progress)
 
-    def _access_hints(
-        self, summary: RunSummary, *, namespace: str
-    ) -> DevelopmentClusterAccessHints:
+    def _access_hints(self, summary: RunSummary) -> DevelopmentClusterAccessHints:
         """Resolve the post-converge advisory data (see access.py)."""
-        return access_hints(summary, kubectl=self.kubectl, namespace=namespace)
+        return access_hints(summary, kubectl=self.kubectl)
 
     def _warn_on_port_mapping_drift(
         self,

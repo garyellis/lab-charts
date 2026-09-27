@@ -54,6 +54,7 @@ spec:
     profiles:
       minimal:
         description: Install the infrastructure-only Thanos backend with Prometheus Operator CRDs and standalone RustFS.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal

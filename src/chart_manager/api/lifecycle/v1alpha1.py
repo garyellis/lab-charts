@@ -79,10 +79,15 @@ class ClusterTestRef(ApiModel):
 
 
 class ClusterTestProfile(ApiModel):
-    """How to install and test a chart under one named profile."""
+    """How to install and test a chart under one named profile.
+
+    `namespace` is required: a chart's values routinely address siblings by
+    in-cluster DNS name, so where it runs is part of the chart's intent, not
+    something a command may pick for it.
+    """
 
     description: str | None = None
-    namespace: str | None = None
+    namespace: str = Field(min_length=1)
     requires: list[ClusterTestRef] = Field(default_factory=list)
     values: list[str] = Field(default_factory=lambda: ["values.yaml"])
     helm_test: bool = Field(default=True, alias="helmTest")

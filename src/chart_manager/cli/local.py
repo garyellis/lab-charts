@@ -428,17 +428,16 @@ def _render_access_hints(hints: DevelopmentClusterAccessHints) -> None:
     if not hints.urls:
         return
     narration.print("\n[bold]URLs:[/bold]")
+    credentials = {entry.url: entry for entry in hints.credentials}
     for url in hints.urls:
         narration.print(f"  {url}")
-        if url != hints.grafana_url:
+        entry = credentials.get(url)
+        if entry is None:
             continue
-        if hints.grafana_error is not None:
-            narration.print(
-                f"    [yellow]could not read admin password:[/yellow] {hints.grafana_error}"
-            )
-        elif hints.grafana_credentials is not None:
-            user, password = hints.grafana_credentials
-            narration.print(f"    user: {user}\n    pass: {password}")
+        if entry.error is not None:
+            narration.print(f"    [yellow]could not read credentials:[/yellow] {entry.error}")
+        else:
+            narration.print(f"    user: {entry.username}\n    pass: {entry.password}")
 
 
 def _print_ca_import_hint() -> None:

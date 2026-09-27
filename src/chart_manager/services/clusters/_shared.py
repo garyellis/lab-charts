@@ -5,8 +5,7 @@ authored documents into the same four answers: the name a chart directory
 declares, the install plan behind a lifecycle release, the Helm reference
 behind a pinned OCI release, and the resolved Kind config path. Each carried
 its own copy, and the copies had already drifted -- two of them raised
-differently worded errors for the identical unresolvable state, and the
-default namespace forked outright (see `DEFAULT_NAMESPACE` below).
+differently worded errors for the identical unresolvable state.
 
 Deliberately named for what it is rather than for a concept it does not have:
 this module holds exactly the duplication removed from those three modules,
@@ -26,21 +25,6 @@ from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-
-#: Namespace for a cluster-test profile that declares no `namespace:`, on the
-#: bootstrap and development converge paths (`local up`, `local plan`,
-#: `local reset`, and every LocalCluster bootstrap release in *both*
-#: services).
-#:
-#: This value is load-bearing beyond being a default: bootstrap publishes its
-#: ownership as `ExternallySatisfiedLifecycle` identities that include the
-#: namespace, and `_preflight_target` excludes workload entries by exact
-#: identity. Resolve the two sides against different defaults and a
-#: bootstrap-owned chart gets converged a second time.
-#:
-#: Deliberately *not* the same value as `ephemeral.DEFAULT_NAMESPACE`
-#: ("observability"); the fork is real and documented at that constant.
-DEFAULT_NAMESPACE = "default"
 
 
 def chart_name(root: Path, chart_relative: Path) -> str:
@@ -107,7 +91,6 @@ def kind_config_path(root: Path, local_cluster: LocalCluster) -> Path:
 
 
 __all__ = [
-    "DEFAULT_NAMESPACE",
     "chart_name",
     "kind_config_path",
     "lifecycle_install_plan",
