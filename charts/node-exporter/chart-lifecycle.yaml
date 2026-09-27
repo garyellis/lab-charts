@@ -43,6 +43,7 @@ spec:
     profiles:
       minimal:
         description: Install node-exporter with ServiceMonitor CRDs available.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal

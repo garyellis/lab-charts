@@ -45,6 +45,7 @@ spec:
     profiles:
       minimal:
         description: Install Mimir with CI-local values.
+        namespace: observability
         requires: []
         values:
           - values.yaml

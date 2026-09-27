@@ -49,17 +49,14 @@ def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
         profiles={
             "full": {
                 **_requires("base"),
+                "namespace": "workloads",
                 "timeout": "20m",
                 "values": ["values.yaml", "values-full.yaml"],
             }
         },
     )
 
-    plan = ClusterTestCompiler(chart_root).compile_cluster_test(
-        "app",
-        "full",
-        default_namespace="workloads",
-    )
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "full")
 
     assert [action.target.chart for action in plan.actions] == [
         *(["base"] * 5),
@@ -90,7 +87,6 @@ def test_cluster_test_namespace_override_wins_over_authored_profile(
     plan = ClusterTestCompiler(chart_root).compile_cluster_test(
         "app",
         "minimal",
-        default_namespace="default",
         namespace_override="requested",
     )
 
@@ -119,7 +115,6 @@ def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
     plan = ClusterTestCompiler(chart_root).compile_cluster_test(
         "app",
         "minimal",
-        default_namespace="default",
         namespace_override="requested-app",
     )
 
@@ -137,7 +132,7 @@ def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
 ) -> None:
     make_chart("app", profiles={"minimal": {"helmTest": False}})
 
-    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
 
     assert [action.kind for action in plan.actions] == [
         ActionKind.NAMESPACE_ENSURE,
@@ -154,7 +149,7 @@ def test_cluster_test_lint_is_typed_and_ordered_between_dependency_and_install(
     make_chart("app")
 
     plan = ClusterTestCompiler(chart_root).compile_cluster_test(
-        "app", "minimal", default_namespace="default", lint=True
+        "app", "minimal", lint=True
     )
 
     assert [action.kind for action in plan.actions] == [
@@ -176,8 +171,8 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     make_chart("app")
     compiler = ClusterTestCompiler(chart_root)
 
-    first = plan_to_dict(compiler.compile_cluster_test("app", "minimal", default_namespace="default"))
-    second = plan_to_dict(compiler.compile_cluster_test("app", "minimal", default_namespace="default"))
+    first = plan_to_dict(compiler.compile_cluster_test("app", "minimal"))
+    second = plan_to_dict(compiler.compile_cluster_test("app", "minimal"))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["schema_version"] == SCHEMA_VERSION
@@ -194,12 +189,12 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
 ) -> None:
     chart = make_chart("app")
     compiler = ClusterTestCompiler(chart_root)
-    before = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
+    before = compiler.compile_cluster_test("app", "minimal")
 
     generated = chart / "charts"
     generated.mkdir()
     (generated / "dependency-1.2.3.tgz").write_bytes(b"downloaded later")
-    after = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
+    after = compiler.compile_cluster_test("app", "minimal")
 
     assert [action.input_digest for action in before.actions] == [
         action.input_digest for action in after.actions
@@ -208,14 +203,14 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
     templates = chart / "templates"
     templates.mkdir()
     (templates / "deployment.yaml").write_text("kind: Deployment\n")
-    source_changed = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
+    source_changed = compiler.compile_cluster_test("app", "minimal")
 
     assert [action.input_digest for action in after.actions] != [
         action.input_digest for action in source_changed.actions
     ]
 
     (chart / "Chart.lock").write_text("dependencies: []\n")
-    lock_changed = compiler.compile_cluster_test("app", "minimal", default_namespace="default")
+    lock_changed = compiler.compile_cluster_test("app", "minimal")
     assert [action.input_digest for action in source_changed.actions] != [
         action.input_digest for action in lock_changed.actions
     ]
@@ -233,7 +228,7 @@ def test_digest_rejects_value_symlink_that_escapes_repository_root(
     values.symlink_to(outside)
 
     with pytest.raises(SpecError, match="digest input escapes repository root"):
-        ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
+        ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
 
 
 def test_compile_rejects_a_requires_cycle(
@@ -253,7 +248,7 @@ def test_compile_rejects_a_requires_cycle(
     make_chart("b", profiles={"minimal": _requires("a")})
 
     with pytest.raises(DependencyCycleError, match="dependency cycle detected"):
-        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal")
 
 
 def test_compile_rejects_an_unknown_chart_reference(
@@ -263,7 +258,7 @@ def test_compile_rejects_an_unknown_chart_reference(
     make_chart("a", profiles={"minimal": _requires("missing")})
 
     with pytest.raises(ChartManagerError):
-        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal")
 
 
 def test_compile_rejects_an_unknown_profile_reference(
@@ -274,7 +269,7 @@ def test_compile_rejects_an_unknown_profile_reference(
     make_chart("a", profiles={"minimal": _requires("base:nope")})
 
     with pytest.raises(SpecError, match="unknown profile 'nope'"):
-        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal", default_namespace="default")
+        ClusterTestCompiler(chart_root).compile_cluster_test("a", "minimal")
 
 
 def test_compile_accepts_a_valid_requires_graph(
@@ -284,6 +279,6 @@ def test_compile_accepts_a_valid_requires_graph(
     make_chart("base")
     make_chart("app", profiles={"minimal": _requires("base")})
 
-    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", default_namespace="default")
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
 
     assert [action.target.chart for action in plan.actions].count("base") >= 1

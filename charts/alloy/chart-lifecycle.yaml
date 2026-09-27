@@ -55,6 +55,7 @@ spec:
     profiles:
       minimal:
         description: Install Alloy with Prometheus Operator CRDs available and backend exports disabled or fixture-safe through CI values.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal
@@ -66,6 +67,7 @@ spec:
 
       hub-observability:
         description: Install the single-pod, metrics-only hub collector with fixture-safe internal Receive values.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal
@@ -78,6 +80,7 @@ spec:
 
       telemetry:
         description: Install Alloy with the real metrics, logs, and traces backends it writes to.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal
@@ -95,6 +98,7 @@ spec:
 
       ui-e2e:
         description: Install Alloy with LGTM plus Grafana for full-stack UI-oriented validation.
+        namespace: observability
         requires:
           - chart: prometheus-operator
             profile: minimal

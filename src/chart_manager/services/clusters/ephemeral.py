@@ -56,27 +56,6 @@ _LOG = logging.getLogger(__name__)
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 
-#: Namespace for a cluster-test profile that declares no `namespace:`, on the
-#: ephemeral `chart test` path.
-#:
-#: Deliberately *not* `_shared.DEFAULT_NAMESPACE` ("default"), which is what
-#: the bootstrap and `local up` paths use for the same authored gap. The fork
-#: is real -- `charts/{grafana,loki,mimir-distributed,tempo,alloy,...}` all
-#: omit `namespace:`, so those charts land in `observability` under
-#: `chart test` and in `default` under `local up` -- and it is deliberate on
-#: this side: this is the namespace the lab's LGTM stack is authored around,
-#: and `cli/grafana.py` imports *this constant* as the default `--namespace`
-#: for `grafana dashboard export`/`lint`, so a `chart test grafana` followed
-#: by a dashboard export agrees without either command passing a flag.
-#:
-#: One caveat if either value is ever revisited: bootstrap publishes its
-#: ownership identities under `_shared.DEFAULT_NAMESPACE`, and
-#: `exclude_bootstrap_owned_charts` matches on the namespace, so a bootstrap
-#: release whose profile omits `namespace:` would be installed here a second
-#: time. Every LocalCluster bootstrap release in this repository declares one
-#: (`charts/cilium` -> `kube-system`), which is why the fork has stayed
-#: invisible.
-DEFAULT_NAMESPACE = "observability"
 DEFAULT_PROFILE = "minimal"
 
 
@@ -284,7 +263,7 @@ class EphemeralTestClusterService:
             options.chart,
             options.profile,
             options.cluster_name,
-            options.namespace or DEFAULT_NAMESPACE,
+            options.namespace or "(per profile)",
             len(plan.actions),
             options.ensure_cluster,
             options.include_dependent_tests,
@@ -455,7 +434,6 @@ class EphemeralTestClusterService:
                 self.cluster_test_compiler.compile_cluster_test(
                     chart,
                     profile,
-                    default_namespace=DEFAULT_NAMESPACE,
                     namespace_override=options.namespace,
                     lint=options.lint,
                 ),

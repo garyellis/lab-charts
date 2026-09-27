@@ -45,6 +45,7 @@ def _cluster_spec(*, root_enabled: bool = True, section_enabled: bool = True) ->
     enabled: {str(section_enabled).lower()}
     profiles:
       minimal:
+        namespace: default
         values: [values.yaml]
         helmTest: true
     dependentTests: []
@@ -89,7 +90,8 @@ def test_both_capabilities_can_share_one_spec(tmp_path: Path) -> None:
             _validation_spec()
             + """  clusterTest:
     profiles:
-      minimal: {}
+      minimal:
+        namespace: default
 """,
         )
     )
@@ -205,7 +207,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
             "spec": {
                 "clusterTest": {
                     "enabled": False,
-                    "profiles": {"minimal": {}},
+                    "profiles": {"minimal": {"namespace": "default"}},
                 }
             },
         }
@@ -215,7 +217,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
             "apiVersion": LIFECYCLE_API_VERSION,
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
-            "spec": {"clusterTest": {"profiles": {"minimal": {}}}},
+            "spec": {"clusterTest": {"profiles": {"minimal": {"namespace": "default"}}}},
         }
     )
 
@@ -259,7 +261,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
                     "spec": {
                         "clusterTest": {
                             "enabled": False,
-                            "profiles": {"minimal": {}},
+                            "profiles": {"minimal": {"namespace": "default"}},
                         }
                     },
                 }

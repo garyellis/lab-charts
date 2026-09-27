@@ -26,6 +26,7 @@ spec:
     profiles:
       minimal:
         description: Install standalone RustFS and verify bucket-scoped Thanos credentials.
+        namespace: observability
         requires: []
         values:
           - values.yaml

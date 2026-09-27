@@ -114,7 +114,9 @@ def make_chart(chart_root: Path) -> MakeChart:
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
 
     Every values file any profile references is created empty, since
-    `ClusterTestCatalog.value_paths` requires them to exist.
+    `ClusterTestCatalog.value_paths` requires them to exist. A profile that
+    names no `namespace` is written with `default`, because the lifecycle
+    API requires one and most tests have no opinion about it.
     """
 
     def build(
@@ -131,7 +133,10 @@ def make_chart(chart_root: Path) -> MakeChart:
             encoding="utf-8",
         )
 
-        spec_profiles: dict[str, Any] = dict(profiles or {"minimal": {}})
+        spec_profiles: dict[str, Any] = {
+            profile_name: {"namespace": "default", **profile}
+            for profile_name, profile in (profiles or {"minimal": {}}).items()
+        }
         referenced = set(values)
         for profile in spec_profiles.values():
             referenced.update(profile.get("values", []))

@@ -25,7 +25,11 @@ from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import ClusterNameOption, RootOption
 from chart_manager.cli.streams import console, narration
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME, DEFAULT_NAMESPACE
+from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME
+
+#: Where the lab's Grafana runs: the namespace `charts/grafana` declares for
+#: its cluster-test profiles. Owned here, not borrowed from a fallback.
+GRAFANA_NAMESPACE = "observability"
 
 NamespaceOption = Annotated[
     str,
@@ -53,7 +57,7 @@ def grafana_dashboard_export(
     ctx: typer.Context,
     uid: Annotated[str, typer.Argument(help="Dashboard UID to export.")],
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    namespace: NamespaceOption = DEFAULT_NAMESPACE,
+    namespace: NamespaceOption = GRAFANA_NAMESPACE,
     release: Annotated[
         str,
         typer.Option(

@@ -261,7 +261,7 @@ def test_chart_lifecycle_fixture_round_trips_through_authored_aliases() -> None:
     # The near-empty `routed` profile shows the profile defaults in the dump.
     assert dumped["spec"]["clusterTest"]["profiles"]["routed"] == {
         "description": None,
-        "namespace": None,
+        "namespace": "routed",
         "requires": [],
         "values": ["values.yaml"],
         "helmTest": True,
@@ -448,13 +448,12 @@ def test_manifest_validation_default_factories_are_per_instance() -> None:
 
 def test_cluster_test_defaults() -> None:
     spec = ClusterTestSpec.model_validate({"profiles": {}})
-    profile = ClusterTestProfile()
+    profile = ClusterTestProfile(namespace="demo")
     ref = ClusterTestRef(chart="istio-base")
 
     assert spec.enabled is True
     assert spec.dependent_tests == []
     assert profile.description is None
-    assert profile.namespace is None
     assert profile.requires == []
     assert profile.values == ["values.yaml"]
     assert profile.helm_test is True
@@ -463,8 +462,8 @@ def test_cluster_test_defaults() -> None:
 
 
 def test_cluster_test_default_factories_are_per_instance() -> None:
-    first = ClusterTestProfile()
-    second = ClusterTestProfile()
+    first = ClusterTestProfile(namespace="demo")
+    second = ClusterTestProfile(namespace="demo")
 
     first.values.append("values-ci.yaml")
     first.requires.append(ClusterTestRef(chart="istio-base"))
@@ -541,9 +540,8 @@ def test_lifecycle_envelope_is_strict_but_capability_specs_are_not() -> None:
 
 def test_cluster_test_timeout_is_an_unvalidated_string() -> None:
     """Unlike local releases, cluster-test timeouts are not shape-checked."""
-    assert ClusterTestProfile.model_validate({"timeout": "not-a-duration"}).timeout == (
-        "not-a-duration"
-    )
+    profile = ClusterTestProfile.model_validate({"namespace": "demo", "timeout": "not-a-duration"})
+    assert profile.timeout == "not-a-duration"
 
 
 def test_chart_lifecycle_metadata_name_rules() -> None:
@@ -736,6 +734,16 @@ def _validation(**overrides: Any) -> dict[str, Any]:
             _lifecycle({"clusterTest": {}}),
             "missing",
             id="missing-cluster-test-profiles",
+        ),
+        pytest.param(
+            _lifecycle({"clusterTest": {"profiles": {"m": {}}}}),
+            "missing",
+            id="missing-cluster-test-namespace",
+        ),
+        pytest.param(
+            _lifecycle({"clusterTest": {"profiles": {"m": {"namespace": ""}}}}),
+            "string_too_short",
+            id="empty-cluster-test-namespace",
         ),
     ],
 )

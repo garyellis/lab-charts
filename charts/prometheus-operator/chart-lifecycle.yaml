@@ -46,6 +46,7 @@ spec:
     profiles:
       minimal:
         description: Install Prometheus Operator CRDs and operator only.
+        namespace: observability
         requires: []
         values:
           - values.yaml

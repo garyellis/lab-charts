@@ -35,7 +35,6 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters._shared import (
-    DEFAULT_NAMESPACE,
     kind_config_path,
     lifecycle_install_plan,
     oci_chart_ref,
@@ -264,7 +263,6 @@ class DevelopmentClusterService:
             if isinstance(target_step, _TargetLocalExecution):
                 self._install_plan(
                     list(target_step.plan),
-                    default_namespace=DEFAULT_NAMESPACE,
                     installed_keys=installed_keys,
                     namespaces_created=namespaces_created,
                     summary=summary,
@@ -437,8 +435,7 @@ class DevelopmentClusterService:
                     DevelopmentClusterPlanEntry(
                         chart=entry.chart,
                         profile=entry.profile,
-                        namespace=require_cluster_test_profile(chart.spec, entry.profile).namespace
-                        or DEFAULT_NAMESPACE,
+                        namespace=require_cluster_test_profile(chart.spec, entry.profile).namespace,
                         source="target",
                     )
                 )
@@ -649,7 +646,7 @@ class DevelopmentClusterService:
                 chart = catalog.get(entry.chart)
                 chart_path = chart.path.resolve()
                 entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
-                effective_namespace = entry_profile.namespace or DEFAULT_NAMESPACE
+                effective_namespace = entry_profile.namespace
                 external_identity = ExternallySatisfiedLifecycle(
                     chart_path=chart_path,
                     chart=entry.chart,
@@ -708,7 +705,6 @@ class DevelopmentClusterService:
         self,
         plan: list[InstallPlanEntry],
         *,
-        default_namespace: str,
         installed_keys: set[tuple[str, str]],
         namespaces_created: set[str],
         summary: RunSummary,
@@ -774,7 +770,7 @@ class DevelopmentClusterService:
                 continue
 
             release = entry.chart
-            namespace = profile.namespace or default_namespace
+            namespace = profile.namespace
             key = (namespace, release)
 
             # Fast-skip path: opt-in only via `--skip-installed`. Default

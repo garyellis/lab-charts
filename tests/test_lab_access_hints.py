@@ -30,7 +30,7 @@ from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.integrations.kubectl import VirtualService
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters import development as lab_module
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.development import (
@@ -236,7 +236,6 @@ def _install_plan(
     summary = lab_module.RunSummary()
     service._install_plan(
         plan,
-        default_namespace="observability",
         installed_keys=set(),
         namespaces_created=set(),
         summary=summary,
@@ -551,83 +550,66 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
     assert [entry.chart for entry in steps[0].plan] == ["app"]
 
 
-def test_bootstrap_exclusion_survives_a_profile_that_declares_no_namespace(
+def test_bootstrap_preflight_rejects_a_profile_that_declares_no_namespace(
     tmp_path: Path,
 ) -> None:
-    """Both sides of the exclusion must fill an absent `namespace:` the same way.
+    """A bootstrap-owned chart must author the namespace it is identified by.
 
     `LocalBootstrapExecutor.preflight` publishes ownership as an identity that
     *includes* the namespace, and `_preflight_target` excludes by exact
-    identity. Those two used to spell the fallback as separate `"default"`
-    literals, one per module; they now share `_shared.DEFAULT_NAMESPACE`. Fork
-    them again and a bootstrap-owned chart is converged a second time -- with
-    no error, because both installs succeed.
+    identity. Both sides used to fill an absent `namespace:` from a shared
+    fallback, and forking it converged a bootstrap-owned chart twice with no
+    error. The fallback is gone: the profile is rejected at load, before any
+    identity exists to disagree about.
     """
-    for name, requires in (
-        ("network", ""),
-        ("app", "        requires:\n          - chart: network\n            profile: minimal\n"),
-    ):
-        chart = tmp_path / "charts" / name
-        chart.mkdir(parents=True)
-        (chart / "Chart.yaml").write_text(
-            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
-            encoding="utf-8",
-        )
-        (chart / "chart-lifecycle.yaml").write_text(
-            (
-                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
-                "kind: ChartLifecycle\n"
-                f"metadata: {{name: {name}}}\n"
-                "spec:\n"
-                "  clusterTest:\n"
-                "    profiles:\n"
-                "      minimal:\n"
-                f"{requires}"
-                "        values: []\n"
-            ),
-            encoding="utf-8",
-        )
+    chart = tmp_path / "charts" / "network"
+    chart.mkdir(parents=True)
+    (chart / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: network\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (chart / "chart-lifecycle.yaml").write_text(
+        (
+            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+            "kind: ChartLifecycle\n"
+            "metadata: {name: network}\n"
+            "spec:\n"
+            "  clusterTest:\n"
+            "    profiles:\n"
+            "      minimal:\n"
+            "        values: []\n"
+        ),
+        encoding="utf-8",
+    )
     bootstrap = LocalBootstrapExecutor(
         tmp_path,
         helm=_Helm(),  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=_RecordingKubectl(),  # type: ignore[arg-type]
     )
-    owned = bootstrap.preflight(
-        LocalCluster.model_validate(
-            {
-                "apiVersion": "local.chartmanager.io/v1alpha1",
-                "kind": "LocalCluster",
-                "metadata": {"name": "default"},
-                "spec": {
-                    "cluster": {"config": "kind-config.yaml"},
-                    "bootstrap": {
-                        "releases": [
-                            {
-                                "type": "lifecycle",
-                                "chart": "charts/network",
-                                "profile": "minimal",
-                            }
-                        ]
+
+    with pytest.raises(SpecError, match=r"profiles\.minimal\.namespace"):
+        bootstrap.preflight(
+            LocalCluster.model_validate(
+                {
+                    "apiVersion": "local.chartmanager.io/v1alpha1",
+                    "kind": "LocalCluster",
+                    "metadata": {"name": "default"},
+                    "spec": {
+                        "cluster": {"config": "kind-config.yaml"},
+                        "bootstrap": {
+                            "releases": [
+                                {
+                                    "type": "lifecycle",
+                                    "chart": "charts/network",
+                                    "profile": "minimal",
+                                }
+                            ]
+                        },
                     },
-                },
-            }
+                }
+            )
         )
-    )
-
-    steps = _service(
-        tmp_path,
-        helm=_Helm(),
-        kind=_Kind(),
-        kubectl=_RecordingKubectl(),
-    )._preflight_target(
-        (LifecycleRelease(type="lifecycle", chart=Path("charts/app"), profile="minimal"),),
-        excluded_lifecycle_identities=owned,
-    )
-
-    assert {identity.namespace for identity in owned} == {"default"}
-    assert isinstance(steps[0], _TargetLocalExecution)
-    assert [entry.chart for entry in steps[0].plan] == ["app"]
 
 
 def test_relative_repository_root_accepts_an_absolute_resolved_chart(

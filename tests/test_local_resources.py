@@ -51,8 +51,8 @@ metadata: {{name: {name}}}
 spec:
   clusterTest:
     profiles:
-      kind: {{}}
-      minimal: {{}}
+      kind: {{namespace: default}}
+      minimal: {{namespace: default}}
 """,
         )
     return path

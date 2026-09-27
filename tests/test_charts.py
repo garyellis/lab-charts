@@ -121,7 +121,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
                 "spec": {
                     "clusterTest": {
                         "enabled": False,
-                        "profiles": {"minimal": {}},
+                        "profiles": {"minimal": {"namespace": "default"}},
                     }
                 },
             }

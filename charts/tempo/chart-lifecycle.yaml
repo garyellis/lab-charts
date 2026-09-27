@@ -43,6 +43,7 @@ spec:
     profiles:
       minimal:
         description: Install Tempo with CI-local values.
+        namespace: observability
         requires: []
         values:
           - values.yaml
@@ -52,6 +53,7 @@ spec:
 
       with-deps:
         description: Install Tempo with Mimir available for metrics-generator remote write.
+        namespace: observability
         requires:
           - chart: mimir-distributed
             profile: minimal

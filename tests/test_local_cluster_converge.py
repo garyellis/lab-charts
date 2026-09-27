@@ -253,7 +253,6 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
             InstallPlanEntry(chart="loki", profile="minimal"),
             InstallPlanEntry(chart="grafana", profile="minimal"),
         ],
-        default_namespace="default",
         installed_keys=set(),
         namespaces_created=set(),
         summary=summary,
@@ -302,7 +301,6 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
     with caplog.at_level("ERROR"):
         service._install_plan(
             [InstallPlanEntry(chart="loki", profile="minimal")],
-            default_namespace="default",
             installed_keys=set(),
             namespaces_created=set(),
             summary=summary,

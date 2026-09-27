@@ -4,8 +4,9 @@
 # chart may set appears here at least once, so an alias, default or validator
 # that changes during the api/ package move shows up as a diff.
 #
-# The `routed` cluster-test profile is deliberately near-empty so the fixture
-# also exercises the profile-level defaults.
+# The `routed` cluster-test profile is deliberately near-empty -- it sets only
+# the required `namespace` -- so the fixture also exercises the profile-level
+# defaults.
 apiVersion: lifecycle.chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata:
@@ -58,6 +59,7 @@ spec:
         helmTest: true
         timeout: 15m
       routed:
+        namespace: routed
         requires: []
     dependentTests:
       - chart: downstream
