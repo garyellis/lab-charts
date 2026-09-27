@@ -1,11 +1,14 @@
 """Coverage for `build_helm_dependency_index` edge cases.
 
 The worklist's library-chart fanout relies on this index; these tests
-pin its tolerant-by-design behavior so we notice if it silently changes.
+pin its tolerant-by-design behavior (and its restriction to local,
+non-self dependencies) so we notice if it silently changes.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from chart_manager.domain.chart_deps import build_helm_dependency_index
 
@@ -84,9 +87,9 @@ def test_skips_chart_with_invalid_dependency_entry(tmp_path: Path) -> None:
 
 
 def test_unknown_dependency_name_still_indexed(tmp_path: Path) -> None:
-    # A dependency on a chart that doesn't exist locally (OCI/remote) is
-    # still indexed — the worklist treats "no dependents" as "no fanout"
-    # by lookup, so a stale name is just a no-op key.
+    # A repository-less dependency whose chart is absent locally is still
+    # indexed — the worklist treats "no dependents" as "no fanout" by
+    # lookup, so a stale name is just a no-op key.
     _chart(
         tmp_path,
         "alpha",
@@ -118,3 +121,69 @@ def test_malformed_yaml_is_silently_skipped(tmp_path: Path) -> None:
     index = build_helm_dependency_index(tmp_path)
 
     assert index == {"common": {"alpha"}}
+
+
+def test_remote_dependencies_are_not_indexed(tmp_path: Path) -> None:
+    _chart(
+        tmp_path,
+        "alpha",
+        chart_yaml=(
+            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
+            "dependencies:\n"
+            "  - name: common\n"
+            "    version: 0.1.0\n"
+            "    repository: https://charts.example.com\n"
+            "  - name: other\n"
+            "    version: 0.1.0\n"
+            "    repository: oci://registry.example.com/charts\n"
+        ),
+    )
+
+    index = build_helm_dependency_index(tmp_path)
+
+    assert index == {}
+
+
+@pytest.mark.parametrize(
+    "repository", [None, "https://charts.example.com", "file://../alpha"]
+)
+def test_self_named_dependency_is_not_indexed(
+    tmp_path: Path, repository: str | None
+) -> None:
+    repository_line = f"    repository: {repository}\n" if repository else ""
+    _chart(
+        tmp_path,
+        "alpha",
+        chart_yaml=(
+            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
+            "dependencies:\n  - name: alpha\n    version: 0.1.0\n"
+            + repository_line
+        ),
+    )
+
+    index = build_helm_dependency_index(tmp_path)
+
+    assert index == {}
+
+
+def test_file_and_repository_less_dependencies_are_indexed(tmp_path: Path) -> None:
+    _chart(
+        tmp_path,
+        "alpha",
+        chart_yaml=(
+            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
+            "dependencies:\n"
+            "  - name: common\n"
+            "    version: 0.1.0\n"
+            "    repository: file://../common\n"
+            "  - name: vendored\n"
+            "    version: 0.1.0\n"
+            "  - name: blank\n"
+            "    version: 0.1.0\n"
+            '    repository: ""\n'
+        ),
+    )
+
+    index = build_helm_dependency_index(tmp_path)
+
+    assert index == {"common": {"alpha"}, "vendored": {"alpha"}, "blank": {"alpha"}}

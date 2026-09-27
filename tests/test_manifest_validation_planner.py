@@ -39,6 +39,8 @@ def _chart(
         chart_yaml += "dependencies:\n"
         for dep in dependencies:
             chart_yaml += f"  - name: {dep['name']}\n    version: {dep.get('version', '0.0.0')}\n"
+            if "repository" in dep:
+                chart_yaml += f"    repository: {dep['repository']}\n"
     (chart_dir / "Chart.yaml").write_text(chart_yaml)
     if spec is not None:
         section = textwrap.dedent(spec).removeprefix("\n")
@@ -291,6 +293,21 @@ def test_library_chart_edit_fanouts_to_dependents(tmp_path: Path) -> None:
         ("beta", "dev"),
         ("beta", "prod"),
     }
+
+
+def test_wrapper_chart_remote_same_name_dependency_respects_triggers(tmp_path: Path) -> None:
+    # Wrapper charts depend on a remote upstream of the same name; that edge
+    # must not turn a values-file edit into an all-environments fanout.
+    _chart(
+        tmp_path,
+        "alpha",
+        spec=_DEFAULT_SPEC.format(name="alpha"),
+        dependencies=[{"name": "alpha", "repository": "https://charts.example.com"}],
+    )
+
+    result = build_worklist(root=tmp_path, changed_files=["charts/alpha/values-prod.yaml"])
+
+    assert {(r.chart, r.env) for r in result.rows} == {("alpha", "prod")}
 
 
 def test_per_chart_policies_dir_edit_fanouts_to_all_envs(tmp_path: Path) -> None:
