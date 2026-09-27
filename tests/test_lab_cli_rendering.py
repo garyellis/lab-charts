@@ -25,6 +25,7 @@ from chart_manager.cli import streams
 from chart_manager.services.clusters.development import (
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
+    DevelopmentClusterCredentials,
     DevelopmentClusterEntryFailure,
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterResult,
@@ -128,36 +129,41 @@ def test_lab_result_omits_the_failure_line_when_ok(
 # ----- access hints ---------------------------------------------------------
 
 
-def test_access_hints_render_urls_and_grafana_credentials(narrated: Console) -> None:
+def test_access_hints_render_credentials_under_their_url(narrated: Console) -> None:
     cli_local._render_access_hints(
         DevelopmentClusterAccessHints(
-            urls=("https://grafana.localhost/", "https://loki.localhost/"),
-            grafana_url="https://grafana.localhost/",
-            grafana_credentials=("admin", "s3cret"),
+            urls=("https://app.localhost/", "https://loki.localhost/"),
+            credentials=(
+                DevelopmentClusterCredentials(
+                    url="https://app.localhost/", username="admin", password="s3cret"
+                ),
+            ),
         )
     )
     out = narrated.export_text()
 
     assert "URLs:" in out
     # Sort order is the service's; the renderer must not reshuffle it.
-    assert out.index("grafana.localhost") < out.index("loki.localhost")
-    assert "user: admin" in out
-    assert "s3cret" in out
+    assert out.index("app.localhost") < out.index("user: admin") < out.index("loki.localhost")
+    assert "pass: s3cret" in out
 
 
-def test_access_hints_render_the_secret_read_failure_in_place(narrated: Console) -> None:
+def test_access_hints_render_the_credential_failure_in_place(narrated: Console) -> None:
     cli_local._render_access_hints(
         DevelopmentClusterAccessHints(
-            urls=("https://grafana.localhost/",),
-            grafana_url="https://grafana.localhost/",
-            grafana_error="secret not found",
+            urls=("https://app.localhost/", "https://loki.localhost/"),
+            credentials=(
+                DevelopmentClusterCredentials(
+                    url="https://app.localhost/", error="secret not found"
+                ),
+            ),
         )
     )
     out = narrated.export_text()
 
-    assert "could not read admin password" in out
-    assert "secret not found" in out
-    assert "user: admin" not in out
+    assert "could not read credentials: secret not found" in out
+    assert out.index("app.localhost") < out.index("secret not found") < out.index("loki")
+    assert "user:" not in out
 
 
 def test_access_hints_render_the_virtualservice_listing_failure(narrated: Console) -> None:

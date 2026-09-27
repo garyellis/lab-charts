@@ -10,8 +10,9 @@ import signal
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from typing import IO, Any
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
@@ -27,6 +28,15 @@ from chart_manager.plumbing.preflight import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VirtualService:
+    """The slice of one Istio VirtualService the access hints read."""
+
+    namespace: str
+    hosts: tuple[str, ...]
+    annotations: Mapping[str, str]
 
 
 class Kubectl:
@@ -412,51 +422,55 @@ class Kubectl:
             timeout=self.timeout,
         )
 
-    def list_virtualservice_hosts(self) -> list[str]:
-        """Return all VirtualService `.spec.hosts[]` across the cluster.
+    def list_virtualservices(self) -> list[VirtualService]:
+        """Return every VirtualService across the cluster: namespace, hosts, annotations.
 
         Best-effort: when the CRD isn't installed (lab pre-istio, or the
         sandbox-test path entirely) we return [] rather than surfacing the
         kubectl error -- the caller treats "no VirtualServices" as the
-        normal early-install state. Result is deduplicated; ordering is
-        stable (sorted) so output is reproducible.
+        normal early-install state. Non-string hosts and annotation values
+        are dropped; order is kubectl's (namespace, then name).
         """
-        return self._list_hosts(
-            "virtualservice",
-            lambda item: (item.get("spec") or {}).get("hosts", []) or [],
-        )
+        found: list[VirtualService] = []
+        for item in self._list_items("virtualservice"):
+            metadata = item.get("metadata") or {}
+            hosts = (item.get("spec") or {}).get("hosts", []) or []
+            annotations = metadata.get("annotations") or {}
+            found.append(
+                VirtualService(
+                    namespace=str(metadata.get("namespace", "")),
+                    hosts=tuple(h for h in hosts if isinstance(h, str) and h),
+                    annotations={
+                        k: v
+                        for k, v in annotations.items()
+                        if isinstance(k, str) and isinstance(v, str)
+                    },
+                )
+            )
+        return found
 
     def list_gateway_hosts(self) -> list[str]:
         """Return all Gateway `.spec.servers[].hosts[]` across the cluster.
 
-        Mirrors `list_virtualservice_hosts`: best-effort, dedup'd, sorted.
-        Used to derive the lab apps-domain for access URLs.
-        print -- the gateway's hosts are the source of truth for the
-        domain the gateway listener will admit.
+        Best-effort like `list_virtualservices`; dedup'd and sorted.
+        Used to derive the lab apps-domain for access URLs -- the
+        gateway's hosts are the source of truth for the domain the
+        gateway listener will admit.
         """
-        def _extract(item: dict[str, Any]) -> Iterable[Any]:
-            """Yield every host from every server block of one Gateway."""
+        hosts: set[str] = set()
+        for item in self._list_items("gateway"):
             for server in (item.get("spec") or {}).get("servers", []) or []:
-                yield from (server or {}).get("hosts", []) or []
+                for host in (server or {}).get("hosts", []) or []:
+                    if isinstance(host, str) and host:
+                        hosts.add(host)
+        return sorted(hosts)
 
-        return self._list_hosts("gateway", _extract)
-
-    def _list_hosts(
-        self,
-        resource: str,
-        extract: Callable[[dict[str, Any]], Iterable[Any]],
-    ) -> list[str]:
-        """Shared `kubectl get <resource> -A -o json` -> sorted host list.
-
-        Both `list_virtualservice_hosts` and `list_gateway_hosts` share
-        the same shell, the same `.items[]` walk, and the same best-
-        effort fallback semantics; only the per-item host-extraction
-        differs. Centralising the wrapper keeps the two public methods
-        as thin wrappers and means any future addition (e.g. an
-        HTTPRoute variant for gateway-api) only writes the extractor.
+    def _list_items(self, resource: str) -> list[dict[str, Any]]:
+        """Shared `kubectl get <resource> -A -o json` -> `.items[]`.
 
         Best-effort: a non-zero kubectl, missing CRD, or unparseable
-        JSON yields []. Non-string hosts and empty strings are dropped.
+        JSON yields []. Any future addition (e.g. an HTTPRoute variant
+        for gateway-api) only writes the per-item projection.
         """
         result = self.runner.run(
             self._with_context(["kubectl", "get", resource, "-A", "-o", "json"]),
@@ -469,12 +483,7 @@ class Kubectl:
             payload = json.loads(result.stdout or "{}")
         except json.JSONDecodeError:
             return []
-        hosts: set[str] = set()
-        for item in payload.get("items", []) or []:
-            for host in extract(item):
-                if isinstance(host, str) and host:
-                    hosts.add(host)
-        return sorted(hosts)
+        return [item for item in payload.get("items", []) or [] if isinstance(item, dict)]
 
     def wait_workloads_ready(
         self,

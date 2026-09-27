@@ -19,6 +19,7 @@ import pytest
 
 from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo
+from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
@@ -66,10 +67,10 @@ class _Kubectl:
         self._hosts = hosts or []
         self._raises = raises
 
-    def list_virtualservice_hosts(self) -> list[str]:
+    def list_virtualservices(self) -> list[VirtualService]:
         if self._raises is not None:
             raise self._raises
-        return list(self._hosts)
+        return [VirtualService(namespace="default", hosts=tuple(self._hosts), annotations={})]
 
 
 class _Kind:

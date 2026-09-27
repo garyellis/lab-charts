@@ -79,7 +79,7 @@ class _Kubectl:
     def diagnostics(self, _namespace: str) -> str:
         return ""
 
-    def list_virtualservice_hosts(self) -> list[str]:
+    def list_virtualservices(self) -> list[Any]:
         return []
 
 

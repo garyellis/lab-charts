@@ -1,10 +1,11 @@
 """DevelopmentClusterService access-hint resolution + cert/webhook gates + port-mapping drift.
 
 Three concerns covered here:
-  * `_access_hints`: empty / one / many VS results, with grafana
-    credentials attached to the grafana URL but only if a grafana host is
-    present. The service resolves the data; `cli/local.py` renders it (see
-    test_lab_cli_rendering.py).
+  * `_access_hints`: empty / one / many VS results, with credentials
+    attached to the URLs of every VirtualService that opts in through the
+    `chartmanager.io/credentials-*` annotations, read from that
+    VirtualService's own namespace. The service resolves the data;
+    `cli/local.py` renders it (see test_lab_cli_rendering.py).
   * Cert + webhook waits: happy path (call recorded) and timeout path
     (warning surfaced, run continues).
   * Port-mapping drift: matching no-op, mismatch produces a warning event.
@@ -28,10 +29,12 @@ from chart_manager.domain.charts import (
 from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
+from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters import development as lab_module
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.development import (
+    DevelopmentClusterCredentials,
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterService,
 )
@@ -50,13 +53,13 @@ class _RecordingKubectl:
     def __init__(
         self,
         *,
-        vs_hosts: list[str] | None = None,
+        virtualservices: list[VirtualService] | None = None,
         vs_raise: Exception | None = None,
         secret_raise: Exception | None = None,
         cert_raise: Exception | None = None,
         webhook_raise: Exception | None = None,
     ) -> None:
-        self._vs_hosts = vs_hosts or []
+        self._virtualservices = virtualservices or []
         self._vs_raise = vs_raise
         self._secret_raise = secret_raise
         self._cert_raise = cert_raise
@@ -83,10 +86,10 @@ class _RecordingKubectl:
         if self._webhook_raise is not None:
             raise self._webhook_raise
 
-    def list_virtualservice_hosts(self) -> list[str]:
+    def list_virtualservices(self) -> list[VirtualService]:
         if self._vs_raise is not None:
             raise self._vs_raise
-        return list(self._vs_hosts)
+        return list(self._virtualservices)
 
     # Returns [] because this file's tests don't exercise the
     # gateway-host path; gateway-host-driven assertions live in
@@ -247,104 +250,155 @@ def _install_plan(
 
 
 _GATEWAY_SYNCED = (DevelopmentClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
+_CREDENTIAL_ANNOTATIONS = {
+    "chartmanager.io/credentials-secret": "app-admin",
+    "chartmanager.io/credentials-username": "admin",
+    "chartmanager.io/credentials-password-key": "password",
+}
+
+
+def _vs(
+    *hosts: str, namespace: str = "apps", annotations: dict[str, str] | None = None
+) -> VirtualService:
+    return VirtualService(namespace=namespace, hosts=hosts, annotations=annotations or {})
+
+
+def _hints(tmp_path: Path, kubectl: _RecordingKubectl) -> lab_module.DevelopmentClusterAccessHints:
+    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
+    return svc._access_hints(lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)))
 
 
 def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
     # Empty VS list -> no URLs at all. The CA-trust decision still stands
     # because istio-gateway synced this run.
-    kubectl = _RecordingKubectl(vs_hosts=[])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
-    )
+    kubectl = _RecordingKubectl(virtualservices=[])
+    hints = _hints(tmp_path, kubectl)
 
     assert hints.urls == ()
-    assert hints.grafana_url is None
+    assert hints.credentials == ()
     assert hints.ca_trust_hint is True
     assert kubectl.secret_calls == []
 
 
-def test_single_virtualservice_yields_one_url_and_credentials(tmp_path: Path) -> None:
-    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
+def test_unannotated_virtualservice_yields_url_only(tmp_path: Path) -> None:
+    kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost")])
+    hints = _hints(tmp_path, kubectl)
+
+    assert hints.urls == ("https://app.localhost/",)
+    assert hints.credentials == ()
+    assert kubectl.secret_calls == []
+
+
+def test_annotated_virtualservice_reads_credentials_from_its_own_namespace(
+    tmp_path: Path,
+) -> None:
+    # The Secret is read where the VirtualService lives -- no chart name,
+    # no run summary, no guessing.
+    kubectl = _RecordingKubectl(
+        virtualservices=[
+            _vs(
+                "app.localhost",
+                "app.alt.localhost",
+                namespace="monitoring",
+                annotations=_CREDENTIAL_ANNOTATIONS,
+            )
+        ]
+    )
+    hints = _hints(tmp_path, kubectl)
+
+    assert hints.urls == ("https://app.alt.localhost/", "https://app.localhost/")
+    # One Secret read per VirtualService, attached to each of its URLs.
+    assert kubectl.secret_calls == [("app-admin", "password", "monitoring")]
+    assert hints.credentials == (
+        DevelopmentClusterCredentials(
+            url="https://app.alt.localhost/", username="admin", password="fake-password"
+        ),
+        DevelopmentClusterCredentials(
+            url="https://app.localhost/", username="admin", password="fake-password"
+        ),
     )
 
-    assert hints.urls == ("https://grafana.localhost/",)
-    assert hints.grafana_url == "https://grafana.localhost/"
-    # Grafana host -> credentials lookup must have fired
-    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]
-    assert hints.grafana_credentials == ("admin", "fake-password")
-    assert hints.grafana_error is None
 
-
-def test_many_virtualservices_yield_sorted_urls(tmp_path: Path) -> None:
-    kubectl = _RecordingKubectl(vs_hosts=["prom.localhost", "grafana.localhost", "loki.localhost"])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
+def test_many_annotated_virtualservices_each_read_their_own_namespace(
+    tmp_path: Path,
+) -> None:
+    kubectl = _RecordingKubectl(
+        virtualservices=[
+            _vs("prom.localhost", namespace="metrics"),
+            _vs("b.localhost", namespace="ns-b", annotations=_CREDENTIAL_ANNOTATIONS),
+            _vs("a.localhost", namespace="ns-a", annotations=_CREDENTIAL_ANNOTATIONS),
+        ]
     )
+    hints = _hints(tmp_path, kubectl)
 
     # Hosts arrive in arbitrary order from kubectl; output is sorted.
     assert hints.urls == (
-        "https://grafana.localhost/",
-        "https://loki.localhost/",
+        "https://a.localhost/",
+        "https://b.localhost/",
         "https://prom.localhost/",
     )
-    # Only grafana triggers the secret lookup
-    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]
+    assert sorted(kubectl.secret_calls) == [
+        ("app-admin", "password", "ns-a"),
+        ("app-admin", "password", "ns-b"),
+    ]
+    assert [c.url for c in hints.credentials] == ["https://a.localhost/", "https://b.localhost/"]
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["chartmanager.io/credentials-username", "chartmanager.io/credentials-password-key"],
+)
+def test_incomplete_annotations_warn_without_reading_the_secret(
+    tmp_path: Path, missing: str
+) -> None:
+    annotations = {k: v for k, v in _CREDENTIAL_ANNOTATIONS.items() if k != missing}
+    kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost", annotations=annotations)])
+    hints = _hints(tmp_path, kubectl)
+
+    assert kubectl.secret_calls == []
+    [credentials] = hints.credentials
+    assert credentials.url == "https://app.localhost/"
+    assert credentials.password is None
+    assert credentials.error is not None
+    assert missing in credentials.error
+
+
+def test_secret_read_failure_is_captured_not_raised(tmp_path: Path) -> None:
+    kubectl = _RecordingKubectl(
+        virtualservices=[_vs("app.localhost", annotations=_CREDENTIAL_ANNOTATIONS)],
+        secret_raise=ChartManagerError("secret not found"),
+    )
+    hints = _hints(tmp_path, kubectl)
+
+    assert hints.urls == ("https://app.localhost/",)
+    assert hints.credentials == (
+        DevelopmentClusterCredentials(url="https://app.localhost/", error="secret not found"),
+    )
 
 
 def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     # No istio-gateway in the summary -> CA decision is False, but the VS
-    # list still resolves (a sync that touched only grafana).
-    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
+    # list still resolves (a sync that touched only some app chart).
+    kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost")])
     svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
     hints = svc._access_hints(
-        lab_module.RunSummary(
-            applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
-        ),
-        namespace="observability",
+        lab_module.RunSummary(applied=[DevelopmentClusterEntryOutcome("app", "minimal", "apps")])
     )
 
     assert hints.ca_trust_hint is False
-    assert hints.urls == ("https://grafana.localhost/",)
+    assert hints.urls == ("https://app.localhost/",)
 
 
 def test_virtualservice_listing_failure_is_captured_not_raised(tmp_path: Path) -> None:
     # Best-effort: a missing CRD must not abort the run, and the surface
     # needs the reason so it can render it where the URLs would have been.
     kubectl = _RecordingKubectl(vs_raise=ExternalCommandError("no such CRD"))
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
-    )
+    hints = _hints(tmp_path, kubectl)
 
     assert hints.urls == ()
     assert hints.urls_error is not None
     assert "could not list VirtualServices" in hints.urls_error
     assert hints.ca_trust_hint is True
-
-
-def test_grafana_secret_failure_is_captured_not_raised(tmp_path: Path) -> None:
-    kubectl = _RecordingKubectl(
-        vs_hosts=["grafana.localhost"],
-        secret_raise=ChartManagerError("secret not found"),
-    )
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
-    )
-
-    assert hints.urls == ("https://grafana.localhost/",)
-    assert hints.grafana_credentials is None
-    assert hints.grafana_error == "secret not found"
 
 
 # ----- _wait_apps_wildcard_ready --------------------------------------------
@@ -722,47 +776,3 @@ def test_an_unrunnable_drift_check_says_so_in_the_log(
     [record] = [r for r in caplog.records if r.levelname == "WARNING"]
     assert "port-mapping drift check skipped" in record.getMessage()
     assert "cluster=chart-manager" in record.getMessage()
-
-
-def test_grafana_secret_is_read_from_the_namespace_grafana_landed_in(
-    tmp_path: Path,
-) -> None:
-    """The lookup namespace comes from the summary, not the run default.
-
-    A profile may declare its own `namespace:`. This read `options.namespace`
-    instead, and the two coincide today only because the grafana cluster-test configuration
-    omits one -- so adding that single line would have silently degraded the
-    credential lookup to "secret not found" with no other symptom. The
-    original test could not catch it: it passed the same value for both.
-    """
-    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-
-    hints = svc._access_hints(
-        lab_module.RunSummary(
-            applied=[
-                *_GATEWAY_SYNCED,
-                # Grafana installed into its own namespace, not the default.
-                DevelopmentClusterEntryOutcome("grafana", "minimal", "monitoring"),
-            ]
-        ),
-        namespace="observability",
-    )
-
-    assert kubectl.secret_calls == [("grafana", "admin-password", "monitoring")]
-    assert hints.grafana_credentials == ("admin", "fake-password")
-
-
-def test_grafana_secret_falls_back_to_the_run_namespace_when_absent(
-    tmp_path: Path,
-) -> None:
-    """No grafana row in the summary -> keep the previous behavior."""
-    kubectl = _RecordingKubectl(vs_hosts=["grafana.localhost"])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-
-    svc._access_hints(
-        lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)),
-        namespace="observability",
-    )
-
-    assert kubectl.secret_calls == [("grafana", "admin-password", "observability")]

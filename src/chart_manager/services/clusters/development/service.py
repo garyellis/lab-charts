@@ -297,14 +297,6 @@ class DevelopmentClusterService:
 
         self._wait_apps_wildcard_ready(summary)
         self._warn_on_port_mapping_drift(cluster_name, config=config)
-        fallback_namespace = next(
-            (
-                entry.namespace
-                for entry in (*summary.applied, *summary.no_change)
-                if entry.chart != local_cluster.metadata.name
-            ),
-            DEFAULT_NAMESPACE,
-        )
         # `failed` is a count, not a raise: this path is continue-on-error, so
         # the run's exit status alone does not say how much of it converged.
         _LOG.info(
@@ -315,7 +307,7 @@ class DevelopmentClusterService:
             len(summary.failed),
             time.monotonic() - started,
         )
-        return summary.freeze(self._access_hints(summary, namespace=fallback_namespace))
+        return summary.freeze(self._access_hints(summary))
 
     def status(self, cluster_name: str) -> DevelopmentClusterStatus:
         """Report the current state of the development cluster.
@@ -1095,11 +1087,9 @@ class DevelopmentClusterService:
         """Wait for the wildcard cert, best-effort (see access.py)."""
         wait_apps_wildcard_ready(summary, kubectl=self.kubectl, progress=self._progress)
 
-    def _access_hints(
-        self, summary: RunSummary, *, namespace: str
-    ) -> DevelopmentClusterAccessHints:
+    def _access_hints(self, summary: RunSummary) -> DevelopmentClusterAccessHints:
         """Resolve the post-converge advisory data (see access.py)."""
-        return access_hints(summary, kubectl=self.kubectl, namespace=namespace)
+        return access_hints(summary, kubectl=self.kubectl)
 
     def _warn_on_port_mapping_drift(
         self,

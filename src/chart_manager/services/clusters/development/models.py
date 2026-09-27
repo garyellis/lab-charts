@@ -34,21 +34,34 @@ class DevelopmentClusterEntryFailure:
 
 
 @dataclass(frozen=True)
+class DevelopmentClusterCredentials:
+    """Login for one URL, read from the Secret its VirtualService names.
+
+    Exactly one of `(username, password)` or `error` is set: `error` carries
+    an incomplete annotation set or a failed Secret read, so the surface can
+    render it where the login would have been.
+    """
+
+    url: str
+    username: str | None = None
+    password: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class DevelopmentClusterAccessHints:
     """Post-converge advisory data: what the operator needs to reach the lab.
 
     Data only -- the wording of the CA-trust instructions is a surface
     concern. `ca_trust_hint` is the *decision* (did the chart that owns the
-    lab CA sync this run?), not the text. The two `*_error` fields carry
-    best-effort lookup failures so the surface can render them in place
-    rather than the service printing them mid-run.
+    lab CA sync this run?), not the text. `urls_error` and each
+    `credentials[].error` carry best-effort lookup failures so the surface
+    can render them in place rather than the service printing them mid-run.
     """
 
     ca_trust_hint: bool = False
     urls: tuple[str, ...] = ()
-    grafana_url: str | None = None
-    grafana_credentials: tuple[str, str] | None = None
-    grafana_error: str | None = None
+    credentials: tuple[DevelopmentClusterCredentials, ...] = ()
     urls_error: str | None = None
 
 
