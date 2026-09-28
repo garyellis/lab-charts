@@ -92,6 +92,33 @@ class LocalBootstrapExecutor:
             self._wait_ready(release)
         return tuple(outcomes)
 
+    def verify(self, cluster: LocalCluster) -> None:
+        """Require every bootstrap Helm release without reconverging it."""
+        for release in cluster.spec.bootstrap.releases:
+            if isinstance(release, BootstrapLifecycleRelease):
+                catalog, plan = self._lifecycle_plan(release)
+                for entry in plan:
+                    profile = require_cluster_test_profile(
+                        catalog.get(entry.chart).spec,
+                        entry.profile,
+                    )
+                    self._verify_release(
+                        entry.chart,
+                        namespace=profile.namespace,
+                        subject=(
+                            f"{entry.chart}:{entry.profile} -> {profile.namespace}"
+                        ),
+                    )
+            elif isinstance(
+                release,
+                BootstrapLocalChartRelease
+                | BootstrapOciChartRelease
+                | BootstrapRepoChartRelease,
+            ):
+                self._verify_release(release.name, namespace=release.namespace)
+            else:  # pragma: no cover - the strict discriminated union prevents this
+                raise ChartManagerError(f"unsupported bootstrap release: {release!r}")
+
     def preflight(
         self,
         cluster: LocalCluster,
@@ -173,6 +200,26 @@ class LocalBootstrapExecutor:
                 BootstrapOutcome(entry.chart, entry.profile, namespace, result.status)
             )
         return outcomes
+
+    def _verify_release(
+        self,
+        name: str,
+        *,
+        namespace: str,
+        subject: str | None = None,
+    ) -> None:
+        emit(
+            self.progress,
+            step("Verifying bootstrap", subject or f"{name} -> {namespace}"),
+        )
+        result = self.helm.status(name, namespace=namespace)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            suffix = f": {detail}" if detail else ""
+            raise ChartManagerError(
+                f"bootstrap release {name!r} is not installed in namespace "
+                f"{namespace!r}; rerun without --skip-requires to converge it{suffix}"
+            )
 
     def _lifecycle_plan(
         self,

@@ -11,6 +11,7 @@ from chart_manager.domain.lifecycle_policy import (
     require_cluster_test,
     require_cluster_test_profile,
 )
+from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import (
@@ -141,6 +142,9 @@ class _MigrationKubectl:
     ) -> None:
         self.calls.append(f"ready:{namespace}:{timeout}:{selector}")
 
+    def wait_nodes_ready(self, *, timeout: str) -> None:
+        self.calls.append(f"nodes:{timeout}")
+
     def diagnostics(self, namespace: str) -> str:
         self.diagnostic_namespaces.append(namespace)
         return "pod diagnostics"
@@ -153,10 +157,12 @@ class _MigrationHelm:
         *,
         fail_dependency: bool = False,
         fail_lint: bool = False,
+        missing_releases: set[str] | None = None,
     ) -> None:
         self.calls = calls
         self.fail_dependency = fail_dependency
         self.fail_lint = fail_lint
+        self.missing_releases = missing_releases or set()
 
     def dependency_update_if_stale(self, chart_path: Path) -> bool:
         self.calls.append(f"dependency:{chart_path.name}")
@@ -181,6 +187,16 @@ class _MigrationHelm:
         self.calls.append(f"lint:{chart_path.name}")
         if self.fail_lint:
             raise RuntimeError("lint found an invalid template")
+
+    def status(self, release: str, *, namespace: str) -> CommandResult:
+        self.calls.append(f"status:{release}:{namespace}")
+        missing = release in self.missing_releases
+        return CommandResult(
+            args=("helm", "status", release),
+            returncode=1 if missing else 0,
+            stdout="",
+            stderr=f"Error: release: {release}: not found" if missing else "",
+        )
 
 
 def _migration_action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
@@ -288,7 +304,9 @@ def _migration_service(
     calls: list[str],
     fail_dependency: bool = False,
     fail_lint: bool = False,
+    missing_releases: set[str] | None = None,
     environment_provider: object | None = None,
+    progress: object | None = None,
 ) -> tuple[EphemeralTestClusterService, _MigrationKubectl]:
     (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     local_cluster = tmp_path / ".chart-manager/local-cluster.yaml"
@@ -311,12 +329,79 @@ spec:
             calls,
             fail_dependency=fail_dependency,
             fail_lint=fail_lint,
+            missing_releases=missing_releases,
         ),  # type: ignore[arg-type]
         kind=_MigrationKind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
         environment_provider=environment_provider,  # type: ignore[arg-type]
+        progress=progress,  # type: ignore[arg-type]
     )
     return service, kubectl
+
+
+class _MigrationProvider:
+    """Environment double that distinguishes retained from absent clusters."""
+
+    def __init__(self, *, exists: bool, stopped: bool = False) -> None:
+        self.exists = exists
+        self.stopped = stopped
+        self.calls: list[str] = []
+
+    @staticmethod
+    def _handle(spec: EnvironmentSpec) -> EnvironmentHandle:
+        return EnvironmentHandle(
+            identity=spec.cluster_name,
+            context=f"kind-{spec.cluster_name}",
+            provider_type="kind",
+        )
+
+    def inspect(self, spec: EnvironmentSpec) -> EnvironmentHandle | None:
+        self.calls.append(f"inspect:{spec.cluster_name}")
+        return self._handle(spec) if self.exists else None
+
+    def ensure(self, spec: EnvironmentSpec) -> EnvironmentHandle:
+        action = "restart" if self.stopped else "ensure"
+        self.calls.append(f"{action}:{spec.cluster_name}")
+        self.exists = True
+        self.stopped = False
+        return self._handle(spec)
+
+    def handle(self, spec: EnvironmentSpec) -> EnvironmentHandle:
+        self.calls.append(f"handle:{spec.cluster_name}")
+        return self._handle(spec)
+
+    def destroy(self, _handle: EnvironmentHandle) -> bool:
+        return True
+
+
+def _configure_local_bootstrap(tmp_path: Path) -> None:
+    chart = tmp_path / "charts/cni"
+    chart.mkdir(parents=True, exist_ok=True)
+    (chart / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: cni\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".chart-manager/local-cluster.yaml").write_text(
+        """
+apiVersion: local.chartmanager.io/v1alpha1
+kind: LocalCluster
+metadata: {name: default}
+spec:
+  cluster: {config: kind-config.yaml}
+  bootstrap:
+    releases:
+      - type: local
+        name: cni
+        chart: charts/cni
+        namespace: kube-system
+        values: []
+        timeout: 2m
+        readiness:
+          nodesReady: true
+          workloadsReady: {namespace: kube-system, timeout: 2m}
+""".lstrip(),
+        encoding="utf-8",
+    )
 
 
 def test_ephemeral_default_executes_projected_action_order(
@@ -599,6 +684,351 @@ def test_ephemeral_bootstrap_transitive_dependency_is_not_reinstalled_or_reteste
     assert result.tested == ("grafana",)
 
 
+def test_skip_requires_runs_only_target_and_never_tests_requirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    result = service.run(
+        EphemeralTestRequest(chart="app", skip_requires=True, ensure_cluster=False)
+    )
+
+    assert calls == [
+        "status:shared:monitoring",
+        "namespace:monitoring",
+        "dependency:app",
+        "install:app:app",
+        "ready:monitoring:1m:app.kubernetes.io/instance=app",
+        "test:app",
+    ]
+    assert "test:shared" not in calls
+    assert result.installed == ("app",)
+    assert result.tested == ("app",)
+
+
+def test_skip_requires_missing_release_fails_before_any_install_or_test(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        missing_releases={"shared"},
+    )
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    with pytest.raises(
+        ChartManagerError,
+        match=r"app requires shared:minimal, not installed in monitoring; "
+        r"run once without --skip-requires",
+    ):
+        service.run(
+            EphemeralTestRequest(chart="app", skip_requires=True, ensure_cluster=False)
+        )
+
+    assert calls == ["status:shared:monitoring"]
+
+
+def test_skip_requires_dry_run_lists_assumptions_without_status_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    plan = service.plan(EphemeralTestRequest(chart="app", skip_requires=True))
+
+    assert {action.target.chart for action in plan.actions} == {"app"}
+    assert all(action.target.chart != "shared" for action in plan.actions)
+    assert plan.warnings[-1].endswith("shared:minimal")
+    assert "missing cluster installs bootstrap and required charts" in plan.warnings[0]
+    no_ensure_plan = service.plan(
+        EphemeralTestRequest(
+            chart="app",
+            skip_requires=True,
+            ensure_cluster=False,
+        )
+    )
+    assert "--no-ensure-cluster creates nothing" in no_ensure_plan.warnings[0]
+    assert calls == []
+
+
+@pytest.mark.parametrize("retained_state", ["running", "stopped"])
+def test_skip_requires_retained_cluster_verifies_bootstrap_without_upgrading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    retained_state: str,
+) -> None:
+    calls: list[str] = []
+    provider = _MigrationProvider(exists=True, stopped=retained_state == "stopped")
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        environment_provider=provider,
+    )
+    _configure_local_bootstrap(tmp_path)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    with caplog.at_level("INFO"):
+        result = service.run(EphemeralTestRequest(chart="app", skip_requires=True))
+
+    ensure_action = "restart" if retained_state == "stopped" else "ensure"
+    assert provider.calls == ["inspect:chart-manager", f"{ensure_action}:chart-manager"]
+    assert "status:cni:kube-system" in calls
+    assert "nodes:2m" not in calls
+    assert "ready:kube-system:2m:None" not in calls
+    assert "status:shared:monitoring" in calls
+    assert "dependency:cni" not in calls
+    assert "install:cni:cni" not in calls
+    assert "test:shared" not in calls
+    assert result.installed == ("app",)
+    assert result.tested == ("app",)
+    assert "bootstrap_mode=verify" in caplog.text
+
+
+def test_skip_requires_no_ensure_uses_verify_only_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    provider = _MigrationProvider(exists=False)
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        environment_provider=provider,
+    )
+    _configure_local_bootstrap(tmp_path)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    service.run(
+        EphemeralTestRequest(
+            chart="app",
+            skip_requires=True,
+            ensure_cluster=False,
+        )
+    )
+
+    assert provider.calls == ["handle:chart-manager"]
+    assert "status:cni:kube-system" in calls
+    assert "status:shared:monitoring" in calls
+    assert not [call for call in calls if call.startswith("install:cni:")]
+    assert "test:shared" not in calls
+
+
+def test_skip_requires_missing_bootstrap_release_stops_before_chart_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    provider = _MigrationProvider(exists=True)
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        missing_releases={"cni"},
+        environment_provider=provider,
+    )
+    _configure_local_bootstrap(tmp_path)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan("app"),
+    )
+
+    with pytest.raises(ChartManagerError, match=r"bootstrap release 'cni'.*not installed"):
+        service.run(EphemeralTestRequest(chart="app", skip_requires=True))
+
+    assert calls[-1] == "status:cni:kube-system"
+    assert not [call for call in calls if call.startswith(("dependency:", "install:", "test:"))]
+
+
+def test_skip_requires_new_cluster_installs_prerequisites_but_tests_only_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    events: list[object] = []
+    provider = _MigrationProvider(exists=False)
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        environment_provider=provider,
+        progress=events.append,
+    )
+    _configure_local_bootstrap(tmp_path)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    result = service.run(EphemeralTestRequest(chart="app", skip_requires=True))
+
+    assert provider.calls == ["inspect:chart-manager", "ensure:chart-manager"]
+    assert "install:cni:cni" in calls
+    assert "install:shared:shared" in calls
+    assert "install:app:app" in calls
+    assert "ready:monitoring:1m:app.kubernetes.io/instance=shared" in calls
+    assert "test:shared" not in calls
+    assert "test:app" in calls
+    assert result.installed == ("app", "cni", "shared")
+    assert result.tested == ("app",)
+    assert any(
+        "must install bootstrap and required charts" in getattr(event, "message", "")
+        for event in events
+    )
+
+
+def test_skip_requires_new_cluster_keeps_required_and_target_install_hooks(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    record = chart_root / "hook-record"
+    script = chart_root / "scripts/hook"
+    script.parent.mkdir()
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "$CHART_MANAGER_HOOK_PHASE $CHART_MANAGER_CHART" '
+        f">> {record}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    hooks = {
+        "preInstall": ["./scripts/hook"],
+        "postInstall": ["./scripts/hook"],
+        "cleanup": ["./scripts/hook"],
+    }
+    make_chart(
+        "base",
+        profiles={"minimal": {"namespace": "base", "hooks": hooks}},
+    )
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "apps",
+                "requires": [{"chart": "base", "profile": "minimal"}],
+                "hooks": hooks,
+            }
+        },
+    )
+    calls: list[str] = []
+    service, _kubectl = _migration_service(
+        chart_root,
+        calls=calls,
+        environment_provider=_MigrationProvider(exists=False),
+    )
+
+    result = service.run(EphemeralTestRequest(chart="app", skip_requires=True))
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "pre-install base",
+        "post-install base",
+        "pre-install app",
+        "post-install app",
+    ]
+    assert "ready:base:10m:app.kubernetes.io/instance=base" in calls
+    assert "test:base" not in calls
+    assert "test:app" in calls
+    assert result.tested == ("app",)
+
+
+def test_without_skip_requires_retained_cluster_still_converges_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    provider = _MigrationProvider(exists=True)
+    service, _kubectl = _migration_service(
+        tmp_path,
+        calls=calls,
+        environment_provider=provider,
+    )
+    _configure_local_bootstrap(tmp_path)
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan("app"),
+    )
+
+    service.run(EphemeralTestRequest(chart="app"))
+
+    assert provider.calls == ["ensure:chart-manager"]
+    assert "install:cni:cni" in calls
+    assert "status:cni:kube-system" not in calls
+
+
+def test_skip_requires_does_not_preflight_bootstrap_owned_requirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    monkeypatch.setattr(
+        LocalBootstrapExecutor,
+        "preflight",
+        lambda *_args, **_kwargs: frozenset(
+            {
+                ExternallySatisfiedLifecycle(
+                    chart_path=(Path("charts") / "shared").resolve(),
+                    chart="shared",
+                    profile="minimal",
+                    namespace="monitoring",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda *_args, **_kwargs: _fanout_plan(
+            "app", prerequisite=("shared", "minimal")
+        ),
+    )
+
+    service.run(EphemeralTestRequest(chart="app", skip_requires=True, ensure_cluster=False))
+
+    assert not [call for call in calls if call.startswith("status:")]
+    assert "test:shared" not in calls
+
+
 def test_ephemeral_recomputes_bootstrap_satisfaction_for_every_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -682,6 +1112,43 @@ def test_ephemeral_dependent_fanout_dedupes_shared_profile_and_preserves_order(
     assert calls.count("install:shared:shared") == 1
     assert calls.count("test:shared") == 1
     assert result.tested == ("shared", "main", "dependent-a", "dependent-b")
+
+
+def test_skip_requires_applies_to_dependent_test_fanout_requirements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(tmp_path, calls=calls)
+    dependents = (SimpleNamespace(chart="dependent", profile="minimal"),)
+    monkeypatch.setattr(service.resolver, "dependent_tests", lambda _chart: dependents)
+    plans = {
+        ("main", "minimal"): _fanout_plan(
+            "main", prerequisite=("shared", "minimal")
+        ),
+        ("dependent", "minimal"): _fanout_plan(
+            "dependent", prerequisite=("shared", "minimal")
+        ),
+    }
+    monkeypatch.setattr(
+        service.cluster_test_compiler,
+        "compile_cluster_test",
+        lambda chart, profile, **_kwargs: plans[(chart, profile)],
+    )
+
+    result = service.run(
+        EphemeralTestRequest(
+            chart="main",
+            ensure_cluster=False,
+            include_dependent_tests=True,
+            skip_requires=True,
+        )
+    )
+
+    assert calls.count("status:shared:monitoring") == 1
+    assert "install:shared:shared" not in calls
+    assert "test:shared" not in calls
+    assert result.tested == ("main", "dependent")
 
 
 def test_ephemeral_fanout_reconverges_same_release_for_distinct_profiles(
@@ -799,7 +1266,12 @@ def test_ephemeral_runs_install_hooks_against_the_bound_cluster_and_never_cleanu
     service, _kubectl = _migration_service(chart_root, calls=calls)
 
     result = service.run(
-        EphemeralTestRequest(chart="app", cluster_name="lab", ensure_cluster=False)
+        EphemeralTestRequest(
+            chart="app",
+            cluster_name="lab",
+            ensure_cluster=False,
+            skip_requires=True,
+        )
     )
 
     assert record.read_text(encoding="utf-8").splitlines() == [
@@ -936,6 +1408,25 @@ def test_teardown_runs_cleanups_in_reverse_install_order_then_deletes_the_cluste
         ("cluster-test.app.minimal.hook-cleanup", "PASS"),
         ("cluster-test.base.minimal.hook-cleanup", "PASS"),
     ]
+
+
+def test_skip_requires_does_not_remove_required_cleanup_from_teardown(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = _teardown_charts(chart_root, make_chart)
+    service, _calls = _teardown_service(chart_root, record)
+
+    test_plan = service.plan(EphemeralTestRequest(chart="app", skip_requires=True))
+    teardown_plan = service.teardown_plan(EphemeralTeardownRequest(chart="app"))
+
+    assert not [
+        action
+        for action in test_plan.actions
+        if action.target.chart == "base"
+    ]
+    assert [action.target.chart for action in teardown_plan.actions] == ["app", "base"]
+    assert [action.kind for action in teardown_plan.actions] == [ActionKind.HOOK_CLEANUP] * 2
+    assert not record.exists()
 
 
 def test_teardown_continues_past_a_failed_cleanup_and_still_deletes_the_cluster(

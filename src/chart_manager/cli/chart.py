@@ -205,6 +205,7 @@ def _run_chart_test(
     namespace: str | None,
     cluster_name: str,
     dependent_tests: bool,
+    skip_requires: bool,
     no_ensure_cluster: bool,
     lint: bool,
     dry_run: bool,
@@ -227,6 +228,7 @@ def _run_chart_test(
         cluster_name=cluster_name,
         ensure_cluster=not no_ensure_cluster,
         include_dependent_tests=dependent_tests,
+        skip_requires=skip_requires,
         lint=lint,
         run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
     )
@@ -291,6 +293,16 @@ def chart_test(
             help="Run cluster tests affected by this chart.",
         ),
     ] = False,
+    skip_requires: Annotated[
+        bool,
+        typer.Option(
+            "--skip-requires",
+            help=(
+                "Reuse installed prerequisites without upgrading them; on a new cluster, "
+                "install prerequisites but Helm-test selected targets only."
+            ),
+        ),
+    ] = False,
     no_ensure_cluster: Annotated[
         bool,
         typer.Option("--no-ensure-cluster", help="Do not create the test cluster if missing."),
@@ -336,6 +348,7 @@ def chart_test(
         namespace=namespace,
         cluster_name=cluster_name,
         dependent_tests=dependent_tests,
+        skip_requires=skip_requires,
         no_ensure_cluster=no_ensure_cluster,
         lint=lint,
         dry_run=dry_run,

@@ -584,6 +584,37 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
     assert charts_dir == Path("charts")
 
 
+def test_chart_test_passes_skip_requires_to_the_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _chart(tmp_path)
+    requests: list[object] = []
+
+    class Service:
+        def run(self, request: object) -> None:
+            requests.append(request)
+
+    class Container:
+        def ephemeral_test_cluster_service(
+            self, _root: Path, *, progress: object, charts_dir: Path
+        ) -> Service:
+            return Service()
+
+    monkeypatch.setattr(chart_cli, "_container", Container)
+
+    result = cli(
+        "chart",
+        "test",
+        "alloy",
+        "--skip-requires",
+        "--root",
+        str(tmp_path),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].skip_requires is True  # type: ignore[attr-defined]
+
+
 def test_chart_test_accepts_the_chart_positionally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -638,14 +638,13 @@ class Helm:
             )
         return payload
 
-    def status(self, release: str, *, namespace: str) -> str:
-        """Return combined stdout+stderr of `helm status`; never raises (check=False)."""
-        result = self.runner.run(
+    def status(self, release: str, *, namespace: str) -> CommandResult:
+        """Return the inspectable `helm status` result; never raise for its exit code."""
+        return self.runner.run(
             self._with_context([self._helm_bin, "status", release, "--namespace", namespace]),
             check=False,
             timeout=self.timeout,
         )
-        return result.stdout + result.stderr
 
     def _with_context(self, args: list[str]) -> list[str]:
         """Append --kube-context when this instance is pinned to one."""

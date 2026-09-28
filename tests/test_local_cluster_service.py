@@ -23,6 +23,7 @@ from chart_manager.services.clusters.ephemeral import (
     EphemeralTestRequest,
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
+from chart_manager.services.lifecycle.plan_projection import RequiredLifecycleProjection
 from chart_manager.services.progress import ProgressEvent
 
 
@@ -237,7 +238,11 @@ def test_run_ensures_the_cluster_and_narrates_it(
     # method's own type forbids makes this test fail for a reason that has
     # nothing to do with what it asserts.
     empty_plan = LifecyclePlan(chart="grafana", actions=())
-    monkeypatch.setattr(svc, "_compile_lifecycle_plan", lambda *_a, **_kw: empty_plan)
+    monkeypatch.setattr(
+        svc,
+        "_compile_lifecycle_plan",
+        lambda *_a, **_kw: RequiredLifecycleProjection(plan=empty_plan, skipped=()),
+    )
     monkeypatch.setattr(svc, "_execute_lifecycle_plan", lambda *_args, **_kwargs: None)
 
     # Chart execution is covered separately; this test isolates environment

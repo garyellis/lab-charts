@@ -13,6 +13,7 @@ from chart_manager.services.lifecycle.models import (
 )
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
+SKIPPED_REQUIRES_WARNING_PREFIX = "requires assumed installed (--skip-requires): "
 
 
 class PlanProjectionError(ValueError):
@@ -27,6 +28,24 @@ class ExternallySatisfiedLifecycle:
     chart: str
     profile: str
     namespace: str
+
+
+@dataclass(frozen=True)
+class SkippedRequiredLifecycle:
+    """One required release omitted from an executable cluster-test plan."""
+
+    chart: str
+    profile: str
+    release: str
+    namespace: str
+
+
+@dataclass(frozen=True)
+class RequiredLifecycleProjection:
+    """A projected plan plus the releases a real run must preflight."""
+
+    plan: LifecyclePlan
+    skipped: tuple[SkippedRequiredLifecycle, ...]
 
 
 def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:
@@ -116,4 +135,70 @@ def exclude_bootstrap_owned_charts(
         plan,
         actions=actions,
         warnings=(*plan.warnings, warning),
+    )
+
+
+def exclude_required_lifecycles(
+    plan: LifecyclePlan,
+    requested: Iterable[tuple[str, str]],
+) -> RequiredLifecycleProjection:
+    """Remove every action that belongs only to a ``requires`` entry.
+
+    The compiler remains authoritative and produces the complete dependency
+    graph. This environment projection keeps only explicitly selected test
+    targets, so a target selected by ``--dependent-tests`` still runs in full
+    even when another selected target also names it as a requirement.
+    """
+
+    selected = frozenset(requested)
+    if not selected or any(
+        not chart.strip() or not profile.strip() for chart, profile in selected
+    ):
+        raise PlanProjectionError("requested lifecycle identity fields must not be empty")
+
+    skipped_by_identity: dict[tuple[str, str], SkippedRequiredLifecycle] = {}
+    for action in plan.actions:
+        profile = action.target.profile
+        if profile is None or (action.target.chart, profile) in selected:
+            continue
+        release = action.target.release
+        namespace = action.target.namespace
+        if not release or not namespace:
+            raise PlanProjectionError(
+                f"required lifecycle {action.target.chart}:{profile} "
+                "must identify a release and namespace"
+            )
+        identity = (action.target.chart, profile)
+        candidate = SkippedRequiredLifecycle(
+            chart=action.target.chart,
+            profile=profile,
+            release=release,
+            namespace=namespace,
+        )
+        previous = skipped_by_identity.setdefault(identity, candidate)
+        if previous != candidate:
+            raise PlanProjectionError(
+                f"required lifecycle {action.target.chart}:{profile} has conflicting coordinates"
+            )
+
+    if not skipped_by_identity:
+        return RequiredLifecycleProjection(plan=plan, skipped=())
+
+    skipped_identities = frozenset(skipped_by_identity)
+    actions = tuple(
+        action
+        for action in plan.actions
+        if (action.target.chart, action.target.profile) not in skipped_identities
+    )
+    skipped_lifecycles = tuple(skipped_by_identity.values())
+    warning = SKIPPED_REQUIRES_WARNING_PREFIX + ", ".join(
+        f"{identity.chart}:{identity.profile}" for identity in skipped_lifecycles
+    )
+    return RequiredLifecycleProjection(
+        plan=replace(
+            plan,
+            actions=actions,
+            warnings=(*plan.warnings, warning),
+        ),
+        skipped=skipped_lifecycles,
     )
