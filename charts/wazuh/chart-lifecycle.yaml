@@ -62,4 +62,8 @@ spec:
           - values-ci.yaml
         helmTest: true
         timeout: 25m
+        # Example hooks: argv from the repository root, CHART_MANAGER_* env.
+        hooks:
+          preInstall: [charts/wazuh/tests/hooks/hello.sh]
+          cleanup: [charts/wazuh/tests/hooks/goodbye.sh]
     dependentTests: []
