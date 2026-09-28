@@ -32,6 +32,7 @@ __all__ = [
     "ChartLifecycle",
     "ChartLifecycleMetadata",
     "ChartLifecycleSpec",
+    "ClusterTestHooks",
     "ClusterTestProfile",
     "ClusterTestRef",
     "ClusterTestSpec",
@@ -82,6 +83,29 @@ class ClusterTestRef(ApiModel):
     profile: str = "minimal"
 
 
+class ClusterTestHooks(StrictApiModel):
+    """Optional fail-fast argv commands around one profile's install.
+
+    Each hook is an argv, never a shell string, mirroring the local cluster's
+    provisioning hooks. `cleanup` releases whatever `preInstall` acquired
+    outside the cluster. It runs only when requested (`--with-hooks-cleanup`),
+    so a developer's release keeps working after `chart test`. Cleanup is
+    best-effort: it must be idempotent, succeed when there is nothing to
+    release, and never be the only thing preventing a leak.
+    """
+
+    pre_install: list[str] | None = Field(default=None, alias="preInstall")
+    post_install: list[str] | None = Field(default=None, alias="postInstall")
+    cleanup: list[str] | None = None
+
+    @field_validator("pre_install", "post_install", "cleanup")
+    @classmethod
+    def _valid_argv(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and (not value or any(not item for item in value)):
+            raise ValueError("cluster-test hook must be a non-empty argv of non-empty strings")
+        return value
+
+
 class ClusterTestProfile(ApiModel):
     """How to install and test a chart under one named profile.
 
@@ -96,6 +120,7 @@ class ClusterTestProfile(ApiModel):
     values: list[str] = Field(default_factory=lambda: ["values.yaml"])
     helm_test: bool = Field(default=True, alias="helmTest")
     timeout: str = "10m"
+    hooks: ClusterTestHooks | None = None
 
     @field_validator("values")
     @classmethod

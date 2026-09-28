@@ -59,6 +59,10 @@ spec:
           - values.yaml
         helmTest: true
         timeout: 15m
+        hooks:
+          preInstall: [scripts/demo-credential.sh, create]
+          postInstall: [scripts/demo-credential.sh, verify]
+          cleanup: [scripts/demo-credential.sh, delete]
       routed:
         namespace: routed
         requires: []

@@ -52,6 +52,59 @@
         "title": "ChartLifecycleSpec",
         "type": "object"
       },
+      "ClusterTestHooks": {
+        "additionalProperties": false,
+        "description": "Optional fail-fast argv commands around one profile's install.\n\nEach hook is an argv, never a shell string, mirroring the local cluster's\nprovisioning hooks. `cleanup` releases whatever `preInstall` acquired\noutside the cluster. It runs only when requested (`--with-hooks-cleanup`),\nso a developer's release keeps working after `chart test`. Cleanup is\nbest-effort: it must be idempotent, succeed when there is nothing to\nrelease, and never be the only thing preventing a leak.",
+        "properties": {
+          "cleanup": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cleanup"
+          },
+          "postInstall": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Postinstall"
+          },
+          "preInstall": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preinstall"
+          }
+        },
+        "title": "ClusterTestHooks",
+        "type": "object"
+      },
       "ClusterTestProfile": {
         "additionalProperties": false,
         "description": "How to install and test a chart under one named profile.\n\n`namespace` is required: a chart's values routinely address siblings by\nin-cluster DNS name, so where it runs is part of the chart's intent, not\nsomething a command may pick for it.",
@@ -72,6 +125,17 @@
             "default": true,
             "title": "Helmtest",
             "type": "boolean"
+          },
+          "hooks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClusterTestHooks"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "namespace": {
             "minLength": 1,
