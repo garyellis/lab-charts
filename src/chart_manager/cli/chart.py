@@ -297,7 +297,10 @@ def chart_test(
         bool,
         typer.Option(
             "--skip-requires",
-            help="Assume required chart releases are installed; test selected targets only.",
+            help=(
+                "Reuse installed prerequisites without upgrading them; on a new cluster, "
+                "install prerequisites but Helm-test selected targets only."
+            ),
         ),
     ] = False,
     no_ensure_cluster: Annotated[

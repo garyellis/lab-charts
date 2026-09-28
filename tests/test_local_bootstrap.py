@@ -9,6 +9,7 @@ import pytest
 
 from chart_manager.api.local.v1alpha1 import LocalCluster
 from chart_manager.integrations.helm import UpgradeResult
+from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import EnvironmentHandle
@@ -55,12 +56,15 @@ class _Helm:
         *,
         fail_on: str | None = None,
         fail_lint: bool = False,
+        missing_releases: set[str] | None = None,
     ) -> None:
         self.fail_on = fail_on
         self.fail_lint = fail_lint
+        self.missing_releases = missing_releases or set()
         self.calls: list[tuple[str, object, dict[str, Any]]] = []
         self.dependencies: list[Path] = []
         self.lints: list[tuple[Path, list[Path]]] = []
+        self.statuses: list[tuple[str, str]] = []
 
     def dependency_update_if_stale(self, chart: Path) -> bool:
         self.dependencies.append(chart)
@@ -81,6 +85,16 @@ class _Helm:
         if name == self.fail_on:
             raise ExternalCommandError(f"{name} failed")
         return UpgradeResult("applied", None, 1, "")
+
+    def status(self, release: str, *, namespace: str) -> CommandResult:
+        self.statuses.append((release, namespace))
+        missing = release in self.missing_releases
+        return CommandResult(
+            args=("helm", "status", release),
+            returncode=1 if missing else 0,
+            stdout="",
+            stderr=f"release {release} not found" if missing else "",
+        )
 
 
 def _executor(
@@ -177,6 +191,122 @@ def test_ordered_bootstrap_injects_only_declared_kind_facts_and_waits(
     assert kind.ip_calls == ["dev-cluster"]
     assert kubectl.calls == [("nodes", "4m"), ("kube-system", "4m")]
     assert [outcome.name for outcome in outcomes] == ["network", "metrics", "ingress"]
+
+
+def test_verify_checks_every_release_without_installing_or_waiting(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "charts/network").mkdir(parents=True)
+    cluster = _cluster(
+        [
+            {
+                "type": "local",
+                "name": "network",
+                "chart": "charts/network",
+                "namespace": "kube-system",
+                "values": [],
+                "timeout": "5m",
+                "readiness": {
+                    "nodesReady": True,
+                    "workloadsReady": {"namespace": "kube-system", "timeout": "4m"},
+                },
+            },
+            {
+                "type": "repo",
+                "name": "ingress",
+                "repo": "https://example.test/helm",
+                "chart": "ingress",
+                "version": "2.3.4",
+                "namespace": "ingress",
+                "values": [],
+                "timeout": "3m",
+            },
+        ]
+    )
+    helm = _Helm()
+    executor, kind, kubectl = _executor(tmp_path, helm=helm)
+
+    executor.verify(cluster)
+
+    assert helm.statuses == [("network", "kube-system"), ("ingress", "ingress")]
+    assert helm.calls == []
+    assert helm.dependencies == []
+    assert kind.ip_calls == []
+    assert kubectl.calls == []
+
+
+def test_verify_lifecycle_checks_transitive_releases_and_profile_readiness(
+    tmp_path: Path,
+) -> None:
+    for name, requires in (
+        ("network", ""),
+        (
+            "platform",
+            "        requires:\n          - chart: network\n            profile: minimal\n",
+        ),
+    ):
+        chart = tmp_path / "charts" / name
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: {name}\nversion: 1.0.0\n",
+            encoding="utf-8",
+        )
+        (chart / "chart-lifecycle.yaml").write_text(
+            (
+                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+                "kind: ChartLifecycle\n"
+                f"metadata: {{name: {name}}}\n"
+                "spec:\n"
+                "  clusterTest:\n"
+                "    profiles:\n"
+                "      minimal:\n"
+                f"{requires}"
+                f"        namespace: {name}\n"
+                "        timeout: 2m\n"
+                "        values: []\n"
+            ),
+            encoding="utf-8",
+        )
+    cluster = _cluster(
+        [{"type": "lifecycle", "chart": "charts/platform", "profile": "minimal"}]
+    )
+    helm = _Helm()
+    executor, _, kubectl = _executor(tmp_path, helm=helm)
+
+    executor.verify(cluster)
+
+    assert helm.statuses == [("network", "network"), ("platform", "platform")]
+    assert helm.calls == []
+    assert kubectl.calls == []
+
+
+def test_verify_missing_release_fails_without_install_or_readiness(tmp_path: Path) -> None:
+    (tmp_path / "charts/network").mkdir(parents=True)
+    cluster = _cluster(
+        [
+            {
+                "type": "local",
+                "name": "network",
+                "chart": "charts/network",
+                "namespace": "kube-system",
+                "values": [],
+                "timeout": "5m",
+                "readiness": {"nodesReady": True},
+            }
+        ]
+    )
+    helm = _Helm(missing_releases={"network"})
+    executor, _, kubectl = _executor(tmp_path, helm=helm)
+
+    with pytest.raises(
+        ChartManagerError,
+        match=r"bootstrap release 'network'.*not installed",
+    ):
+        executor.verify(cluster)
+
+    assert helm.statuses == [("network", "kube-system")]
+    assert helm.calls == []
+    assert kubectl.calls == []
 
 
 def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
