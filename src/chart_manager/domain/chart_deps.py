@@ -41,12 +41,20 @@ class _DependencyIdentity:
 def build_helm_dependency_index(
     root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
 ) -> dict[str, set[str]]:
-    """Map each managed chart to the chart names that depend on it.
+    """Map each local chart name to the managed charts that depend on it.
 
     Loads ordinary Helm chart metadata, so charts without enabled cluster
     tests — including library charts — still enter the index. Malformed
     charts are skipped by this best-effort repository-wide scan; explicitly
     requested charts remain strict.
+
+    Only repository-less or ``file://`` dependencies are indexed, and a
+    chart's dependency on its own name is skipped. Wrapper charts depend on
+    a remote upstream of the same name, so indexing by name alone recorded
+    ``grafana -> {grafana}`` and the planner selected every environment for
+    any wrapper file edit, bypassing per-environment triggers. A remote
+    dependency cannot change with a file in this repository, and a chart's
+    own edits are planned by its triggers, so neither needs fanout.
     """
     index: dict[str, set[str]] = {}
     repository = ChartRepository(root, charts_dir=charts_dir)
@@ -56,8 +64,21 @@ def build_helm_dependency_index(
         except ChartManagerError:
             continue
         for dependency in chart.metadata.dependencies:
+            if dependency.name == chart.name or not _is_local_dependency(dependency):
+                continue
             index.setdefault(dependency.name, set()).add(chart.name)
     return index
+
+
+def _is_local_dependency(dependency: ChartDependency) -> bool:
+    """Return whether Helm would resolve the dependency from local files.
+
+    Helm reads an omitted/empty ``repository`` from the parent's ``charts/``
+    directory and ``file://`` from a path; everything else (https, oci,
+    ``@alias`` repositories) is fetched remotely.
+    """
+    repository = dependency.repository
+    return not repository or repository.startswith("file://")
 
 
 def chart_has_dependencies(chart_path: Path) -> bool:

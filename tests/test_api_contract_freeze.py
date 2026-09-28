@@ -29,6 +29,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from chart_manager.api.lifecycle.v1alpha1 import (
+    ALL_ENVIRONMENTS,
     LIFECYCLE_API_VERSION,
     LIFECYCLE_KIND,
     MATCH_BY_BASENAME,
@@ -142,6 +143,7 @@ def test_authored_api_constants_are_frozen() -> None:
     assert LIFECYCLE_KIND == "ChartLifecycle"
     assert LIFECYCLE_FILENAME == "chart-lifecycle.yaml"
     assert MATCH_BY_BASENAME == "match-by-basename"
+    assert ALL_ENVIRONMENTS == "all-environments"
     assert LOCAL_API_VERSION == "local.chartmanager.io/v1alpha1"
     assert LOCAL_CLUSTER_KIND == "LocalCluster"
     assert LOCAL_STACK_KIND == "LocalStack"

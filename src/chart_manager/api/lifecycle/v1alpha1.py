@@ -17,7 +17,7 @@ leaves an author writes to the wrapper they write around them.
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import Final, Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
@@ -25,6 +25,7 @@ from chart_manager.api.base import ApiModel, StrictApiModel
 from chart_manager.plumbing.paths import ensure_relative
 
 __all__ = [
+    "ALL_ENVIRONMENTS",
     "LIFECYCLE_API_VERSION",
     "LIFECYCLE_KIND",
     "MATCH_BY_BASENAME",
@@ -61,9 +62,12 @@ LIFECYCLE_KIND: LifecycleKind = get_args(LifecycleKind)[0]
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
 # layer and the spec validator agree on the spelling.
-MATCH_BY_BASENAME = "match-by-basename"
+MATCH_BY_BASENAME: Final = "match-by-basename"
+# Literal string used as a trigger value to select every declared environment
+# (e.g. templates/** renders differently under each env's values).
+ALL_ENVIRONMENTS: Final = "all-environments"
 
-TriggerValue = list[str] | Literal["match-by-basename"]
+TriggerValue = list[str] | Literal["match-by-basename", "all-environments"]
 
 
 # ---------------------------------------------------------------------------
@@ -208,14 +212,14 @@ class ManifestValidationSpec(ApiModel):
 
     @model_validator(mode="after")
     def _check_triggers(self) -> ManifestValidationSpec:
-        """Each trigger must be MATCH_BY_BASENAME or a list of known envs."""
+        """Each trigger must be a string alias or a list of known envs."""
         known = set(self.environments)
         for pattern, value in self.triggers.items():
             if isinstance(value, str):
-                if value != MATCH_BY_BASENAME:
+                if value not in (MATCH_BY_BASENAME, ALL_ENVIRONMENTS):
                     raise ValueError(
                         f"trigger '{pattern}' string value must be "
-                        f"'{MATCH_BY_BASENAME}', got {value!r}"
+                        f"'{MATCH_BY_BASENAME}' or '{ALL_ENVIRONMENTS}', got {value!r}"
                     )
                 continue
             unknown = [env for env in value if env not in known]
