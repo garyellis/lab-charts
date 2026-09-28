@@ -52,7 +52,6 @@ def _runner(root: Path, runner: object | None = None) -> ClusterTestHookRunner:
 def test_hook_runs_argv_from_repo_root_with_run_coordinates_in_its_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The argv runs unshelled from the root, over the parent environment."""
     monkeypatch.setenv("PARENT_MARKER", "inherited")
     dump = tmp_path / "env-dump"
     argv = (_script(tmp_path, f'pwd > {dump}\necho "argv=$1" >> {dump}\nenv >> {dump}\n'), "$HOME")
@@ -134,7 +133,6 @@ def test_hook_exceeding_the_profile_timeout_reports_the_timeout_and_stderr(
 def test_hook_logs_that_it_runs_and_its_output_at_debug(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """INFO names the configured hook; DEBUG (-v) carries its output verbatim."""
     argv = (_script(tmp_path, 'echo "hello $2"\necho "warn" >&2\n'), "--token", "s3cret")
     caplog.set_level("DEBUG", logger="chart_manager.services.lifecycle.hooks")
 
@@ -143,6 +141,6 @@ def test_hook_logs_that_it_runs_and_its_output_at_debug(
     info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
     debug = "\n".join(r.getMessage() for r in caplog.records if r.levelname == "DEBUG")
     assert info == ["running pre-install hook for app/minimal: ./scripts/hook --token ***"]
-    # The configured argv is masked; what the script prints is its own business.
+    # The configured argv is masked; the script's own output is verbatim.
     assert "hello s3cret" in debug
     assert "warn" in debug

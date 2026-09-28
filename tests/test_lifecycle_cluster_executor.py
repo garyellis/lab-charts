@@ -338,7 +338,6 @@ def _hooked_plan() -> LifecyclePlan:
 
 
 def test_install_hooks_run_through_the_hooks_port_and_cleanups_are_skipped() -> None:
-    """preInstall/postInstall run in plan order; `chart test` never runs a cleanup."""
     calls: list[str] = []
 
     result = executor(calls).execute(_hooked_plan())

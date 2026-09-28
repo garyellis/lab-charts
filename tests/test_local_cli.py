@@ -780,13 +780,7 @@ def test_chart_test_output_without_dry_run_is_a_usage_error(
 def test_chart_test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    """A real compile through the real container: hooks are planned, never run.
-
-    Every hook is a stub that would create a marker file, so the marker's
-    absence proves the dry run executed none of them. The table shows each
-    hook's argv through `redact`; the JSON document carries it verbatim
-    under `command`.
-    """
+    """Dry run plans hooks but runs none; the table redacts argv, JSON keeps it."""
     (chart_root / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     config = chart_root / ".chart-manager" / "local-cluster.yaml"
     config.parent.mkdir()

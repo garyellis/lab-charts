@@ -719,12 +719,6 @@ def test_merged_fanout_plans_keep_one_reverse_install_order_cleanup_tail(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
-    """Two dependents of one hooked dependency merge into one cleanup tail.
-
-    Each compiled plan ends in its own cleanup tail, so a naive merge would
-    leave `a`'s and `dep`'s cleanups stranded mid-plan before `b` installs.
-    The shared dependency's hook actions are deduplicated like any other.
-    """
     script = chart_root / "scripts" / "hook"
     script.parent.mkdir()
     script.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -777,11 +771,6 @@ def test_ephemeral_runs_install_hooks_against_the_bound_cluster_and_never_cleanu
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
-    """A real compile and real hook subprocesses; only helm/kubectl are faked.
-
-    The hook runner is built after the clients are bound, so each hook sees
-    the resolved kube context and cluster name. `chart test` skips cleanups.
-    """
     record = chart_root / "hook-record"
     script = chart_root / "scripts" / "hook"
     script.parent.mkdir()
@@ -849,8 +838,6 @@ def test_ephemeral_failed_pre_install_hook_fails_the_run_before_install(
 
 
 class _TeardownProvider:
-    """A kind-like provider that appends its lifecycle calls to the hook record."""
-
     def __init__(self, record: Path, *, exists: bool = True, fail_destroy: bool = False) -> None:
         self.record = record
         self.exists = exists
@@ -885,7 +872,7 @@ class _TeardownProvider:
 
 
 def _teardown_charts(chart_root: Path, make_chart: MakeChart, *, fail: str = "") -> Path:
-    """`app` requires `base`; each has a recording cleanup (exit 3 for `fail`) and a preInstall."""
+    """`app` requires `base`; each has a preInstall and a recording cleanup."""
     record = chart_root / "hook-record"
     script = chart_root / "scripts" / "hook"
     script.parent.mkdir()
@@ -932,7 +919,6 @@ def _teardown_service(
 def test_teardown_runs_cleanups_in_reverse_install_order_then_deletes_the_cluster(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    """Only cleanups run -- the dependent's before its dependency's -- then delete."""
     record = _teardown_charts(chart_root, make_chart)
     service, calls = _teardown_service(chart_root, record)
 
@@ -993,7 +979,6 @@ def test_teardown_keep_cluster_runs_cleanups_without_deleting(
 def test_teardown_of_a_missing_cluster_still_runs_cleanups_and_creates_nothing(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    """External resources can still be released; there is no context to give."""
     record = _teardown_charts(chart_root, make_chart)
     events: list[Any] = []
     service, _calls = _teardown_service(chart_root, record, exists=False)

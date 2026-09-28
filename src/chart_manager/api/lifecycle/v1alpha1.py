@@ -84,12 +84,11 @@ class ClusterTestRef(ApiModel):
 
 
 class ClusterTestHooks(StrictApiModel):
-    """Optional argv commands (never shell strings) around one profile's install.
+    """Commands run around a profile's install, as argv lists (not shell strings).
 
-    `preInstall` runs before every install or upgrade, including a re-run of
-    `chart test` on an existing cluster, so it must be idempotent. `cleanup`
-    runs at `chart teardown`, best-effort: it must be idempotent, succeed when
-    nothing is left, and never be the only thing preventing a leak.
+    `preInstall` runs before every install or upgrade, so it must be idempotent.
+    `cleanup` runs best-effort at `chart teardown`; it must be idempotent and
+    succeed when nothing is left.
     """
 
     pre_install: list[str] | None = Field(default=None, alias="preInstall")

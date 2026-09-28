@@ -152,11 +152,6 @@ def test_requires_exact_managed_lifecycle_identity(
 
 
 def test_cleanup_tail_moves_cleanups_last_in_reverse_entry_order() -> None:
-    """Non-cleanup order is untouched; cleanups follow in reverse install order.
-
-    The order of the cleanups themselves in the input does not matter: an
-    entry's position is where any of its actions first appears.
-    """
     base_install = action("base", "install", ActionKind.HELM_UPGRADE_INSTALL)
     base_cleanup = action("base", "cleanup", ActionKind.HOOK_CLEANUP)
     app_install = action("app", "install", ActionKind.HELM_UPGRADE_INSTALL)

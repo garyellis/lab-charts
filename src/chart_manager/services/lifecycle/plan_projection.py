@@ -30,12 +30,9 @@ class ExternallySatisfiedLifecycle:
 
 
 def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:
-    """Move every hook-cleanup action to the end, in reverse install order.
+    """Move hook-cleanup actions to the end, in reverse install order.
 
-    An entry (chart/profile) is ordered by where any of its actions first
-    appears, so a dependent's cleanup runs before its dependency's. Every
-    other action keeps its relative order. Applied to one compiled plan and
-    again to a merged fanout, whose per-plan tails would otherwise interleave.
+    Dependents clean up before their dependencies; other actions keep their order.
     """
     ordered = tuple(actions)
     first_seen: dict[tuple[str, str | None], int] = {}

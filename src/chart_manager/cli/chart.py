@@ -9,9 +9,8 @@ file under `cli/`.
 
 `list` and `show` are pure reads: both hand a wire document from
 `services/chart_catalog_wire.py` to `output.emit` and build their own table
-projection beside it. `test` and `teardown` touch a cluster but own none of
-that -- `EphemeralTestCluster` compiles and runs the plan, and this module
-chooses between printing the plan and running it.
+projection beside it. `test` and `teardown` touch a cluster; `EphemeralTestCluster`
+compiles and runs the plan, and this module prints or runs it.
 """
 
 from __future__ import annotations
@@ -370,9 +369,7 @@ def chart_teardown(
         typer.Option("--dry-run", help="Print the cleanup hooks and exit; run nothing."),
     ] = False,
 ) -> None:
-    """Run each profile's cleanup hooks in reverse install order,
-    then delete the test cluster (unless --keep-cluster).
-    """
+    """Run cleanup hooks in reverse install order, then delete the test cluster."""
     if (chart_argument is None) == (chart is None):
         raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
     selected = chart_argument if chart_argument is not None else chart

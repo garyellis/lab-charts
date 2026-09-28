@@ -114,8 +114,7 @@ class LocalBootstrapExecutor:
             for entry in plan:
                 chart = catalog.get(entry.chart)
                 profile = require_cluster_test_profile(chart.spec, entry.profile)
-                # Bootstrap converges outside the compiled plan, so a hook
-                # would be dropped silently; refuse it instead.
+                # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
                 if profile.hooks is not None:
                     raise SpecError(
                         f"bootstrap chart {entry.chart}:{entry.profile} declares "

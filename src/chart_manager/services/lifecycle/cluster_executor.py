@@ -28,7 +28,7 @@ from chart_manager.services.progress import (
 
 ActionVerdict = Literal["PASS", "FAIL", "SKIP"]
 
-#: The skip reason every hook-cleanup action gets: this executor never runs one.
+#: Cleanup actions are skipped here; they run at teardown.
 CLEANUP_SKIP_REASON = "DeferredToTeardown"
 
 _HOOK_ACTIONS = frozenset(
@@ -143,7 +143,7 @@ class ClusterExecutionResult:
 
     @property
     def ok(self) -> bool:
-        """Whether no planned action failed; a skipped cleanup is not a failure."""
+        """Whether no planned action failed."""
 
         return all(outcome.verdict != "FAIL" for outcome in self.outcomes)
 
@@ -188,7 +188,7 @@ class ClusterActionExecutor:
             raise ClusterPlanError(f"unsupported cluster action kind(s): {kinds}")
         if self.hooks is None and any(action.kind in _HOOK_ACTIONS for action in plan.actions):
             raise ClusterPlanError("cluster plan contains hook actions but no hooks port")
-        # False sorts before True: sorted means every cleanup follows the body.
+        # Sorted (False < True) means the cleanups form the tail.
         is_cleanup = [action.kind is ActionKind.HOOK_CLEANUP for action in plan.actions]
         if is_cleanup != sorted(is_cleanup):
             raise ClusterPlanError("hook-cleanup actions must form a contiguous tail of the plan")
@@ -224,7 +224,7 @@ class ClusterActionExecutor:
         return ClusterExecutionResult(tuple(outcomes))
 
     def execute_cleanups(self, plan: LifecyclePlan) -> ClusterExecutionResult:
-        """Run a cleanup-only plan, continuing past failures (teardown's mode)."""
+        """Run a cleanup-only plan, continuing past failures."""
 
         if self.hooks is None:
             raise ClusterPlanError("cleanup plan requires a hooks port")

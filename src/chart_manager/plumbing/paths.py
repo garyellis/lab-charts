@@ -67,11 +67,8 @@ def validate_hook_executable(
 ) -> Path | None:
     """Validate a hook's argv[0]; return the repository file it names, if any.
 
-    An executable spelled with a separator is a repository-relative path: it
-    must pass `relative_path`, stay inside `root` once symlinks resolve, and
-    name an existing file. A bare name is a PATH command and returns None;
-    it is looked up only when `require_on_path` is set, because the local
-    cluster's provisioning hooks have always left that to run time.
+    A path must be an existing file inside `root`. A bare name is a PATH
+    command: None, checked on PATH only when `require_on_path` is set.
     """
     if "/" not in executable and "\\" not in executable:
         if require_on_path and shutil.which(executable) is None:
@@ -79,9 +76,7 @@ def validate_hook_executable(
         return None
     try:
         authored_path = executable.replace("\\", "/")
-        # Hook examples conventionally use `./script`; accept that explicit
-        # execution spelling while applying the repository path validator to
-        # the path it identifies.
+        # Accept the conventional `./script` spelling.
         if authored_path.startswith("./"):
             authored_path = authored_path[2:]
         relative = relative_path(authored_path, field=field)

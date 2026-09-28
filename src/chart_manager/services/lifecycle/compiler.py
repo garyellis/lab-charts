@@ -63,11 +63,8 @@ class ClusterTestCompiler:
         intentionally remain outside chart-authored intent and therefore
         outside this chart plan.
 
-        A profile's hooks wrap its own install: preInstall immediately before
-        Helm installs, postInstall once workloads are ready and before Helm
-        tests. Cleanups are always compiled -- whether they run is the
-        executor's decision -- and sit at the plan tail in reverse install
-        order, so a dependent is cleaned before its dependency.
+        preInstall precedes the Helm install and postInstall the Helm tests.
+        Cleanups go at the plan tail in reverse install order.
         """
         install_plan = self.resolver.install_plan(chart, profile)
         actions: list[LifecycleAction] = []
@@ -210,11 +207,7 @@ class ClusterTestCompiler:
         timeout: str,
         field: str,
     ) -> LifecycleAction:
-        """Compile one declared hook, validating its executable up front.
-
-        A repository script is part of the digest, so editing it makes the
-        compiled action stale exactly like editing a values file does.
-        """
+        """Compile one hook; a repository script is digested like a values file."""
         script = validate_hook_executable(
             self.root,
             command[0],
@@ -278,7 +271,7 @@ def _input_digest(
         digest.update(b"=")
         digest.update(value.encode())
         digest.update(b"\0")
-    # Only hook actions carry a command, so every other digest is unchanged.
+    # Empty for non-hook actions, so their digests are unchanged.
     for arg in command:
         digest.update(b"argv=")
         digest.update(arg.encode())

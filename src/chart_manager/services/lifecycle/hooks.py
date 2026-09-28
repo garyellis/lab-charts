@@ -12,16 +12,12 @@ from chart_manager.services.lifecycle.models import LifecycleAction
 
 _LOG = logging.getLogger(__name__)
 
-#: How much of a failed hook's stderr its error carries.
+#: Stderr lines kept in a failed hook's error.
 _STDERR_TAIL_LINES = 20
 
 
 class ClusterTestHookRunner:
-    """Run one hook action's argv from the repository root, bound to one cluster.
-
-    Built per run, once the cluster clients are bound, because every hook is
-    told which kube context and cluster it runs against.
-    """
+    """Run hook actions from the repository root against one cluster."""
 
     def __init__(
         self,
@@ -84,7 +80,6 @@ class ClusterTestHookRunner:
 
 
 def _tail(stderr: str) -> str:
-    """The last stderr lines as a message suffix; the script owns what it prints."""
     lines = stderr.strip().splitlines()[-_STDERR_TAIL_LINES:]
     return "".join(f"\n{line}" for line in lines)
 

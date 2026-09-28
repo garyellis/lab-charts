@@ -49,7 +49,7 @@ class LifecycleAction:
     values: tuple[Path, ...] = ()
     timeout: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
-    #: The authored argv of a hook action; empty for every other kind.
+    #: A hook action's argv; empty otherwise.
     command: tuple[str, ...] = ()
 
 

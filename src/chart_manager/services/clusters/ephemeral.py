@@ -101,7 +101,7 @@ class EphemeralTestResult:
 
 @dataclass(frozen=True)
 class EphemeralTeardownRequest:
-    """One `chart teardown`: the plan `chart test` would compile, and the cluster."""
+    """One `chart teardown` request."""
 
     chart: str
     profile: str = DEFAULT_PROFILE
@@ -113,7 +113,7 @@ class EphemeralTeardownRequest:
 
 @dataclass(frozen=True)
 class EphemeralTeardownResult:
-    """Every cleanup's outcome, and whether the cluster was deleted."""
+    """Cleanup outcomes and whether the cluster was deleted."""
 
     chart: str
     profile: str
@@ -351,8 +351,7 @@ class EphemeralTestClusterService:
 
         self._execute_lifecycle_plan(
             plan=plan,
-            # Per run, like the bootstrap executor: hooks are told the
-            # context the clients were just bound to.
+            # Built per run: hooks need the freshly bound kube context.
             hooks=ClusterTestHookRunner(
                 self.root,
                 runner=self._command_runner,
@@ -386,7 +385,7 @@ class EphemeralTestClusterService:
         )
 
     def teardown_plan(self, request: EphemeralTeardownRequest) -> LifecyclePlan:
-        """The cleanup tail of the plan `chart test` would run, touching nothing."""
+        """The cleanup actions `chart teardown` would run; touches nothing."""
         _cluster, plan = self._load_teardown_plan(request)
         return plan
 
@@ -407,10 +406,7 @@ class EphemeralTestClusterService:
         return local_cluster, replace(plan, actions=cleanups)
 
     def teardown(self, request: EphemeralTeardownRequest) -> EphemeralTeardownResult:
-        """Run every cleanup hook, then delete the cluster unless kept; never create it.
-
-        Continues past failures: the result carries each outcome and any delete error.
-        """
+        """Run every cleanup hook, then delete the cluster unless kept; never create it."""
         local_cluster, plan = self._load_teardown_plan(request)
         name = request.cluster_name
         _LOG.info(
@@ -572,8 +568,7 @@ def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
     Action IDs include the profile, so the same release under different
     profiles is intentionally converged and tested once per profile. Identical
     chart/profile actions shared by multiple dependent plans are deduplicated
-    while retaining first-authored plan order; hook cleanups are then
-    regathered into one reverse-install-order tail.
+    while retaining first-authored plan order; cleanups then form one tail.
     """
 
     if not plans:

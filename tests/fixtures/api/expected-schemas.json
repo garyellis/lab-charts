@@ -54,7 +54,7 @@
       },
       "ClusterTestHooks": {
         "additionalProperties": false,
-        "description": "Optional argv commands (never shell strings) around one profile's install.\n\n`preInstall` runs before every install or upgrade, including a re-run of\n`chart test` on an existing cluster, so it must be idempotent. `cleanup`\nruns at `chart teardown`, best-effort: it must be idempotent, succeed when\nnothing is left, and never be the only thing preventing a leak.",
+        "description": "Commands run around a profile's install, as argv lists (not shell strings).\n\n`preInstall` runs before every install or upgrade, so it must be idempotent.\n`cleanup` runs best-effort at `chart teardown`; it must be idempotent and\nsucceed when nothing is left.",
         "properties": {
           "cleanup": {
             "anyOf": [

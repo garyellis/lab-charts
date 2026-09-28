@@ -289,7 +289,6 @@ def test_compile_accepts_a_valid_requires_graph(
 
 
 def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
-    """Write a stub hook script under the repo root and return its argv[0]."""
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
@@ -298,7 +297,6 @@ def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
 
 
 def _hooks(root: Path, chart: str, *phases: str) -> dict[str, object]:
-    """Declare one repo-relative stub script per requested hook phase."""
     return {
         "hooks": {
             phase: [_script(root, f"scripts/{chart}-{phase}"), chart]
@@ -318,11 +316,6 @@ def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
-    """preInstall precedes install, postInstall follows readiness, cleanup is last.
-
-    Cleanups sit at the plan tail in reverse install order so a dependent's
-    cleanup runs before the cleanup of the dependency it was installed onto.
-    """
     make_chart("base", profiles={"minimal": _hooks(chart_root, "base", *_ALL_PHASES)})
     make_chart(
         "app",

@@ -102,7 +102,6 @@ def _action(action: LifecycleAction) -> dict[str, Any]:
         "values": [path.as_posix() for path in action.values],
         "timeout": action.timeout,
         "metadata": dict(action.metadata),
-        # A hook's argv, verbatim; an empty list for every non-hook action.
         "command": list(action.command),
     }
 
