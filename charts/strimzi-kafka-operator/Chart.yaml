@@ -3,7 +3,7 @@ apiVersion: v2
 name: strimzi-kafka-operator
 description: Strimzi Kafka Operator vendor/deployment chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "1.0.1"
 dependencies:
   - name: strimzi-kafka-operator

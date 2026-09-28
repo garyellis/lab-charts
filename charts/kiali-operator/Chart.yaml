@@ -3,7 +3,7 @@ apiVersion: v2
 name: kiali-operator
 description: kiali operator vendor/deployment chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "v2.28.0"
 dependencies:
   - name: kiali-operator
