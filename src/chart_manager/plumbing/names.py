@@ -2,7 +2,7 @@
 
 `dns_label` is a pure `str -> str` rule with no knowledge of charts, clusters
 or the repository, which is why it lives here rather than in either of the two
-layers that use it.  `chart_manager.api.local.v1alpha1` applies it to authored
+layers that use it. `chart_manager.api.v1alpha1` applies it to authored
 fields (`metadata.name`, `release.name`, `release.namespace`, ...) and
 `chart_manager.domain.local_resources` applies the same rule to a stack name
 typed on the command line and to a name read out of `Chart.yaml`.  Keeping one

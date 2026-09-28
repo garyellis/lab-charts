@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from chart_manager.api.lifecycle.v1alpha1 import (
+from chart_manager.api.v1alpha1.chart_lifecycle import (
     ALL_ENVIRONMENTS,
     MATCH_BY_BASENAME,
     ManifestValidationSpec,

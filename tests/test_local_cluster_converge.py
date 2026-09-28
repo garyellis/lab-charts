@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
-from chart_manager.api.local.v1alpha1 import LifecycleRelease, RepoChartRelease
+from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, ClusterTestSpec
+from chart_manager.api.v1alpha1.releases import LifecycleRelease, RepoChartRelease
 from chart_manager.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -163,7 +163,7 @@ def _repository(tmp_path: Path) -> None:
     )
     (grafana / "chart-lifecycle.yaml").write_text(
         (
-            "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+            "apiVersion: chartmanager.io/v1alpha1\n"
             "kind: ChartLifecycle\n"
             "metadata: {name: grafana}\n"
             "spec:\n"
@@ -179,7 +179,7 @@ def _repository(tmp_path: Path) -> None:
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
@@ -415,7 +415,7 @@ def test_target_preflight_excludes_bootstrap_owned_transitive_chart(
         )
         (chart / "chart-lifecycle.yaml").write_text(
             (
-                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+                "apiVersion: chartmanager.io/v1alpha1\n"
                 "kind: ChartLifecycle\n"
                 f"metadata: {{name: {name}}}\n"
                 "spec:\n"

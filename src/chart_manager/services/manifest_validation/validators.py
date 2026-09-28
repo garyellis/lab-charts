@@ -13,7 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.services.manifest_validation.models import PhaseResult
 

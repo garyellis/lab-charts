@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.api.local.v1alpha1 import (
+from chart_manager.api.v1alpha1.releases import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
@@ -45,7 +45,7 @@ def _chart(root: Path, relative: str, *, name: str = "demo", lifecycle: bool = T
             root,
             f"{relative}/chart-lifecycle.yaml",
             f"""
-apiVersion: lifecycle.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {{name: {name}}}
 spec:
@@ -76,7 +76,7 @@ def test_conventional_local_cluster_loads_ordered_bootstrap_releases(tmp_path: P
         tmp_path,
         ".chart-manager/local-cluster.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: local}
 spec:
@@ -146,7 +146,7 @@ def test_stack_accepts_lifecycle_oci_and_https_repo_releases(tmp_path: Path) -> 
         tmp_path,
         "stack.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {name: observability}
 spec:
@@ -215,7 +215,7 @@ def test_bootstrap_runtime_and_readiness_are_strict(
         tmp_path,
         ".chart-manager/local-cluster.yaml",
         f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {{name: local}}
 spec:
@@ -239,7 +239,7 @@ def test_stack_rejects_bootstrap_only_contracts(tmp_path: Path, field: str) -> N
         tmp_path,
         "stack.yaml",
         f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {{name: demo}}
 spec:
@@ -277,7 +277,7 @@ def test_oci_release_requires_one_exact_pin(tmp_path: Path, pin: str) -> None:
         tmp_path,
         "bad.yaml",
         f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {{name: bad}}
 spec:
@@ -315,7 +315,7 @@ def test_repo_release_requires_https_bare_chart_and_exact_version(
         tmp_path,
         "bad.yaml",
         f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {{name: bad}}
 spec:
@@ -340,7 +340,7 @@ def test_raw_release_requires_explicit_helm_settings_and_safe_paths(tmp_path: Pa
         tmp_path,
         "bad.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {name: bad}
 spec:
@@ -365,7 +365,7 @@ def test_resolver_distinguishes_chart_named_stack_and_explicit_stack(tmp_path: P
         tmp_path,
         ".chart-manager/stacks/observability.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {name: observability}
 spec:
@@ -400,7 +400,7 @@ def test_loader_rejects_missing_and_symlink_escaped_repository_paths(tmp_path: P
         tmp_path,
         ".chart-manager/local-cluster.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: local}
 spec:
@@ -419,7 +419,7 @@ def test_custom_config_and_stack_directories_are_supported(tmp_path: Path) -> No
         tmp_path,
         "config/compositions/demo.yaml",
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata: {name: demo}
 spec:

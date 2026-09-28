@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from chart_manager.api.local.v1alpha1 import LocalCluster
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
@@ -19,7 +19,7 @@ from chart_manager.services.lifecycle.plan_projection import ExternallySatisfied
 def _cluster(releases: list[dict[str, object]]) -> LocalCluster:
     return LocalCluster.model_validate(
         {
-            "apiVersion": "local.chartmanager.io/v1alpha1",
+            "apiVersion": "chartmanager.io/v1alpha1",
             "kind": "LocalCluster",
             "metadata": {"name": "default"},
             "spec": {
@@ -253,7 +253,7 @@ def test_verify_lifecycle_checks_transitive_releases_and_profile_readiness(
         )
         (chart / "chart-lifecycle.yaml").write_text(
             (
-                "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+                "apiVersion: chartmanager.io/v1alpha1\n"
                 "kind: ChartLifecycle\n"
                 f"metadata: {{name: {name}}}\n"
                 "spec:\n"
@@ -389,7 +389,7 @@ def test_preflight_resolves_bootstrap_lifecycle_identities(tmp_path: Path) -> No
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -442,7 +442,7 @@ def test_preflight_rejects_a_lifecycle_profile_that_declares_no_namespace(
         encoding="utf-8",
     )
     (chart / "chart-lifecycle.yaml").write_text(
-        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+        "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: ChartLifecycle\n"
         "metadata: {name: network}\n"
         "spec:\n"
@@ -477,7 +477,7 @@ def test_a_lifecycle_release_pointing_at_a_foreign_chart_is_rejected(
             encoding="utf-8",
         )
     (other / "chart-lifecycle.yaml").write_text(
-        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+        "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: ChartLifecycle\n"
         "metadata: {name: other}\n"
         "spec:\n"
@@ -504,7 +504,7 @@ def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -539,7 +539,7 @@ def test_preflight_resolves_every_release_before_linting_any(
     )
     (chart / "chart-lifecycle.yaml").write_text(
         """
-apiVersion: lifecycle.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
@@ -577,7 +577,7 @@ def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(
         encoding="utf-8",
     )
     (chart / "chart-lifecycle.yaml").write_text(
-        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+        "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: ChartLifecycle\n"
         "metadata: {name: network}\n"
         "spec:\n"

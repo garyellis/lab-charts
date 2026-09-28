@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from chart_manager.api.local.v1alpha1 import LocalCluster
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.local_resources import LocalResourceLoader

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import yaml
 
-from chart_manager.api.lifecycle.v1alpha1 import LIFECYCLE_API_VERSION, LIFECYCLE_KIND
+from chart_manager.api.v1alpha1.chart_lifecycle import CHART_LIFECYCLE_KIND
+from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
@@ -47,8 +48,8 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
         config_path = chart_dir / LIFECYCLE_FILENAME
         document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert list(document) == ["apiVersion", "kind", "metadata", "spec"], chart_dir.name
-        assert document["apiVersion"] == LIFECYCLE_API_VERSION, chart_dir.name
-        assert document["kind"] == LIFECYCLE_KIND, chart_dir.name
+        assert document["apiVersion"] == API_VERSION, chart_dir.name
+        assert document["kind"] == CHART_LIFECYCLE_KIND, chart_dir.name
         assert document["metadata"] == {"name": chart_dir.name}, chart_dir.name
         assert list(document["spec"]) == [
             "enabled",

@@ -15,9 +15,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.api.local.v1alpha1 import (
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
+from chart_manager.api.v1alpha1.releases import (
     LifecycleRelease,
-    LocalCluster,
     OciChartRelease,
     RepoChartRelease,
 )

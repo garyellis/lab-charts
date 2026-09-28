@@ -1,7 +1,7 @@
 """Authored, versioned configuration contracts for chart-manager.
 
 Every YAML document a user writes is described by exactly one module under
-``chart_manager.api.<group>.v1alpha1``.  Reviewing a group's version module
+``chart_manager.api.v1alpha1``. Reviewing a kind module
 shows the complete accepted shape -- field names, aliases, defaults, enums,
 and the validation that can be decided from a single document -- without
 reading loaders, filesystem resolution, planning, or CLI code.
@@ -15,7 +15,7 @@ into a user-facing diagnostic is the loader's job.
 
 Consumers import the explicit version::
 
-    from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
+    from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 
 There are deliberately no versionless re-exports, so a future ``v1beta1``
 cannot silently change what an existing consumer parses.

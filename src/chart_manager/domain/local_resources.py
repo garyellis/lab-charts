@@ -1,7 +1,7 @@
 """Load repository-local authored resources and resolve them against the tree.
 
 The accepted shape of ``LocalCluster`` and ``LocalStack`` is owned by
-``chart_manager.api.local.v1alpha1``.  What is left here is everything that
+``chart_manager.api.v1alpha1``. What is left here is everything that
 needs more than a single document: reading the YAML and translating decode
 failures into ``SpecError``, keeping every referenced path inside the
 repository root, checking that charts, ``Chart.yaml`` files and values files
@@ -20,12 +20,12 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from chart_manager.api.local.v1alpha1 import (
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
+from chart_manager.api.v1alpha1.local_stack import LocalStack
+from chart_manager.api.v1alpha1.releases import (
     BootstrapRelease,
     LifecycleRelease,
     LocalChartRelease,
-    LocalCluster,
-    LocalStack,
     OciChartRelease,
     RepoChartRelease,
     StackRelease,

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from chart_manager.api.local.v1alpha1 import LifecycleRelease, LocalChartRelease
+from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.domain.local_resources import load_local_cluster

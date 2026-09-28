@@ -1,7 +1,7 @@
 """Loading and capability policy for authored ``ChartLifecycle`` intent.
 
 ``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  Its
-accepted shape is owned by ``chart_manager.api.lifecycle.v1alpha1``; this
+accepted shape is owned by ``chart_manager.api.v1alpha1.chart_lifecycle``; this
 module owns everything decided *about* that shape -- where the file lives,
 how a decode failure becomes a ``SpecError``, whether an authored capability
 is usable, and which profile a name selects.  Catalogs compose the document
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from chart_manager.api.lifecycle.v1alpha1 import (
+from chart_manager.api.v1alpha1.chart_lifecycle import (
     ChartLifecycle,
     ClusterTestProfile,
     ClusterTestSpec,

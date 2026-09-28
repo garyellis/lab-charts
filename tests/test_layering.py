@@ -108,7 +108,7 @@ _FORBIDDEN_ROOTS = ("rich", "typer")
 
 # Chart concepts are domain policy, not generic plumbing.
 # `graph.py` and `spec.py` no longer exist anywhere -- their contents split
-# across `api/lifecycle/v1alpha1.py`, `domain/lifecycle_policy.py` and
+# across `api/v1alpha1/chart_lifecycle.py`, `domain/lifecycle_policy.py` and
 # `manifest_validation/namespaces.py`. They stay on this ban list regardless:
 # it names spellings that may not appear under `plumbing/`, and a future
 # `plumbing/spec.py` would be exactly the violation it always was.
@@ -125,7 +125,7 @@ _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
 
 
 def _package_of(path: Path) -> str:
-    """The dotted package a module file lives in, e.g. `chart_manager.api.local`."""
+    """The dotted package a module file lives in, e.g. `chart_manager.api.v1alpha1`."""
     return ".".join(path.relative_to(_SRC).parent.parts)
 
 
@@ -136,7 +136,7 @@ def _imports_in(source: str, label: str, package: str = "") -> list[tuple[int, s
     slipped past by spelling the escape `from ...services import x`.
 
     Parsing rather than text-matching matters here: `plumbing/names.py` names
-    `chart_manager.api.local.v1alpha1` in its docstring precisely to explain
+    `chart_manager.api.v1alpha1` in its docstring precisely to explain
     why the rule lives in plumbing, and a `grep` would call that a violation.
     """
     found: list[tuple[int, str]] = []
@@ -179,7 +179,7 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
 
     # `lifecycle_policy.py` is here because the capability gate and the profile
     # lookup were split out of the authored models when they moved to
-    # `api/lifecycle/v1alpha1.py`: the shape is a contract, deciding whether a
+    # `api/v1alpha1/chart_lifecycle.py`: shape is a contract; deciding whether a
     # capability is usable and phrasing the failure is policy. It must not
     # drift back -- and it must not drift *up* into `services/` either, which
     # is where `require_validation` and `require_cluster_test` used to sit
@@ -216,8 +216,8 @@ def test_validation_domain_modules_stay_out_of_plumbing() -> None:
     )
 
     # `namespaces.py` holds `resolve_namespace`, split out of the authored
-    # validation spec when that moved to `api/lifecycle/v1alpha1.py`. It is a
-    # leaf on purpose: putting it on the compiler would make `planner.py`
+    # validation spec when that moved to `api/v1alpha1/chart_lifecycle.py`.
+    # It is a leaf on purpose: putting it on the compiler would make `planner.py`
     # drag in the helm/kubeconform/kyverno adapters.
     validation_domain = _SERVICES / "manifest_validation"
     expected = {"models.py", "namespaces.py", "paths.py"}
@@ -743,8 +743,9 @@ def test_the_settings_rule_fires_on_a_direct_construction() -> None:
 #: versionless re-exports, so a future `v1beta1` cannot silently change what
 #: an existing consumer parses -- which makes these the canonical spellings.
 _API_ROOT_MODELS = {
-    "chart_manager.api.lifecycle.v1alpha1": ("ChartLifecycle",),
-    "chart_manager.api.local.v1alpha1": ("LocalCluster", "LocalStack"),
+    "chart_manager.api.v1alpha1.chart_lifecycle": ("ChartLifecycle",),
+    "chart_manager.api.v1alpha1.local_cluster": ("LocalCluster",),
+    "chart_manager.api.v1alpha1.local_stack": ("LocalStack",),
 }
 
 #: Layers `api/` may not reach for, each with the reason it is out of bounds.
@@ -813,8 +814,8 @@ def test_api_modules_exist_and_expose_their_root_models() -> None:
         missing = [name for name in models if not hasattr(module, name)]
         assert not missing, f"{dotted} no longer defines {', '.join(missing)}"
 
-    # D6: the version is part of the import path. A versionless re-export
-    # would let `from chart_manager.api.local import LocalCluster` keep
+    # The version is part of the import path. A package re-export
+    # would let `from chart_manager.api.v1alpha1 import LocalCluster` keep
     # working across a version bump while quietly parsing something else.
     for dotted, models in _API_ROOT_MODELS.items():
         group = importlib.import_module(dotted.rsplit(".", 1)[0])
@@ -824,6 +825,20 @@ def test_api_modules_exist_and_expose_their_root_models() -> None:
             f"version instead ({dotted}) so a future version cannot change what "
             "an existing consumer parses."
         )
+
+
+def test_api_kind_modules_do_not_import_each_other() -> None:
+    """Kinds share common vocabulary, not other root contracts."""
+    kinds = frozenset(_API_ROOT_MODELS)
+    offenders: list[str] = []
+    for dotted in sorted(kinds):
+        path = _SRC.joinpath(*dotted.split(".")).with_suffix(".py")
+        for lineno, imported in _imports_in(
+            path.read_text(encoding="utf-8"), str(path.relative_to(_SRC)), dotted.rsplit(".", 1)[0]
+        ):
+            if imported in kinds - {dotted}:
+                offenders.append(f"{dotted}:{lineno} imports {imported}")
+    assert not offenders, "kind modules must not import each other:\n  " + "\n  ".join(offenders)
 
 
 def test_api_imports_only_stdlib_pydantic_and_pure_helpers() -> None:
@@ -885,7 +900,7 @@ def test_importing_the_api_loads_no_surface_service_or_adapter() -> None:
 def test_plumbing_does_not_import_the_configuration_api() -> None:
     """`api/` imports plumbing, so the reverse edge is a cycle.
 
-    `api/local/v1alpha1.py` calls `plumbing.names.dns_label` and
+    `api/v1alpha1/common.py` calls `plumbing.names.dns_label` and
     `plumbing.paths.relative_path`. That direction is deliberate and is what
     keeps one definition of a DNS label for authored fields and for the stack
     name typed on the command line. Plumbing reaching back for an API type
@@ -1043,7 +1058,7 @@ def test_authored_resource_envelopes_live_under_the_api_package() -> None:
     ]
 
     assert not offenders, (
-        "authored resource envelopes belong in chart_manager/api/<group>/<version>.py:\n"
+        "authored resource envelopes belong in chart_manager/api/<version>/<kind>.py:\n"
         + "\n".join(offenders)
         + "\n\nMove the model into the version module and import it from there. "
         "If it is a wire projection rather than authored YAML, add it to "
@@ -1071,7 +1086,7 @@ _API_LEAKS = {
 _API_ALLOWED_SOURCES = {
     "the-standard-library": "import re\nfrom pathlib import Path",
     "pydantic": "from pydantic import Field, field_validator",
-    "the-shared-base": "from chart_manager.api.base import StrictApiModel",
+    "the-shared-base": "from chart_manager.api.v1alpha1.common import StrictApiModel",
     "a-pure-lexical-rule": "from chart_manager.plumbing.names import dns_label",
     "a-pure-path-rule": "from chart_manager.plumbing.paths import ensure_relative",
 }
@@ -1084,7 +1099,7 @@ def test_the_api_import_rule_fires_on_each_synthetic_leak() -> None:
         for name, source in _API_LEAKS.items()
         if not [
             module
-            for _, module in _imports_in(source, name, "chart_manager.api.lifecycle")
+            for _, module in _imports_in(source, name, "chart_manager.api.v1alpha1")
             if _api_import_verdict(module) is not None
         ]
     ]
@@ -1096,7 +1111,7 @@ def test_the_api_import_rule_stays_quiet_on_what_a_contract_legitimately_needs()
     noisy = {
         name: [
             f"{module}: {verdict}"
-            for _, module in _imports_in(source, name, "chart_manager.api.lifecycle")
+            for _, module in _imports_in(source, name, "chart_manager.api.v1alpha1")
             if (verdict := _api_import_verdict(module)) is not None
         ]
         for name, source in _API_ALLOWED_SOURCES.items()
@@ -1108,7 +1123,7 @@ def test_the_api_import_rule_stays_quiet_on_what_a_contract_legitimately_needs()
 _ENVELOPE_LEAKS = {
     "a-new-authored-resource-next-to-its-loader": (
         "class LocalRegistry(StrictApiModel):\n"
-        '    api_version: Literal["local.chartmanager.io/v1alpha1"] = Field(alias="apiVersion")\n'
+        '    api_version: Literal["chartmanager.io/v1alpha1"] = Field(alias="apiVersion")\n'
         '    kind: Literal["LocalRegistry"]\n'
     ),
     "the-same-thing-spelled-without-an-alias": (

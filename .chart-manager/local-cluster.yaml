@@ -1,4 +1,4 @@
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata:
   name: default

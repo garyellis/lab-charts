@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.api.local.v1alpha1 import LocalCluster
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.cli._options import provision_hooks_enabled
 from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
@@ -21,7 +21,7 @@ from .conftest import FakeCommandRunner
 
 def _document(hooks: str) -> str:
     return f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {{name: default}}
 spec:

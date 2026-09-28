@@ -28,10 +28,9 @@ import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from chart_manager.api.lifecycle.v1alpha1 import (
+from chart_manager.api.v1alpha1.chart_lifecycle import (
     ALL_ENVIRONMENTS,
-    LIFECYCLE_API_VERSION,
-    LIFECYCLE_KIND,
+    CHART_LIFECYCLE_KIND,
     MATCH_BY_BASENAME,
     ChartLifecycle,
     ChartLifecycleMetadata,
@@ -43,21 +42,21 @@ from chart_manager.api.lifecycle.v1alpha1 import (
     ManifestValidationSpec,
     ManifestValidationValidatorsSpec,
 )
-from chart_manager.api.local.v1alpha1 import (
-    LOCAL_API_VERSION,
+from chart_manager.api.v1alpha1.common import API_VERSION, ResourceMetadata
+from chart_manager.api.v1alpha1.local_cluster import (
     LOCAL_CLUSTER_KIND,
-    LOCAL_STACK_KIND,
+    LocalBootstrap,
+    LocalCluster,
+)
+from chart_manager.api.v1alpha1.local_stack import LOCAL_STACK_KIND, LocalStack
+from chart_manager.api.v1alpha1.releases import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
     BootstrapRepoChartRelease,
     LifecycleRelease,
-    LocalBootstrap,
-    LocalCluster,
-    LocalStack,
     OciChartRelease,
     RepoChartRelease,
-    ResourceMetadata,
 )
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 from chart_manager.domain.local_resources import DEFAULT_STACKS_DIR
@@ -139,12 +138,11 @@ def _assert_authored_subset(authored: Any, dumped: Any, where: str = "$") -> Non
 
 def test_authored_api_constants_are_frozen() -> None:
     """Group/version/kind strings appear verbatim in every authored document."""
-    assert LIFECYCLE_API_VERSION == "lifecycle.chartmanager.io/v1alpha1"
-    assert LIFECYCLE_KIND == "ChartLifecycle"
+    assert API_VERSION == "chartmanager.io/v1alpha1"
+    assert CHART_LIFECYCLE_KIND == "ChartLifecycle"
     assert LIFECYCLE_FILENAME == "chart-lifecycle.yaml"
     assert MATCH_BY_BASENAME == "match-by-basename"
     assert ALL_ENVIRONMENTS == "all-environments"
-    assert LOCAL_API_VERSION == "local.chartmanager.io/v1alpha1"
     assert LOCAL_CLUSTER_KIND == "LocalCluster"
     assert LOCAL_STACK_KIND == "LocalStack"
 
@@ -185,15 +183,15 @@ def test_checked_in_documents_are_discoverable() -> None:
 def test_every_checked_in_chart_lifecycle_parses(path: Path) -> None:
     resource = ChartLifecycle.model_validate(_read_yaml(path))
 
-    assert resource.api_version == LIFECYCLE_API_VERSION
-    assert resource.kind == LIFECYCLE_KIND
+    assert resource.api_version == API_VERSION
+    assert resource.kind == CHART_LIFECYCLE_KIND
     assert ChartLifecycle.model_validate(resource.model_dump(by_alias=True)) == resource
 
 
 def test_repository_local_cluster_parses() -> None:
     resource = LocalCluster.model_validate(_read_yaml(LOCAL_CLUSTER_DOCUMENT))
 
-    assert resource.api_version == LOCAL_API_VERSION
+    assert resource.api_version == API_VERSION
     assert resource.kind == LOCAL_CLUSTER_KIND
     assert LocalCluster.model_validate(resource.model_dump(by_alias=True)) == resource
 
@@ -370,8 +368,8 @@ def test_chart_lifecycle_metadata_name_rules() -> None:
 
 def _lifecycle(spec: dict[str, Any], **envelope: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
-        "apiVersion": LIFECYCLE_API_VERSION,
-        "kind": LIFECYCLE_KIND,
+        "apiVersion": API_VERSION,
+        "kind": CHART_LIFECYCLE_KIND,
         "metadata": {"name": "demo"},
         "spec": spec,
     }
@@ -432,9 +430,14 @@ def _hooks(hooks: Any) -> dict[str, Any]:
             id="wrong-apiVersion",
         ),
         pytest.param(
+            _lifecycle({}, apiVersion="lifecycle.chartmanager.io/v1alpha1"),
+            "literal_error",
+            id="legacy-lifecycle-apiVersion",
+        ),
+        pytest.param(
             _lifecycle({}, apiVersion="local.chartmanager.io/v1alpha1"),
             "literal_error",
-            id="other-group-apiVersion",
+            id="legacy-local-apiVersion",
         ),
         pytest.param(
             _lifecycle({}, kind="Chart"),
@@ -611,7 +614,7 @@ def test_chart_lifecycle_rejections_stay_in_category(
 
 def _cluster(spec: dict[str, Any], **envelope: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
-        "apiVersion": LOCAL_API_VERSION,
+        "apiVersion": API_VERSION,
         "kind": LOCAL_CLUSTER_KIND,
         "metadata": {"name": "demo"},
         "spec": spec,
@@ -669,7 +672,12 @@ _DIGEST = "sha256:" + "0" * 64
         pytest.param(
             _cluster(_bootstrap(), apiVersion="lifecycle.chartmanager.io/v1alpha1"),
             "literal_error",
-            id="other-group-apiVersion",
+            id="legacy-lifecycle-apiVersion",
+        ),
+        pytest.param(
+            _cluster(_bootstrap(), apiVersion="local.chartmanager.io/v1alpha1"),
+            "literal_error",
+            id="legacy-local-apiVersion",
         ),
         pytest.param(
             _cluster(_bootstrap(), kind="LocalStack"),
@@ -878,7 +886,7 @@ def test_local_cluster_rejections_stay_in_category(
 
 def _stack(*releases: dict[str, Any], **envelope: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
-        "apiVersion": LOCAL_API_VERSION,
+        "apiVersion": API_VERSION,
         "kind": LOCAL_STACK_KIND,
         "metadata": {"name": "demo"},
         "spec": {"releases": list(releases)},
@@ -895,6 +903,16 @@ def _stack(*releases: dict[str, Any], **envelope: Any) -> dict[str, Any]:
             _stack({"type": "lifecycle", "chart": "charts/demo", "profile": "minimal"}, status={}),
             "extra_forbidden",
             id="unknown-envelope-field",
+        ),
+        pytest.param(
+            _stack(_oci(version="1.2.3"), apiVersion="lifecycle.chartmanager.io/v1alpha1"),
+            "literal_error",
+            id="legacy-lifecycle-apiVersion",
+        ),
+        pytest.param(
+            _stack(_oci(version="1.2.3"), apiVersion="local.chartmanager.io/v1alpha1"),
+            "literal_error",
+            id="legacy-local-apiVersion",
         ),
         pytest.param(
             _stack(_local()),

@@ -1,7 +1,7 @@
 """Resolve the namespace an authored validation environment renders into.
 
 The accepted shape of ``spec.validation`` is owned by
-``chart_manager.api.lifecycle.v1alpha1``; this is application interpretation
+``chart_manager.api.v1alpha1.chart_lifecycle``; this is application interpretation
 of a document that already parsed, so it raises ``SpecError`` rather than a
 Pydantic error.
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from string import Template
 
-from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.plumbing.errors import SpecError
 
 

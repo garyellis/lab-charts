@@ -11,13 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.api.local.v1alpha1 import (
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
+from chart_manager.api.v1alpha1.releases import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
     BootstrapOciChartRelease,
     BootstrapRelease,
     BootstrapRepoChartRelease,
-    LocalCluster,
 )
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import InstallPlanEntry

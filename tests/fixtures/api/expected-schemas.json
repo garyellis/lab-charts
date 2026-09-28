@@ -409,7 +409,7 @@
     "description": "Kubernetes-style lifecycle intent envelope for one Helm chart.",
     "properties": {
       "apiVersion": {
-        "const": "lifecycle.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
@@ -892,7 +892,7 @@
     "description": "Envelope for one authored local environment.\n\nRead from `.chart-manager/local-cluster.yaml` unless\n`CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.",
     "properties": {
       "apiVersion": {
-        "const": "local.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
@@ -1130,7 +1130,7 @@
     "description": "Envelope for a reusable application composition.\n\nResolved by name from the `stacks/` directory beside the LocalCluster file,\nor from an explicit path. Composition only -- no templating or ordering\nlanguage, which is what keeps it narrower than Helmfile.",
     "properties": {
       "apiVersion": {
-        "const": "local.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
