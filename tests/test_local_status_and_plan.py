@@ -27,6 +27,7 @@ from chart_manager.services.clusters.development import (
 )
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.expose import ExposeStatus
+from chart_manager.services.progress import ProgressEvent
 
 
 class _Helm:
@@ -411,3 +412,30 @@ def test_plan_down_names_the_cluster_and_installs_nothing(tmp_path: Path) -> Non
     assert plan.cluster_name == "chart-manager"
     assert plan.entries == ()
     assert plan.target is None
+
+
+def test_plan_target_warns_that_local_up_does_not_run_cluster_test_hooks(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _local_cluster(tmp_path)
+    chart = _chart(tmp_path, "grafana")
+    lifecycle = chart / "chart-lifecycle.yaml"
+    lifecycle.write_text(
+        lifecycle.read_text(encoding="utf-8")
+        + "        hooks: {preInstall: [./scripts/credential]}\n",
+        encoding="utf-8",
+    )
+    _chart(tmp_path, "loki")
+    events: list[ProgressEvent] = []
+    service = _service(tmp_path)
+    service._progress = events.append
+
+    with caplog.at_level("WARNING"):
+        for name in ("grafana", "loki"):
+            service.plan_target(
+                _target(tmp_path, name), profile="minimal", cluster_name="chart-manager"
+            )
+
+    expected = "local up does not run cluster-test hooks declared by grafana:minimal"
+    assert [event.message for event in events if event.severity == "warn"] == [expected]
+    assert [record.getMessage() for record in caplog.records] == [expected]

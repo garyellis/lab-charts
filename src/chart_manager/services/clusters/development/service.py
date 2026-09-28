@@ -666,6 +666,13 @@ class DevelopmentClusterService:
                         f"{entry.profile} in {effective_namespace}"
                     )
                 seen[chart_path] = identity
+                if entry_profile.hooks is not None:
+                    message = (
+                        "local up does not run cluster-test hooks declared by "
+                        f"{entry.chart}:{entry.profile}"
+                    )
+                    _LOG.warning("%s", message)
+                    self._progress(warn(message))
                 deduped.append(entry)
             steps.append(
                 _TargetLocalExecution(

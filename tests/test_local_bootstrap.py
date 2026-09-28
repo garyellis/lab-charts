@@ -434,3 +434,33 @@ spec:
     assert helm.lints == []
     assert helm.calls == []
     assert helm.dependencies == []
+
+
+def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap installs outside the compiled plan, so hooks would never run."""
+    chart = tmp_path / "charts/network"
+    chart.mkdir(parents=True)
+    (chart / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: network\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (chart / "chart-lifecycle.yaml").write_text(
+        "apiVersion: lifecycle.chartmanager.io/v1alpha1\n"
+        "kind: ChartLifecycle\n"
+        "metadata: {name: network}\n"
+        "spec:\n"
+        "  clusterTest:\n"
+        "    profiles:\n"
+        "      minimal:\n"
+        "        namespace: kube-system\n"
+        "        values: []\n"
+        "        hooks: {preInstall: [./scripts/credential]}\n",
+        encoding="utf-8",
+    )
+    cluster = _cluster([{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}])
+    executor, _, _ = _executor(tmp_path, helm=_Helm())
+
+    with pytest.raises(SpecError, match=r"bootstrap chart network:minimal declares cluster-test hooks"):
+        executor.preflight(cluster)

@@ -100,6 +100,7 @@ class ClusterTestCompiler:
                     target=target_coordinates,
                     prefix=prefix,
                     chart_path=cluster_chart.path,
+                    timeout=profile_spec.timeout,
                     field=(
                         f"{entry.chart}: spec.clusterTest.profiles."
                         f"{entry.profile}.hooks.{phase}[0]"
@@ -206,6 +207,7 @@ class ClusterTestCompiler:
         target: ActionTarget,
         prefix: tuple[str, ...],
         chart_path: Path,
+        timeout: str,
         field: str,
     ) -> LifecycleAction:
         """Compile one declared hook, validating its executable up front.
@@ -234,6 +236,7 @@ class ClusterTestCompiler:
                 script=script,
             ),
             chart_path=chart_path.resolve(),
+            timeout=timeout,
             command=command,
         )
 

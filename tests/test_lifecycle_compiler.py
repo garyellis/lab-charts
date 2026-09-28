@@ -353,6 +353,7 @@ def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
     assert pre.command == ("scripts/app-preInstall", "app")
     assert pre.values == ()
     assert pre.target.namespace == "default"
+    assert pre.timeout == "10m"  # the profile's timeout bounds its hooks too
     assert plan_to_dict(plan)["actions"][3]["command"] == ["scripts/base-preInstall", "base"]
 
 

@@ -764,3 +764,75 @@ def test_merged_fanout_plans_keep_one_reverse_install_order_cleanup_tail(
         "dep.minimal.hook-cleanup",
     ]
     assert [action.kind for action in merged.actions[-3:]] == [ActionKind.HOOK_CLEANUP] * 3
+
+
+def test_ephemeral_runs_install_hooks_against_the_bound_cluster_and_never_cleanup(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    """A real compile and real hook subprocesses; only helm/kubectl are faked.
+
+    The hook runner is built after the clients are bound, so each hook sees
+    the resolved kube context and cluster name. `chart test` skips cleanups.
+    """
+    record = chart_root / "hook-record"
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "$CHART_MANAGER_HOOK_PHASE $CHART_MANAGER_KUBE_CONTEXT '
+        f'$CHART_MANAGER_CLUSTER_NAME" >> {record}\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "apps",
+                "helmTest": False,
+                "hooks": {
+                    "preInstall": ["./scripts/hook"],
+                    "postInstall": ["./scripts/hook"],
+                    "cleanup": ["./scripts/hook"],
+                },
+            }
+        },
+    )
+    calls: list[str] = []
+    service, _kubectl = _migration_service(chart_root, calls=calls)
+
+    result = service.run(
+        EphemeralTestRequest(chart="app", cluster_name="lab", ensure_cluster=False)
+    )
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "pre-install kind-lab lab",
+        "post-install kind-lab lab",
+    ]
+    assert result.installed == ("app",)
+
+
+def test_ephemeral_failed_pre_install_hook_fails_the_run_before_install(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\necho 'no credential' >&2\nexit 3\n", encoding="utf-8")
+    script.chmod(0o755)
+    make_chart(
+        "app",
+        profiles={"minimal": {"hooks": {"preInstall": ["./scripts/hook"]}}},
+    )
+    calls: list[str] = []
+    service, _kubectl = _migration_service(chart_root, calls=calls)
+
+    with pytest.raises(
+        ChartManagerError,
+        match=r"cluster action failed for app \(hook-pre-install\): "
+        r"pre-install hook exited 3: ./scripts/hook\nno credential",
+    ):
+        service.run(EphemeralTestRequest(chart="app", ensure_cluster=False))
+
+    assert not any(call.startswith("install:") for call in calls)

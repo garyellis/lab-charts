@@ -37,6 +37,7 @@ from chart_manager.services.lifecycle.cluster_executor import (
     HelmTestResult,
 )
 from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
+from chart_manager.services.lifecycle.hooks import ClusterTestHookRunner
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
@@ -138,9 +139,10 @@ class EphemeralTestClusterService:
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
         self._client_factory = client_factory
+        self._command_runner = command_runner or SubprocessRunner()
         self._hooks = ProvisioningHookRunner(
             self.root,
-            runner=command_runner or SubprocessRunner(),
+            runner=self._command_runner,
             timeout=command_timeout,
         )
         # No-op default so the narration call sites don't need a None check.
@@ -316,6 +318,14 @@ class EphemeralTestClusterService:
 
         self._execute_lifecycle_plan(
             plan=plan,
+            # Per run, like the bootstrap executor: hooks are told the
+            # context the clients were just bound to.
+            hooks=ClusterTestHookRunner(
+                self.root,
+                runner=self._command_runner,
+                kube_context=handle.context,
+                cluster_name=options.cluster_name,
+            ),
             installed=installed,
             tested=tested,
             namespaces_created=namespaces_created,
@@ -346,6 +356,7 @@ class EphemeralTestClusterService:
         self,
         *,
         plan: LifecyclePlan,
+        hooks: ClusterTestHookRunner,
         installed: set[str],
         tested: list[str],
         namespaces_created: set[str],
@@ -355,6 +366,7 @@ class EphemeralTestClusterService:
         executor = ClusterActionExecutor(
             helm=_ExecutorHelmAdapter(self.helm),
             kubectl=self.kubectl,
+            hooks=hooks,
             progress=self._progress,
         )
         result = executor.execute(plan)
