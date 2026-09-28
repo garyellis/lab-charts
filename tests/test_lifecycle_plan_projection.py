@@ -10,9 +10,11 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
+    SKIPPED_REQUIRES_WARNING_PREFIX,
     ExternallySatisfiedLifecycle,
     cleanup_tail,
     exclude_bootstrap_owned_charts,
+    exclude_required_lifecycles,
 )
 
 
@@ -149,6 +151,60 @@ def test_requires_exact_managed_lifecycle_identity(
     projected = exclude_bootstrap_owned_charts(original, {identity})
 
     assert projected is original
+
+
+def test_skip_requires_removes_every_required_action_including_tests() -> None:
+    base_install = action("base", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    base_test = action("base", "test", ActionKind.HELM_TEST)
+    dependency_ready = action("dependency", "ready", ActionKind.WORKLOAD_READY)
+    dependency_test = action("dependency", "test", ActionKind.HELM_TEST)
+    target_install = action("app", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    target_test = action("app", "test", ActionKind.HELM_TEST)
+    original = LifecyclePlan(
+        chart="app",
+        profile="minimal",
+        actions=(
+            base_install,
+            base_test,
+            dependency_ready,
+            dependency_test,
+            target_install,
+            target_test,
+        ),
+        warnings=("authored warning",),
+    )
+
+    projected = exclude_required_lifecycles(original, [("app", "minimal")])
+
+    assert projected.plan.actions == (target_install, target_test)
+    assert [(item.chart, item.profile) for item in projected.skipped] == [
+        ("base", "minimal"),
+        ("dependency", "minimal"),
+    ]
+    assert projected.plan.warnings == (
+        "authored warning",
+        SKIPPED_REQUIRES_WARNING_PREFIX + "base:minimal, dependency:minimal",
+    )
+    assert original.actions[1].kind is ActionKind.HELM_TEST
+
+
+def test_skip_requires_preserves_every_explicit_fanout_target() -> None:
+    shared_test = action("shared", "test", ActionKind.HELM_TEST)
+    app_test = action("app", "test", ActionKind.HELM_TEST)
+    dependent_test = action("dependent", "test", ActionKind.HELM_TEST)
+    original = LifecyclePlan(
+        chart="app",
+        profile="minimal",
+        actions=(shared_test, app_test, dependent_test),
+    )
+
+    projected = exclude_required_lifecycles(
+        original,
+        [("app", "minimal"), ("dependent", "minimal")],
+    )
+
+    assert projected.plan.actions == (app_test, dependent_test)
+    assert [item.chart for item in projected.skipped] == ["shared"]
 
 
 def test_cleanup_tail_moves_cleanups_last_in_reverse_entry_order() -> None:

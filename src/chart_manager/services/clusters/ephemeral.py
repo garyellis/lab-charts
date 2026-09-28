@@ -46,8 +46,11 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
+    RequiredLifecycleProjection,
+    SkippedRequiredLifecycle,
     cleanup_tail,
     exclude_bootstrap_owned_charts,
+    exclude_required_lifecycles,
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
@@ -72,6 +75,7 @@ class EphemeralTestRequest:
     cluster_name: str = DEFAULT_CLUSTER_NAME
     ensure_cluster: bool = True
     include_dependent_tests: bool = False
+    skip_requires: bool = False
     lint: bool = False
     run_provision_hooks: bool = True
 
@@ -258,15 +262,15 @@ class EphemeralTestClusterService:
         it: `lint` only adds a HELM_LINT action, which the compiler derives
         from the request, not from the preflight.
         """
-        _cluster, plan = self._load_and_compile(options, lint=False)
-        return plan
+        _cluster, projection = self._load_and_compile(options, lint=False)
+        return projection.plan
 
     def _load_and_compile(
         self,
         options: EphemeralTestRequest,
         *,
         lint: bool,
-    ) -> tuple[LocalCluster, LifecyclePlan]:
+    ) -> tuple[LocalCluster, RequiredLifecycleProjection]:
         """Load authored cluster config and compile the plan to execute."""
         # Bootstrap ownership is authored configuration, not process state.
         # Reload it for every run so a long-lived service cannot carry an
@@ -292,7 +296,8 @@ class EphemeralTestClusterService:
         injected progress callback.
         """
         started = time.monotonic()
-        local_cluster, plan = self._load_and_compile(options, lint=options.lint)
+        local_cluster, projection = self._load_and_compile(options, lint=options.lint)
+        plan = projection.plan
         _LOG.info(
             "chart test run started: chart=%s profile=%s cluster=%s namespace=%s "
             "actions=%d ensure_cluster=%s include_dependent_tests=%s lint=%s",
@@ -336,6 +341,8 @@ class EphemeralTestClusterService:
                     self._environment_spec(options.cluster_name, local_cluster)
                 )
             )
+
+        self._preflight_skipped_requires(options, projection.skipped)
 
         installed: set[str] = set()
         tested: list[str] = []
@@ -392,7 +399,7 @@ class EphemeralTestClusterService:
     def _load_teardown_plan(
         self, request: EphemeralTeardownRequest
     ) -> tuple[LocalCluster, LifecyclePlan]:
-        local_cluster, plan = self._load_and_compile(
+        local_cluster, projection = self._load_and_compile(
             EphemeralTestRequest(
                 chart=request.chart,
                 profile=request.profile,
@@ -402,6 +409,7 @@ class EphemeralTestClusterService:
             ),
             lint=False,
         )
+        plan = projection.plan
         cleanups = tuple(a for a in plan.actions if a.kind is ActionKind.HOOK_CLEANUP)
         return local_cluster, replace(plan, actions=cleanups)
 
@@ -538,7 +546,7 @@ class EphemeralTestClusterService:
         options: EphemeralTestRequest,
         *,
         bootstrap_lifecycles: Iterable[ExternallySatisfiedLifecycle],
-    ) -> LifecyclePlan:
+    ) -> RequiredLifecycleProjection:
         """Compile and project all requested plans before cluster mutation."""
 
         requested = [(options.chart, options.profile)]
@@ -559,7 +567,29 @@ class EphemeralTestClusterService:
             )
             for chart, profile in requested
         ]
-        return _merge_lifecycle_plans(plans)
+        plan = _merge_lifecycle_plans(plans)
+        if not options.skip_requires:
+            return RequiredLifecycleProjection(plan=plan, skipped=())
+        return exclude_required_lifecycles(plan, requested)
+
+    def _preflight_skipped_requires(
+        self,
+        options: EphemeralTestRequest,
+        skipped: tuple[SkippedRequiredLifecycle, ...],
+    ) -> None:
+        """Require every omitted lifecycle release before any chart install."""
+
+        for required in skipped:
+            result = self.helm.status(required.release, namespace=required.namespace)
+            if result.returncode == 0:
+                continue
+            helm_detail = (result.stderr or result.stdout).strip()
+            detail_suffix = f": {helm_detail}" if helm_detail else ""
+            raise ChartManagerError(
+                f"{options.chart} requires {required.chart}:{required.profile}, "
+                f"not installed in {required.namespace}; "
+                f"run once without --skip-requires{detail_suffix}"
+            )
 
 
 def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
