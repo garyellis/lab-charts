@@ -216,24 +216,38 @@ class ClusterActionExecutor:
                     detail("Skipped", self._progress_subject(action)),
                 )
             else:
-                subject = self._progress_subject(action)
-                emit(self.progress, step(self._progress_label(action), subject))
-                outcome = self._execute_action(action)
+                outcome = self._run_with_progress(action)
                 failed = failed or outcome.verdict == "FAIL"
-                if outcome.verdict == "PASS":
-                    emit(self.progress, detail("Completed", subject))
-                else:
-                    emit(
-                        self.progress,
-                        failure(
-                            "Failed",
-                            f"{subject}: {outcome.detail or 'unknown error'}",
-                        ),
-                    )
 
             outcomes.append(outcome)
 
         return ClusterExecutionResult(tuple(outcomes))
+
+    def execute_cleanups(self, plan: LifecyclePlan) -> ClusterExecutionResult:
+        """Run a cleanup-only plan, continuing past failures (teardown's mode)."""
+
+        if self.hooks is None:
+            raise ClusterPlanError("cleanup plan requires a hooks port")
+        for action in plan.actions:
+            if action.kind is not ActionKind.HOOK_CLEANUP:
+                raise ClusterPlanError(f"cleanup plan contains {action.kind.value} action")
+            self._validate_coordinates(action)
+        return ClusterExecutionResult(
+            tuple(self._run_with_progress(action) for action in plan.actions)
+        )
+
+    def _run_with_progress(self, action: LifecycleAction) -> ClusterActionOutcome:
+        subject = self._progress_subject(action)
+        emit(self.progress, step(self._progress_label(action), subject))
+        outcome = self._execute_action(action)
+        if outcome.verdict == "PASS":
+            emit(self.progress, detail("Completed", subject))
+        else:
+            emit(
+                self.progress,
+                failure("Failed", f"{subject}: {outcome.detail or 'unknown error'}"),
+            )
+        return outcome
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
         if action.kind is ActionKind.NAMESPACE_ENSURE:
@@ -349,4 +363,5 @@ class ClusterActionExecutor:
             ActionKind.HELM_TEST: "Running Helm tests",
             ActionKind.HOOK_PRE_INSTALL: "Running pre-install hook",
             ActionKind.HOOK_POST_INSTALL: "Running post-install hook",
+            ActionKind.HOOK_CLEANUP: "Running cleanup hook",
         }[action.kind]

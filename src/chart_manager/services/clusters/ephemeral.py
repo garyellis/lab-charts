@@ -34,6 +34,7 @@ from chart_manager.services.clusters.environment import (
 from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
 from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionExecutor,
+    ClusterActionOutcome,
     HelmTestResult,
 )
 from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
@@ -96,6 +97,38 @@ class EphemeralTestResult:
     def ok(self) -> bool:
         """True whenever a result exists -- failures raise instead of returning."""
         return True
+
+
+@dataclass(frozen=True)
+class EphemeralTeardownRequest:
+    """One `chart teardown`: the plan `chart test` would compile, and the cluster."""
+
+    chart: str
+    profile: str = DEFAULT_PROFILE
+    namespace: str | None = None
+    cluster_name: str = DEFAULT_CLUSTER_NAME
+    include_dependent_tests: bool = False
+    keep_cluster: bool = False
+
+
+@dataclass(frozen=True)
+class EphemeralTeardownResult:
+    """Every cleanup's outcome, and whether the cluster was deleted."""
+
+    chart: str
+    profile: str
+    cluster_name: str
+    cleanups: tuple[ClusterActionOutcome, ...] = ()
+    cluster_deleted: bool = False
+    delete_error: str | None = None
+
+    @property
+    def failed_cleanups(self) -> tuple[ClusterActionOutcome, ...]:
+        return tuple(outcome for outcome in self.cleanups if outcome.verdict == "FAIL")
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed_cleanups and self.delete_error is None
 
 
 class EphemeralTestClusterService:
@@ -350,6 +383,82 @@ class EphemeralTestClusterService:
             installed=tuple(sorted(installed)),
             tested=tuple(tested),
             namespaces=tuple(sorted(namespaces_created)),
+        )
+
+    def teardown_plan(self, request: EphemeralTeardownRequest) -> LifecyclePlan:
+        """The cleanup tail of the plan `chart test` would run, touching nothing."""
+        _cluster, plan = self._load_teardown_plan(request)
+        return plan
+
+    def _load_teardown_plan(
+        self, request: EphemeralTeardownRequest
+    ) -> tuple[LocalCluster, LifecyclePlan]:
+        local_cluster, plan = self._load_and_compile(
+            EphemeralTestRequest(
+                chart=request.chart,
+                profile=request.profile,
+                namespace=request.namespace,
+                cluster_name=request.cluster_name,
+                include_dependent_tests=request.include_dependent_tests,
+            ),
+            lint=False,
+        )
+        cleanups = tuple(a for a in plan.actions if a.kind is ActionKind.HOOK_CLEANUP)
+        return local_cluster, replace(plan, actions=cleanups)
+
+    def teardown(self, request: EphemeralTeardownRequest) -> EphemeralTeardownResult:
+        """Run every cleanup hook, then delete the cluster unless kept; never create it.
+
+        Continues past failures: the result carries each outcome and any delete error.
+        """
+        local_cluster, plan = self._load_teardown_plan(request)
+        name = request.cluster_name
+        _LOG.info(
+            "chart teardown started: chart=%s profile=%s cluster=%s cleanups=%d keep_cluster=%s",
+            request.chart,
+            request.profile,
+            name,
+            len(plan.actions),
+            request.keep_cluster,
+        )
+        handle = self.environment_provider.inspect(self._environment_spec(name, local_cluster))
+        if handle is None:
+            # Cleanups are idempotent and may still release external resources.
+            message = f"cluster {name} does not exist; running cleanup hooks without a kube context"
+            _LOG.warning("%s", message)
+            self._progress(warn(message))
+        else:
+            self._bind_clients(handle)
+
+        executor = ClusterActionExecutor(
+            helm=_ExecutorHelmAdapter(self.helm),
+            kubectl=self.kubectl,
+            hooks=ClusterTestHookRunner(
+                self.root,
+                runner=self._command_runner,
+                kube_context=handle.context if handle is not None else "",
+                cluster_name=name,
+            ),
+            progress=self._progress,
+        )
+        cleanups = executor.execute_cleanups(plan).outcomes
+
+        deleted = False
+        delete_error: str | None = None
+        if handle is not None and not request.keep_cluster:
+            self._progress(step("Deleting local cluster", name))
+            try:
+                deleted = self.environment_provider.destroy(handle)
+            except ChartManagerError as exc:
+                delete_error = str(exc)
+                _LOG.error("deleting cluster %s failed: %s", name, exc)
+        return EphemeralTeardownResult(
+            chart=request.chart,
+            profile=request.profile,
+            cluster_name=name,
+            cleanups=cleanups,
+            cluster_deleted=deleted,
+            delete_error=delete_error,
         )
 
     def _execute_lifecycle_plan(

@@ -54,7 +54,7 @@
       },
       "ClusterTestHooks": {
         "additionalProperties": false,
-        "description": "Optional fail-fast argv commands around one profile's install.\n\nEach hook is an argv, never a shell string, mirroring the local cluster's\nprovisioning hooks. `cleanup` releases whatever `preInstall` acquired\noutside the cluster. It runs only when requested (`--with-hooks-cleanup`),\nso a developer's release keeps working after `chart test`. Cleanup is\nbest-effort: it must be idempotent, succeed when there is nothing to\nrelease, and never be the only thing preventing a leak.",
+        "description": "Optional argv commands (never shell strings) around one profile's install.\n\n`preInstall` runs before every install or upgrade, including a re-run of\n`chart test` on an existing cluster, so it must be idempotent. `cleanup`\nruns at `chart teardown`, best-effort: it must be idempotent, succeed when\nnothing is left, and never be the only thing preventing a leak.",
         "properties": {
           "cleanup": {
             "anyOf": [

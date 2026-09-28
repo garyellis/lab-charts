@@ -403,3 +403,29 @@ def test_rejects_a_cleanup_outside_the_plan_tail_before_calling_integrations() -
         executor(calls).execute(plan((cleanup, install)))
 
     assert calls == []
+
+
+def test_execute_cleanups_continues_past_a_failure() -> None:
+    calls: list[str] = []
+    hooks = FakeHooks(calls, fail_on=ActionKind.HOOK_CLEANUP)
+    cleanups = plan(
+        (
+            action("cluster:grafana:cleanup", ActionKind.HOOK_CLEANUP),
+            action("cluster:loki:cleanup", ActionKind.HOOK_CLEANUP, chart="loki"),
+        )
+    )
+
+    result = executor(calls, hooks=hooks).execute_cleanups(cleanups)
+
+    assert len(calls) == 2
+    assert [outcome.verdict for outcome in result.outcomes] == ["FAIL", "FAIL"]
+    assert not result.ok
+
+
+def test_execute_cleanups_rejects_any_other_action() -> None:
+    calls: list[str] = []
+
+    with pytest.raises(ClusterPlanError, match="hook-pre-install"):
+        executor(calls).execute_cleanups(_hooked_plan())
+
+    assert calls == []

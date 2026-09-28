@@ -84,14 +84,12 @@ class ClusterTestRef(ApiModel):
 
 
 class ClusterTestHooks(StrictApiModel):
-    """Optional fail-fast argv commands around one profile's install.
+    """Optional argv commands (never shell strings) around one profile's install.
 
-    Each hook is an argv, never a shell string, mirroring the local cluster's
-    provisioning hooks. `cleanup` releases whatever `preInstall` acquired
-    outside the cluster. It runs only when requested (`--with-hooks-cleanup`),
-    so a developer's release keeps working after `chart test`. Cleanup is
-    best-effort: it must be idempotent, succeed when there is nothing to
-    release, and never be the only thing preventing a leak.
+    `preInstall` runs before every install or upgrade, including a re-run of
+    `chart test` on an existing cluster, so it must be idempotent. `cleanup`
+    runs at `chart teardown`, best-effort: it must be idempotent, succeed when
+    nothing is left, and never be the only thing preventing a leak.
     """
 
     pre_install: list[str] | None = Field(default=None, alias="preInstall")

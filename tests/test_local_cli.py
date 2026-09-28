@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,11 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterResult,
     DevelopmentClusterStatus,
 )
+from chart_manager.services.clusters.ephemeral import (
+    EphemeralTeardownRequest,
+    EphemeralTeardownResult,
+)
+from chart_manager.services.lifecycle.cluster_executor import ClusterActionOutcome
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
@@ -842,3 +848,168 @@ def test_chart_test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(
         ("hook-cleanup", ["scripts/hook", "cleanup"]),
     ]
     assert actions[-1]["kind"] == "hook-cleanup"
+
+
+# --- `chart teardown` --------------------------------------------------------
+
+
+def _cleanup_outcome(verdict: str, detail: str | None = None) -> ClusterActionOutcome:
+    now = datetime.now(UTC)
+    return ClusterActionOutcome(
+        action_id="cluster-test.alloy.minimal.hook-cleanup",
+        kind="hook-cleanup",
+        verdict=verdict,  # type: ignore[arg-type]
+        reason="ActionCompleted",
+        detail=detail,
+        started_at=now,
+        finished_at=now,
+    )
+
+
+@pytest.fixture
+def teardown_requests(monkeypatch: pytest.MonkeyPatch) -> list[EphemeralTeardownRequest]:
+    """Route `chart teardown` to a stub that records requests and passes."""
+    requests: list[EphemeralTeardownRequest] = []
+
+    class Service:
+        def teardown(self, request: EphemeralTeardownRequest) -> EphemeralTeardownResult:
+            requests.append(request)
+            return EphemeralTeardownResult(
+                chart=request.chart,
+                profile=request.profile,
+                cluster_name=request.cluster_name,
+                cleanups=(_cleanup_outcome("PASS"),),
+                cluster_deleted=not request.keep_cluster,
+            )
+
+    class Container:
+        def ephemeral_test_cluster_service(
+            self, _root: Path, *, progress: object, charts_dir: Path
+        ) -> Service:
+            return Service()
+
+    monkeypatch.setattr(chart_cli, "_container", Container)
+    return requests
+
+
+def test_chart_teardown_defaults(
+    tmp_path: Path, teardown_requests: list[EphemeralTeardownRequest]
+) -> None:
+    _chart(tmp_path)
+
+    result = cli("chart", "teardown", "--chart", "alloy", "--root", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert teardown_requests == [
+        EphemeralTeardownRequest(
+            chart="alloy",
+            profile="minimal",
+            namespace=None,
+            cluster_name="chart-manager",
+            include_dependent_tests=False,
+            keep_cluster=False,
+        )
+    ]
+
+
+def test_chart_teardown_passes_plan_options_and_keep_cluster(
+    tmp_path: Path, teardown_requests: list[EphemeralTeardownRequest]
+) -> None:
+    _chart(tmp_path)
+
+    result = cli(
+        "chart", "teardown", "alloy", "--profile", "full", "--namespace", "ns",
+        "--cluster-name", "lab", "--dependent-tests", "--keep-cluster",
+        "--root", str(tmp_path),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert teardown_requests == [
+        EphemeralTeardownRequest(
+            chart="alloy",
+            profile="full",
+            namespace="ns",
+            cluster_name="lab",
+            include_dependent_tests=True,
+            keep_cluster=True,
+        )
+    ]
+
+
+def test_chart_teardown_fails_naming_the_failed_cleanup_and_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chart(tmp_path)
+    result_value = EphemeralTeardownResult(
+        chart="alloy",
+        profile="minimal",
+        cluster_name="lab",
+        cleanups=(_cleanup_outcome("FAIL", "cleanup hook exited 3: ./hook"),),
+        delete_error="kind delete cluster failed",
+    )
+
+    class Container:
+        def ephemeral_test_cluster_service(
+            self, _root: Path, *, progress: object, charts_dir: Path
+        ) -> object:
+            return type("Service", (), {"teardown": lambda _self, _r: result_value})()
+
+    monkeypatch.setattr(chart_cli, "_container", Container)
+
+    result = cli("chart", "teardown", "alloy", "--root", str(tmp_path))
+
+    assert result.exit_code == 1
+    message = str(result.exception) if result.exception else result.output
+    assert "cluster-test.alloy.minimal.hook-cleanup" in message
+    assert "cleanup hook exited 3: ./hook" in message
+    assert "kind delete cluster failed" in message
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_chart_teardown_dry_run_lists_redacted_cleanups_and_runs_nothing(
+    chart_root: Path, make_chart: MakeChart, keep: bool
+) -> None:
+    (chart_root / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
+    config = chart_root / ".chart-manager" / "local-cluster.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "apiVersion: local.chartmanager.io/v1alpha1\n"
+        "kind: LocalCluster\n"
+        "metadata: {name: default}\n"
+        "spec:\n"
+        "  cluster: {config: kind-config.yaml}\n"
+        "  bootstrap: {releases: []}\n",
+        encoding="utf-8",
+    )
+    marker = chart_root / "hook-ran"
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    script.chmod(0o755)
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "apps",
+                "hooks": {
+                    "preInstall": ["scripts/hook", "pre"],
+                    "cleanup": ["scripts/hook", "--token", "s3cret"],
+                },
+            }
+        },
+    )
+
+    result = cli(
+        "chart", "teardown", "app", "--dry-run", "--cluster-name", "lab",
+        *(["--keep-cluster"] if keep else []), "--root", str(chart_root),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not marker.exists()
+    assert "hook-cleanup" in result.stdout
+    assert "scripts/hook --token ***" in result.stdout
+    assert "s3cret" not in result.stdout
+    assert "scripts/hook pre" not in result.stdout
+    expected = "would keep cluster lab" if keep else "would delete cluster lab"
+    assert expected in result.stderr

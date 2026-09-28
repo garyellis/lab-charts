@@ -11,10 +11,15 @@ from chart_manager.domain.lifecycle_policy import (
     require_cluster_test,
     require_cluster_test_profile,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
-from chart_manager.services.clusters.environment import BoundClients
+from chart_manager.services.clusters.environment import (
+    BoundClients,
+    EnvironmentHandle,
+    EnvironmentSpec,
+)
 from chart_manager.services.clusters.ephemeral import (
+    EphemeralTeardownRequest,
     EphemeralTestClusterService,
     EphemeralTestRequest,
     _merge_lifecycle_plans,
@@ -283,6 +288,7 @@ def _migration_service(
     calls: list[str],
     fail_dependency: bool = False,
     fail_lint: bool = False,
+    environment_provider: object | None = None,
 ) -> tuple[EphemeralTestClusterService, _MigrationKubectl]:
     (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     local_cluster = tmp_path / ".chart-manager/local-cluster.yaml"
@@ -308,6 +314,7 @@ spec:
         ),  # type: ignore[arg-type]
         kind=_MigrationKind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
+        environment_provider=environment_provider,  # type: ignore[arg-type]
     )
     return service, kubectl
 
@@ -836,3 +843,209 @@ def test_ephemeral_failed_pre_install_hook_fails_the_run_before_install(
         service.run(EphemeralTestRequest(chart="app", ensure_cluster=False))
 
     assert not any(call.startswith("install:") for call in calls)
+
+
+# ----- chart teardown ---------------------------------------------------------
+
+
+class _TeardownProvider:
+    """A kind-like provider that appends its lifecycle calls to the hook record."""
+
+    def __init__(self, record: Path, *, exists: bool = True, fail_destroy: bool = False) -> None:
+        self.record = record
+        self.exists = exists
+        self.fail_destroy = fail_destroy
+
+    def _write(self, line: str) -> None:
+        with self.record.open("a", encoding="utf-8") as stream:
+            stream.write(f"{line}\n")
+
+    def _handle(self, spec: EnvironmentSpec) -> EnvironmentHandle:
+        return EnvironmentHandle(
+            identity=spec.cluster_name,
+            context=f"kind-{spec.cluster_name}",
+            provider_type="kind",
+        )
+
+    def ensure(self, spec: EnvironmentSpec) -> EnvironmentHandle:
+        self._write(f"ensure {spec.cluster_name}")
+        return self._handle(spec)
+
+    def inspect(self, spec: EnvironmentSpec) -> EnvironmentHandle | None:
+        return self._handle(spec) if self.exists else None
+
+    def handle(self, spec: EnvironmentSpec) -> EnvironmentHandle:
+        return self._handle(spec)
+
+    def destroy(self, handle: EnvironmentHandle) -> bool:
+        self._write(f"destroy {handle.identity}")
+        if self.fail_destroy:
+            raise ExternalCommandError("kind delete cluster failed")
+        return True
+
+
+def _teardown_charts(chart_root: Path, make_chart: MakeChart, *, fail: str = "") -> Path:
+    """`app` requires `base`; each has a recording cleanup (exit 3 for `fail`) and a preInstall."""
+    record = chart_root / "hook-record"
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "$CHART_MANAGER_HOOK_PHASE $CHART_MANAGER_CHART '
+        f'[$CHART_MANAGER_KUBE_CONTEXT] $CHART_MANAGER_CLUSTER_NAME" >> {record}\n'
+        '[ "$1" = fail ] && { echo "still attached" >&2; exit 3; }\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    def hooks(chart: str) -> dict[str, list[str]]:
+        cleanup = ["./scripts/hook", *(["fail"] if chart == fail else [])]
+        return {"preInstall": ["./scripts/hook"], "cleanup": cleanup}
+
+    make_chart("base", profiles={"minimal": {"namespace": "base", "hooks": hooks("base")}})
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "apps",
+                "requires": [{"chart": "base", "profile": "minimal"}],
+                "hooks": hooks("app"),
+            }
+        },
+    )
+    return record
+
+
+def _teardown_service(
+    chart_root: Path, record: Path, **provider: bool
+) -> tuple[EphemeralTestClusterService, list[str]]:
+    calls: list[str] = []
+    service, _kubectl = _migration_service(
+        chart_root,
+        calls=calls,
+        environment_provider=_TeardownProvider(record, **provider),
+    )
+    return service, calls
+
+
+def test_teardown_runs_cleanups_in_reverse_install_order_then_deletes_the_cluster(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """Only cleanups run -- the dependent's before its dependency's -- then delete."""
+    record = _teardown_charts(chart_root, make_chart)
+    service, calls = _teardown_service(chart_root, record)
+
+    result = service.teardown(EphemeralTeardownRequest(chart="app", cluster_name="lab"))
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "cleanup app [kind-lab] lab",
+        "cleanup base [kind-lab] lab",
+        "destroy lab",
+    ]
+    assert calls == []
+    assert result.ok
+    assert result.cluster_deleted
+    assert [(o.action_id, o.verdict) for o in result.cleanups] == [
+        ("cluster-test.app.minimal.hook-cleanup", "PASS"),
+        ("cluster-test.base.minimal.hook-cleanup", "PASS"),
+    ]
+
+
+def test_teardown_continues_past_a_failed_cleanup_and_still_deletes_the_cluster(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = _teardown_charts(chart_root, make_chart, fail="app")
+    service, _calls = _teardown_service(chart_root, record)
+
+    result = service.teardown(EphemeralTeardownRequest(chart="app", cluster_name="lab"))
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "cleanup app [kind-lab] lab",
+        "cleanup base [kind-lab] lab",
+        "destroy lab",
+    ]
+    assert not result.ok
+    assert result.cluster_deleted
+    failed, passed = result.cleanups
+    assert (failed.verdict, passed.verdict) == ("FAIL", "PASS")
+    assert failed.detail == "cleanup hook exited 3: ./scripts/hook fail\nstill attached"
+
+
+def test_teardown_keep_cluster_runs_cleanups_without_deleting(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = _teardown_charts(chart_root, make_chart)
+    service, _calls = _teardown_service(chart_root, record)
+
+    result = service.teardown(
+        EphemeralTeardownRequest(chart="app", cluster_name="lab", keep_cluster=True)
+    )
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "cleanup app [kind-lab] lab",
+        "cleanup base [kind-lab] lab",
+    ]
+    assert result.ok
+    assert not result.cluster_deleted
+
+
+def test_teardown_of_a_missing_cluster_still_runs_cleanups_and_creates_nothing(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """External resources can still be released; there is no context to give."""
+    record = _teardown_charts(chart_root, make_chart)
+    events: list[Any] = []
+    service, _calls = _teardown_service(chart_root, record, exists=False)
+    service._progress = events.append
+
+    result = service.teardown(EphemeralTeardownRequest(chart="app", cluster_name="lab"))
+
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "cleanup app [] lab",
+        "cleanup base [] lab",
+    ]
+    assert result.ok
+    assert not result.cluster_deleted
+    assert any("lab does not exist" in event.message for event in events)
+
+
+def test_teardown_delete_failure_is_reported_on_the_result(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = _teardown_charts(chart_root, make_chart)
+    service, _calls = _teardown_service(chart_root, record, fail_destroy=True)
+
+    result = service.teardown(EphemeralTeardownRequest(chart="app", cluster_name="lab"))
+
+    assert not result.ok
+    assert not result.cluster_deleted
+    assert result.delete_error == "kind delete cluster failed"
+
+
+def test_teardown_without_cleanups_only_deletes_the_cluster(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = chart_root / "hook-record"
+    make_chart("app", profiles={"minimal": {"namespace": "apps"}})
+    service, _calls = _teardown_service(chart_root, record)
+
+    result = service.teardown(EphemeralTeardownRequest(chart="app", cluster_name="lab"))
+
+    assert record.read_text(encoding="utf-8").splitlines() == ["destroy lab"]
+    assert result.ok
+    assert result.cleanups == ()
+
+
+def test_teardown_plan_is_the_test_plans_cleanup_tail_and_runs_nothing(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    record = _teardown_charts(chart_root, make_chart)
+    service, _calls = _teardown_service(chart_root, record)
+
+    plan = service.teardown_plan(EphemeralTeardownRequest(chart="app"))
+
+    full = service.plan(EphemeralTestRequest(chart="app"))
+    assert plan.actions == full.actions[-2:]
+    assert [action.kind for action in plan.actions] == [ActionKind.HOOK_CLEANUP] * 2
+    assert not record.exists()
