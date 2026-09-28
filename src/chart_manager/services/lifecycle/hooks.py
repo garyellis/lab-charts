@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from chart_manager.plumbing.commands import CommandRunner, redact
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
 from chart_manager.services.lifecycle.models import LifecycleAction
+
+_LOG = logging.getLogger(__name__)
 
 #: How much of a failed hook's stderr its error carries.
 _STDERR_TAIL_LINES = 20
@@ -50,6 +53,7 @@ class ClusterTestHookRunner:
         }
         timeout = action.timeout or "10m"
         command = redact(action.command)
+        _LOG.info("running %s hook for %s/%s: %s", phase, target.chart, target.profile, command)
         try:
             result = self.runner.run(
                 action.command,
@@ -63,6 +67,14 @@ class ClusterTestHookRunner:
                 f"{phase} hook timed out after {timeout}: {command}{_tail(exc.stderr)}",
                 stderr=exc.stderr,
             ) from exc
+        # Logged verbatim: hiding sensitive output is the hook script's job.
+        _LOG.debug(
+            "%s hook output: %s\nstdout:\n%s\nstderr:\n%s",
+            phase,
+            command,
+            result.stdout.rstrip(),
+            result.stderr.rstrip(),
+        )
         if result.returncode != 0:
             raise ExternalCommandError(
                 f"{phase} hook exited {result.returncode}: {command}{_tail(result.stderr)}",
@@ -72,9 +84,9 @@ class ClusterTestHookRunner:
 
 
 def _tail(stderr: str) -> str:
-    """The last stderr lines, each masked like an argv, as a message suffix."""
+    """The last stderr lines as a message suffix; the script owns what it prints."""
     lines = stderr.strip().splitlines()[-_STDERR_TAIL_LINES:]
-    return "".join(f"\n{redact(line.split(' '))}" for line in lines)
+    return "".join(f"\n{line}" for line in lines)
 
 
 __all__ = ["ClusterTestHookRunner"]

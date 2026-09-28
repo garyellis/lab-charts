@@ -89,7 +89,7 @@ def test_hook_timeout_is_the_profile_timeout_and_output_is_captured(tmp_path: Pa
     assert record.cwd == tmp_path.resolve()
 
 
-def test_failed_hook_reports_exit_code_and_redacted_stderr_tail(tmp_path: Path) -> None:
+def test_failed_hook_reports_exit_code_and_verbatim_stderr_tail(tmp_path: Path) -> None:
     argv = (
         _script(
             tmp_path,
@@ -111,8 +111,8 @@ def test_failed_hook_reports_exit_code_and_redacted_stderr_tail(tmp_path: Path) 
     )
     assert "line 6\n" not in message
     assert "line 7\n" in message
-    assert message.endswith("line 25\nretry with --token ***")
-    assert "s3cret" not in message
+    # The configured argv is masked; the script's own stderr is verbatim.
+    assert message.endswith("line 25\nretry with --token s3cret")
     assert "hunter2" not in message
 
 
@@ -127,5 +127,22 @@ def test_hook_exceeding_the_profile_timeout_reports_the_timeout_and_stderr(
         )
 
     assert str(raised.value) == (
-        "cleanup hook timed out after 0.5s: ./scripts/hook\nwaiting on --token ***"
+        "cleanup hook timed out after 0.5s: ./scripts/hook\nwaiting on --token s3cret"
     )
+
+
+def test_hook_logs_that_it_runs_and_its_output_at_debug(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """INFO names the configured hook; DEBUG (-v) carries its output verbatim."""
+    argv = (_script(tmp_path, 'echo "hello $2"\necho "warn" >&2\n'), "--token", "s3cret")
+    caplog.set_level("DEBUG", logger="chart_manager.services.lifecycle.hooks")
+
+    _runner(tmp_path).run(_action(tmp_path, argv))
+
+    info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+    debug = "\n".join(r.getMessage() for r in caplog.records if r.levelname == "DEBUG")
+    assert info == ["running pre-install hook for app/minimal: ./scripts/hook --token ***"]
+    # The configured argv is masked; what the script prints is its own business.
+    assert "hello s3cret" in debug
+    assert "warn" in debug
