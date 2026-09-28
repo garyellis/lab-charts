@@ -37,7 +37,7 @@ from chart_manager.domain.lifecycle_policy import (
 )
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.names import dns_label
-from chart_manager.plumbing.paths import relative_path
+from chart_manager.plumbing.paths import relative_path, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
@@ -123,29 +123,14 @@ class LocalResourceLoader:
                 ("postProvision", hooks.post_provision),
             ):
                 if command is not None:
-                    self._validate_hook_executable(command[0], phase=phase)
+                    validate_hook_executable(
+                        self.root,
+                        command[0],
+                        field=f"spec.cluster.hooks.{phase}[0]",
+                    )
         for release in cluster.spec.bootstrap.releases:
             self._validate_release(release)
         return cluster
-
-    def _validate_hook_executable(self, executable: str, *, phase: str) -> None:
-        """Resolve authored path executables; leave bare PATH commands unresolved."""
-        if "/" not in executable and "\\" not in executable:
-            return
-        try:
-            authored_path = executable.replace("\\", "/")
-            # Hook examples conventionally use `./script`; accept that
-            # explicit execution spelling while applying the repository path
-            # validator to the path it identifies.
-            if authored_path.startswith("./"):
-                authored_path = authored_path[2:]
-            relative = relative_path(
-                authored_path,
-                field=f"spec.cluster.hooks.{phase}[0]",
-            )
-        except ValueError as exc:
-            raise SpecError(str(exc)) from exc
-        self._require_file(relative, field=f"spec.cluster.hooks.{phase}[0]")
 
     def load_stack(self, path: Path) -> LocalStack:
         absolute = self._inside_root(path)

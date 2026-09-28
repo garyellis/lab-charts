@@ -21,6 +21,9 @@ class ActionKind(StrEnum):
     HELM_UPGRADE_INSTALL = "helm-upgrade-install"
     WORKLOAD_READY = "workload-ready"
     HELM_TEST = "helm-test"
+    HOOK_PRE_INSTALL = "hook-pre-install"
+    HOOK_POST_INSTALL = "hook-post-install"
+    HOOK_CLEANUP = "hook-cleanup"
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,8 @@ class LifecycleAction:
     values: tuple[Path, ...] = ()
     timeout: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
+    #: The authored argv of a hook action; empty for every other kind.
+    command: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,9 @@ from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.clusters.ephemeral import (
     EphemeralTestClusterService,
     EphemeralTestRequest,
+    _merge_lifecycle_plans,
 )
+from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
@@ -26,7 +28,7 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 
-from .conftest import cli
+from .conftest import MakeChart, cli
 
 
 def _alloy_spec() -> ClusterTestSpec:
@@ -704,3 +706,61 @@ def test_ephemeral_fanout_reconverges_same_release_for_distinct_profiles(
     assert calls.count("install:main:main") == 2
     assert calls.count("test:main") == 2
     assert result.tested == ("main", "main")
+
+
+def test_merged_fanout_plans_keep_one_reverse_install_order_cleanup_tail(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    """Two dependents of one hooked dependency merge into one cleanup tail.
+
+    Each compiled plan ends in its own cleanup tail, so a naive merge would
+    leave `a`'s and `dep`'s cleanups stranded mid-plan before `b` installs.
+    The shared dependency's hook actions are deduplicated like any other.
+    """
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def hooked(chart: str) -> dict[str, object]:
+        return {
+            "hooks": {
+                "preInstall": ["scripts/hook", chart],
+                "cleanup": ["scripts/hook", chart],
+            }
+        }
+
+    make_chart("dep", profiles={"minimal": hooked("dep")})
+    for dependent in ("a", "b"):
+        make_chart(
+            dependent,
+            profiles={
+                "minimal": {
+                    "requires": [{"chart": "dep", "profile": "minimal"}],
+                    **hooked(dependent),
+                }
+            },
+        )
+    compiler = ClusterTestCompiler(chart_root)
+
+    merged = _merge_lifecycle_plans(
+        [
+            compiler.compile_cluster_test("a", "minimal"),
+            compiler.compile_cluster_test("b", "minimal"),
+        ]
+    )
+
+    hook_ids = [
+        action.action_id.removeprefix("cluster-test.")
+        for action in merged.actions
+        if action.kind in (ActionKind.HOOK_PRE_INSTALL, ActionKind.HOOK_CLEANUP)
+    ]
+    assert hook_ids == [
+        "dep.minimal.hook-pre-install",
+        "a.minimal.hook-pre-install",
+        "b.minimal.hook-pre-install",
+        "b.minimal.hook-cleanup",
+        "a.minimal.hook-cleanup",
+        "dep.minimal.hook-cleanup",
+    ]
+    assert [action.kind for action in merged.actions[-3:]] == [ActionKind.HOOK_CLEANUP] * 3

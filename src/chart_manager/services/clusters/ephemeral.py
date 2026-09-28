@@ -44,6 +44,7 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.plan_projection import (
     ExternallySatisfiedLifecycle,
+    cleanup_tail,
     exclude_bootstrap_owned_charts,
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
@@ -450,7 +451,8 @@ def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
     Action IDs include the profile, so the same release under different
     profiles is intentionally converged and tested once per profile. Identical
     chart/profile actions shared by multiple dependent plans are deduplicated
-    while retaining first-authored plan order.
+    while retaining first-authored plan order; hook cleanups are then
+    regathered into one reverse-install-order tail.
     """
 
     if not plans:
@@ -474,7 +476,7 @@ def _merge_lifecycle_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
                 warnings.append(warning)
     return replace(
         first,
-        actions=tuple(actions),
+        actions=cleanup_tail(actions),
         warnings=tuple(warnings),
     )
 

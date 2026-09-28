@@ -16,6 +16,7 @@ from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
     ActionKind,
     ClusterTestCompiler,
+    LifecyclePlan,
     plan_to_dict,
 )
 
@@ -282,3 +283,189 @@ def test_compile_accepts_a_valid_requires_graph(
     plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
 
     assert [action.target.chart for action in plan.actions].count("base") >= 1
+
+
+# --- cluster-test hooks ------------------------------------------------------
+
+
+def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
+    """Write a stub hook script under the repo root and return its argv[0]."""
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return relative
+
+
+def _hooks(root: Path, chart: str, *phases: str) -> dict[str, object]:
+    """Declare one repo-relative stub script per requested hook phase."""
+    return {
+        "hooks": {
+            phase: [_script(root, f"scripts/{chart}-{phase}"), chart]
+            for phase in phases
+        }
+    }
+
+
+_ALL_PHASES = ("preInstall", "postInstall", "cleanup")
+
+
+def _kinds(plan: LifecyclePlan) -> list[tuple[str, ActionKind]]:
+    return [(action.target.chart, action.kind) for action in plan.actions]
+
+
+def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    """preInstall precedes install, postInstall follows readiness, cleanup is last.
+
+    Cleanups sit at the plan tail in reverse install order so a dependent's
+    cleanup runs before the cleanup of the dependency it was installed onto.
+    """
+    make_chart("base", profiles={"minimal": _hooks(chart_root, "base", *_ALL_PHASES)})
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {**_requires("base"), **_hooks(chart_root, "app", *_ALL_PHASES)}
+        },
+    )
+
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal", lint=True)
+
+    body = [
+        ActionKind.NAMESPACE_ENSURE,
+        ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.HELM_LINT,
+        ActionKind.HOOK_PRE_INSTALL,
+        ActionKind.HELM_UPGRADE_INSTALL,
+        ActionKind.WORKLOAD_READY,
+        ActionKind.HOOK_POST_INSTALL,
+        ActionKind.HELM_TEST,
+    ]
+    assert _kinds(plan) == [
+        *(("base", kind) for kind in body),
+        *(("app", kind) for kind in body),
+        ("app", ActionKind.HOOK_CLEANUP),
+        ("base", ActionKind.HOOK_CLEANUP),
+    ]
+    pre = plan.action("cluster-test.app.minimal.hook-pre-install")
+    assert pre.command == ("scripts/app-preInstall", "app")
+    assert pre.values == ()
+    assert pre.target.namespace == "default"
+    assert plan_to_dict(plan)["actions"][3]["command"] == ["scripts/base-preInstall", "base"]
+
+
+def test_undeclared_hooks_compile_no_hook_actions(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart("app", profiles={"minimal": _hooks(chart_root, "app", "postInstall")})
+    make_chart("plain")
+
+    with_post = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
+    plain = ClusterTestCompiler(chart_root).compile_cluster_test("plain", "minimal")
+
+    assert [kind for _chart, kind in _kinds(with_post)] == [
+        ActionKind.NAMESPACE_ENSURE,
+        ActionKind.HELM_DEPENDENCY_UPDATE,
+        ActionKind.HELM_UPGRADE_INSTALL,
+        ActionKind.WORKLOAD_READY,
+        ActionKind.HOOK_POST_INSTALL,
+        ActionKind.HELM_TEST,
+    ]
+    assert all(action.command == () for action in plain.actions)
+    assert all(
+        payload["command"] == [] for payload in plan_to_dict(plain)["actions"]
+    )
+
+
+def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    make_chart(
+        "base",
+        profiles={
+            "minimal": {},
+            "secured": _hooks(chart_root, "base", "preInstall", "cleanup"),
+        },
+    )
+    make_chart("app", profiles={"minimal": _requires("base:secured")})
+
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
+
+    hooks = [
+        (action.action_id, action.command)
+        for action in plan.actions
+        if action.command
+    ]
+    assert hooks == [
+        ("cluster-test.base.secured.hook-pre-install", ("scripts/base-preInstall", "base")),
+        ("cluster-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
+    ]
+    assert plan.actions[-1].kind is ActionKind.HOOK_CLEANUP
+
+
+def test_hook_digest_covers_argv_and_repo_script_content(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    script = _script(chart_root, "scripts/prepare", "#!/bin/sh\necho one\n")
+
+    def pre_digest(argv: list[str]) -> str:
+        make_chart("app", profiles={"minimal": {"hooks": {"preInstall": argv}}})
+        plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
+        return plan.action("cluster-test.app.minimal.hook-pre-install").input_digest
+
+    original = pre_digest([script, "--flag"])
+    assert pre_digest([script, "--flag"]) == original
+    assert pre_digest([script, "--other"]) != original
+
+    edited_before = pre_digest([script, "--flag"])
+    _script(chart_root, "scripts/prepare", "#!/bin/sh\necho two\n")
+    assert pre_digest([script, "--flag"]) != edited_before
+
+
+@pytest.mark.parametrize(
+    ("executable", "message"),
+    [
+        pytest.param("/usr/bin/true", "relative", id="absolute"),
+        pytest.param("scripts/../prepare", "without", id="parent-segment"),
+        pytest.param("scripts/missing", "file does not exist", id="missing"),
+        pytest.param(
+            "chart-manager-no-such-command", "not found on PATH", id="bare-not-on-path"
+        ),
+    ],
+)
+def test_compile_rejects_an_unresolvable_hook_executable(
+    chart_root: Path,
+    make_chart: MakeChart,
+    executable: str,
+    message: str,
+) -> None:
+    _script(chart_root, "prepare")
+    make_chart("app", profiles={"minimal": {"hooks": {"cleanup": [executable]}}})
+
+    with pytest.raises(SpecError, match=message) as excinfo:
+        ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
+    assert "hooks.cleanup[0]" in str(excinfo.value)
+
+
+def test_compile_accepts_a_bare_hook_executable_found_on_path(
+    chart_root: Path,
+    make_chart: MakeChart,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_dir = tmp_path_factory.mktemp("bin")
+    _script(bin_dir, "mint-token")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    make_chart("app", profiles={"minimal": {"hooks": {"preInstall": ["mint-token", "-q"]}}})
+
+    plan = ClusterTestCompiler(chart_root).compile_cluster_test("app", "minimal")
+
+    assert plan.action("cluster-test.app.minimal.hook-pre-install").command == (
+        "mint-token",
+        "-q",
+    )

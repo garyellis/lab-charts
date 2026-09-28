@@ -29,7 +29,7 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
 
-from .conftest import cli
+from .conftest import MakeChart, cli
 
 
 def _chart(root: Path, name: str = "alloy") -> Path:
@@ -769,3 +769,76 @@ def test_chart_test_output_without_dry_run_is_a_usage_error(
     assert result.exit_code == 2
     assert "--dry-run" in result.output
     assert planning_container == []
+
+
+def test_chart_test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    """A real compile through the real container: hooks are planned, never run.
+
+    Every hook is a stub that would create a marker file, so the marker's
+    absence proves the dry run executed none of them. The table shows each
+    hook's argv through `redact`; the JSON document carries it verbatim
+    under `command`.
+    """
+    (chart_root / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
+    config = chart_root / ".chart-manager" / "local-cluster.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "apiVersion: local.chartmanager.io/v1alpha1\n"
+        "kind: LocalCluster\n"
+        "metadata: {name: default}\n"
+        "spec:\n"
+        "  cluster: {config: kind-config.yaml}\n"
+        "  bootstrap: {releases: []}\n",
+        encoding="utf-8",
+    )
+    marker = chart_root / "hook-ran"
+    script = chart_root / "scripts" / "hook"
+    script.parent.mkdir()
+    script.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    script.chmod(0o755)
+    make_chart(
+        "base",
+        profiles={
+            "minimal": {
+                "namespace": "base",
+                "hooks": {
+                    "preInstall": ["scripts/hook", "--token", "s3cret"],
+                    "cleanup": ["scripts/hook", "cleanup"],
+                },
+            }
+        },
+    )
+    make_chart(
+        "app",
+        profiles={
+            "minimal": {
+                "namespace": "apps",
+                "requires": [{"chart": "base", "profile": "minimal"}],
+                "hooks": {"postInstall": ["scripts/hook", "post"]},
+            }
+        },
+    )
+
+    table = cli(
+        "chart", "test", "app", "--dry-run", "-o", "table", "--root", str(chart_root)
+    )
+    document = cli(
+        "chart", "test", "app", "--dry-run", "-o", "json", "--root", str(chart_root)
+    )
+
+    assert table.exit_code == 0, table.output
+    assert document.exit_code == 0, document.output
+    assert not marker.exists()
+    assert "Command" in table.stdout
+    assert "scripts/hook --token ***" in table.stdout
+    assert "s3cret" not in table.stdout
+    assert "scripts/hook post" in table.stdout
+    actions = json.loads(document.stdout)["actions"]
+    assert [(action["kind"], action["command"]) for action in actions if action["command"]] == [
+        ("hook-pre-install", ["scripts/hook", "--token", "s3cret"]),
+        ("hook-post-install", ["scripts/hook", "post"]),
+        ("hook-cleanup", ["scripts/hook", "cleanup"]),
+    ]
+    assert actions[-1]["kind"] == "hook-cleanup"

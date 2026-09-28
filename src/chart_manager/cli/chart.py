@@ -36,6 +36,7 @@ from chart_manager.cli._options import (
 )
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
+from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.chart_catalog import ChartCatalogEntry
@@ -241,7 +242,7 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
     stream a `-o json | jq` consumer reads.
     """
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
-    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release")
+    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release", "Command")
     for step, action in enumerate(plan.actions, start=1):
         table.add_row(
             str(step),
@@ -250,6 +251,7 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
             action.target.profile or "",
             action.target.namespace or "",
             action.target.release or "",
+            escape(redact(action.command)),
         )
     output_mod.emit(plan_to_dict(plan), mode=mode, table=table)
     for warning in plan.warnings:
