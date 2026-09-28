@@ -29,6 +29,26 @@ class ExternallySatisfiedLifecycle:
     namespace: str
 
 
+def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:
+    """Move hook-cleanup actions to the end, in reverse install order.
+
+    Dependents clean up before their dependencies; other actions keep their order.
+    """
+    ordered = tuple(actions)
+    first_seen: dict[tuple[str, str | None], int] = {}
+    for action in ordered:
+        first_seen.setdefault((action.target.chart, action.target.profile), len(first_seen))
+    cleanups = sorted(
+        (action for action in ordered if action.kind is ActionKind.HOOK_CLEANUP),
+        key=lambda action: first_seen[(action.target.chart, action.target.profile)],
+        reverse=True,
+    )
+    return (
+        *(action for action in ordered if action.kind is not ActionKind.HOOK_CLEANUP),
+        *cleanups,
+    )
+
+
 def exclude_bootstrap_owned_charts(
     plan: LifecyclePlan,
     bootstrap_lifecycles: Iterable[ExternallySatisfiedLifecycle],

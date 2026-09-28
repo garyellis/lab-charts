@@ -1,4 +1,4 @@
-"""`chart list`, `chart show`, `chart test` -- reading and exercising charts.
+"""`chart list`, `chart show`, `chart test`, `chart teardown` -- reading and exercising charts.
 
 The rest of the `chart` group lives elsewhere and always has:
 `cli/validate.py` owns `validate` and the `cache` subgroup, `cli/publish.py`
@@ -9,9 +9,8 @@ file under `cli/`.
 
 `list` and `show` are pure reads: both hand a wire document from
 `services/chart_catalog_wire.py` to `output.emit` and build their own table
-projection beside it. `test` is the only one that touches a cluster, and it
-owns none of that -- `EphemeralTestCluster` compiles and runs the plan, and
-this module chooses between printing the plan and running it.
+projection beside it. `test` and `teardown` touch a cluster; `EphemeralTestCluster`
+compiles and runs the plan, and this module prints or runs it.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ from chart_manager.cli._options import (
 )
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
+from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.chart_catalog import ChartCatalogEntry
@@ -43,6 +43,8 @@ from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle
 from chart_manager.services.clusters.ephemeral import (
     DEFAULT_CLUSTER_NAME,
     DEFAULT_PROFILE,
+    EphemeralTeardownRequest,
+    EphemeralTeardownResult,
     EphemeralTestRequest,
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
@@ -87,6 +89,7 @@ def register(app: typer.Typer) -> None:
     """
     app.command("list")(list_charts)
     app.command("test")(chart_test)
+    app.command("teardown")(chart_teardown)
     app.command("show")(show_lifecycle)
 
 
@@ -241,7 +244,16 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
     stream a `-o json | jq` consumer reads.
     """
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
-    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release")
+    output_mod.emit(plan_to_dict(plan), mode=mode, table=_plan_table(plan))
+    for warning in plan.warnings:
+        narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
+    narration.print(
+        "[yellow]dry run[/yellow]: no cluster was created, nothing was installed or tested"
+    )
+
+
+def _plan_table(plan: LifecyclePlan) -> Table:
+    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release", "Command")
     for step, action in enumerate(plan.actions, start=1):
         table.add_row(
             str(step),
@@ -250,13 +262,9 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
             action.target.profile or "",
             action.target.namespace or "",
             action.target.release or "",
+            escape(redact(action.command)),
         )
-    output_mod.emit(plan_to_dict(plan), mode=mode, table=table)
-    for warning in plan.warnings:
-        narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
-    narration.print(
-        "[yellow]dry run[/yellow]: no cluster was created, nothing was installed or tested"
-    )
+    return table
 
 
 def chart_test(
@@ -333,6 +341,74 @@ def chart_test(
         dry_run=dry_run,
         run_provision_hooks=run_provision_hooks,
     )
+
+
+def chart_teardown(
+    chart_argument: Annotated[
+        str | None,
+        typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
+    ] = None,
+    chart: Annotated[
+        str | None,
+        typer.Option("--chart", help="Chart name or chart directory."),
+    ] = None,
+    root: RootOption = Path("."),
+    profile: ProfileOption = DEFAULT_PROFILE,
+    namespace: NamespaceOverrideOption = None,
+    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    dependent_tests: Annotated[
+        bool,
+        typer.Option("--dependent-tests", help="Include cleanups of affected cluster tests."),
+    ] = False,
+    keep_cluster: Annotated[
+        bool,
+        typer.Option("--keep-cluster", help="Run cleanup hooks but keep the test cluster."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the cleanup hooks and exit; run nothing."),
+    ] = False,
+) -> None:
+    """Run cleanup hooks in reverse install order, then delete the test cluster."""
+    if (chart_argument is None) == (chart is None):
+        raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
+    selected = chart_argument if chart_argument is not None else chart
+    assert selected is not None
+    root = root.resolve()
+    target = resolve_chart(root, selected)
+    service = _container().ephemeral_test_cluster_service(
+        root,
+        progress=_print_progress,
+        charts_dir=target.path.parent.relative_to(root),
+    )
+    request = EphemeralTeardownRequest(
+        chart=target.name,
+        profile=profile,
+        namespace=namespace,
+        cluster_name=cluster_name,
+        include_dependent_tests=dependent_tests,
+        keep_cluster=keep_cluster,
+    )
+    if dry_run:
+        console.print(_plan_table(service.teardown_plan(request)))
+        verb = "keep" if keep_cluster else "delete"
+        narration.print(
+            f"[yellow]dry run[/yellow]: ran no hook; would {verb} cluster {escape(cluster_name)}"
+        )
+        return
+    result = service.teardown(request)
+    if not result.ok:
+        raise ChartManagerError(_teardown_failure(result))
+
+
+def _teardown_failure(result: EphemeralTeardownResult) -> str:
+    problems = [
+        f"cleanup {outcome.action_id} failed: {outcome.detail}"
+        for outcome in result.failed_cleanups
+    ]
+    if result.delete_error is not None:
+        problems.append(f"deleting cluster {result.cluster_name} failed: {result.delete_error}")
+    return "chart teardown failed:\n" + "\n".join(problems)
 
 
 def show_lifecycle(

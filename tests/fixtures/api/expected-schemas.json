@@ -52,6 +52,59 @@
         "title": "ChartLifecycleSpec",
         "type": "object"
       },
+      "ClusterTestHooks": {
+        "additionalProperties": false,
+        "description": "Commands run around a profile's install, as argv lists (not shell strings).\n\n`preInstall` runs before every install or upgrade, so it must be idempotent.\n`cleanup` runs best-effort at `chart teardown`; it must be idempotent and\nsucceed when nothing is left.",
+        "properties": {
+          "cleanup": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cleanup"
+          },
+          "postInstall": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Postinstall"
+          },
+          "preInstall": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preinstall"
+          }
+        },
+        "title": "ClusterTestHooks",
+        "type": "object"
+      },
       "ClusterTestProfile": {
         "additionalProperties": false,
         "description": "How to install and test a chart under one named profile.\n\n`namespace` is required: a chart's values routinely address siblings by\nin-cluster DNS name, so where it runs is part of the chart's intent, not\nsomething a command may pick for it.",
@@ -72,6 +125,17 @@
             "default": true,
             "title": "Helmtest",
             "type": "boolean"
+          },
+          "hooks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClusterTestHooks"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "namespace": {
             "minLength": 1,

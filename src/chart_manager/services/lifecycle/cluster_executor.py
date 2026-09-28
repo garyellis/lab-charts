@@ -28,6 +28,17 @@ from chart_manager.services.progress import (
 
 ActionVerdict = Literal["PASS", "FAIL", "SKIP"]
 
+#: Cleanup actions are skipped here; they run at teardown.
+CLEANUP_SKIP_REASON = "DeferredToTeardown"
+
+_HOOK_ACTIONS = frozenset(
+    {
+        ActionKind.HOOK_PRE_INSTALL,
+        ActionKind.HOOK_POST_INSTALL,
+        ActionKind.HOOK_CLEANUP,
+    }
+)
+
 _SUPPORTED_ACTIONS = frozenset(
     {
         ActionKind.NAMESPACE_ENSURE,
@@ -36,6 +47,7 @@ _SUPPORTED_ACTIONS = frozenset(
         ActionKind.HELM_UPGRADE_INSTALL,
         ActionKind.WORKLOAD_READY,
         ActionKind.HELM_TEST,
+        *_HOOK_ACTIONS,
     }
 )
 
@@ -95,6 +107,13 @@ class ClusterKubectl(Protocol):
         """Wait for workloads in a namespace to become ready."""
 
 
+class ClusterHooks(Protocol):
+    """Host-side commands declared by cluster-test profile hooks."""
+
+    def run(self, action: LifecycleAction) -> object:
+        """Run one hook action's argv; raise when it fails."""
+
+
 class ClusterPlanError(ValueError):
     """The supplied plan cannot be executed by the cluster action executor."""
 
@@ -124,9 +143,9 @@ class ClusterExecutionResult:
 
     @property
     def ok(self) -> bool:
-        """Whether every planned action passed."""
+        """Whether no planned action failed."""
 
-        return all(outcome.verdict == "PASS" for outcome in self.outcomes)
+        return all(outcome.verdict != "FAIL" for outcome in self.outcomes)
 
 
 def _required(value: str | None, action: LifecycleAction, field: str) -> str:
@@ -143,11 +162,13 @@ class ClusterActionExecutor:
         *,
         helm: ClusterHelm,
         kubectl: ClusterKubectl,
+        hooks: ClusterHooks | None = None,
         clock: Callable[[], datetime] | None = None,
         progress: ProgressCallback | None = None,
     ) -> None:
         self.helm = helm
         self.kubectl = kubectl
+        self.hooks = hooks
         self.clock = clock or (lambda: datetime.now(UTC))
         self.progress = progress
 
@@ -165,6 +186,12 @@ class ClusterActionExecutor:
         if unsupported:
             kinds = ", ".join(sorted({action.kind.value for action in unsupported}))
             raise ClusterPlanError(f"unsupported cluster action kind(s): {kinds}")
+        if self.hooks is None and any(action.kind in _HOOK_ACTIONS for action in plan.actions):
+            raise ClusterPlanError("cluster plan contains hook actions but no hooks port")
+        # Sorted (False < True) means the cleanups form the tail.
+        is_cleanup = [action.kind is ActionKind.HOOK_CLEANUP for action in plan.actions]
+        if is_cleanup != sorted(is_cleanup):
+            raise ClusterPlanError("hook-cleanup actions must form a contiguous tail of the plan")
         # Validate coordinates before starting, preventing a late malformed
         # action from leaving an avoidable partial deployment.
         for action in plan.actions:
@@ -174,31 +201,53 @@ class ClusterActionExecutor:
         failed = False
 
         for action in plan.actions:
-            if failed:
+            if action.kind is ActionKind.HOOK_CLEANUP:
+                outcome = self._skip(
+                    action, CLEANUP_SKIP_REASON, "cleanup hooks run at teardown"
+                )
+                emit(
+                    self.progress,
+                    detail("Skipped", self._progress_subject(action)),
+                )
+            elif failed:
                 outcome = self._skip(action, "FailFast", "an earlier action failed")
                 emit(
                     self.progress,
                     detail("Skipped", self._progress_subject(action)),
                 )
             else:
-                subject = self._progress_subject(action)
-                emit(self.progress, step(self._progress_label(action), subject))
-                outcome = self._execute_action(action)
+                outcome = self._run_with_progress(action)
                 failed = failed or outcome.verdict == "FAIL"
-                if outcome.verdict == "PASS":
-                    emit(self.progress, detail("Completed", subject))
-                else:
-                    emit(
-                        self.progress,
-                        failure(
-                            "Failed",
-                            f"{subject}: {outcome.detail or 'unknown error'}",
-                        ),
-                    )
 
             outcomes.append(outcome)
 
         return ClusterExecutionResult(tuple(outcomes))
+
+    def execute_cleanups(self, plan: LifecyclePlan) -> ClusterExecutionResult:
+        """Run a cleanup-only plan, continuing past failures."""
+
+        if self.hooks is None:
+            raise ClusterPlanError("cleanup plan requires a hooks port")
+        for action in plan.actions:
+            if action.kind is not ActionKind.HOOK_CLEANUP:
+                raise ClusterPlanError(f"cleanup plan contains {action.kind.value} action")
+            self._validate_coordinates(action)
+        return ClusterExecutionResult(
+            tuple(self._run_with_progress(action) for action in plan.actions)
+        )
+
+    def _run_with_progress(self, action: LifecycleAction) -> ClusterActionOutcome:
+        subject = self._progress_subject(action)
+        emit(self.progress, step(self._progress_label(action), subject))
+        outcome = self._execute_action(action)
+        if outcome.verdict == "PASS":
+            emit(self.progress, detail("Completed", subject))
+        else:
+            emit(
+                self.progress,
+                failure("Failed", f"{subject}: {outcome.detail or 'unknown error'}"),
+            )
+        return outcome
 
     def _validate_coordinates(self, action: LifecycleAction) -> None:
         if action.kind is ActionKind.NAMESPACE_ENSURE:
@@ -209,7 +258,7 @@ class ClusterActionExecutor:
         elif action.kind is ActionKind.WORKLOAD_READY:
             _required(action.target.namespace, action, "namespace")
             _required(action.target.release, action, "release")
-        elif action.kind is ActionKind.HELM_TEST:
+        elif action.kind is ActionKind.HELM_TEST or action.kind in _HOOK_ACTIONS:
             _required(action.target.release, action, "release")
             _required(action.target.namespace, action, "namespace")
 
@@ -252,6 +301,9 @@ class ClusterActionExecutor:
                     if output:
                         detail = f"{detail}: {output}"
                     raise RuntimeError(detail)
+            elif action.kind in _HOOK_ACTIONS:
+                assert self.hooks is not None  # guarded by the preflight check
+                self.hooks.run(action)
             else:  # guarded by the preflight check
                 raise ClusterPlanError(f"unsupported cluster action kind: {action.kind.value}")
         except Exception as exc:
@@ -309,4 +361,7 @@ class ClusterActionExecutor:
             ActionKind.HELM_UPGRADE_INSTALL: "Installing",
             ActionKind.WORKLOAD_READY: "Waiting for workloads",
             ActionKind.HELM_TEST: "Running Helm tests",
+            ActionKind.HOOK_PRE_INSTALL: "Running pre-install hook",
+            ActionKind.HOOK_POST_INSTALL: "Running post-install hook",
+            ActionKind.HOOK_CLEANUP: "Running cleanup hook",
         }[action.kind]

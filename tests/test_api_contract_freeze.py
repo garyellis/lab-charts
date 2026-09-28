@@ -316,6 +316,7 @@ def test_cluster_test_defaults() -> None:
     assert spec.dependent_tests == []
     assert profile.requires == []
     assert profile.values == ["values.yaml"]
+    assert profile.hooks is None
 
 
 def test_local_resource_defaults() -> None:
@@ -385,6 +386,11 @@ def _validation(**overrides: Any) -> dict[str, Any]:
     }
     raw.update(overrides)
     return raw
+
+
+def _hooks(hooks: Any) -> dict[str, Any]:
+    """A lifecycle whose one otherwise-valid profile carries ``hooks``."""
+    return _lifecycle({"clusterTest": {"profiles": {"m": {"namespace": "d", "hooks": hooks}}}})
 
 
 @pytest.mark.parametrize(
@@ -561,6 +567,36 @@ def _validation(**overrides: Any) -> dict[str, Any]:
             _lifecycle({"clusterTest": {"profiles": {"m": {"namespace": ""}}}}),
             "string_too_short",
             id="empty-cluster-test-namespace",
+        ),
+        pytest.param(
+            _hooks({"preInstall": []}),
+            "value_error",
+            id="empty-cluster-test-hook-argv",
+        ),
+        pytest.param(
+            _hooks({"cleanup": [""]}),
+            "value_error",
+            id="empty-cluster-test-hook-arg",
+        ),
+        pytest.param(
+            _hooks({"preInstall": "echo hi"}),
+            "list_type",
+            id="shell-string-cluster-test-hook",
+        ),
+        pytest.param(
+            _hooks({"postInstall": [1]}),
+            "string_type",
+            id="non-string-cluster-test-hook-arg",
+        ),
+        pytest.param(
+            _hooks({"pre_install": ["x"]}),
+            "extra_forbidden",
+            id="snake-case-preInstall",
+        ),
+        pytest.param(
+            _hooks({"preUpgrade": ["x"]}),
+            "extra_forbidden",
+            id="unknown-cluster-test-hook",
         ),
     ],
 )

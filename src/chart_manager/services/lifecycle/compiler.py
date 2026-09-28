@@ -10,12 +10,14 @@ from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.paths import validate_hook_executable
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
 )
+from chart_manager.services.lifecycle.plan_projection import cleanup_tail
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 #: Frozen first segment of every action ID (formerly `Workflow.CLUSTER_TEST`,
@@ -60,6 +62,9 @@ class ClusterTestCompiler:
         Cluster creation, API readiness, and LocalCluster bootstrap
         intentionally remain outside chart-authored intent and therefore
         outside this chart plan.
+
+        preInstall precedes the Helm install and postInstall the Helm tests.
+        Cleanups go at the plan tail in reverse install order.
         """
         install_plan = self.resolver.install_plan(chart, profile)
         actions: list[LifecycleAction] = []
@@ -84,6 +89,27 @@ class ClusterTestCompiler:
                 namespace=namespace,
             )
             prefix = (_CLUSTER_TEST_PREFIX, entry.chart, entry.profile)
+            hooks = profile_spec.hooks
+            hook_actions = {
+                kind: self._hook_action(
+                    kind,
+                    tuple(argv),
+                    target=target_coordinates,
+                    prefix=prefix,
+                    chart_path=cluster_chart.path,
+                    timeout=profile_spec.timeout,
+                    field=(
+                        f"{entry.chart}: spec.clusterTest.profiles."
+                        f"{entry.profile}.hooks.{phase}[0]"
+                    ),
+                )
+                for kind, phase, argv in (
+                    (ActionKind.HOOK_PRE_INSTALL, "preInstall", hooks and hooks.pre_install),
+                    (ActionKind.HOOK_POST_INSTALL, "postInstall", hooks and hooks.post_install),
+                    (ActionKind.HOOK_CLEANUP, "cleanup", hooks and hooks.cleanup),
+                )
+                if argv
+            }
             entry_actions: list[LifecycleAction] = []
             for kind in (
                 ActionKind.NAMESPACE_ENSURE,
@@ -91,6 +117,10 @@ class ClusterTestCompiler:
                 *((ActionKind.HELM_LINT,) if lint else ()),
                 ActionKind.HELM_UPGRADE_INSTALL,
             ):
+                if kind is ActionKind.HELM_UPGRADE_INSTALL and (
+                    pre_install := hook_actions.get(ActionKind.HOOK_PRE_INSTALL)
+                ):
+                    entry_actions.append(pre_install)
                 action_id = _action_id(*prefix, kind)
                 action_values = (
                     values
@@ -137,6 +167,8 @@ class ClusterTestCompiler:
                 timeout=profile_spec.timeout,
             )
             actions.append(ready)
+            if post_install := hook_actions.get(ActionKind.HOOK_POST_INSTALL):
+                actions.append(post_install)
             if profile_spec.helm_test:
                 test_id = _action_id(*prefix, ActionKind.HELM_TEST)
                 helm_test = LifecycleAction(
@@ -155,11 +187,50 @@ class ClusterTestCompiler:
                     timeout=profile_spec.timeout,
                 )
                 actions.append(helm_test)
+            if cleanup := hook_actions.get(ActionKind.HOOK_CLEANUP):
+                actions.append(cleanup)
 
         return LifecyclePlan(
             chart=chart,
             profile=profile,
-            actions=tuple(actions),
+            actions=cleanup_tail(actions),
+        )
+
+    def _hook_action(
+        self,
+        kind: ActionKind,
+        command: tuple[str, ...],
+        *,
+        target: ActionTarget,
+        prefix: tuple[str, ...],
+        chart_path: Path,
+        timeout: str,
+        field: str,
+    ) -> LifecycleAction:
+        """Compile one hook; a repository script is digested like a values file."""
+        script = validate_hook_executable(
+            self.root,
+            command[0],
+            field=field,
+            require_on_path=True,
+        )
+        action_id = _action_id(*prefix, kind)
+        return LifecycleAction(
+            action_id=action_id,
+            kind=kind,
+            target=target,
+            input_digest=_input_digest(
+                root=self.root,
+                action_id=action_id,
+                chart_path=chart_path,
+                values=(),
+                metadata=(),
+                command=command,
+                script=script,
+            ),
+            chart_path=chart_path.resolve(),
+            timeout=timeout,
+            command=command,
         )
 
 
@@ -187,6 +258,8 @@ def _input_digest(
     chart_path: Path,
     values: tuple[Path, ...],
     metadata: tuple[tuple[str, str], ...],
+    command: tuple[str, ...] = (),
+    script: Path | None = None,
 ) -> str:
     """Digest action intent and the local authored files that determine it."""
     root = root.resolve()
@@ -197,6 +270,11 @@ def _input_digest(
         digest.update(key.encode())
         digest.update(b"=")
         digest.update(value.encode())
+        digest.update(b"\0")
+    # Empty for non-hook actions, so their digests are unchanged.
+    for arg in command:
+        digest.update(b"argv=")
+        digest.update(arg.encode())
         digest.update(b"\0")
     # The top-level ``charts/`` directory contains generated/downloaded Helm
     # dependency artifacts. ``helm dependency update`` is allowed to create
@@ -211,6 +289,8 @@ def _input_digest(
         if path.is_file():
             candidates.add(_resolve_digest_input(path, root))
     candidates.update(_resolve_digest_input(path, root) for path in values)
+    if script is not None:
+        candidates.add(_resolve_digest_input(script, root))
     for resolved in sorted(candidates):
         label = str(resolved.relative_to(root))
         digest.update(label.encode())

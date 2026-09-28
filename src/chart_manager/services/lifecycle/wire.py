@@ -102,6 +102,7 @@ def _action(action: LifecycleAction) -> dict[str, Any]:
         "values": [path.as_posix() for path in action.values],
         "timeout": action.timeout,
         "metadata": dict(action.metadata),
+        "command": list(action.command),
     }
 
 

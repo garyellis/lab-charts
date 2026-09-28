@@ -25,7 +25,7 @@ from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.clusters._shared import (
     chart_name,
     lifecycle_install_plan,
@@ -114,6 +114,12 @@ class LocalBootstrapExecutor:
             for entry in plan:
                 chart = catalog.get(entry.chart)
                 profile = require_cluster_test_profile(chart.spec, entry.profile)
+                # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
+                if profile.hooks is not None:
+                    raise SpecError(
+                        f"bootstrap chart {entry.chart}:{entry.profile} declares "
+                        "cluster-test hooks, which bootstrap does not run"
+                    )
                 values = catalog.value_paths(chart, entry.profile)
                 namespace = profile.namespace
                 identities.add(

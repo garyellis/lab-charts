@@ -32,6 +32,7 @@ __all__ = [
     "ChartLifecycle",
     "ChartLifecycleMetadata",
     "ChartLifecycleSpec",
+    "ClusterTestHooks",
     "ClusterTestProfile",
     "ClusterTestRef",
     "ClusterTestSpec",
@@ -82,6 +83,26 @@ class ClusterTestRef(ApiModel):
     profile: str = "minimal"
 
 
+class ClusterTestHooks(StrictApiModel):
+    """Commands run around a profile's install, as argv lists (not shell strings).
+
+    `preInstall` runs before every install or upgrade, so it must be idempotent.
+    `cleanup` runs best-effort at `chart teardown`; it must be idempotent and
+    succeed when nothing is left.
+    """
+
+    pre_install: list[str] | None = Field(default=None, alias="preInstall")
+    post_install: list[str] | None = Field(default=None, alias="postInstall")
+    cleanup: list[str] | None = None
+
+    @field_validator("pre_install", "post_install", "cleanup")
+    @classmethod
+    def _valid_argv(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and (not value or any(not item for item in value)):
+            raise ValueError("cluster-test hook must be a non-empty argv of non-empty strings")
+        return value
+
+
 class ClusterTestProfile(ApiModel):
     """How to install and test a chart under one named profile.
 
@@ -96,6 +117,7 @@ class ClusterTestProfile(ApiModel):
     values: list[str] = Field(default_factory=lambda: ["values.yaml"])
     helm_test: bool = Field(default=True, alias="helmTest")
     timeout: str = "10m"
+    hooks: ClusterTestHooks | None = None
 
     @field_validator("values")
     @classmethod

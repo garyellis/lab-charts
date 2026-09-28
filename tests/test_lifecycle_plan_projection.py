@@ -11,6 +11,7 @@ from chart_manager.services.lifecycle.models import (
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
     ExternallySatisfiedLifecycle,
+    cleanup_tail,
     exclude_bootstrap_owned_charts,
 )
 
@@ -148,3 +149,38 @@ def test_requires_exact_managed_lifecycle_identity(
     projected = exclude_bootstrap_owned_charts(original, {identity})
 
     assert projected is original
+
+
+def test_cleanup_tail_moves_cleanups_last_in_reverse_entry_order() -> None:
+    base_install = action("base", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    base_cleanup = action("base", "cleanup", ActionKind.HOOK_CLEANUP)
+    app_install = action("app", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    app_cleanup = action("app", "cleanup", ActionKind.HOOK_CLEANUP)
+    web_install = action("web", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    web_cleanup = action("web", "cleanup", ActionKind.HOOK_CLEANUP)
+
+    reordered = cleanup_tail(
+        [
+            base_install,
+            base_cleanup,
+            app_install,
+            web_cleanup,
+            web_install,
+            app_cleanup,
+        ]
+    )
+
+    assert reordered == (
+        base_install,
+        app_install,
+        web_install,
+        web_cleanup,
+        app_cleanup,
+        base_cleanup,
+    )
+
+
+def test_cleanup_tail_without_cleanups_keeps_order() -> None:
+    actions = cluster_plan().actions
+
+    assert cleanup_tail(actions) == actions

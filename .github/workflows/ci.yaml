@@ -485,10 +485,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Delete kind cluster
+      - name: Teardown (cleanup hooks, delete kind cluster)
         if: always()
         continue-on-error: true
-        run: kind delete cluster --name "$CLUSTER_NAME"
+        run: |
+          uv run chart-manager chart teardown --chart "$CHART" \
+            --profile "$PROFILE" \
+            --cluster-name "$CLUSTER_NAME"
 
       - name: Summary
         if: always()
