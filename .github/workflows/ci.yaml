@@ -2,6 +2,7 @@ name: ci
 
 # Combined PR/main pipeline:
 #   layering     → architecture contract between cli/, services/, integrations/.
+#   chart-contracts → offline rendered-chart source contracts.
 #   prep         → compute diff + sandbox chart matrix once.
 #   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
 #   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
@@ -12,8 +13,8 @@ name: ci
 # selection and the sandbox chart/profile matrix, including repository-level
 # safety fanout for kind config, tool pins, and workflow changes.
 #
-# layering has no `needs` — it's a seconds-long static gate on the Python
-# package and shares nothing with the chart pipeline.
+# layering and chart-contracts have no `needs` — they are independent fast
+# gates and share nothing with the chart pipeline.
 
 on:
   push:
@@ -94,9 +95,6 @@ jobs:
           uv run --extra dev pytest -q -m integration
           tests/integration/test_chart_lifecycle_packaging.py
 
-      - name: Chart source contracts
-        run: scripts/check-chart-source-contracts
-
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
@@ -106,6 +104,21 @@ jobs:
       # is clean; test annotations stay lightweight by design.
       - name: Type check
         run: uv run --extra dev mypy src/chart_manager
+
+  # Keep rendered-chart behavior and security contracts independent from the
+  # Python architecture gate. The aggregator prepares each chart's locked
+  # dependencies, then runs every chart-owned offline source contract.
+  chart-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install mise + tools
+        uses: jdx/mise-action@v4
+
+      - name: Chart source contracts
+        run: scripts/check-chart-source-contracts
 
   prep:
     runs-on: ubuntu-latest
@@ -508,7 +521,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
-    needs: [prep, layering, validate, sandbox-test]
+    needs: [prep, layering, chart-contracts, validate, sandbox-test]
     if: >-
       ${{
         !cancelled() &&
@@ -527,6 +540,7 @@ jobs:
           ) &&
         needs.prep.outputs.publish_charts != '' &&
         needs.layering.result == 'success' &&
+        needs.chart-contracts.result == 'success' &&
         needs.validate.result == 'success' &&
         (needs.sandbox-test.result == 'success' || needs.sandbox-test.result == 'skipped')
       }}

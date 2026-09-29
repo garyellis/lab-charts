@@ -188,9 +188,10 @@ and that file is always canonical JSON regardless of `-o`.
 CI runs the same commands you run locally.
 
 ```text
-layering (import contract, lint, types, unit tests)
-prep ──┬── validate ──────────────────────────────┐
-       └── sandbox-test (matrix per chart) ───────┴── publish (one batch)
+layering (import contract, lint, types, unit tests) ────────────────────┐
+chart-contracts (offline rendered-chart contracts) ────────────────────┤
+prep ──┬── validate ───────────────────────────────────────────────────┤
+       └── sandbox-test (matrix per chart) ────────────────────────────┴── publish
 ```
 
 `prep` computes the changed files and derives the validate and sandbox
