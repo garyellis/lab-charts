@@ -79,32 +79,18 @@ def test_schema_regexes_extract_policy_version_and_tracking_pins() -> None:
     assert policy is not None
     assert policy.group("currentValue") == "1.35.3"
 
-    lock = """\
-    kubernetes:
-      repository: yannh/kubernetes-json-schema
-      track: master
-      resolved: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    catalog:
-      repository: datreeio/CRDs-catalog
-      track: main
-      resolved: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-"""
+    # Exercise the generated artifact rather than a hand-written field order:
+    # the lock serializer's stable ordering is part of the Renovate contract.
+    lock = (ROOT / ".chart-manager" / "schemas.lock.yaml").read_text()
     pins = [
         (match.group("depName"), match.group("currentValue"), match.group("currentDigest"))
         for match in lock_pattern.finditer(lock)
     ]
-    assert pins == [
-        (
-            "yannh/kubernetes-json-schema",
-            "master",
-            "a" * 40,
-        ),
-        (
-            "datreeio/CRDs-catalog",
-            "main",
-            "b" * 40,
-        ),
-    ]
+    assert {(name, track) for name, track, _digest in pins} == {
+        ("datreeio/CRDs-catalog", "main"),
+        ("yannh/kubernetes-json-schema", "master"),
+    }
+    assert all(re.fullmatch(r"[a-f0-9]{40}", digest) for _, _, digest in pins)
 
 
 def test_image_regex_splits_on_the_tag_not_a_registry_port() -> None:

@@ -51,7 +51,7 @@
         "/^\\.chart-manager/schemas\\.lock\\.yaml$/"
       ],
       "matchStrings": [
-        "repository:\\s*(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)\\s+track:\\s*(?<currentValue>[^\\s]+)\\s+resolved:\\s*(?<currentDigest>[a-f0-9]{40})"
+        "repository:\\s*(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)\\s+resolved:\\s*(?<currentDigest>[a-f0-9]{40})\\s+track:\\s*(?<currentValue>[^\\s]+)"
       ],
       "packageNameTemplate": "https://github.com/{{{depName}}}.git",
       "depTypeTemplate": "schema-lock",

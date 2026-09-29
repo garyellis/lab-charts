@@ -203,7 +203,7 @@ changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
 The validate job restores the XDG schema store using the committed
 `.chart-manager/schemas.lock.yaml` hash, runs `mise run schemas` to hydrate a
-cold or incomplete cache from that immutable lock, then validates with
+cold cache from that immutable lock, then validates with
 `--offline`. Normal validation never advances source refs or rewrites the
 lock; only `schemas sync --update` does that.
 

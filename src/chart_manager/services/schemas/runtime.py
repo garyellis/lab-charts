@@ -103,7 +103,8 @@ def load_schema_runtime(
         )
         raise SchemaStoreError(
             f"schema generation {lock.generation} is corrupt: {details}; "
-            "run `chart-manager schemas sync`"
+            f"remove {status.generation_path}, then run "
+            "`chart-manager schemas sync` while online"
         )
     if status.missing or status.uncovered:
         detail_parts = [
