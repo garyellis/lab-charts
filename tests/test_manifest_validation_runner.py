@@ -19,7 +19,7 @@ from chart_manager.integrations.kyverno import Kyverno, KyvernoReport, PolicyRes
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.manifest_validation.models import WorklistRow
+from chart_manager.services.manifest_validation.models import PhaseResult, WorklistRow
 from chart_manager.services.manifest_validation.runner import (
     ManifestValidationRunner as _ManifestValidationRunner,
 )
@@ -95,8 +95,15 @@ class _StubHelm(Helm):
         api_versions=None,
         kube_version=None,
         skip_tests: bool = True,
+        include_crds: bool = False,
     ) -> Path:
-        self.calls.append({"release": release, "output_dir": output_dir})
+        self.calls.append(
+            {
+                "release": release,
+                "output_dir": output_dir,
+                "include_crds": include_crds,
+            }
+        )
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         if self._raise is not None:
@@ -221,6 +228,7 @@ def test_render_pass_triggers_schema_phase(tmp_path: Path) -> None:
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "no policies discovered"
     assert result.outcome() is Outcome.SUCCESS
+    assert helm.calls[0]["include_crds"] is True
 
 
 @pytest.mark.parametrize(
@@ -466,6 +474,47 @@ def test_schema_fail_preserves_disabled_policy_semantics(tmp_path: Path) -> None
     assert policy.skip_cause == "validator_disabled"
     assert kyverno.calls == []
     assert result.outcome() is Outcome.FAILED
+
+
+def test_category_aggregate_preserves_environment_error_precedence() -> None:
+    invocations = (
+        ValidatorInvocation(
+            validator_id="environment",
+            category=ValidatorCategory.SCHEMA,
+            order=100,
+            enabled=True,
+            config=KubeconformConfig(kubernetes_version=None, schema_locations=()),
+        ),
+        ValidatorInvocation(
+            validator_id="tool",
+            category=ValidatorCategory.SCHEMA,
+            order=200,
+            enabled=True,
+            config=KubeconformConfig(kubernetes_version=None, schema_locations=()),
+        ),
+    )
+
+    result = _ManifestValidationRunner._aggregate_category(
+        ValidatorCategory.SCHEMA,
+        invocations,
+        {
+            "environment": PhaseResult(
+                phase="schema",
+                status="FAIL",
+                detail="schema source unavailable",
+                error_type="environment",
+            ),
+            "tool": PhaseResult(
+                phase="schema",
+                status="FAIL",
+                detail="validator crashed",
+                error_type="tool",
+            ),
+        },
+    )
+
+    assert result.status == "FAIL"
+    assert result.error_type == "environment"
 
 
 def test_policy_runs_after_passing_schema(tmp_path: Path) -> None:

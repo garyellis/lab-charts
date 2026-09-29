@@ -318,6 +318,17 @@ def validate(
             ),
         ),
     ] = False,
+    offline: Annotated[
+        bool | None,
+        typer.Option(
+            "--offline/--online",
+            help=(
+                "Require all locked validation inputs to be available locally. "
+                "--online permits cache hydration (default, unless "
+                "CHART_MANAGER_OFFLINE or config sets offline)."
+            ),
+        ),
+    ] = None,
     output: OutputOption = None,
     github_step_summary: GithubStepSummaryOption = False,
 ) -> None:
@@ -363,6 +374,9 @@ def validate(
         tool_timeout=tool_timeout,
         dep_update_timeout=dep_update_timeout,
         fail_fast=fail_fast,
+        # A command-line choice is authoritative. With neither spelling,
+        # inherit the Settings value resolved once by the root callback.
+        offline=(getattr(ctx.obj, "offline", False) if offline is None else offline),
     )
     _execute(
         request,

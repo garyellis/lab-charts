@@ -62,6 +62,16 @@ def test_log_format_has_case_insensitive_environment_override(
     assert Settings().log_format == "json"
 
 
+def test_offline_has_boolean_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHART_MANAGER_OFFLINE", raising=False)
+    assert Settings().offline is False
+
+    monkeypatch.setenv("CHART_MANAGER_OFFLINE", "1")
+    assert Settings().offline is True
+
+
 def test_local_resource_file_has_default_and_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

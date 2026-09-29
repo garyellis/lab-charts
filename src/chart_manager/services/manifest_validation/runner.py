@@ -636,6 +636,10 @@ class ManifestValidationRunner:
                 namespace=cfg.row.namespace,
                 output_dir=out_dir,
                 values=cfg.values,
+                # CRDs from locked chart dependencies are authoritative
+                # inputs for schema generation and part of the manifest set
+                # validation is expected to cover.
+                include_crds=True,
             )
         except ExternalCommandError as exc:
             # Logged as well as returned: the PhaseResult reaches the summary
@@ -765,6 +769,8 @@ class ManifestValidationRunner:
         error_type: ErrorType | None = (
             "spec"
             if any(result.error_type == "spec" for _, result in selected)
+            else "environment"
+            if any(result.error_type == "environment" for _, result in selected)
             else "tool"
             if any(result.error_type == "tool" for _, result in selected)
             else None

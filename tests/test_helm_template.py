@@ -215,6 +215,23 @@ def test_template_with_skip_tests_false_omits_flag(tmp_path: Path) -> None:
     assert "--skip-tests" not in runner.calls[0]
 
 
+def test_template_can_include_crds(tmp_path: Path) -> None:
+    chart = tmp_path / "chart"
+    _write_chart(chart, with_deps=False)
+    runner = FakeCommandRunner()
+    helm = _helm(runner)
+
+    helm.template(
+        "r",
+        chart,
+        namespace="ns",
+        output_dir=tmp_path / "out",
+        include_crds=True,
+    )
+
+    assert "--include-crds" in runner.calls[0]
+
+
 
 def test_dependency_update_deduped_per_chart_path(tmp_path: Path) -> None:
     # Two template() calls on the same chart with deps should only run

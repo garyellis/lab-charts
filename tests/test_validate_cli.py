@@ -301,6 +301,14 @@ def test_validate_help_lists_output_option() -> None:
     assert "--output" in result.output
 
 
+def test_validate_help_lists_offline_and_online_flags() -> None:
+    result = cli("chart", "validate", "--help")
+
+    assert result.exit_code == 0
+    assert "--offline" in result.output
+    assert "--online" in result.output
+
+
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
     from chart_manager.services.manifest_validation.models import (
         PhaseResult,
@@ -748,6 +756,41 @@ def test_run_builds_a_request_from_its_flags(
     assert request.tool_timeout == 12.0
     assert request.fail_fast is True
     assert request.root == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("setting", "flag", "expected"),
+    [
+        ("0", (), False),
+        ("1", (), True),
+        ("0", ("--offline",), True),
+        ("1", ("--online",), False),
+    ],
+)
+def test_offline_flag_overrides_settings_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    setting: str,
+    flag: tuple[str, ...],
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("CHART_MANAGER_OFFLINE", setting)
+    fake = _FakeApp(_outcome(tmp_path / "out"))
+    _install(monkeypatch, fake)
+
+    result = cli(
+        "chart",
+        "validate",
+        "--all",
+        *flag,
+        "--root",
+        str(tmp_path),
+        "--progress",
+        "none",
+    )
+
+    assert result.exit_code == 0
+    assert fake.requests[0].offline is expected
 
 
 # --- the `validate chart` + `validate run` merge ---------------------------

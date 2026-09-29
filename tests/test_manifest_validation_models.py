@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
+    RunRequest,
     RunResult,
     WorklistRow,
 )
@@ -95,6 +96,68 @@ def test_tool_error_takes_precedence_over_plain_fail() -> None:
     assert result.outcome() is Outcome.TOOL
 
 
+def test_environment_error_maps_to_exit_five() -> None:
+    result = _run(
+        _row(
+            schema=PhaseResult(
+                phase="schema",
+                status="FAIL",
+                detail="locked schema source is unavailable",
+                error_type="environment",
+            ),
+        )
+    )
+
+    assert result.outcome() is Outcome.ENVIRONMENT
+    assert exit_code_for(result.outcome()) == 5
+
+
+def test_environment_error_takes_precedence_over_tool_and_chart_failures() -> None:
+    result = _run(
+        _row(
+            schema=PhaseResult(
+                phase="schema",
+                status="FAIL",
+                detail="locked schema source is unavailable",
+                error_type="environment",
+            ),
+        ),
+        _row(
+            render=PhaseResult(
+                phase="render",
+                status="FAIL",
+                detail="helm crashed",
+                error_type="tool",
+            ),
+        ),
+        _row(
+            policy=PhaseResult(phase="policy", status="FAIL", detail="policy denied"),
+        ),
+    )
+
+    assert result.outcome() is Outcome.ENVIRONMENT
+
+
+def test_spec_error_takes_precedence_over_environment_error() -> None:
+    result = _run(
+        _row(
+            schema=PhaseResult(
+                phase="schema",
+                status="FAIL",
+                detail="locked schema source is unavailable",
+                error_type="environment",
+            ),
+        ),
+        spec_errors=("corrupt chart-lifecycle.yaml",),
+    )
+
+    assert result.outcome() is Outcome.SPEC
+
+
 def test_empty_run_is_success() -> None:
     result = _run()
     assert result.outcome() is Outcome.SUCCESS
+
+
+def test_run_request_defaults_to_online_validation() -> None:
+    assert RunRequest().offline is False

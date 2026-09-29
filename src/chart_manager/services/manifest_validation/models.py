@@ -32,7 +32,7 @@ from chart_manager.plumbing.exit_codes import Outcome
 
 PhaseName = Literal["render", "schema", "policy"]
 PhaseStatus = Literal["PASS", "FAIL", "SKIP", "NOT_RUN"]
-ErrorType = Literal["tool", "spec"]
+ErrorType = Literal["tool", "spec", "environment"]
 SkipCause = Literal["validator_disabled", "upstream_failed"]
 
 #: The phases, in dependency order (render feeds schema feeds policy).
@@ -149,24 +149,31 @@ class RunResult:
         things happened, so a non-CLI caller gets the same judgement without
         inheriting a process convention it has no use for.
 
-        Precedence, most fundamental fault first: a spec error beats a tool
-        error beats a validation failure beats a pass. The reasoning is that
-        the later phases ran on input the earlier fault already invalidated,
-        so reporting the downstream symptom would send the operator to the
-        wrong file.
+        Precedence, most fundamental fault first: a spec error beats an
+        environment error, which beats a tool error, which beats a validation
+        failure, which beats a pass. The reasoning is that the later phases
+        ran on input the earlier fault already invalidated, so reporting the
+        downstream symptom would send the operator to the wrong file. An
+        unavailable locked input or remote source is an environment failure,
+        not evidence that either a validator or the chart is broken.
         """
         if self.spec_errors:
             return Outcome.SPEC
+        has_environment_error = False
         has_tool_error = False
         has_fail = False
         for row in self.rows:
             for phase in row.phases.values():
                 if phase.error_type == "spec":
                     return Outcome.SPEC
+                if phase.error_type == "environment":
+                    has_environment_error = True
                 if phase.error_type == "tool":
                     has_tool_error = True
                 if phase.status == "FAIL":
                     has_fail = True
+        if has_environment_error:
+            return Outcome.ENVIRONMENT
         if has_tool_error:
             return Outcome.TOOL
         if has_fail:
@@ -273,6 +280,10 @@ class RunRequest:
     tool_timeout: float = 0.0
     dep_update_timeout: float = 300.0
     fail_fast: bool = False
+    # Assert that validation may use only already-cached inputs. The service
+    # that prepares schema inputs owns enforcement; the request merely carries
+    # the caller's resolved CLI/settings choice across the surface boundary.
+    offline: bool = False
 
     def __post_init__(self) -> None:
         """Reject an unknown phase name."""

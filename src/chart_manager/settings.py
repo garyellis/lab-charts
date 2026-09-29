@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     local_config: Path = DEFAULT_LOCAL_CONFIG
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
+    # Store-only schema validation. The normal path remains cache-first and
+    # may hydrate missing entries from the immutable lock; this switch is an
+    # assertion used primarily by CI and diagnostics that no network fallback
+    # is permitted.
+    offline: bool = False
 
     #: The repository this invocation operates on.
     #:
