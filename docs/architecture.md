@@ -107,11 +107,11 @@ proving the guards still fire on a synthetic violation.
 
 ## A note on shared bases
 
-`api/base.py` deliberately has **two** bases. `ChartLifecycle` and its
+`api/v1alpha1/common.py` deliberately has **two** bases. `ChartLifecycle` and its
 envelope are `strict=True`; the capability specs nested inside are not, so
 `spec.validation.enabled: "true"` is coerced today while
 `spec.enabled: "true"` is rejected. Collapsing them would reject YAML that
-currently parses. The two API groups likewise keep separate metadata models:
+currently parses. The kinds likewise keep separate metadata models:
 lifecycle names allow any non-padded string, local resource names must be
 DNS labels. Share a base only where behavior is provably identical —
 tidiness is not a reason to change what a user's file may say.

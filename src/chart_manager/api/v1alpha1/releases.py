@@ -1,4 +1,4 @@
-"""Release models shared by local resources."""
+"""Local releases validate path spelling; domain loaders validate existence and Chart.yaml."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ __all__ = [
     "LocalChartRelease",
     "OciChartRelease",
     "RepoChartRelease",
+    "ResourceMetadata",
     "StackRelease",
     "WorkloadsReady",
 ]
@@ -44,6 +45,17 @@ _KIND_RUNTIME_PLACEHOLDERS = frozenset(
         "${kind.controlPlanePort}",
     }
 )
+
+
+class ResourceMetadata(StrictApiModel):
+    """DNS-label identity shared by both local resource kinds."""
+
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, value: str) -> str:
+        return dns_label(value, field="metadata.name")
 
 
 def _paths(value: object, *, field: str) -> list[Path]:
@@ -220,9 +232,8 @@ class BootstrapReadiness(StrictApiModel):
 class _BootstrapRelease:
     """Fields available only while bootstrapping a ``LocalCluster``.
 
-    A plain class, not a model: Pydantic collects fields and validators from
-    every entry in the MRO, so this stays a mixin that contributes no
-    ``model_config`` of its own. Listing it first preserves field order.
+    Declare this plain mixin before the bootstrap models and list it first in
+    their MRO so ``runtimeValues`` and ``readiness`` remain first in schemas.
     """
 
     runtime_values: dict[str, str] = Field(default_factory=dict, alias="runtimeValues")
@@ -257,6 +268,7 @@ class BootstrapRepoChartRelease(_BootstrapRelease, RepoChartRelease):
     """HTTPS repository release augmented with bootstrap runtime contracts."""
 
 
+# Union aliases follow their member classes so they need no forward references.
 type BootstrapRelease = Annotated[
     BootstrapLifecycleRelease
     | BootstrapLocalChartRelease

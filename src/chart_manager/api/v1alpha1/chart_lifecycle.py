@@ -43,15 +43,7 @@ __all__ = [
     "TriggerValue",
 ]
 
-# The group string and the kind are each spelled exactly once, here. The
-# envelope annotates its fields with these aliases and the constants are read
-# back out of them, so a rename cannot leave the accepted `apiVersion` and the
-# exported constant disagreeing -- which is precisely what happened while the
-# group moved off `cmg.io`.
-#
-# Plain assignment, not `type X = ...`: a PEP 695 alias makes Pydantic emit a
-# `$ref` into `$defs` instead of an inline `const`, which would change the
-# generated JSON Schema for no benefit.
+# A PEP 695 alias would emit a schema `$ref` instead of an inline `const`.
 ChartLifecycleKind = Literal["ChartLifecycle"]
 CHART_LIFECYCLE_KIND: ChartLifecycleKind = get_args(ChartLifecycleKind)[0]
 

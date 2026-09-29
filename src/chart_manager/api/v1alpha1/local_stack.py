@@ -6,8 +6,8 @@ from typing import Literal, get_args
 
 from pydantic import Field
 
-from chart_manager.api.v1alpha1.common import ApiVersion, ResourceMetadata, StrictApiModel
-from chart_manager.api.v1alpha1.releases import StackRelease
+from chart_manager.api.v1alpha1.common import ApiVersion, StrictApiModel
+from chart_manager.api.v1alpha1.releases import ResourceMetadata, StackRelease
 
 LocalStackKind = Literal["LocalStack"]
 LOCAL_STACK_KIND: LocalStackKind = get_args(LocalStackKind)[0]

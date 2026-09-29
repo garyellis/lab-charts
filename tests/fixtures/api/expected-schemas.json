@@ -854,7 +854,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
-        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "description": "DNS-label identity shared by both local resource kinds.",
         "properties": {
           "name": {
             "title": "Name",
@@ -1091,7 +1091,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
-        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "description": "DNS-label identity shared by both local resource kinds.",
         "properties": {
           "name": {
             "title": "Name",

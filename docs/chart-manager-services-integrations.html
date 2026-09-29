@@ -1136,9 +1136,9 @@
         <div class="two-col">
           <div class="block"><h4>Model rules</h4>
             <ul>
-              <li>Every model extends <span class="ref" data-tip="api/base.py — class StrictApiModel(ApiModel): model_config = ConfigDict(strict=True)"><code>_StrictModel</code></span> — <code>extra="forbid"</code> plus <code>strict=True</code>, so an unknown key or a coerced type is an error, not a silent default</li>
+              <li>Every model extends <span class="ref" data-tip="api/v1alpha1/common.py — class StrictApiModel(ApiModel): model_config = ConfigDict(strict=True)"><code>StrictApiModel</code></span> — <code>extra="forbid"</code> plus <code>strict=True</code>, so an unknown key or a coerced type is an error, not a silent default</li>
               <li><code>apiVersion</code> and <code>kind</code> are <code>Literal</code>s; no other envelope is accepted</li>
-              <li><span class="ref" data-tip="api/v1alpha1/common.py — class ResourceMetadata(_StrictModel)"><code>ResourceMetadata.name</code></span>, release <code>name</code>, <code>namespace</code> and <code>profile</code> are all lowercase DNS labels of at most 63 characters</li>
+              <li><span class="ref" data-tip="api/v1alpha1/releases.py — class ResourceMetadata(StrictApiModel)"><code>ResourceMetadata.name</code></span>, release <code>name</code>, <code>namespace</code> and <code>profile</code> are all lowercase DNS labels of at most 63 characters</li>
               <li><code>LocalStackSpec.releases</code> declares <code>min_length=1</code> — an empty stack is not a stack</li>
               <li>Failures are normalized into one <code>SpecError: invalid local resource &lt;path&gt;: …</code> boundary</li>
             </ul>

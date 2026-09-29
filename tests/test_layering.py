@@ -827,6 +827,19 @@ def test_api_modules_exist_and_expose_their_root_models() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "dotted",
+    [
+        "chart_manager.api.base",
+        "chart_manager.api.lifecycle.v1alpha1",
+        "chart_manager.api.local.v1alpha1",
+    ],
+)
+def test_obsolete_api_modules_are_absent(dotted: str) -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(dotted)
+
+
 def test_api_kind_modules_do_not_import_each_other() -> None:
     """Kinds share common vocabulary, not other root contracts."""
     kinds = frozenset(_API_ROOT_MODELS)

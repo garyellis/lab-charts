@@ -7,8 +7,8 @@ from typing import Literal, get_args
 
 from pydantic import Field, field_validator
 
-from chart_manager.api.v1alpha1.common import ApiVersion, ResourceMetadata, StrictApiModel
-from chart_manager.api.v1alpha1.releases import BootstrapRelease
+from chart_manager.api.v1alpha1.common import ApiVersion, StrictApiModel
+from chart_manager.api.v1alpha1.releases import BootstrapRelease, ResourceMetadata
 from chart_manager.plumbing.paths import relative_path
 
 LocalClusterKind = Literal["LocalCluster"]

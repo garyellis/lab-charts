@@ -42,7 +42,7 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
     ManifestValidationSpec,
     ManifestValidationValidatorsSpec,
 )
-from chart_manager.api.v1alpha1.common import API_VERSION, ResourceMetadata
+from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.api.v1alpha1.local_cluster import (
     LOCAL_CLUSTER_KIND,
     LocalBootstrap,
@@ -57,6 +57,7 @@ from chart_manager.api.v1alpha1.releases import (
     LifecycleRelease,
     OciChartRelease,
     RepoChartRelease,
+    ResourceMetadata,
 )
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 from chart_manager.domain.local_resources import DEFAULT_STACKS_DIR
@@ -425,7 +426,7 @@ def _hooks(hooks: Any) -> dict[str, Any]:
             id="snake-case-releaseName",
         ),
         pytest.param(
-            _lifecycle({}, apiVersion="lifecycle.chartmanager.io/v1"),
+            _lifecycle({}, apiVersion="chartmanager.io/v1beta1"),
             "literal_error",
             id="wrong-apiVersion",
         ),
@@ -665,7 +666,7 @@ _DIGEST = "sha256:" + "0" * 64
             id="unknown-envelope-field",
         ),
         pytest.param(
-            _cluster(_bootstrap(), apiVersion="local.chartmanager.io/v1"),
+            _cluster(_bootstrap(), apiVersion="chartmanager.io/v1beta1"),
             "literal_error",
             id="wrong-apiVersion",
         ),
@@ -903,6 +904,11 @@ def _stack(*releases: dict[str, Any], **envelope: Any) -> dict[str, Any]:
             _stack({"type": "lifecycle", "chart": "charts/demo", "profile": "minimal"}, status={}),
             "extra_forbidden",
             id="unknown-envelope-field",
+        ),
+        pytest.param(
+            _stack(_oci(version="1.2.3"), apiVersion="chartmanager.io/v1beta1"),
+            "literal_error",
+            id="wrong-apiVersion",
         ),
         pytest.param(
             _stack(_oci(version="1.2.3"), apiVersion="lifecycle.chartmanager.io/v1alpha1"),

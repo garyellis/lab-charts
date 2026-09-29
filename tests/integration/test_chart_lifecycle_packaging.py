@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 
 pytestmark = pytest.mark.integration
@@ -66,8 +67,13 @@ def test_every_production_chart_package_contains_chart_lifecycle(
     assert len(archives) == len(chart_dirs)
     for archive in archives:
         with tarfile.open(archive, mode="r:gz") as package:
-            members = {member.name for member in package.getmembers()}
-        packaged_configs = {
-            member for member in members if member.endswith(f"/{LIFECYCLE_FILENAME}")
-        }
-        assert len(packaged_configs) == 1, archive.name
+            packaged_configs = [
+                member
+                for member in package.getmembers()
+                if member.name.endswith(f"/{LIFECYCLE_FILENAME}")
+            ]
+            assert len(packaged_configs) == 1, archive.name
+            config = package.extractfile(packaged_configs[0])
+            assert config is not None
+            document = yaml.safe_load(config)
+        assert document["apiVersion"] == API_VERSION, archive.name
