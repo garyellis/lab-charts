@@ -35,6 +35,18 @@ class SchemaRuntime:
             scope=scope,
         )
 
+    def ignored_missing_kinds(self, scope: SchemaScope) -> tuple[str, ...]:
+        """Return the locked per-scope allow-list as kubeconform Kind skips."""
+        return tuple(
+            sorted(
+                {
+                    requirement.gvk.kind
+                    for requirement in self.lock.inventory
+                    if requirement.scope == scope and requirement.allow_missing
+                }
+            )
+        )
+
 
 def load_schema_runtime(
     workspace: RepositoryWorkspace,

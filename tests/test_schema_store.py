@@ -153,3 +153,12 @@ def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) ->
     assert "/generated/demo/ci/" in locations.generated_schema_locations[0]
     assert len(locations.fallback_schema_locations) == 1
     assert "/kubernetes/" in locations.fallback_schema_locations[0]
+
+
+def test_core_schema_path_matches_kubeconform_group_expansion() -> None:
+    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
+
+    assert (
+        artifact_relative_path(source="kubernetes", gvk=gvk, scope=None)
+        == "kubernetes/v1/configmap_v1.json"
+    )

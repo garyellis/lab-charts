@@ -77,10 +77,13 @@ from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
+    KubeconformRuntimeInputs,
     ValidatorProvider,
     validate_registry,
 )
 from chart_manager.services.manifest_validation.wire import to_json
+from chart_manager.services.schemas.models import SchemaScope
+from chart_manager.services.schemas.runtime import SchemaRuntime, load_schema_runtime
 from chart_manager.settings import (
     DEFAULT_CHARTS_DIR,
     validate_charts_dir,
@@ -205,6 +208,7 @@ class RunnerSpec:
 
 
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
+SchemaRuntimeFactory = Callable[[RepositoryWorkspace, bool, int], SchemaRuntime]
 
 
 # --- the app ---------------------------------------------------------------
@@ -234,6 +238,7 @@ class ManifestValidationService:
         validation_fanout: tuple[str, ...] = (),
         workspace: RepositoryWorkspace | None = None,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
+        schema_runtime_factory: SchemaRuntimeFactory | None = None,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self.workspace = workspace
@@ -259,6 +264,9 @@ class ManifestValidationService:
         self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
+        self._schema_runtime_factory = schema_runtime_factory or (
+            lambda workspace, _offline, _workers: load_schema_runtime(workspace)
+        )
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -349,7 +357,20 @@ class ManifestValidationService:
 
         out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
 
-        compiled_by_chart: dict[str, ResolvedManifestValidation] = {}
+        # Load and verify the immutable generation once for the whole run.
+        # Every row then receives only local templates from this snapshot;
+        # no validator process can resolve or download a schema on its own.
+        schema_runtime: SchemaRuntime | None = None
+        if workspace.validation is not None and "schema" in request.phases and any(
+            build.targets[row.chart].spec.validators.kubeconform for row in rows
+        ):
+            schema_runtime = self._schema_runtime_factory(
+                workspace,
+                request.offline,
+                request.workers,
+            )
+
+        compiled_by_case: dict[tuple[str, str], ResolvedManifestValidation] = {}
         compile_warnings: list[str] = []
         configs: list[RowConfig] = []
         for row in rows:
@@ -359,18 +380,33 @@ class ManifestValidationService:
             # invariant broke, and a silent `continue` would drop the row
             # from the run without it appearing anywhere in the result.
             target = build.targets[row.chart]
-            if row.chart not in compiled_by_chart:
+            case = (row.chart, row.env)
+            if case not in compiled_by_case:
+                runtime_inputs = KubeconformRuntimeInputs()
+                if schema_runtime is not None:
+                    locations = schema_runtime.locations(
+                        SchemaScope(chart=row.chart, environment=row.env)
+                    )
+                    runtime_inputs = KubeconformRuntimeInputs(
+                        kubernetes_version=schema_runtime.lock.policy.kubernetes_version,
+                        generated_schema_locations=locations.generated_schema_locations,
+                        fallback_schema_locations=locations.fallback_schema_locations,
+                        ignore_missing_schemas=schema_runtime.ignored_missing_kinds(
+                            SchemaScope(chart=row.chart, environment=row.env)
+                        ),
+                    )
                 compiled = resolve_manifest_validation(
                     target,
                     repo_root,
                     providers=self._validator_providers,
                     policies_dir=self._policies_dir,
+                    kubeconform=runtime_inputs,
                 )
-                compiled_by_chart[row.chart] = compiled
+                compiled_by_case[case] = compiled
                 compile_warnings.extend(compiled.warnings)
                 for warning in compiled.warnings:
                     self._on_warn(warning)
-            configs.append(row_config_for(compiled_by_chart[row.chart], row))
+            configs.append(row_config_for(compiled_by_case[case], row))
 
         workers = resolve_workers(request.workers)
         # Streamed subprocess output from >1 worker interleaves into
@@ -412,7 +448,7 @@ class ManifestValidationService:
             "fail_fast=%s phases=%s changed_files=%s out_dir=%s",
             out_dir.name,
             len(configs),
-            len(compiled_by_chart),
+            len({chart for chart, _environment in compiled_by_case}),
             workers,
             request.fail_fast,
             ",".join(sorted(request.phases)),

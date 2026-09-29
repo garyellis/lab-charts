@@ -69,6 +69,7 @@ from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
+from chart_manager.integrations.schema_sources import SchemaSourceClient
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.chart_catalog import ChartCatalogService
@@ -99,6 +100,13 @@ from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
 from chart_manager.services.publish import PublishService
+from chart_manager.services.schemas.app import (
+    RepositorySchemaService,
+    build_repository_schema_service,
+)
+from chart_manager.services.schemas.doctor import SchemaDoctor
+from chart_manager.services.schemas.errors import SchemaSourceEnvironmentError
+from chart_manager.services.schemas.runtime import SchemaRuntime, load_schema_runtime
 from chart_manager.services.upgrader import (
     GitBaselineReader,
     PullRequestLike,
@@ -235,6 +243,7 @@ class Container:
             "git": Git(resolved_root, runner, charts_dir=workspace.charts_dir).preflight,
             "github": Github(resolved_root, runner).preflight,
             "renovate": Renovate(runner).preflight,
+            "schemas": SchemaDoctor(workspace).preflight,
             "events": preflight_event_store,
         }
         return DoctorService(providers)
@@ -442,6 +451,42 @@ class Container:
             on_warn=on_warn,
             command_runner=self.command_runner(),
             workspace=workspace,
+            schema_runtime_factory=self._prepare_schema_runtime,
+        )
+
+    def _prepare_schema_runtime(
+        self,
+        workspace: RepositoryWorkspace,
+        offline: bool,
+        workers: int,
+    ) -> SchemaRuntime:
+        """Return a ready generation, hydrating a cold cache once when online."""
+        try:
+            return load_schema_runtime(workspace)
+        except SchemaSourceEnvironmentError:
+            if offline:
+                raise
+
+        # Cache readiness is checked before rendering or source access. A
+        # cold online run hydrates the exact committed lock once here, before
+        # the validation runner fans rows out to workers.
+        self.schema_service(workspace.root).sync(
+            update=False,
+            offline=False,
+            workers=workers,
+        )
+        return load_schema_runtime(workspace)
+
+    def schema_service(self, root: Path | None = None) -> RepositorySchemaService:
+        """Build eager schema inventory/synchronization for one workspace."""
+        workspace = self.workspace(root)
+        timeout = self._settings.command_timeout
+        return build_repository_schema_service(
+            workspace=workspace,
+            validation=self.validate_app(root=workspace.root),
+            source_client=SchemaSourceClient(
+                timeout=timeout if timeout is not None and timeout > 0 else 15.0
+            ),
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:

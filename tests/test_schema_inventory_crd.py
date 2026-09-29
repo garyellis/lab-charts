@@ -109,6 +109,19 @@ def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
     assert "additionalProperties" not in spec["properties"]["arbitrary"]
 
 
+def test_inventory_reads_json_manifests(tmp_path: Path) -> None:
+    (tmp_path / "configmap.json").write_text(
+        '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"demo"}}'
+    )
+
+    inventory = scan_rendered_directory(
+        tmp_path,
+        scope=SchemaScope(chart="demo", environment="ci"),
+    )
+
+    assert [item.gvk.key for item in inventory.requirements] == ["v1/ConfigMap"]
+
+
 def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
     tmp_path: Path,
 ) -> None:

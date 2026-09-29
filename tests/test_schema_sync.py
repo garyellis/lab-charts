@@ -50,7 +50,7 @@ class _Sources:
                 value = _DEPLOYMENT_SCHEMA
             elif "/example.io/widget_v1.json" in request.url:
                 value = _WIDGET_SCHEMA
-            elif "widget-example-io-v1.json" in request.url:
+            elif "widget-example-v1.json" in request.url:
                 if not allow_not_found:
                     raise AssertionError("in-tree Widget 404 must permit catalog fallback")
                 missing.append(request.key)

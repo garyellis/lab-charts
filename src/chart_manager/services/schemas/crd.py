@@ -99,10 +99,15 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
             {"type": "string", "enum": [f"{group}/{version}"]},
         )
         properties.setdefault("kind", {"type": "string", "enum": [kind]})
-        properties.setdefault(
-            "metadata",
-            {"type": "object", "additionalProperties": True},
-        )
+        # CRD structural schemas commonly include ``metadata: {type: object}``
+        # as a marker but do not describe ObjectMeta. Closing that empty object
+        # under strict validation rejects every real resource. Object metadata
+        # is validated by the API server independently of custom fields, so
+        # keep this envelope permissive here.
+        properties["metadata"] = {
+            "type": "object",
+            "additionalProperties": True,
+        }
         required = normalized.setdefault("required", [])
         if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
             raise SchemaIntegrityError(

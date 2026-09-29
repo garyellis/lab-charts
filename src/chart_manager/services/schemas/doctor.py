@@ -82,7 +82,14 @@ class SchemaDoctor:
                     data={"offlineReady": False},
                 ),
             )
-        return policy_check, lock_check, _store_check(lock, status)
+        policy_matches = bool(
+            lock_check.data and lock_check.data.get("matchesPolicy", False)
+        )
+        return (
+            policy_check,
+            lock_check,
+            _store_check(lock, status, policy_matches=policy_matches),
+        )
 
     def _policy_check(self) -> tuple[Check, AuthoredSchemaPolicy | None]:
         validation = self.workspace.validation
@@ -168,7 +175,7 @@ class SchemaDoctor:
                     outcome=Outcome.SPEC,
                     data=data,
                 ),
-                None,
+                lock,
             )
         return (
             Check.ok(
@@ -181,7 +188,12 @@ class SchemaDoctor:
         )
 
 
-def _store_check(lock: SchemaLock, status: StoreStatus) -> Check:
+def _store_check(
+    lock: SchemaLock,
+    status: StoreStatus,
+    *,
+    policy_matches: bool,
+) -> Check:
     unavailable = {problem.path for problem in (*status.missing, *status.corrupt)}
     missing_gvks = _missing_gvks(lock, unavailable)
     source_coverage = _source_coverage(lock)
@@ -196,7 +208,7 @@ def _store_check(lock: SchemaLock, status: StoreStatus) -> Check:
         "sourceCoverage": source_coverage,
         "missingGVKs": missing_gvks,
         "ready": status.ready,
-        "offlineReady": status.ready,
+        "offlineReady": status.ready and policy_matches,
     }
     sources = ", ".join(
         f"{source}={source_coverage[source]['files']}" for source in _SOURCES
@@ -206,7 +218,7 @@ def _store_check(lock: SchemaLock, status: StoreStatus) -> Check:
         f"expected={status.expected} present={status.present} "
         f"missing={len(status.missing)} corrupt={len(status.corrupt)} "
         f"uncovered={len(status.uncovered)}; sources: {sources}; "
-        f"offline-ready={str(status.ready).lower()}"
+        f"offline-ready={str(status.ready and policy_matches).lower()}"
     )
     if missing_gvks:
         detail += "; missing GVKs: " + ", ".join(

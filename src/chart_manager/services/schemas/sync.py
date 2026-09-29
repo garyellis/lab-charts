@@ -482,8 +482,11 @@ def _gvk_key(gvk: GroupVersionKind) -> tuple[str, str, str]:
 
 
 def _kubernetes_schema_url(policy: LockedSchemaPolicy, gvk: GroupVersionKind) -> str:
+    # kubernetes-json-schema filenames use the API group prefix (``rbac``),
+    # not the fully-qualified DNS group (``rbac.authorization.k8s.io``).
+    group = gvk.group.split(".", 1)[0] if gvk.group else ""
     suffix = "-" + "-".join(
-        part.replace(".", "-") for part in ([gvk.group] if gvk.group else []) + [gvk.version]
+        part for part in ([group] if group else []) + [gvk.version]
     )
     filename = f"{gvk.kind.lower()}{suffix.lower()}.json"
     path = f"v{policy.kubernetes_version}-standalone-strict/{filename}"

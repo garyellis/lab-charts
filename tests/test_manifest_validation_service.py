@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import (
@@ -35,6 +38,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
+from chart_manager.services.schemas.store import KubeconformSchemaLocations
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -184,6 +188,70 @@ def test_run_passes_resolved_workers_to_the_runner(
     _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert rec.runs[0][0].max_workers == 4
+
+
+def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha")
+    policy = WorkspaceValidation.model_validate(
+        {
+            "kubernetesVersion": "1.35.3",
+            "schemas": {
+                "generateFromCRDs": True,
+                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+            },
+        }
+    )
+    workspace = RepositoryWorkspace(
+        root=tmp_path,
+        name="demo",
+        validation=policy,
+        authored=True,
+    )
+    calls: list[tuple[RepositoryWorkspace, bool, int]] = []
+
+    class Runtime:
+        lock = SimpleNamespace(
+            policy=SimpleNamespace(kubernetes_version="1.35.3")
+        )
+
+        def locations(self, scope):  # type: ignore[no-untyped-def]
+            return KubeconformSchemaLocations(
+                generated_schema_locations=(f"/cache/{scope.environment}/generated",),
+                fallback_schema_locations=("/cache/shared/fallback",),
+            )
+
+        def ignored_missing_kinds(self, _scope):  # type: ignore[no-untyped-def]
+            return ()
+
+    def runtime_factory(selected: RepositoryWorkspace, offline: bool, workers: int):
+        calls.append((selected, offline, workers))
+        return Runtime()
+
+    rec = Recorder()
+    _app(
+        rec,
+        workspace=workspace,
+        schema_runtime_factory=runtime_factory,
+    ).run(
+        RunRequest(
+            root=tmp_path,
+            skip_change_detection=True,
+            offline=True,
+            workers=3,
+        )
+    )
+
+    assert calls == [(workspace, True, 3)]
+    configs = {cfg.row.env: cfg for cfg in rec.configs}
+    for environment in ("dev", "prod"):
+        invocation = configs[environment].validator_invocations[0]
+        assert isinstance(invocation.config, KubeconformConfig)
+        assert invocation.config.schema_locations == (
+            f"/cache/{environment}/generated",
+            "/cache/shared/fallback",
+        )
 
 
 def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:

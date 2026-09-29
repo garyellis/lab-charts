@@ -223,6 +223,7 @@ _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("helmrelease",): ("helmrelease",),
     ("local",): ("local",),
     ("plan",): ("plan",),
+    ("schemas",): ("schemas",),
     ("version",): ("version",),
     # FROZEN. `renovate-global.json` pins the literal string
     # `chart-manager upgrade-finalize --path <dir>` in a security allowlist

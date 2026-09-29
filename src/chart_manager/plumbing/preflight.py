@@ -36,7 +36,7 @@ case free, deterministic, and testable by monkeypatching one stdlib symbol.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
@@ -86,16 +86,32 @@ class Check:
     #: `SUCCESS` for a passing or skipped check, so the aggregate outcome is
     #: a fold over this field and never a second classification of `status`.
     outcome: Outcome = Outcome.SUCCESS
+    #: Optional structured evidence. Kept additive: ordinary checks omit it,
+    #: while diagnostics with counts and paths can expose them without asking
+    #: consumers to parse the human-readable detail sentence.
+    data: Mapping[str, Any] | None = None
 
     @classmethod
-    def ok(cls, name: str, detail: str) -> Check:
+    def ok(
+        cls,
+        name: str,
+        detail: str,
+        *,
+        data: Mapping[str, Any] | None = None,
+    ) -> Check:
         """A check that passed."""
-        return cls(name=name, status=CheckStatus.OK, detail=detail)
+        return cls(name=name, status=CheckStatus.OK, detail=detail, data=data)
 
     @classmethod
-    def skipped(cls, name: str, detail: str) -> Check:
+    def skipped(
+        cls,
+        name: str,
+        detail: str,
+        *,
+        data: Mapping[str, Any] | None = None,
+    ) -> Check:
         """A check that could not be answered, and is not itself a failure."""
-        return cls(name=name, status=CheckStatus.SKIPPED, detail=detail)
+        return cls(name=name, status=CheckStatus.SKIPPED, detail=detail, data=data)
 
     @classmethod
     def failed(
@@ -105,6 +121,7 @@ class Check:
         *,
         remediation: str,
         outcome: Outcome,
+        data: Mapping[str, Any] | None = None,
     ) -> Check:
         """A check that failed, with the fix and what it costs at the exit."""
         return cls(
@@ -113,22 +130,27 @@ class Check:
             detail=detail,
             remediation=remediation,
             outcome=outcome,
+            data=data,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """The wire shape: name, status, detail, remediation.
 
-        Four keys, fixed. `outcome` is deliberately absent: it is how the
+        The four base keys are fixed; `data` is added only when the check
+        carries structured evidence. `outcome` is deliberately absent: it is how the
         *process* ends, which the report reports once, and duplicating it
         per row would invite a consumer to fold it themselves and disagree
         with `DoctorReport.outcome` about precedence.
         """
-        return {
+        result: dict[str, Any] = {
             "name": self.name,
             "status": str(self.status),
             "detail": self.detail,
             "remediation": self.remediation,
         }
+        if self.data is not None:
+            result["data"] = dict(self.data)
+        return result
 
 
 def first_line(text: str) -> str:

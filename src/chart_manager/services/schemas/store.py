@@ -74,18 +74,22 @@ def artifact_relative_path(
 ) -> str:
     """Choose a deterministic collision-free store path for one schema."""
     name = f"{gvk.kind.lower()}_{gvk.version}.json"
+    # Kubeconform exposes the core API version (for example ``v1``) through
+    # its ``.Group`` template variable.  Named API groups use their literal
+    # group.  Mirror that behavior in the store so one location template
+    # resolves both core and grouped resources.
+    template_group = gvk.group or gvk.version
     if source in {"generated", "local"}:
         if scope is None:
             raise SchemaStoreError(f"{source} schema {gvk.key} requires a scope")
         environment = scope.environment or "_all"
-        return (Path(source) / scope.chart / environment / gvk.group / name).as_posix()
+        return (
+            Path(source) / scope.chart / environment / template_group / name
+        ).as_posix()
     if source == "catalog":
-        return (Path("catalog") / gvk.group / name).as_posix()
+        return (Path("catalog") / template_group / name).as_posix()
     if source == "kubernetes":
-        # An empty core group intentionally contributes no path segment. The
-        # corresponding kubeconform template contains `.../{{.Group}}/...`;
-        # its harmless double slash resolves to this path for core/v1 objects.
-        return (Path("kubernetes") / gvk.group / name).as_posix()
+        return (Path("kubernetes") / template_group / name).as_posix()
     raise SchemaStoreError(f"unknown schema source: {source}")
 
 

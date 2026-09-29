@@ -16,6 +16,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.models import WorklistRow
 from chart_manager.services.manifest_validation.runner import ManifestValidationRunner, RowConfig
 from chart_manager.services.manifest_validation.validator_adapters import (
@@ -33,6 +34,10 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 FIXTURE_CHARTS = Path(__file__).parent.parent / "fixtures" / "charts"
+FIXTURE_SCHEMAS = Path(__file__).parent.parent / "fixtures" / "schemas"
+SCHEMA_LOCATION = str(
+    FIXTURE_SCHEMAS / "{{.Group}}" / "{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+)
 REPO_POLICIES = REPO_ROOT / "policies"
 
 
@@ -44,8 +49,9 @@ def _skip_if_missing(*tools: str) -> None:
 
 def _runner(out_root: Path) -> ManifestValidationRunner:
     cmd_runner = SubprocessRunner()
+    helm = Helm(runner=cmd_runner)
     return ManifestValidationRunner(
-        helm=Helm(runner=cmd_runner),
+        helm_factory=lambda _version, _binary: helm,
         output_root=out_root,
         validators={
             "kubeconform": KubeconformValidator(Kubeconform(runner=cmd_runner)),
@@ -68,20 +74,18 @@ def _cfg(chart_dir: Path, *, env: str = "dev") -> RowConfig:
         values=values,
         validator_invocations=(
             ValidatorInvocation(
-                "kubeconform",
-                ValidatorCategory.SCHEMA,
-                100,
-                "schema-validate",
-                True,
-                KubeconformConfig(None, ()),
+                validator_id="kubeconform",
+                category=ValidatorCategory.SCHEMA,
+                order=100,
+                enabled=True,
+                config=KubeconformConfig(None, (SCHEMA_LOCATION,)),
             ),
             ValidatorInvocation(
-                "kyverno",
-                ValidatorCategory.POLICY,
-                200,
-                "policy-validate",
-                True,
-                KyvernoConfig((REPO_POLICIES,)),
+                validator_id="kyverno",
+                category=ValidatorCategory.POLICY,
+                order=200,
+                enabled=True,
+                config=KyvernoConfig((REPO_POLICIES,)),
             ),
         ),
     )
@@ -97,7 +101,7 @@ def test_passing_app_renders_schema_passes_policy_passes(tmp_path: Path) -> None
     assert row.phases["render"].status == "PASS", row.phases["render"].detail
     assert row.phases["schema"].status == "PASS", row.phases["schema"].detail
     assert row.phases["policy"].status == "PASS", row.phases["policy"].detail
-    assert result.exit_code() == 0
+    assert result.outcome() is Outcome.SUCCESS
 
 
 def test_policy_violator_passes_schema_fails_policy(tmp_path: Path) -> None:
@@ -120,4 +124,4 @@ def test_policy_violator_passes_schema_fails_policy(tmp_path: Path) -> None:
     assert "Deployment/policy-violator" in detail
     assert "forbid-load-balancer" in detail
     assert "Service/policy-violator" in detail
-    assert result.exit_code() == 1
+    assert result.outcome() is Outcome.FAILED

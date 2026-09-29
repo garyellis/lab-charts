@@ -63,7 +63,7 @@ COMMAND_REQUIREMENTS: Final[Mapping[str, frozenset[str]]] = {
     "chart show": frozenset(),
     "chart test": frozenset({"helm", "kubectl", "kind"}),
     "chart upgrade": frozenset({"git", "github", "renovate", "events"}),
-    "chart validate": frozenset({"helm", "kubeconform", "kyverno"}),
+    "chart validate": frozenset({"helm", "kubeconform", "kyverno", "schemas"}),
     "doctor": frozenset(),
     "event emit build": frozenset({"events"}),
     "event emit promote": frozenset({"events"}),
@@ -77,6 +77,7 @@ COMMAND_REQUIREMENTS: Final[Mapping[str, frozenset[str]]] = {
     "local status": frozenset({"helm", "kubectl", "kind"}),
     "local up": frozenset({"helm", "kubectl", "kind"}),
     "plan": frozenset({"git"}),
+    "schemas sync": frozenset({"helm", "schemas"}),
     "upgrade-finalize": frozenset({"git"}),
     "version": frozenset(),
 }

@@ -316,7 +316,14 @@ class KubeconformProvider:
                     spec.kubernetes_version or context.kubeconform.kubernetes_version
                 ),
                 schema_locations=locations,
-                ignore_missing_schemas=tuple(spec.ignore_missing_schemas),
+                ignore_missing_schemas=tuple(
+                    dict.fromkeys(
+                        (
+                            *context.kubeconform.ignore_missing_schemas,
+                            *spec.ignore_missing_schemas,
+                        )
+                    )
+                ),
             ),
         )
 

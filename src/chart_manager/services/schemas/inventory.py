@@ -15,7 +15,10 @@ from chart_manager.services.schemas.models import (
     sort_requirements,
 )
 
-_YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+# JSON is a YAML subset and Helm may preserve JSON-formatted CRDs in the
+# rendered tree. Inventory every manifest format accepted by kubeconform so
+# the lock cannot omit resources that validation will later see.
+_MANIFEST_SUFFIXES = frozenset({".json", ".yaml", ".yml"})
 
 
 @dataclass(frozen=True)
@@ -65,7 +68,7 @@ def scan_rendered_directory(
     for path in sorted(
         candidate
         for candidate in root.rglob("*")
-        if candidate.is_file() and candidate.suffix.lower() in _YAML_SUFFIXES
+        if candidate.is_file() and candidate.suffix.lower() in _MANIFEST_SUFFIXES
     ):
         try:
             documents = load_yaml_documents(path)
@@ -99,6 +102,12 @@ def scan_rendered_directory(
                 scope=scope,
                 allow_missing=(
                     resource.gvk.kind in allow_missing or resource.gvk.key in allow_missing
+                    # yannh/kubernetes-json-schema publishes CRD component
+                    # definitions but no top-level CustomResourceDefinition
+                    # schema. Keep the exception explicit in the lock so the
+                    # validator skip is derived from verified inventory rather
+                    # than hidden in the kubeconform adapter.
+                    or _is_crd(resource.gvk)
                 ),
             )
             for resource in ordered

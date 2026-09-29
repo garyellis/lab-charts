@@ -39,6 +39,7 @@ class KubeconformRuntimeInputs:
     kubernetes_version: str | None = None
     generated_schema_locations: tuple[str, ...] = ()
     fallback_schema_locations: tuple[str, ...] = ()
+    ignore_missing_schemas: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
