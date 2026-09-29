@@ -291,7 +291,7 @@ class ManifestValidationRunner:
         with self._event_lock:
             self._terminal_events.clear()
 
-        blockers = self._prepare(configs, active=active, fail_fast=fail_fast)
+        blockers = self._prepare(configs, fail_fast=fail_fast)
         results: list[RowResult] = []
         runnable: list[RowConfig] = []
         stopped = False
@@ -396,7 +396,6 @@ class ManifestValidationRunner:
         self,
         configs: list[RowConfig],
         *,
-        active: frozenset[str],
         fail_fast: bool,
     ) -> dict[tuple[HelmBinding, Path], tuple[Exception, str]]:
         """Build the helms and prefetch the deps; report what blocks which rows.
@@ -427,27 +426,22 @@ class ManifestValidationRunner:
                     if cfg.helm_binding == binding:
                         key = (binding, cfg.chart_path.resolve())
                         blockers[key] = (exc, "helm binding unavailable")
-        # NOTE: `_run_row` renders unconditionally (schema and policy need the
-        # tree), so this gate is narrower than the work it guards: a
-        # `--phase schema` run renders WITHOUT the prefetch and each row pays
-        # its own first-time dep fetch. Left as-is because widening it adds
-        # `helm dependency update` subprocesses to a run that does not ask for
-        # them today; fix it deliberately, with a timing test, not as a side
-        # effect.
-        if "render" in active:
-            prefetched = self._prefetch_dependencies(
-                configs,
-                fail_fast=fail_fast,
-                unusable=frozenset(unusable),
+        # Every validation request renders first, including schema-only and
+        # policy-only requests, so every request gets the same dependency
+        # preparation path.
+        prefetched = self._prefetch_dependencies(
+            configs,
+            fail_fast=fail_fast,
+            unusable=frozenset(unusable),
+        )
+        for key, failure in prefetched.items():
+            _LOG.error(
+                "dependency prefetch failed: chart_path=%s: %s: %s",
+                key[1],
+                type(failure).__name__,
+                failure,
             )
-            for key, failure in prefetched.items():
-                _LOG.error(
-                    "dependency prefetch failed: chart_path=%s: %s: %s",
-                    key[1],
-                    type(failure).__name__,
-                    failure,
-                )
-                blockers[key] = (failure, "dependency prefetch failed")
+            blockers[key] = (failure, "dependency prefetch failed")
         return blockers
 
     def _prefetch_dependencies(
@@ -457,16 +451,13 @@ class ManifestValidationRunner:
         fail_fast: bool,
         unusable: frozenset[HelmBinding] = frozenset(),
     ) -> dict[tuple[HelmBinding, Path], Exception]:
-        """Run `helm dependency update` once per distinct (binding, chart path).
+        """Prepare dependencies once per distinct (binding, chart path).
 
-        Helm.dependency_update is already idempotent (per-chart lock + dedupe
-        set), so this is technically redundant — but doing the prefetch BEFORE
-        the worker fan-out means no row blocks on another row's first-time dep
-        fetch. Parallelizes across distinct charts at the same worker count as
-        the main pool: `Helm` locks per chart path, not per instance, so the
-        fetches below genuinely overlap. `tests/test_manifest_validation_runner.py`
-        asserts the wall-clock, because the claim is not checkable by reading
-        this function alone.
+        Helm.dependency_update_if_stale is idempotent (per-chart lock + dedupe
+        set) and avoids a subprocess when the lock and packages are already
+        current. Doing the preparation before worker fan-out means no row
+        blocks on another row's first-time fetch. Distinct stale charts update
+        in parallel at the same worker count as the main pool.
 
         Keyed by binding as well as path because the dedupe set lives on the
         `Helm` instance: the same chart under two pinned helm versions is two
@@ -490,7 +481,7 @@ class ManifestValidationRunner:
 
         def _update(binding: HelmBinding, chart_path: Path) -> None:
             """Prefetch one chart's helm dependencies under one binding."""
-            self._helm_for(binding).dependency_update(
+            self._helm_for(binding).dependency_update_if_stale(
                 chart_path, timeout=self.dep_update_timeout
             )
 

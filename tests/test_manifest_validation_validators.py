@@ -3,8 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.domain import chart_deps
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.services.manifest_validation import app as manifest_app
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -36,8 +38,10 @@ from chart_manager.services.manifest_validation.validators import (
 class _HelmStub:
     timeout = None
 
-    def dependency_update(self, _chart: Path, *, timeout: float | None = None) -> None:
-        return None
+    def dependency_update_if_stale(
+        self, _chart: Path, *, timeout: float | None = None
+    ) -> bool:
+        return False
 
     def template(
         self,
@@ -60,6 +64,30 @@ def _row() -> WorklistRow:
         release="demo",
         namespace="default",
     )
+
+
+def test_runner_factory_injects_dependency_predicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturingHelm:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(manifest_app, "Helm", _CapturingHelm)
+    service = ManifestValidationService(
+        validator_providers=(),
+        command_runner=object(),  # type: ignore[arg-type]
+    )
+    runner = service._build_runner(
+        RunnerSpec(output_root=tmp_path / "out", validator_ids=frozenset())
+    )
+
+    runner.helm_factory(None, None)
+
+    assert captured["deps_are_fresh"] is chart_deps.deps_are_fresh
+    assert captured["chart_has_dependencies"] is chart_deps.chart_has_dependencies
 
 
 @dataclass

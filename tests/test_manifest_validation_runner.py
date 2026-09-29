@@ -75,10 +75,13 @@ class _StubHelm(Helm):
         self.calls: list[dict] = []
         self.dep_update_calls: list[Path] = []
 
-    def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:  # type: ignore[override]
+    def dependency_update_if_stale(  # type: ignore[override]
+        self, chart_path: Path, *, timeout: float | None = None
+    ) -> bool:
         # Stub the runner's dep-prefetch pass: track calls, don't shell out.
         _ = timeout  # accepted for signature parity with the real Helm.
         self.dep_update_calls.append(chart_path.resolve())
+        return True
 
     def template(  # type: ignore[override]
         self,
@@ -582,10 +585,13 @@ def test_dependency_prefetch_failure_isolated_by_chart(
     workers: int,
 ) -> None:
     class _PrefetchFailureHelm(_StubHelm):
-        def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
-            super().dependency_update(chart_path, timeout=timeout)
+        def dependency_update_if_stale(
+            self, chart_path: Path, *, timeout: float | None = None
+        ) -> bool:
+            super().dependency_update_if_stale(chart_path, timeout=timeout)
             if chart_path.name == "bad":
                 raise RuntimeError("registry unavailable")
+            return True
 
     runner = ManifestValidationRunner(
         helm=_PrefetchFailureHelm(succeed=True),
@@ -909,12 +915,32 @@ def test_phases_subset_excluding_render_still_renders(tmp_path: Path) -> None:
     row_result = result.rows[0]
     # Render ran and PASSed even though the caller did not ask for it.
     assert row_result.phases["render"].status == "PASS"
+    assert helm.dep_update_calls == [(tmp_path / "chart").resolve()]
     assert len(helm.calls) == 1
     assert row_result.phases["schema"].status == "PASS"
     assert kc.calls != []
     assert row_result.phases["policy"].status == "NOT_RUN"
     assert ky.calls == []
     assert result.outcome() is Outcome.SUCCESS
+
+
+def test_policy_only_request_prepares_dependencies_before_render(tmp_path: Path) -> None:
+    helm = _StubHelm(succeed=True)
+    kyverno = _StubKyverno(report=_kyverno_pass())
+    runner = ManifestValidationRunner(
+        helm=helm,
+        output_root=tmp_path / "out",
+        kyverno=kyverno,
+    )
+
+    result = runner.run(
+        [_cfg(_row(), tmp_path / "chart", policy_paths=[tmp_path / "policies"])],
+        enabled_phases=frozenset({"policy"}),
+    )
+
+    assert helm.dep_update_calls == [(tmp_path / "chart").resolve()]
+    assert result.rows[0].phases["render"].status == "PASS"
+    assert result.rows[0].phases["policy"].status == "PASS"
 
 
 def test_chart_disabled_kubeconform_skips_it_without_blocking_policy(

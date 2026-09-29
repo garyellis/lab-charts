@@ -2,8 +2,8 @@
 
 The lab `up` re-run path is dominated by ~18 `helm dependency update`
 invocations (~5-15s each) -- the single biggest tax on iteration. The
-`dependency_update_if_stale` elides those when Chart.lock is newer than
-Chart.yaml and its dependency identities match the materialized charts.
+`dependency_update_if_stale` elides those when Chart.lock's Helm digest and
+dependency identities match the materialized charts.
 The per-instance cache then dedupes within a single process.
 """
 from __future__ import annotations
@@ -33,7 +33,11 @@ def _helm(runner: FakeCommandRunner) -> Helm:
     assumes stale and always runs the update. This file is the gate's
     coverage, so it needs the real predicate.
     """
-    return Helm(runner=runner, deps_are_fresh=chart_deps.deps_are_fresh)
+    return Helm(
+        runner=runner,
+        deps_are_fresh=chart_deps.deps_are_fresh,
+        chart_has_dependencies=chart_deps.chart_has_dependencies,
+    )
 
 
 def _write_chart(path: Path, dependencies: str | None = None) -> None:
@@ -64,7 +68,7 @@ _LOCK_ONE_DEP = (
     "  - name: foo\n"
     "    version: 1.0.0\n"
     "    repository: https://example.test/charts\n"
-    "digest: sha256:abc\n"
+    "digest: sha256:ac904eb48ba9649a9d5261dfc887cd08080cdddfd2e7bca3217ff88cfaadb27b\n"
 )
 
 
@@ -72,6 +76,8 @@ def _materialize_dep(
     chart: Path,
     name: str = "foo",
     version: str = "1.0.0",
+    *,
+    helm_gzip_extra: bool = False,
 ) -> None:
     """Create a minimal real Helm package under ``charts/``."""
     chart_yaml = (
@@ -79,8 +85,20 @@ def _materialize_dep(
     ).encode()
     info = tarfile.TarInfo(f"{name}/Chart.yaml")
     info.size = len(chart_yaml)
-    with tarfile.open(chart / "charts" / f"{name}-{version}.tgz", "w:gz") as archive:
+    package = chart / "charts" / f"{name}-{version}.tgz"
+    with tarfile.open(package, "w:gz") as archive:
         archive.addfile(info, io.BytesIO(chart_yaml))
+    if helm_gzip_extra:
+        compressed = package.read_bytes()
+        # Helm's Go gzip writer includes FEXTRA. Insert a minimal valid extra
+        # field into Python's otherwise equivalent gzip header.
+        package.write_bytes(
+            compressed[:3]
+            + bytes([compressed[3] | 0x04])
+            + compressed[4:10]
+            + b"\x04\x00HELM"
+            + compressed[10:]
+        )
 
 
 def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> None:
@@ -101,13 +119,16 @@ def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> 
     assert runner.calls == []
 
 
-def test_dependency_update_if_stale_runs_when_chart_yaml_is_newer(tmp_path: Path) -> None:
+def test_dependency_update_if_stale_ignores_filesystem_mtime(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
     (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
     (chart / "charts").mkdir()
     _materialize_dep(chart)
-    # Stale lock: Chart.yaml just edited, lock predates it.
+    # Unrelated metadata edits and filesystem timestamps do not change the
+    # dependency content Helm hashes.
+    chart_yaml = chart / "Chart.yaml"
+    chart_yaml.write_text(chart_yaml.read_text() + "description: edited metadata\n")
     _mtime(chart / "Chart.lock", seconds_ago=60)
 
     runner = FakeCommandRunner()
@@ -115,8 +136,65 @@ def test_dependency_update_if_stale_runs_when_chart_yaml_is_newer(tmp_path: Path
 
     ran = helm.dependency_update_if_stale(chart)
 
-    assert ran is True
-    assert runner.calls == [("helm", "dependency", "update", str(chart))]
+    assert ran is False
+    assert runner.calls == []
+
+
+def test_dependency_digest_covers_all_helm_dependency_fields(tmp_path: Path) -> None:
+    chart = tmp_path / "demo"
+    _write_chart(
+        chart,
+        dependencies=(
+            "dependencies:\n"
+            "  - name: foo\n"
+            "    version: ^1.0.0\n"
+            "    repository: https://example.test/charts\n"
+            "    condition: foo.enabled\n"
+            "    tags: [backend, cache]\n"
+            "    enabled: true\n"
+            "    import-values:\n"
+            "      - data\n"
+            "      - child: exports.data\n"
+            "        parent: imports\n"
+            "    alias: db\n"
+        ),
+    )
+    (chart / "Chart.lock").write_text(
+        "dependencies:\n"
+        "  - name: foo\n"
+        "    version: 1.2.3\n"
+        "    repository: https://example.test/charts\n"
+        "digest: sha256:e812ebf3588e27c5c0c9bea509cfbd610ffc6311e12fe8766ae4039677b7b44a\n"
+    )
+    (chart / "charts").mkdir()
+    _materialize_dep(chart, version="1.2.3")
+
+    assert chart_deps.deps_are_fresh(chart) is True
+
+    chart_yaml = chart / "Chart.yaml"
+    chart_yaml.write_text(chart_yaml.read_text().replace("foo.enabled", "foo.disabled"))
+    assert chart_deps.deps_are_fresh(chart) is False
+
+
+def test_deps_are_fresh_reads_helm_gzip_extra_header(tmp_path: Path) -> None:
+    chart = tmp_path / "demo"
+    _write_chart(chart)
+    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "charts").mkdir()
+    _materialize_dep(chart, helm_gzip_extra=True)
+
+    assert chart_deps.deps_are_fresh(chart) is True
+
+
+def test_dependency_update_if_stale_skips_chart_without_dependencies(
+    tmp_path: Path,
+) -> None:
+    chart = tmp_path / "demo"
+    _write_chart(chart, dependencies="")
+    runner = FakeCommandRunner()
+
+    assert _helm(runner).dependency_update_if_stale(chart) is False
+    assert runner.calls == []
 
 
 def test_dependency_update_if_stale_runs_when_lock_missing(tmp_path: Path) -> None:
@@ -147,9 +225,8 @@ def test_dependency_update_if_stale_runs_when_charts_dir_missing(tmp_path: Path)
 def test_dependency_update_if_stale_runs_when_charts_dir_partial(tmp_path: Path) -> None:
     """Lock declares N deps but charts/ contains fewer -> force re-update.
 
-    Catches the partial-materialization case that the mtime gate alone
-    misses (interrupted `helm dependency update`, manual prune of
-    charts/foo.tgz, etc.).
+    Catches interrupted `helm dependency update` or manual pruning of
+    charts/foo.tgz even when the lock digest is current.
     """
     chart = tmp_path / "demo"
     _write_chart(
@@ -213,6 +290,20 @@ def test_deps_are_fresh_returns_false_on_malformed_lock_yaml(tmp_path: Path) -> 
     (chart / "charts").mkdir()
     _materialize_dep(chart)
     _mtime(chart / "Chart.yaml", seconds_ago=60)
+
+    assert chart_deps.deps_are_fresh(chart) is False
+
+
+def test_deps_are_fresh_fails_closed_on_unsupported_dependency_field(
+    tmp_path: Path,
+) -> None:
+    chart = tmp_path / "demo"
+    _write_chart(chart)
+    chart_yaml = chart / "Chart.yaml"
+    chart_yaml.write_text(chart_yaml.read_text() + "    unsupported: value\n")
+    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "charts").mkdir()
+    _materialize_dep(chart)
 
     assert chart_deps.deps_are_fresh(chart) is False
 
@@ -317,7 +408,7 @@ def test_dependency_update_accounts_for_two_aliases_of_one_package(
         "  - name: foo\n"
         "    version: 1.0.0\n"
         "    repository: https://example.test/charts\n"
-        "digest: sha256:abc\n"
+        "digest: sha256:2c7dc475034b0488d48755633c791fdb114835bd3797bbf26e67d12d05f4bba3\n"
     )
     (chart / "charts").mkdir()
     _materialize_dep(chart)
