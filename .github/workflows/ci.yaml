@@ -13,9 +13,6 @@ name: ci
 # selection and the sandbox chart/profile matrix, including repository-level
 # safety fanout for kind config, tool pins, and workflow changes.
 #
-# layering and chart-contracts have no `needs` — they are independent fast
-# gates and share nothing with the chart pipeline.
-
 on:
   push:
     branches: [main]
