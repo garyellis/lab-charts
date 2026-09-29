@@ -36,6 +36,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. `--for '<command>'` narrows to one command. |
 | `uv run chart-manager chart validate <name> --env <env>` | Render one chart for one environment, then run its validators. `--all` validates every environment; with no chart named, the worklist comes from `git diff` against `origin/main`. |
 | `mise run validate -- --all` | Validate every chart and environment in the repo. |
+| `mise run schemas` | Hydrate the local schema store from the committed lock without advancing it. Use `mise run schemas -- --update` only when intentionally refreshing schema inputs. |
 | `uv run chart-manager chart test <name> --profile minimal` | Install the chart on a local kind cluster and run its Helm test hooks. |
 | `uv run chart-manager chart test <name> --skip-requires` | On an existing cluster, verify bootstrap and required releases without upgrading them, then reinstall and test only the selected target. On a new cluster, install prerequisites but Helm-test only the selected target. |
 | `uv run chart-manager local up --chart <name>` | Create or start the local cluster, run bootstrap releases, converge the chart. `--stack <name>` converges a `LocalStack` instead. |
@@ -200,6 +201,12 @@ heuristic in workflow YAML. `sandbox-test` runs one kind job per changed
 chart, so unrelated charts never gate a PR. `publish` pushes every directly
 changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
+The validate job restores the XDG schema store using the committed
+`.chart-manager/schemas.lock.yaml` hash, runs `mise run schemas` to hydrate a
+cold or incomplete cache from that immutable lock, then validates with
+`--offline`. Normal validation never advances source refs or rewrites the
+lock; only `schemas sync --update` does that.
+
 Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 `HARBOR_PROJECT` (default `charts`) in the runner environment, plus
 `HARBOR_PASSWORD` as a GitHub secret.
@@ -209,7 +216,8 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 - Download `rendered-manifests-<run_id>` (validate) or
   `sandbox-logs-<chart>-<profile>-<run_id>` (sandbox-test) from the run's
   Artifacts panel.
-- Validate failure: `uv run chart-manager chart validate <name> --env <env>`.
+- Validate failure: run `mise run schemas`, then
+  `uv run chart-manager chart validate <name> --env <env> --offline`.
 - Sandbox failure: `uv run chart-manager chart test <name> --profile minimal`.
 - If it looks environmental, run `uv run chart-manager doctor --for 'chart test'`
   first — it names the missing binary or unreachable backend.

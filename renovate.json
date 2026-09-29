@@ -31,6 +31,55 @@
         "repository:\\s*(?<depName>ghcr\\.io/stakater/reloader)\\s+tag:\\s*(?<currentValue>v[0-9][^\\s#]*)[\\s\\S]*?digest:\\s*(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.chart-manager/workspace\\.yaml$/"
+      ],
+      "matchStrings": [
+        "kubernetesVersion:\\s*[\"']?(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)[\"']?"
+      ],
+      "depNameTemplate": "registry.k8s.io/kube-apiserver",
+      "depTypeTemplate": "schema-policy",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.chart-manager/schemas\\.lock\\.yaml$/"
+      ],
+      "matchStrings": [
+        "repository:\\s*(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)\\s+track:\\s*(?<currentValue>[^\\s]+)\\s+resolved:\\s*(?<currentDigest>[a-f0-9]{40})"
+      ],
+      "packageNameTemplate": "https://github.com/{{{depName}}}.git",
+      "depTypeTemplate": "schema-lock",
+      "datasourceTemplate": "git-refs"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Regenerate the immutable schema lock after schema-policy updates",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepTypes": [
+        "schema-policy",
+        "schema-lock"
+      ],
+      "groupName": "schema inputs",
+      "groupSlug": "schema-inputs",
+      "postUpgradeTasks": {
+        "commands": [
+          "chart-manager schemas sync --update"
+        ],
+        "fileFilters": [
+          ".chart-manager/workspace.yaml",
+          ".chart-manager/schemas.lock.yaml"
+        ],
+        "executionMode": "update"
+      }
     }
   ]
 }

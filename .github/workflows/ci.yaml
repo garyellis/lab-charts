@@ -326,6 +326,12 @@ jobs:
   validate:
     needs: prep
     runs-on: ubuntu-latest
+    env:
+      # Both schema sync and validation resolve the same XDG store. Keeping it
+      # under the checked-out workspace makes the cached scope explicit and
+      # avoids mixing it with unrelated tool caches under the runner account's
+      # home directory.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
     steps:
       - uses: actions/checkout@v6
         with:
@@ -333,6 +339,18 @@ jobs:
 
       - name: Install mise + tools
         uses: jdx/mise-action@v4
+
+      - name: Restore locked schema generation
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas
+          key: schema-store-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
+
+      # Ordinary CI is lock-preserving: hydrate exactly the committed
+      # generation, then prove the validation pass needs no network fallback.
+      # Only the narrowly allowlisted Renovate maintenance path runs --update.
+      - name: Synchronize locked schemas
+        run: mise run schemas
 
       - name: Validate
         id: validate
@@ -377,7 +395,7 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
-          mise run validate -- "${args[@]}" --output all --keep --github-step-summary
+          mise run validate -- "${args[@]}" --offline --output all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
