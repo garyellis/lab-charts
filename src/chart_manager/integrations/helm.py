@@ -205,11 +205,13 @@ class Helm:
         The per-instance `_deps_updated` cache is still consulted first so
         a chart only updates once per process even when stale.
 
-        Freshness is decided by `deps_are_fresh` (see its docstring): lock
-        and charts/ must exist, the lock must be no older than Chart.yaml,
-        and every locked name/version identity must match a valid materialized
-        chart. Any other shape falls through to running the update.
+        Charts with no declared dependencies return immediately. Freshness is
+        decided by `deps_are_fresh` (see its docstring): Helm's lock digest
+        and every materialized name/version identity must agree. Any other
+        shape falls through to running the update.
         """
+        if not self._chart_has_dependencies(chart_path):
+            return False
         resolved = chart_path.resolve()
         with self._chart_lock(resolved):
             if self._already_updated(resolved):
@@ -469,8 +471,8 @@ class Helm:
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if _is_local_chart_ref(chart_ref) and self._chart_has_dependencies(Path(chart_ref)):
-            self.dependency_update(Path(chart_ref))
+        if _is_local_chart_ref(chart_ref):
+            self.dependency_update_if_stale(Path(chart_ref))
 
         base_args = [
             self._helm_bin,

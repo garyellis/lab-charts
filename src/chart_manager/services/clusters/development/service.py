@@ -815,8 +815,8 @@ class DevelopmentClusterService:
                     namespaces_created.add(namespace)
                 values = catalog.value_paths(chart, entry.profile)
                 self._progress(step("Updating dependencies", entry.chart))
-                # mtime-gated: skips the subprocess when Chart.lock is
-                # already newer than Chart.yaml and charts/ is populated.
+                # Content-gated: skips the subprocess when Helm's lock digest
+                # and the materialized dependency identities agree.
                 # Per-chart per-process cache prevents repeat fetches.
                 self.helm.dependency_update_if_stale(chart.path)
                 self._progress(step("Applying", f"{entry.chart}:{entry.profile} -> {namespace}"))

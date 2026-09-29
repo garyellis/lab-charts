@@ -26,6 +26,7 @@ def _helm(runner: FakeCommandRunner, **kwargs: Any) -> Helm:
     """
     return Helm(
         runner=runner,
+        deps_are_fresh=chart_deps.deps_are_fresh,
         chart_has_dependencies=chart_deps.chart_has_dependencies,
         **kwargs,
     )
@@ -91,6 +92,30 @@ def test_template_runs_dependency_update_when_chart_has_deps(tmp_path: Path) -> 
     assert runner.calls[0][:3] == ("helm", "dependency", "update")
     assert runner.calls[0][3] == str(chart)
     assert runner.calls[1][1] == "template"
+
+
+def test_template_skips_dependency_update_when_packages_are_fresh(tmp_path: Path) -> None:
+    chart = tmp_path / "chart"
+    _write_chart(chart, with_deps=True)
+    (chart / "Chart.lock").write_text(
+        "dependencies:\n"
+        "- name: subchart\n"
+        "  version: 1.0.0\n"
+        "  repository: https://example.invalid/\n"
+        "digest: sha256:ccd9663ae190001cfd05a44e502dbdb5e9772d777fb0d0d317c74164fb2f844f\n"
+    )
+    packaged = chart / "charts" / "subchart"
+    packaged.mkdir(parents=True)
+    (packaged / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: subchart\nversion: 1.0.0\n"
+    )
+    runner = FakeCommandRunner()
+
+    _helm(runner).template(
+        "r", chart, namespace="ns", output_dir=tmp_path / "out"
+    )
+
+    assert [call[1] for call in runner.calls] == ["template"]
 
 
 def test_template_skips_dependency_update_for_oci_ref(tmp_path: Path) -> None:

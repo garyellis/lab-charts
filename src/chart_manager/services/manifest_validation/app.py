@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from chart_manager.domain import chart_deps
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
@@ -631,6 +632,8 @@ class ManifestValidationService:
                 version=version,
                 binary=binary,
                 verbose=spec.verbose,
+                deps_are_fresh=chart_deps.deps_are_fresh,
+                chart_has_dependencies=chart_deps.chart_has_dependencies,
             ),
             output_root=spec.output_root,
             validators=validators,

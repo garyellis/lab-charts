@@ -7,8 +7,10 @@ with the wrong dependency.
 """
 from __future__ import annotations
 
+import gzip
+import hashlib
+import json
 import tarfile
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -35,6 +37,55 @@ _MAX_CHART_YAML_BYTES = 1024 * 1024
 class _DependencyIdentity:
     name: str
     version: str
+
+
+@dataclass(frozen=True)
+class _HelmDependency:
+    """The fields and JSON order of Helm's ``chart.Dependency`` type."""
+
+    name: str
+    version: str
+    repository: str
+    condition: str = ""
+    tags: tuple[str, ...] = ()
+    enabled: bool = False
+    import_values: tuple[Any, ...] = ()
+    alias: str = ""
+
+    def json_object(self) -> dict[str, Any]:
+        """Return the Go ``encoding/json`` shape, including ``omitempty``."""
+        value: dict[str, Any] = {
+            "name": self.name,
+        }
+        if self.version:
+            value["version"] = self.version
+        # Repository deliberately has no omitempty tag in Helm.
+        value["repository"] = self.repository
+        if self.condition:
+            value["condition"] = self.condition
+        if self.tags:
+            value["tags"] = list(self.tags)
+        if self.enabled:
+            value["enabled"] = True
+        if self.import_values:
+            value["import-values"] = list(self.import_values)
+        if self.alias:
+            value["alias"] = self.alias
+        return value
+
+
+_DEPENDENCY_FIELDS = frozenset(
+    {
+        "name",
+        "version",
+        "repository",
+        "condition",
+        "tags",
+        "enabled",
+        "import-values",
+        "alias",
+    }
+)
 
 
 def build_helm_dependency_index(
@@ -91,14 +142,13 @@ def chart_has_dependencies(chart_path: Path) -> bool:
 
 
 def deps_are_fresh(chart_path: Path) -> bool:
-    """Return whether lock and materialized dependency identities agree.
+    """Return whether Helm's lock digest and materialized identities agree.
 
     A fresh result requires:
 
     * ``Chart.lock`` and ``charts/`` exist;
-    * the lock is no older than ``Chart.yaml``;
-    * the source and lock describe compatible dependency names (including
-      duplicate dependencies intentionally distinguished by aliases);
+    * ``Chart.lock.digest`` equals Helm's content hash of the authored and
+      resolved dependency arrays;
     * every unique locked ``(name, version)`` is represented exactly once by
       an expanded chart directory or packaged ``.tgz`` chart; and
     * no additional chart artifact is present.
@@ -113,14 +163,28 @@ def deps_are_fresh(chart_path: Path) -> bool:
     try:
         if not chart_yaml.is_file() or not chart_lock.is_file() or not charts_dir.is_dir():
             return False
-        if chart_lock.stat().st_mtime < chart_yaml.stat().st_mtime:
-            return False
-        declared = load_chart_metadata(chart_yaml).dependencies
-    except (OSError, SpecError):
+        chart_data = load_yaml_file(chart_yaml)
+        lock_data = load_yaml_file(chart_lock)
+    except (OSError, YamlError):
         return False
 
-    locked = _load_lock_dependencies(chart_lock)
-    if locked is None or not _lock_matches_declaration(declared, locked):
+    declared = _parse_dependencies(chart_data, require_nonempty=True)
+    locked = _parse_dependencies(lock_data, require_nonempty=True)
+    digest = lock_data.get("digest")
+    try:
+        calculated_digest = (
+            _helm_dependency_digest(declared, locked)
+            if declared is not None and locked is not None
+            else None
+        )
+    except (TypeError, UnicodeError, ValueError):
+        return False
+    if (
+        declared is None
+        or locked is None
+        or not isinstance(digest, str)
+        or digest != calculated_digest
+    ):
         return False
 
     expected = {_identity(dependency) for dependency in locked}
@@ -132,76 +196,114 @@ def deps_are_fresh(chart_path: Path) -> bool:
     return materialized is not None and materialized == expected_identities
 
 
-def _load_lock_dependencies(lock_path: Path) -> tuple[ChartDependency, ...] | None:
-    """Strictly parse the dependency identity fields in Chart.lock."""
-    try:
-        data = load_yaml_file(lock_path)
-    except YamlError:
-        return None
+def _parse_dependencies(
+    data: dict[str, Any], *, require_nonempty: bool
+) -> tuple[_HelmDependency, ...] | None:
+    """Parse exactly the dependency fields Helm includes in ``HashReq``."""
     dependencies = data.get("dependencies")
-    if not isinstance(dependencies, list):
+    if not isinstance(dependencies, list) or (require_nonempty and not dependencies):
         return None
 
-    parsed: list[ChartDependency] = []
+    parsed: list[_HelmDependency] = []
     for raw in dependencies:
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict) or not set(raw).issubset(_DEPENDENCY_FIELDS):
             return None
         dependency: dict[str, Any] = raw
         name = dependency.get("name")
-        version = dependency.get("version")
-        repository = dependency.get("repository")
-        alias = dependency.get("alias")
         if not isinstance(name, str) or not name.strip():
             return None
-        if not isinstance(version, str) or not version.strip():
+        version = dependency.get("version", "")
+        repository = dependency.get("repository", "")
+        condition = dependency.get("condition", "")
+        alias = dependency.get("alias", "")
+        if not all(
+            isinstance(value, str)
+            for value in (version, repository, condition, alias)
+        ):
             return None
-        if repository is not None and not isinstance(repository, str):
+        tags = dependency.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
             return None
-        if alias is not None and (not isinstance(alias, str) or not alias.strip()):
+        enabled = dependency.get("enabled", False)
+        if not isinstance(enabled, bool):
+            return None
+        import_values = dependency.get("import-values", [])
+        if not _is_supported_import_values(import_values):
+            return None
+        sanitized_name = _helm_sanitize(name)
+        sanitized_version = _helm_sanitize(version)
+        if not sanitized_name.strip() or not sanitized_version.strip():
             return None
         parsed.append(
-            ChartDependency(
-                name=name,
-                version=version,
-                repository=repository,
+            _HelmDependency(
+                name=sanitized_name,
+                version=sanitized_version,
+                repository=_helm_sanitize(repository),
+                condition=_helm_sanitize(condition),
+                tags=tuple(_helm_sanitize(tag) for tag in tags),
+                enabled=enabled,
+                import_values=tuple(
+                    item
+                    if isinstance(item, str)
+                    else {"child": item["child"], "parent": item["parent"]}
+                    for item in import_values
+                ),
                 alias=alias,
             )
         )
     return tuple(parsed)
 
 
-def _lock_matches_declaration(
-    declared: tuple[ChartDependency, ...],
-    locked: tuple[ChartDependency, ...],
-) -> bool:
-    """Check names/cardinality while allowing lock-resolved version ranges.
+def _helm_sanitize(value: str) -> str:
+    """Mirror Helm's whitespace normalization and non-printable removal."""
+    return "".join(
+        " " if character.isspace() else character
+        for character in value
+        if character.isprintable() or character.isspace()
+    )
 
-    Helm aliases do not rename the packaged chart: the artifact's Chart.yaml
-    still contains the dependency's real name. Multiple declarations of one
-    chart are valid only when each occurrence has a distinct alias; Helm may
-    materialize their shared package only once.
-    """
-    if Counter(item.name for item in declared) != Counter(item.name for item in locked):
+
+def _is_supported_import_values(value: Any) -> bool:
+    """Accept Helm's documented string or child/parent mapping entries."""
+    if not isinstance(value, list):
         return False
-    if any(item.alias is not None for item in locked) and Counter(
-        (item.name, item.alias) for item in declared
-    ) != Counter((item.name, item.alias) for item in locked):
-        return False
-
-    declared_by_name: dict[str, list[ChartDependency]] = {}
-    for dependency in declared:
-        declared_by_name.setdefault(dependency.name, []).append(dependency)
-    for dependencies in declared_by_name.values():
-        if len(dependencies) < 2:
-            continue
-        aliases = [dependency.alias for dependency in dependencies]
-        if any(alias is None for alias in aliases) or len(set(aliases)) != len(aliases):
-            return False
-    return True
+    return all(
+        isinstance(item, str)
+        or (
+            isinstance(item, dict)
+            and set(item) == {"child", "parent"}
+            and all(isinstance(part, str) for part in item.values())
+        )
+        for item in value
+    )
 
 
-def _identity(dependency: ChartDependency) -> _DependencyIdentity | None:
-    if dependency.version is None or not dependency.version.strip():
+def _helm_dependency_digest(
+    declared: tuple[_HelmDependency, ...], locked: tuple[_HelmDependency, ...]
+) -> str:
+    """Reproduce Helm ``resolver.HashReq`` for supported dependency values."""
+    value = [
+        [dependency.json_object() for dependency in declared],
+        [dependency.json_object() for dependency in locked],
+    ]
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    # Go's encoding/json escapes HTML-significant characters and U+2028/U+2029.
+    encoded = (
+        encoded.replace(b"<", b"\\u003c")
+        .replace(b">", b"\\u003e")
+        .replace(b"&", b"\\u0026")
+        .replace("\u2028".encode(), b"\\u2028")
+        .replace("\u2029".encode(), b"\\u2029")
+    )
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _identity(dependency: ChartDependency | _HelmDependency) -> _DependencyIdentity | None:
+    if not dependency.version or not dependency.version.strip():
         return None
     return _DependencyIdentity(dependency.name, dependency.version)
 
@@ -257,7 +359,10 @@ def _packaged_chart_identity(path: Path) -> _DependencyIdentity | None:
         if path.stat().st_size > _MAX_ARCHIVE_BYTES:
             return None
         candidates: list[_DependencyIdentity] = []
-        with tarfile.open(path, mode="r|gz") as archive:
+        with (
+            gzip.open(path, mode="rb") as compressed,
+            tarfile.open(fileobj=compressed, mode="r|") as archive,
+        ):
             for index, member in enumerate(archive):
                 if index >= _MAX_ARCHIVE_MEMBERS:
                     return None
@@ -285,7 +390,7 @@ def _packaged_chart_identity(path: Path) -> _DependencyIdentity | None:
                 if len(raw) > _MAX_CHART_YAML_BYTES:
                     return None
                 candidates.append(_identity_from_chart_yaml(raw))
-    except (OSError, EOFError, tarfile.TarError, YamlError):
+    except (OSError, EOFError, gzip.BadGzipFile, tarfile.TarError, YamlError):
         return None
 
     if len(candidates) != 1:
