@@ -31,7 +31,8 @@ def _schema(
     rendered_dir: Path,
     *,
     kubernetes_version: str | None = None,
-    schema_locations: tuple[str, ...] = (),
+    schema_locations: tuple[str, ...] = ("/cache/schemas/{{.ResourceKind}}.json",),
+    ignore_missing_schemas: tuple[str, ...] = (),
 ):
     """Run the schema gate the way the runner does."""
     return KubeconformValidator(kubeconform).validate(
@@ -39,6 +40,7 @@ def _schema(
         KubeconformConfig(
             kubernetes_version=kubernetes_version,
             schema_locations=schema_locations,
+            ignore_missing_schemas=ignore_missing_schemas,
         ),
     )
 
@@ -74,6 +76,7 @@ class _StubKubeconform(Kubeconform):
                 "manifests_dir": manifests_dir,
                 "kubernetes_version": kubernetes_version,
                 "schema_locations": schema_locations,
+                "skip_kinds": skip_kinds,
             }
         )
         if self._raise is not None:
@@ -112,15 +115,8 @@ def test_schema_fail_formats_findings_one_per_line(tmp_path: Path) -> None:
                 status="invalid",
                 msg="/spec/replicas: got string, want integer",
             ),
-            ResourceResult(
-                filename="/r/svc.yaml",
-                kind="Service",
-                name="bad-svc",
-                status="error",
-                msg="schema fetch failed",
-            ),
         ),
-        summary={"valid": 0, "invalid": 1, "errors": 1, "skipped": 0},
+        summary={"valid": 0, "invalid": 1, "errors": 0, "skipped": 0},
     )
     kc = _StubKubeconform(report=report)
 
@@ -130,10 +126,31 @@ def test_schema_fail_formats_findings_one_per_line(tmp_path: Path) -> None:
     assert result.error_type is None  # spec/chart-author failure, not a tool crash
     assert result.detail is not None
     lines = result.detail.split("\n")
-    assert len(lines) == 2
+    assert len(lines) == 1
     assert "Deployment/bad" in lines[0]
     assert "/spec/replicas" in lines[0]
-    assert "Service/bad-svc" in lines[1]
+
+
+def test_schema_status_error_is_a_tool_failure(tmp_path: Path) -> None:
+    _seed_manifest(tmp_path)
+    report = KubeconformReport(
+        resources=(
+            ResourceResult(
+                filename="/r/widget.yaml",
+                kind="Widget",
+                name="example",
+                status="error",
+                msg="could not find schema for Widget",
+            ),
+        ),
+        summary={"valid": 0, "invalid": 0, "errors": 1, "skipped": 0},
+    )
+
+    result = _schema(_StubKubeconform(report=report), tmp_path)
+
+    assert result.status == "FAIL"
+    assert result.error_type == "tool"
+    assert "Widget/example" in (result.detail or "")
 
 
 def test_schema_tool_crash_returns_fail_with_tool_error_type(tmp_path: Path) -> None:
@@ -395,7 +412,9 @@ def test_schema_passes_overrides_through_to_kubeconform(tmp_path: Path) -> None:
         tmp_path,
         kubernetes_version="1.31.2",
         schema_locations=("/local/schemas",),
+        ignore_missing_schemas=("UnpublishedKind",),
     )
 
     assert kc.validate_calls[0]["kubernetes_version"] == "1.31.2"
     assert kc.validate_calls[0]["schema_locations"] == ["/local/schemas"]
+    assert kc.validate_calls[0]["skip_kinds"] == ["UnpublishedKind"]

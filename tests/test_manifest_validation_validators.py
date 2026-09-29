@@ -51,7 +51,9 @@ class _HelmStub:
         namespace: str,
         output_dir: Path,
         values: list[Path],
+        include_crds: bool = False,
     ) -> Path:
+        assert include_crds is True
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "manifest.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n")
         return output_dir

@@ -21,7 +21,6 @@ plugin discovery.
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
@@ -97,7 +96,7 @@ def resolve_schema_locations(
     repo_root: Path,
     spec_path: Path,
 ) -> tuple[str, ...]:
-    """Keep kubeconform keywords/URLs and validate local schema templates."""
+    """Resolve chart additions as repository-local schema templates."""
     return tuple(
         _resolve_schema_location(location, repo_root, spec_path=spec_path)
         for location in locations
@@ -110,11 +109,6 @@ def _resolve_schema_location(
     *,
     spec_path: Path,
 ) -> str:
-    if location == "default":
-        return location
-    parsed = urlsplit(location)
-    if parsed.scheme:
-        return location
     if not location.strip():
         raise SpecError(f"{spec_path}: schema location must not be empty")
 
@@ -152,7 +146,8 @@ class KubeconformValidator:
 
     Empty rendered_dir -> SKIP. Tool crash -> FAIL with error_type="tool"
     (`Outcome.TOOL`), because the underlying issue is kubeconform breaking,
-    not a chart-author problem. Schema violations -> FAIL with a
+    not a chart-author problem. ``statusInvalid`` is a chart failure;
+    ``statusError`` is a tool/schema-readiness failure. Both retain a
     human-scannable one-line-per-finding detail block.
     """
 
@@ -175,7 +170,8 @@ class KubeconformValidator:
             report = self.integration.validate(
                 rendered_dir,
                 kubernetes_version=config.kubernetes_version,
-                schema_locations=list(config.schema_locations) or None,
+                schema_locations=list(config.schema_locations),
+                skip_kinds=list(config.ignore_missing_schemas),
             )
         except ExternalCommandError as exc:
             return PhaseResult(
@@ -192,6 +188,7 @@ class KubeconformValidator:
             phase="schema",
             status="FAIL",
             detail=_format_schema_findings(report.invalid()),
+            error_type="tool" if report.errors() else None,
         )
 
 
@@ -289,9 +286,9 @@ class KubeconformProvider:
     order: int = 100
 
     def compile(self, context: ValidatorCompileContext) -> ValidatorInvocation:
-        """Resolve authored schema locations into a kubeconform config."""
+        """Add chart-local schema locations to prepared repository inputs."""
         spec = context.spec
-        locations = (
+        authored_locations = (
             resolve_schema_locations(
                 spec.schema_locations,
                 repo_root=context.repo_root,
@@ -300,14 +297,26 @@ class KubeconformProvider:
             if spec.validators.kubeconform
             else ()
         )
+        locations = tuple(
+            dict.fromkeys(
+                (
+                    *context.kubeconform.generated_schema_locations,
+                    *authored_locations,
+                    *context.kubeconform.fallback_schema_locations,
+                )
+            )
+        )
         return ValidatorInvocation(
             validator_id=self.validator_id,
             category=self.category,
             order=self.order,
             enabled=spec.validators.kubeconform,
             config=KubeconformConfig(
-                kubernetes_version=spec.kubernetes_version,
+                kubernetes_version=(
+                    spec.kubernetes_version or context.kubeconform.kubernetes_version
+                ),
                 schema_locations=locations,
+                ignore_missing_schemas=tuple(spec.ignore_missing_schemas),
             ),
         )
 

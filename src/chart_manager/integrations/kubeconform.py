@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
@@ -46,6 +47,10 @@ class KubeconformReport:
         """Resources with status invalid or error."""
         return tuple(r for r in self.resources if r.status in ("invalid", "error"))
 
+    def errors(self) -> tuple[ResourceResult, ...]:
+        """Tool/schema-resolution errors, distinct from invalid resources."""
+        return tuple(r for r in self.resources if r.status == "error")
+
     def has_failures(self) -> bool:
         """True if any resource failed validation."""
         return bool(self.invalid())
@@ -53,14 +58,6 @@ class KubeconformReport:
 
 class Kubeconform:
     """Run `kubeconform` over rendered manifests and parse its JSON report."""
-
-    # datreeio CRDs catalog — covers most common in-tree CRDs. Charts that
-    # vendor uncatalogued CRDs (cert-manager, istio-base) are addressed via
-    # the CRD-skip default rather than a per-chart schema location.
-    SCHEMA_LOCATION_CRDS = (
-        "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/"
-        "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-    )
 
     def __init__(
         self,
@@ -100,28 +97,35 @@ class Kubeconform:
         manifests_dir: Path,
         *,
         kubernetes_version: str | None = None,
-        schema_locations: list[str] | None = None,
+        schema_locations: list[str],
         skip_kinds: list[str] | None = None,
         strict: bool = True,
         extra_args: list[str] | None = None,
     ) -> KubeconformReport:
         """Validate all manifests under `manifests_dir`; return the parsed report.
 
-        Defaults: default schemas + datreeio CRD catalog, CRDs skipped,
-        strict mode on. Never raises on validation failures (check=False) —
-        those land in the report; unparseable output raises.
+        Schema inputs must be explicit local paths supplied by the managed
+        store and chart-local additions. No remote/default fallback and no
+        resource kind are skipped implicitly. Validation failures land in the
+        report (``check=False``); invalid configuration or output raises.
         """
-        locations = (
-            schema_locations
-            if schema_locations is not None
-            else ["default", self.SCHEMA_LOCATION_CRDS]
-        )
-        skips = skip_kinds if skip_kinds is not None else ["CustomResourceDefinition"]
+        if not schema_locations:
+            raise ExternalCommandError(
+                "kubeconform requires at least one explicit local schema location"
+            )
+        for location in schema_locations:
+            parsed = urlsplit(location)
+            if not location.strip() or location == "default" or parsed.scheme or parsed.netloc:
+                raise ExternalCommandError(
+                    "kubeconform schema locations must be local paths, "
+                    f"got {location!r}"
+                )
+        skips = skip_kinds or []
 
         args: list[str] = [self._bin, "-output", "json", "-summary"]
         if strict:
             args.append("-strict")
-        for loc in locations:
+        for loc in schema_locations:
             args.extend(["-schema-location", loc])
         if skips:
             args.extend(["-skip", ",".join(skips)])
@@ -147,7 +151,7 @@ def _parse(
     except json.JSONDecodeError as exc:
         # rc==0 with non-JSON would be a runtime contract violation; rc!=0 with
         # non-JSON is the typical tool crash. Treat both as ExternalCommandError
-        # — the caller (phases.schema) tags it error_type="tool" -> exit 2.
+        # — the caller tags it error_type="tool" -> TOOL (exit 4).
         command = " ".join(args)
         detail = (stderr or stdout).strip()
         raise ExternalCommandError(

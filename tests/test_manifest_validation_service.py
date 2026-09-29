@@ -315,7 +315,7 @@ def test_chart_and_env_filters_narrow_the_worklist(tmp_path: Path) -> None:
 def test_row_config_resolves_values_policies_and_spec_settings(tmp_path: Path) -> None:
     extra = """
 kubernetesVersion: "1.31.2"
-schemaLocations: ["default"]
+schemaLocations: ["schemas/{{.ResourceKind}}.json"]
 policies:
   extra: [extra-policies]
 """
@@ -323,6 +323,7 @@ policies:
     (tmp_path / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "extra-policies").mkdir()
+    (tmp_path / "schemas").mkdir()
     rec = Recorder()
 
     _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("prod",)))
@@ -338,7 +339,9 @@ policies:
     assert isinstance(kubeconform, KubeconformConfig)
     assert isinstance(kyverno, KyvernoConfig)
     assert kubeconform.kubernetes_version == "1.31.2"
-    assert kubeconform.schema_locations == ("default",)
+    assert kubeconform.schema_locations == (
+        str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
+    )
     assert kyverno.policy_paths == (
         tmp_path / "policies",
         tmp_path / "charts" / "alpha" / "policies",

@@ -23,6 +23,7 @@ from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
+    KubeconformRuntimeInputs,
     ValidatorCompileContext,
     ValidatorInvocation,
     ValidatorProvider,
@@ -54,6 +55,7 @@ def resolve_manifest_validation(
     *,
     providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
     policies_dir: Path = Path("policies"),
+    kubeconform: KubeconformRuntimeInputs | None = None,
 ) -> ResolvedManifestValidation:
     """Resolve an authored spec against its Helm chart and repository."""
     root = repo_root.resolve()
@@ -81,6 +83,7 @@ def resolve_manifest_validation(
         chart_path=chart_path,
         spec_path=target.spec_path,
         policies_dir=policies_dir,
+        kubeconform=kubeconform or KubeconformRuntimeInputs(),
     )
     invocations = tuple(
         provider.compile(context)

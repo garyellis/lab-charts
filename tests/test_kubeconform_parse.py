@@ -5,10 +5,10 @@ kubeconform 0.8.0 output and pinned. If the kubeconform schema or output
 format changes in a future release, regenerate via:
 
     kubeconform -output json -summary -strict \\
-      -skip CustomResourceDefinition \\
+      -schema-location /path/to/local/{{.ResourceKind}}.json \\
       tests/fixtures/charts/passing-app/templates  > tests/fixtures/kubeconform/valid.json
     kubeconform -output json -summary -strict \\
-      -skip CustomResourceDefinition \\
+      -schema-location /path/to/local/{{.ResourceKind}}.json \\
       tests/fixtures/charts/schema-violator/templates > tests/fixtures/kubeconform/invalid.json
 
 The schema-violator fixture deliberately sets Deployment.spec.replicas
@@ -26,6 +26,7 @@ from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
+LOCAL_SCHEMA_TEMPLATE = "/cache/schemas/{{.ResourceKind}}.json"
 
 
 
@@ -33,11 +34,11 @@ def _load(name: str) -> str:
     return (FIXTURE_DIR / name).read_text()
 
 
-def test_default_args_include_strict_summary_json_and_crd_skip(tmp_path: Path) -> None:
+def test_args_require_local_schemas_without_implicit_crd_skip(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
 
-    kc.validate(tmp_path)
+    kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     assert len(runner.calls) == 1
     call = runner.calls[0]
@@ -45,12 +46,33 @@ def test_default_args_include_strict_summary_json_and_crd_skip(tmp_path: Path) -
     assert "-output" in call and call[call.index("-output") + 1] == "json"
     assert "-summary" in call
     assert "-strict" in call
-    assert "-skip" in call and call[call.index("-skip") + 1] == "CustomResourceDefinition"
-    # default schema locations: 'default' + datreeio CRDs catalog
+    assert "-skip" not in call
     schema_indices = [i for i, a in enumerate(call) if a == "-schema-location"]
-    assert len(schema_indices) == 2
-    assert call[schema_indices[0] + 1] == "default"
-    assert call[schema_indices[1] + 1] == Kubeconform.SCHEMA_LOCATION_CRDS
+    assert len(schema_indices) == 1
+    assert call[schema_indices[0] + 1] == LOCAL_SCHEMA_TEMPLATE
+
+
+@pytest.mark.parametrize(
+    "locations",
+    [
+        [],
+        [""],
+        ["default"],
+        ["//schemas.example.test/schema.json"],
+        ["https://schemas.example.test/{{.ResourceKind}}.json"],
+    ],
+)
+def test_rejects_missing_or_remote_schema_locations(
+    tmp_path: Path,
+    locations: list[str],
+) -> None:
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
+    kc = Kubeconform(runner=runner)
+
+    with pytest.raises(ExternalCommandError, match="local"):
+        kc.validate(tmp_path, schema_locations=locations)
+
+    assert runner.calls == []
 
 
 def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
@@ -71,6 +93,7 @@ def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
     assert call[call.index("-kubernetes-version") + 1] == "1.31.2"
     assert call[call.index("-schema-location") + 1] == "/local/schemas"
     assert call[call.index("-skip") + 1] == "CustomResourceDefinition,PodDisruptionBudget"
+    assert "-ignore-missing-schemas" not in call
     assert "-cache" in call and call[call.index("-cache") + 1] == "/tmp/kc"
 
 
@@ -78,7 +101,7 @@ def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
 
-    report = kc.validate(tmp_path)
+    report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     # Non-verbose kubeconform emits an empty resources list when everything
     # passes; the summary is the source of truth.
@@ -92,7 +115,7 @@ def test_invalid_fixture_populates_invalid_with_expected_finding(tmp_path: Path)
     runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"))
     kc = Kubeconform(runner=runner)
 
-    report = kc.validate(tmp_path)
+    report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     invalids = report.invalid()
     assert len(invalids) == 1
@@ -111,7 +134,7 @@ def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> Non
     kc = Kubeconform(runner=runner)
 
     with pytest.raises(ExternalCommandError) as exc:
-        kc.validate(tmp_path)
+        kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     msg = str(exc.value)
     assert "kubeconform produced unparseable output" in msg
@@ -125,7 +148,7 @@ def test_empty_resources_list_with_rc_zero_is_pass(tmp_path: Path) -> None:
     )
     kc = Kubeconform(runner=runner)
 
-    report = kc.validate(tmp_path)
+    report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     assert report.resources == ()
     assert report.has_failures() is False
@@ -138,7 +161,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
     runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"), stderr="")
     kc = Kubeconform(runner=runner)
 
-    report = kc.validate(tmp_path)
+    report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     assert report.has_failures() is True
     assert len(report.invalid()) == 1
@@ -155,6 +178,6 @@ def test_unknown_status_string_maps_to_error(tmp_path: Path) -> None:
     )
     kc = Kubeconform(runner=runner)
 
-    report = kc.validate(tmp_path)
+    report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     assert report.invalid()[0].status == "error"

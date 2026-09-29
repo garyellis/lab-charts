@@ -86,6 +86,7 @@ def test_missing_marker_uses_start_as_legacy_root(tmp_path: Path) -> None:
     assert resolve_repository_root(configured=None, start=tmp_path) == tmp_path
     workspace = load_repository_workspace(tmp_path)
     assert not workspace.authored
+    assert workspace.name == tmp_path.name
     assert workspace.charts_dir == Path("charts")
 
 
@@ -165,6 +166,7 @@ spec:
     workspace = load_repository_workspace(tmp_path)
 
     assert workspace.validation is not None
+    assert workspace.name == "example"
     assert workspace.validation.kubernetes_version == "1.35.3"
     assert workspace.validation.schemas.generate_from_crds is True
     assert workspace.validation.schemas.catalog.repository == "datreeio/CRDs-catalog"

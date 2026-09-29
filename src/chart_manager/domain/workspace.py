@@ -27,6 +27,7 @@ class RepositoryWorkspace:
     """One compiled, immutable interpretation of a repository checkout."""
 
     root: Path
+    name: str | None = None
     charts_dir: Path = LEGACY_CHARTS_DIR
     local_cluster: Path = LEGACY_LOCAL_CLUSTER
     render_dir: Path = LEGACY_RENDER_DIR
@@ -183,6 +184,7 @@ def load_repository_workspace(
     if not marker.is_file():
         return RepositoryWorkspace(
             root=resolved_root,
+            name=resolved_root.name,
             charts_dir=legacy_charts_dir,
             local_cluster=legacy_local_cluster,
         )
@@ -215,6 +217,7 @@ def load_repository_workspace(
                     )
     return RepositoryWorkspace(
         root=resolved_root,
+        name=resource.metadata.name,
         charts_dir=spec.charts_dir,
         local_cluster=spec.local_cluster,
         render_dir=spec.render_dir,
