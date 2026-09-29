@@ -2,7 +2,7 @@ apiVersion: v2
 name: wazuh
 description: Wazuh SIEM/XDR server stack (indexer, manager cluster, dashboard) with cert-manager TLS and externally supplied credentials
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "4.14.7"
 kubeVersion: ">=1.29.0-0"
 home: https://wazuh.com/

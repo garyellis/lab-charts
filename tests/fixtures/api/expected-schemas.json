@@ -409,7 +409,7 @@
     "description": "Kubernetes-style lifecycle intent envelope for one Helm chart.",
     "properties": {
       "apiVersion": {
-        "const": "lifecycle.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
@@ -854,7 +854,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
-        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "description": "DNS-label identity shared by both local resource kinds.",
         "properties": {
           "name": {
             "title": "Name",
@@ -892,7 +892,7 @@
     "description": "Envelope for one authored local environment.\n\nRead from `.chart-manager/local-cluster.yaml` unless\n`CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.",
     "properties": {
       "apiVersion": {
-        "const": "local.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },
@@ -1091,7 +1091,7 @@
       },
       "ResourceMetadata": {
         "additionalProperties": false,
-        "description": "Identity shared by both local kinds.\n\n`name` is a lowercase DNS label, which is stricter than\n`ChartLifecycleMetadata.name` in the lifecycle group -- that one accepts any\nnon-padded string. The two are separate models on purpose; merging them\nwould change what one of the groups accepts.",
+        "description": "DNS-label identity shared by both local resource kinds.",
         "properties": {
           "name": {
             "title": "Name",
@@ -1130,7 +1130,7 @@
     "description": "Envelope for a reusable application composition.\n\nResolved by name from the `stacks/` directory beside the LocalCluster file,\nor from an explicit path. Composition only -- no templating or ordering\nlanguage, which is what keeps it narrower than Helmfile.",
     "properties": {
       "apiVersion": {
-        "const": "local.chartmanager.io/v1alpha1",
+        "const": "chartmanager.io/v1alpha1",
         "title": "Apiversion",
         "type": "string"
       },

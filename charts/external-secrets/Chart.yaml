@@ -3,7 +3,7 @@ apiVersion: v2
 name: external-secrets
 description: External Secrets Operator vendor/deployment chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "v2.6.0"
 dependencies:
   - name: external-secrets

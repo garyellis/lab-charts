@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
-from chart_manager.api.lifecycle.v1alpha1 import ManifestValidationSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.domain.charts import HelmChart
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome

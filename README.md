@@ -54,8 +54,8 @@ the chart's `chart-lifecycle.yaml`.
 
 ## Local clusters
 
-Three authored kinds, all defined in
-[`src/chart_manager/api/local/v1alpha1.py`](src/chart_manager/api/local/v1alpha1.py):
+Three authored kinds share the `chartmanager.io/v1alpha1` API under
+[`src/chart_manager/api/v1alpha1/`](src/chart_manager/api/v1alpha1/):
 
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
@@ -82,7 +82,7 @@ them.
 The bootstrap is ordinary authored YAML:
 
 ```yaml
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
@@ -214,7 +214,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 ## Adding or editing a chart
 
 Each managed chart owns one `charts/<name>/chart-lifecycle.yaml` with
-`apiVersion: lifecycle.chartmanager.io/v1alpha1`, `kind: ChartLifecycle`.
+`apiVersion: chartmanager.io/v1alpha1`, `kind: ChartLifecycle`.
 `spec.validation` declares environments, composed values, triggers, and
 policies; `spec.clusterTest` declares install profiles and their Helm test
 gates, plus `dependentTests` — chart/profile tests to rerun when this chart
@@ -224,10 +224,9 @@ pauses both. See
 for a minimal example.
 
 The accepted shape of that file is
-[`src/chart_manager/api/lifecycle/v1alpha1.py`](src/chart_manager/api/lifecycle/v1alpha1.py);
-local resources are
-[`src/chart_manager/api/local/v1alpha1.py`](src/chart_manager/api/local/v1alpha1.py).
-Reading one module is reading the whole contract. See
+[`chart_lifecycle.py`](src/chart_manager/api/v1alpha1/chart_lifecycle.py).
+Local roots and their shared release types live beside it. Reading a kind
+module and its shared vocabulary is reading the whole contract. See
 [`docs/architecture.md`](docs/architecture.md) for why the contract lives
 apart from the code that interprets it.
 

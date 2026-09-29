@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile
-from chart_manager.api.lifecycle.v1alpha1 import ClusterTestSpec as _TestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile
+from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec as _TestSpec
 from chart_manager.domain.charts import (
     ChartMetadata,
     ClusterTestChart,
@@ -106,7 +106,7 @@ def _local_cluster(tmp_path: Path) -> None:
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:

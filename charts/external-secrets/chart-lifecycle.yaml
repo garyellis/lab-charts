@@ -1,4 +1,4 @@
-apiVersion: lifecycle.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata:
   name: external-secrets

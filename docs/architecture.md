@@ -35,21 +35,21 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 
 `api/` owns the authored, versioned YAML contracts:
 
-| Group / version | Kinds | Module |
+| Version | Kind | Module |
 |---|---|---|
-| `lifecycle.chartmanager.io/v1alpha1` | `ChartLifecycle` | `api/lifecycle/v1alpha1.py` |
-| `local.chartmanager.io/v1alpha1` | `LocalCluster`, `LocalStack` | `api/local/v1alpha1.py` |
+| `chartmanager.io/v1alpha1` | `ChartLifecycle` | `api/v1alpha1/chart_lifecycle.py` |
+| `chartmanager.io/v1alpha1` | `LocalCluster` | `api/v1alpha1/local_cluster.py` |
+| `chartmanager.io/v1alpha1` | `LocalStack` | `api/v1alpha1/local_stack.py` |
 
-Each module is the complete accepted shape of its YAML — field names,
-aliases, defaults, enums, every rule decidable from a single document — with
-no loader or planner in the way. The boundary exists because a change under
-`api/` can break a YAML document someone already wrote and so deserves API
-review; a change to a compiled plan or execution result cannot.
+Each kind module and its shared vocabulary define the complete accepted YAML
+shape, with no loader or planner in the way. A change under `api/` can break a
+document someone already wrote and so deserves API review; a change to a
+compiled plan or execution result cannot.
 
 Consumers import the explicit version:
 
 ```python
-from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 ```
 
 There are no versionless re-exports, so a future `v1beta1` cannot silently
@@ -107,11 +107,11 @@ proving the guards still fire on a synthetic violation.
 
 ## A note on shared bases
 
-`api/base.py` deliberately has **two** bases. `ChartLifecycle` and its
+`api/v1alpha1/common.py` deliberately has **two** bases. `ChartLifecycle` and its
 envelope are `strict=True`; the capability specs nested inside are not, so
 `spec.validation.enabled: "true"` is coerced today while
 `spec.enabled: "true"` is rejected. Collapsing them would reject YAML that
-currently parses. The two API groups likewise keep separate metadata models:
+currently parses. The kinds likewise keep separate metadata models:
 lifecycle names allow any non-padded string, local resource names must be
 DNS labels. Share a base only where behavior is provably identical —
 tidiness is not a reason to change what a user's file may say.

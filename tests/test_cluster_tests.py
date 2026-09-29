@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from chart_manager.api.lifecycle.v1alpha1 import ClusterTestProfile, ClusterTestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, ClusterTestSpec
 from chart_manager.domain.lifecycle_policy import (
     load_chart_lifecycle,
     require_cluster_test,
@@ -313,7 +313,7 @@ def _migration_service(
     local_cluster.parent.mkdir()
     local_cluster.write_text(
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:
@@ -383,7 +383,7 @@ def _configure_local_bootstrap(tmp_path: Path) -> None:
     )
     (tmp_path / ".chart-manager/local-cluster.yaml").write_text(
         """
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
 metadata: {name: default}
 spec:

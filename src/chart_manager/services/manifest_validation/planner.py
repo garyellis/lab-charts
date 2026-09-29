@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
-from chart_manager.api.lifecycle.v1alpha1 import (
+from chart_manager.api.v1alpha1.chart_lifecycle import (
     ALL_ENVIRONMENTS,
     MATCH_BY_BASENAME,
     ManifestValidationSpec,

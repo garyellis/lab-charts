@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.api.local.v1alpha1 import LocalCluster
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.services.clusters._shared import kind_config_path
 from chart_manager.services.clusters.environment import EnvironmentHandle

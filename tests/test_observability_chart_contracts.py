@@ -15,7 +15,7 @@ def test_prometheus_operator_is_controller_and_crds_without_full_stack() -> None
     values = _yaml("charts/prometheus-operator/values.yaml")
     upstream = values["prometheus-operator"]
 
-    assert chart["version"] == "0.1.1"
+    assert chart["version"] == "0.1.2"
     assert upstream["crds"]["enabled"] is True
     assert upstream["prometheusOperator"]["enabled"] is True
     assert upstream["defaultRules"]["create"] is False
@@ -36,14 +36,14 @@ def test_prometheus_operator_is_controller_and_crds_without_full_stack() -> None
 def test_alloy_stable_hub_identity_chart_version() -> None:
     chart = _yaml("charts/alloy/Chart.yaml")
 
-    assert chart["version"] == "0.2.1"
+    assert chart["version"] == "0.2.2"
 
 
 def test_thanos_defaults_are_infrastructure_only_with_monitoring_definitions() -> None:
     chart = _yaml("charts/thanos/Chart.yaml")
     values = _yaml("charts/thanos/values.yaml")["thanos"]
 
-    assert chart["version"] == "0.2.0"
+    assert chart["version"] == "0.2.1"
     assert values["global"]["serviceMonitor"]["enabled"] is True
     assert values["global"]["thanosRules"]["enabled"] is True
     assert values["ruler"]["enabled"] is False
@@ -66,7 +66,7 @@ def test_observability_alerting_runbook_suffix_is_backward_compatible() -> None:
     chart = _yaml("charts/observability-alerting/Chart.yaml")
     values = _yaml("charts/observability-alerting/values.yaml")
 
-    assert chart["version"] == "0.1.1"
+    assert chart["version"] == "0.1.2"
     assert values["links"]["runbookPathSuffix"] == ""
 
 
@@ -77,7 +77,7 @@ def test_rustfs_defaults_require_external_secrets_and_one_data_disk() -> None:
     upstream = values["rustfs"]
     bootstrap = values["bootstrap"]
 
-    assert chart["version"] == "0.2.0"
+    assert chart["version"] == "0.2.1"
     assert chart["dependencies"] == [
         {
             "name": "rustfs",

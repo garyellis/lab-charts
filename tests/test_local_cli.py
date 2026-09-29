@@ -53,7 +53,7 @@ def _stack(root: Path, name: str = "platform") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""
-apiVersion: local.chartmanager.io/v1alpha1
+apiVersion: chartmanager.io/v1alpha1
 kind: LocalStack
 metadata:
   name: {name}
@@ -816,7 +816,7 @@ def test_chart_test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(
     config = chart_root / ".chart-manager" / "local-cluster.yaml"
     config.parent.mkdir()
     config.write_text(
-        "apiVersion: local.chartmanager.io/v1alpha1\n"
+        "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: LocalCluster\n"
         "metadata: {name: default}\n"
         "spec:\n"
@@ -999,7 +999,7 @@ def test_chart_teardown_dry_run_lists_redacted_cleanups_and_runs_nothing(
     config = chart_root / ".chart-manager" / "local-cluster.yaml"
     config.parent.mkdir()
     config.write_text(
-        "apiVersion: local.chartmanager.io/v1alpha1\n"
+        "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: LocalCluster\n"
         "metadata: {name: default}\n"
         "spec:\n"

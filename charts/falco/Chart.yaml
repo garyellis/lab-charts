@@ -2,7 +2,7 @@ apiVersion: v2
 name: falco
 description: Falco runtime security vendor/deployment chart, alerts delivered to Wazuh
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.45.0"
 dependencies:
   - name: falco

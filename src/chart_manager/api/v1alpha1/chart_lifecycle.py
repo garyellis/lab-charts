@@ -1,4 +1,4 @@
-"""``lifecycle.chartmanager.io/v1alpha1`` -- the authored ``ChartLifecycle`` contract.
+"""The authored ``ChartLifecycle`` contract.
 
 ``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
 module owns its complete accepted shape: the envelope, the metadata identity,
@@ -21,23 +21,21 @@ from typing import Final, Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
-from chart_manager.api.base import ApiModel, StrictApiModel
+from chart_manager.api.v1alpha1.common import ApiModel, ApiVersion, StrictApiModel
 from chart_manager.plumbing.paths import ensure_relative
 
 __all__ = [
     "ALL_ENVIRONMENTS",
-    "LIFECYCLE_API_VERSION",
-    "LIFECYCLE_KIND",
+    "CHART_LIFECYCLE_KIND",
     "MATCH_BY_BASENAME",
     "ChartLifecycle",
+    "ChartLifecycleKind",
     "ChartLifecycleMetadata",
     "ChartLifecycleSpec",
     "ClusterTestHooks",
     "ClusterTestProfile",
     "ClusterTestRef",
     "ClusterTestSpec",
-    "LifecycleApiVersion",
-    "LifecycleKind",
     "ManifestValidationEnvironmentSpec",
     "ManifestValidationPolicySpec",
     "ManifestValidationSpec",
@@ -45,20 +43,9 @@ __all__ = [
     "TriggerValue",
 ]
 
-# The group string and the kind are each spelled exactly once, here. The
-# envelope annotates its fields with these aliases and the constants are read
-# back out of them, so a rename cannot leave the accepted `apiVersion` and the
-# exported constant disagreeing -- which is precisely what happened while the
-# group moved off `cmg.io`.
-#
-# Plain assignment, not `type X = ...`: a PEP 695 alias makes Pydantic emit a
-# `$ref` into `$defs` instead of an inline `const`, which would change the
-# generated JSON Schema for no benefit.
-LifecycleApiVersion = Literal["lifecycle.chartmanager.io/v1alpha1"]
-LifecycleKind = Literal["ChartLifecycle"]
-
-LIFECYCLE_API_VERSION: LifecycleApiVersion = get_args(LifecycleApiVersion)[0]
-LIFECYCLE_KIND: LifecycleKind = get_args(LifecycleKind)[0]
+# A PEP 695 alias would emit a schema `$ref` instead of an inline `const`.
+ChartLifecycleKind = Literal["ChartLifecycle"]
+CHART_LIFECYCLE_KIND: ChartLifecycleKind = get_args(ChartLifecycleKind)[0]
 
 # Literal string used as a trigger value to opt into basename-derived env
 # fanout (e.g. envs/dev.yaml -> dev). Kept as a constant so the worklist
@@ -292,7 +279,7 @@ class ChartLifecycleSpec(StrictApiModel):
 class ChartLifecycle(StrictApiModel):
     """Kubernetes-style lifecycle intent envelope for one Helm chart."""
 
-    api_version: LifecycleApiVersion = Field(alias="apiVersion")
-    kind: LifecycleKind
+    api_version: ApiVersion = Field(alias="apiVersion")
+    kind: ChartLifecycleKind
     metadata: ChartLifecycleMetadata
     spec: ChartLifecycleSpec

@@ -3,7 +3,7 @@ apiVersion: v2
 name: arc-runner-set
 description: GitHub Actions Runner Controller runner scale set dependency chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.14.2"
 dependencies:
   - name: gha-runner-scale-set

@@ -2,7 +2,7 @@ apiVersion: v2
 name: harbor
 description: Harbor vendor/deployment chart
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "2.15.1"
 dependencies:
   - name: harbor

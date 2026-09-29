@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.api.lifecycle.v1alpha1 import ChartLifecycle
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.domain.charts import ChartDependency, ChartRepository
 from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,

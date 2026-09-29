@@ -33,7 +33,7 @@ def relative_path(value: object, *, field: str) -> Path:
     reader would have to normalize in their head before knowing which file is
     meant. The two rules are not interchangeable.
 
-    Shared by `chart_manager.api.local.v1alpha1`, which applies it to authored
+    Shared by `chart_manager.api.v1alpha1`, which applies it to authored
     fields, and by `chart_manager.domain.local_resources`, which applies the
     same rule to the layout paths its loader is constructed with. Pure and
     lexical -- it never touches the filesystem, so it says nothing about

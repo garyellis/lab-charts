@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.api.lifecycle.v1alpha1 import LIFECYCLE_API_VERSION, ChartLifecycle
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
+from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
@@ -27,7 +28,7 @@ def _write_lifecycle(tmp_path: Path, spec: str, *, name: str = "demo") -> Path:
     path = tmp_path / LIFECYCLE_FILENAME
     path.write_text(
         f"""
-apiVersion: {LIFECYCLE_API_VERSION}
+apiVersion: {API_VERSION}
 kind: ChartLifecycle
 metadata:
   name: {name}
@@ -70,7 +71,7 @@ def _validation_spec(*, root_enabled: bool = True, section_enabled: bool = True)
 def test_loads_each_capability_from_chart_lifecycle(tmp_path: Path) -> None:
     cluster = load_chart_lifecycle(_write_lifecycle(tmp_path, _cluster_spec()))
 
-    assert cluster.api_version == LIFECYCLE_API_VERSION
+    assert cluster.api_version == API_VERSION
     assert cluster.kind == "ChartLifecycle"
     assert cluster.metadata.name == "demo"
     assert cluster.spec.cluster_test is not None
@@ -113,30 +114,30 @@ def test_enabled_defaults_true_and_capabilities_are_optional(tmp_path: Path) -> 
     [
         "kind: ChartLifecycle\nmetadata: {name: demo}\nspec: {}\n",
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: Wrong\n"
+            f"apiVersion: {API_VERSION}\nkind: Wrong\n"
             "metadata: {name: demo}\nspec: {}\n"
         ),
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
+            f"apiVersion: {API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {}\nspec: {}\n"
         ),
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
+            f"apiVersion: {API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: ' demo'}\nspec: {}\n"
         ),
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
+            f"apiVersion: {API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: demo, extra: true}\nspec: {}\n"
         ),
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
+            f"apiVersion: {API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: demo}\nspec: {enabled: 'true'}\n"
         ),
         (
-            f"apiVersion: {LIFECYCLE_API_VERSION}\nkind: ChartLifecycle\n"
+            f"apiVersion: {API_VERSION}\nkind: ChartLifecycle\n"
             "metadata: {name: demo}\nspec: {}\nextra: true\n"
         ),
-        "- apiVersion\n- lifecycle.chartmanager.io/v1alpha1\n",
+        "- apiVersion\n- chartmanager.io/v1alpha1\n",
     ],
 )
 def test_envelope_is_strict(tmp_path: Path, body: str) -> None:
@@ -193,7 +194,7 @@ def test_composition_requires_all_three_chart_names_to_match(tmp_path: Path) -> 
 def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
     absent = ChartLifecycle.model_validate(
         {
-            "apiVersion": LIFECYCLE_API_VERSION,
+            "apiVersion": API_VERSION,
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
             "spec": {"enabled": False},
@@ -201,7 +202,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
     )
     disabled = ChartLifecycle.model_validate(
         {
-            "apiVersion": LIFECYCLE_API_VERSION,
+            "apiVersion": API_VERSION,
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
             "spec": {
@@ -214,7 +215,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
     )
     enabled = ChartLifecycle.model_validate(
         {
-            "apiVersion": LIFECYCLE_API_VERSION,
+            "apiVersion": API_VERSION,
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
             "spec": {"clusterTest": {"profiles": {"minimal": {"namespace": "default"}}}},
@@ -238,7 +239,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
         (
             ChartLifecycle.model_validate(
                 {
-                    "apiVersion": LIFECYCLE_API_VERSION,
+                    "apiVersion": API_VERSION,
                     "kind": "ChartLifecycle",
                     "metadata": {"name": "demo"},
                     "spec": {"enabled": False},
@@ -255,7 +256,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
         (
             ChartLifecycle.model_validate(
                 {
-                    "apiVersion": LIFECYCLE_API_VERSION,
+                    "apiVersion": API_VERSION,
                     "kind": "ChartLifecycle",
                     "metadata": {"name": "demo"},
                     "spec": {
