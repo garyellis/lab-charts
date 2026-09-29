@@ -206,6 +206,7 @@ class ManifestValidationRunner:
         on_event: EventCallback | None = None,
         dep_update_timeout: float | None = 300.0,
         tool_timeout: float | None = None,
+        include_crds: bool = False,
     ) -> None:
         """Wire integrations, worker count, event callback, and dep/tool timeouts."""
         self.helm_factory = helm_factory
@@ -237,6 +238,7 @@ class ManifestValidationRunner:
         # Validator providers receive the same timeout while constructing
         # their executors in the service composition root.
         self.tool_timeout = tool_timeout
+        self.include_crds = include_crds
 
     def run(
         self,
@@ -636,10 +638,7 @@ class ManifestValidationRunner:
                 namespace=cfg.row.namespace,
                 output_dir=out_dir,
                 values=cfg.values,
-                # CRDs from locked chart dependencies are authoritative
-                # inputs for schema generation and part of the manifest set
-                # validation is expected to cover.
-                include_crds=True,
+                include_crds=self.include_crds,
             )
         except ExternalCommandError as exc:
             # Logged as well as returned: the PhaseResult reaches the summary

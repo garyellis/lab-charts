@@ -179,7 +179,6 @@ class ManifestValidationSpec(ApiModel):
     helm_version: str | None = Field(default=None, alias="helmVersion")
     helm_binary: str | None = Field(default=None, alias="helmBinary")
 
-    kubernetes_version: str | None = Field(default=None, alias="kubernetesVersion")
     # Additive repository-local schema sources. Repository-wide generated,
     # in-tree and catalog sources are supplied by ChartWorkspace and cannot be
     # replaced by one chart.

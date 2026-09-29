@@ -36,7 +36,9 @@ def test_sync_forwards_update_offline_and_workers(monkeypatch) -> None:  # type:
     result = cli("schemas", "sync", "--update", "--offline", "--workers", "2")
 
     assert result.exit_code == 0
-    assert service.calls == [{"update": True, "offline": True, "workers": 2}]
+    assert service.calls == [
+        {"update": True, "refresh": False, "offline": True, "workers": 2}
+    ]
     assert "schema generation sha256:" in result.stdout
 
 
@@ -60,6 +62,23 @@ def test_explicit_online_overrides_offline_environment(monkeypatch) -> None:  # 
 
     assert result.exit_code == 0
     assert service.calls[0]["offline"] is False
+
+
+def test_refresh_is_distinct_from_upstream_update(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    service = _Service()
+    monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
+
+    result = cli("schemas", "sync", "--refresh")
+
+    assert result.exit_code == 0
+    assert service.calls[0]["refresh"] is True
+    assert service.calls[0]["update"] is False
+
+
+def test_refresh_and_update_are_mutually_exclusive() -> None:
+    result = cli("schemas", "sync", "--refresh", "--update")
+
+    assert result.exit_code == 2
 
 
 def test_schemas_help_lists_sync() -> None:

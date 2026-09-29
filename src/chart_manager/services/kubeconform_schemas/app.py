@@ -11,6 +11,8 @@ from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
+    KubeconformSchemaMaterializationRequiredError,
+    KubeconformSchemaSourceEnvironmentError,
 )
 from chart_manager.services.kubeconform_schemas.inventory import (
     SchemaInventory,
@@ -66,6 +68,7 @@ class RepositoryKubeconformSchemaService:
         self,
         *,
         update: bool = False,
+        refresh: bool = False,
         offline: bool = False,
         workers: int = 0,
     ) -> RepositoryKubeconformSchemaSyncResult:
@@ -77,6 +80,49 @@ class RepositoryKubeconformSchemaService:
                 "before running `chart-manager schemas sync --update`"
             )
         workspace_name = _require_workspace_name(self.workspace)
+        if offline and (update or refresh):
+            raise KubeconformSchemaSourceEnvironmentError(
+                "schema --refresh/--update requires rendering and source access; "
+                "rerun online"
+            )
+
+        base_request = KubeconformSchemaSyncRequest(
+            workspace=workspace_name,
+            policy=AuthoredSchemaPolicy(
+                kubernetes_version=policy.kubernetes_version,
+                generate_from_crds=policy.schemas.generate_from_crds,
+                catalog_repository=policy.schemas.catalog.repository,
+                catalog_track=policy.schemas.catalog.track,
+            ),
+            requirements=(),
+            materialized=(),
+            lock_path=self.workspace.root / SCHEMA_LOCK_FILE,
+            update=False,
+            offline=offline,
+        )
+        if not update and not refresh:
+            # The common path is lock/cache only. In particular this must not
+            # run Helm (or dependency updates) merely because validation is
+            # starting. A cold generation containing repository-derived
+            # schemas requires the explicit refresh path below.
+            try:
+                synchronized = self.sync_service.sync(base_request)
+            except KubeconformSchemaMaterializationRequiredError:
+                if offline:
+                    raise
+                # A new machine cannot reproduce generated/local bytes from
+                # hashes alone. The explicit schemas command may render them;
+                # chart validation itself never takes this fallback.
+            else:
+                return RepositoryKubeconformSchemaSyncResult(
+                    sync=synchronized,
+                    rows=0,
+                    required=len(synchronized.lock.schemas),
+                    generated=sum(
+                        entry.source == "generated" for entry in synchronized.lock.schemas
+                    ),
+                    local=sum(entry.source == "local" for entry in synchronized.lock.schemas),
+                )
 
         catalog = build_catalog(
             self.workspace.root,
@@ -103,6 +149,7 @@ class RepositoryKubeconformSchemaService:
                     keep=True,
                     workers=workers,
                     offline=offline,
+                    include_crds=True,
                 )
             )
             failures = [
@@ -145,20 +192,22 @@ class RepositoryKubeconformSchemaService:
                 targets,
             )
             request = KubeconformSchemaSyncRequest(
-                workspace=workspace_name,
-                policy=AuthoredSchemaPolicy(
-                    kubernetes_version=policy.kubernetes_version,
-                    generate_from_crds=policy.schemas.generate_from_crds,
-                    catalog_repository=policy.schemas.catalog.repository,
-                    catalog_track=policy.schemas.catalog.track,
-                ),
+                workspace=base_request.workspace,
+                policy=base_request.policy,
                 requirements=inventory.requirements,
                 materialized=(*generated, *local),
                 lock_path=self.workspace.root / SCHEMA_LOCK_FILE,
                 update=update,
                 offline=offline,
             )
-            synchronized = self.sync_service.sync(request)
+            if refresh:
+                synchronized = self.sync_service.refresh(request)
+            else:
+                # ``update`` and a cold default hydration both flow through
+                # sync.  The latter verifies locally-derived bytes against the
+                # committed lock and must never rewrite that lock as a side
+                # effect of populating an empty cache.
+                synchronized = self.sync_service.sync(request)
 
         return RepositoryKubeconformSchemaSyncResult(
             sync=synchronized,
@@ -214,7 +263,7 @@ def _expand_schema_template(
     requirement: SchemaRequirement,
 ) -> Path:
     replacements = {
-        "{{.Group}}": requirement.gvk.group,
+        "{{.Group}}": requirement.gvk.group or requirement.gvk.version,
         "{{.ResourceKind}}": requirement.gvk.kind.lower(),
         "{{.ResourceAPIVersion}}": requirement.gvk.version,
     }

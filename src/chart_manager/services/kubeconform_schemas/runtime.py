@@ -13,7 +13,12 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaStoreError,
 )
 from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
-from chart_manager.services.kubeconform_schemas.models import SchemaLock, SchemaScope
+from chart_manager.services.kubeconform_schemas.models import (
+    AuthoredSchemaPolicy,
+    SchemaLock,
+    SchemaScope,
+    lock_policy_mismatches,
+)
 from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaLocations,
     KubeconformSchemaStore,
@@ -36,16 +41,9 @@ class KubeconformSchemaRuntime:
         )
 
     def ignored_missing_kinds(self, scope: SchemaScope) -> tuple[str, ...]:
-        """Return the locked per-scope allow-list as kubeconform Kind skips."""
-        return tuple(
-            sorted(
-                {
-                    requirement.gvk.kind
-                    for requirement in self.lock.inventory
-                    if requirement.scope == scope and requirement.allow_missing
-                }
-            )
-        )
+        """Compatibility hook; allow-missing policy is expanded from each row."""
+        del scope
+        return ()
 
 
 def load_kubeconform_schema_runtime(
@@ -70,25 +68,16 @@ def load_kubeconform_schema_runtime(
             f"schema lock does not exist: {path}; run `chart-manager schemas sync --update`"
         )
     lock = load_schema_lock(path)
-    mismatches: list[str] = []
-    expected = (
-        ("workspace", lock.workspace, workspace_name),
-        ("kubernetesVersion", lock.policy.kubernetes_version, authored.kubernetes_version),
-        (
-            "generateFromCRDs",
-            lock.policy.generate_from_crds,
-            authored.schemas.generate_from_crds,
+    mismatches = lock_policy_mismatches(
+        AuthoredSchemaPolicy(
+            kubernetes_version=authored.kubernetes_version,
+            generate_from_crds=authored.schemas.generate_from_crds,
+            catalog_repository=authored.schemas.catalog.repository,
+            catalog_track=authored.schemas.catalog.track,
         ),
-        (
-            "catalog.repository",
-            lock.policy.catalog.repository,
-            authored.schemas.catalog.repository,
-        ),
-        ("catalog.track", lock.policy.catalog.track, authored.schemas.catalog.track),
+        lock,
+        workspace=workspace_name,
     )
-    for name, actual, wanted in expected:
-        if actual != wanted:
-            mismatches.append(f"{name}: lock={actual!r}, workspace={wanted!r}")
     if mismatches:
         raise KubeconformSchemaLockError(
             "schema lock does not match workspace policy; run "
@@ -103,11 +92,13 @@ def load_kubeconform_schema_runtime(
             f"remove {status.generation_path}, then run "
             "`chart-manager schemas sync` while online"
         )
-    if status.missing or status.uncovered:
-        detail_parts = [
-            *(f"missing {problem.path}" for problem in status.missing),
-            *(f"uncovered {item}" for item in status.uncovered),
-        ]
+    if status.uncovered:
+        raise KubeconformSchemaLockError(
+            f"schema lock does not cover its generation inventory: "
+            f"{'; '.join(status.uncovered)}; run `chart-manager schemas sync --refresh`"
+        )
+    if status.missing:
+        detail_parts = [f"missing {problem.path}" for problem in status.missing]
         raise KubeconformSchemaSourceEnvironmentError(
             f"schema generation {lock.generation} is not cached: "
             + "; ".join(detail_parts)

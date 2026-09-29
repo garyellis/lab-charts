@@ -248,6 +248,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
     for environment in ("dev", "prod"):
         invocation = configs[environment].validator_invocations[0]
         assert isinstance(invocation.config, KubeconformConfig)
+        assert invocation.config.kubernetes_version == "1.35.3"
         assert invocation.config.schema_locations == (
             f"/cache/{environment}/generated",
             "/cache/shared/fallback",
@@ -382,7 +383,6 @@ def test_chart_and_env_filters_narrow_the_worklist(tmp_path: Path) -> None:
 
 def test_row_config_resolves_values_policies_and_spec_settings(tmp_path: Path) -> None:
     extra = """
-kubernetesVersion: "1.31.2"
 schemaLocations: ["schemas/{{.ResourceKind}}.json"]
 policies:
   extra: [extra-policies]
@@ -406,7 +406,7 @@ policies:
     kyverno = cfg.validator_invocations[1].config
     assert isinstance(kubeconform, KubeconformConfig)
     assert isinstance(kyverno, KyvernoConfig)
-    assert kubeconform.kubernetes_version == "1.31.2"
+    assert kubeconform.kubernetes_version is None
     assert kubeconform.schema_locations == (
         str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
     )

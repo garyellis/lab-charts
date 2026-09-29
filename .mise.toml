@@ -74,7 +74,7 @@ description = "Run the spec-driven repository validator. Usage: mise run validat
 run = "uv run chart-manager chart validate \"$@\""
 
 [tasks.schemas]
-description = "Hydrate the schema store from the committed lock. Pass --update only when intentionally advancing schema inputs."
+description = "Hydrate the committed schema generation. Use --refresh for derived inputs and --update for upstream pins."
 run = "uv run chart-manager schemas sync \"$@\""
 
 [tasks."validate:clean"]

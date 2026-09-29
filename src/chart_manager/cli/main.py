@@ -50,6 +50,7 @@ from chart_manager.plumbing.logger import setup_logging
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaError,
+    KubeconformSchemaLockError,
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaSourceError,
 )
@@ -279,6 +280,7 @@ _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (KubeconformSchemaSourceEnvironmentError, Outcome.ENVIRONMENT),
     (KubeconformSchemaSourceError, Outcome.TOOL),
     (KubeconformSchemaConfigurationError, Outcome.SPEC),
+    (KubeconformSchemaLockError, Outcome.SPEC),
     (KubeconformSchemaError, Outcome.TOOL),
     (SpecError, Outcome.SPEC),
     (ChartManagerError, Outcome.FAILED),

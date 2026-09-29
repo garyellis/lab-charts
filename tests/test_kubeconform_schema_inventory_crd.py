@@ -9,7 +9,10 @@ from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaIntegrityError,
 )
-from chart_manager.services.kubeconform_schemas.inventory import scan_rendered_directory
+from chart_manager.services.kubeconform_schemas.inventory import (
+    SchemaInventory,
+    scan_rendered_directory,
+)
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
 
 
@@ -139,3 +142,43 @@ def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
         match="conflicting rendered CRDs",
     ):
         generate_crd_schemas(inventory.crds)
+
+
+def test_identical_crds_are_shared_across_chart_scopes(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "crd.yaml").write_text(_crd())
+    (second / "crd.yaml").write_text(_crd())
+    inventory = SchemaInventory.merge(
+        scan_rendered_directory(first, scope=SchemaScope(chart="operator", environment="ci")),
+        scan_rendered_directory(second, scope=SchemaScope(chart="consumer", environment="dev")),
+    )
+
+    generated = generate_crd_schemas(inventory.crds)
+
+    assert len(generated) == 1
+    assert generated[0].scope is None
+    assert generated[0].source_reference == "rendered CRD example.io/v1/Widget"
+
+
+def test_strimzi_style_combinator_fragments_are_not_closed(tmp_path: Path) -> None:
+    text = _crd().replace(
+        "properties:\n                name:",
+        "oneOf:\n                - properties:\n                    value: {type: string}\n"
+        "                - properties:\n                    valueFrom:\n                      type: object\n"
+        "                      properties:\n                        secretKeyRef: {type: object}\n"
+        "              properties:\n                name:",
+    )
+    (tmp_path / "crd.yaml").write_text(text)
+    inventory = scan_rendered_directory(
+        tmp_path, scope=SchemaScope(chart="strimzi", environment="ci")
+    )
+
+    schema = json.loads(generate_crd_schemas(inventory.crds)[0].content)
+    branches = schema["properties"]["spec"]["oneOf"]
+
+    assert "additionalProperties" not in branches[0]
+    assert "additionalProperties" not in branches[1]
+    assert branches[1]["properties"]["valueFrom"]["additionalProperties"] is False

@@ -350,10 +350,26 @@ jobs:
       # generation, then prove the validation pass needs no network fallback.
       # Only the narrowly allowlisted Renovate maintenance path runs --update.
       - name: Synchronize locked schemas
-        run: mise run schemas
+        id: schemas
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mise run schemas
+          status=$?
+          if (( status != 0 )); then
+            {
+              echo "## Schema preparation failed"
+              echo
+              echo "Run \`mise run schemas\` locally; use \`chart-manager schemas sync --refresh\` after chart-derived schema changes."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
 
       - name: Validate
         id: validate
+        if: ${{ !cancelled() }}
         # Don't fail-fast the job on a non-zero CLI exit: every post-step
         # (artifact upload, future post-processing) must run to completion
         # so the PR has full diagnostic context. The final "Gate" step below
@@ -403,7 +419,7 @@ jobs:
         # gate fires, so `if: failure()` would never trigger here. `!cancelled()`
         # skips artifact upload during workflow cancellation (no point keeping
         # a half-rendered tree from a killed run).
-        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.schemas.outcome == 'failure' || steps.validate.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: rendered-manifests-${{ github.run_id }}
@@ -418,9 +434,9 @@ jobs:
         # (skipped), the condition is false, and the job's overall status
         # reflects the earlier failure via normal GHA semantics. On cancel
         # we don't want to overwrite the cancel verdict with a "failed" row.
-        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.schemas.outcome == 'failure' || steps.validate.outcome == 'failure') }}
         run: |
-          echo "validate found failures — failing job to block merge."
+          echo "schema preparation or validation found failures — failing job to block merge."
           exit 1
 
   sandbox-test:

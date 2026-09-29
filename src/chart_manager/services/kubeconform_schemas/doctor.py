@@ -20,6 +20,7 @@ from chart_manager.services.kubeconform_schemas.models import (
     SchemaLock,
     SchemaRequirement,
     SchemaSourceKind,
+    lock_policy_mismatches,
 )
 from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaStore,
@@ -167,7 +168,6 @@ class KubeconformSchemaDoctor:
             "generation": lock.generation,
             "matchesPolicy": not mismatches,
             "mismatches": list(mismatches),
-            "inventory": len(lock.inventory),
             "schemas": len(lock.schemas),
         }
         if mismatches:
@@ -185,7 +185,7 @@ class KubeconformSchemaDoctor:
             Check.ok(
                 "schema-lock",
                 f"{path}; generation={lock.generation}; policy matches; "
-                f"inventory={len(lock.inventory)} schemas={len(lock.schemas)}",
+                f"schemas={len(lock.schemas)}",
                 data=data,
             ),
             lock,
@@ -199,8 +199,8 @@ def _store_check(
     policy_matches: bool,
 ) -> Check:
     unavailable = {problem.path for problem in (*status.missing, *status.corrupt)}
-    missing_gvks = _missing_gvks(lock, unavailable)
-    source_coverage = _source_coverage(lock)
+    missing_gvks = _missing_gvks(lock, status.inventory, unavailable)
+    source_coverage = _source_coverage(lock, status.inventory)
     data: dict[str, Any] = {
         "path": str(status.generation_path),
         "generation": lock.generation,
@@ -208,23 +208,29 @@ def _store_check(
         "present": status.present,
         "missing": len(status.missing),
         "corrupt": len(status.corrupt),
+        "inventory": len(status.inventory),
         "uncovered": len(status.uncovered),
         "sourceCoverage": source_coverage,
         "missingGVKs": missing_gvks,
         "ready": status.ready,
         "offlineReady": status.ready and policy_matches,
+        "repositoryDerivedInputsRecorded": status.inventory_present,
+        "repositoryDerivedInputsChecked": False,
     }
     sources = ", ".join(f"{source}={source_coverage[source]['files']}" for source in _SOURCES)
     detail = (
         f"{status.generation_path}; generation={lock.generation}; "
         f"expected={status.expected} present={status.present} "
         f"missing={len(status.missing)} corrupt={len(status.corrupt)} "
-        f"uncovered={len(status.uncovered)}; sources: {sources}; "
-        f"offline-ready={str(status.ready and policy_matches).lower()}"
+        f"inventory={len(status.inventory)} uncovered={len(status.uncovered)}; "
+        f"sources: {sources}; "
+        f"offline-ready={str(status.ready and policy_matches).lower()}; "
+        f"repository-derived-inputs-recorded={str(status.inventory_present).lower()}; "
+        "current-inputs-checked=false (run schemas sync --refresh)"
     )
     if missing_gvks:
         detail += "; missing GVKs: " + ", ".join(
-            f"{item['scope']} {item['gvk']}" for item in missing_gvks
+            item["gvk"] for item in missing_gvks
         )
     if status.ready:
         return Check.ok("schema-store", detail, data=data)
@@ -233,8 +239,8 @@ def _store_check(
             "schema-store",
             detail,
             remediation=(
-                _UPDATE + "; if a schema is intentionally unavailable, add its kind to "
-                "spec.validation.ignoreMissingSchemas"
+                "run chart-manager schemas sync --refresh; if a schema is intentionally "
+                "unavailable, add its kind to spec.validation.ignoreMissingSchemas"
             ),
             outcome=Outcome.SPEC,
             data=data,
@@ -278,30 +284,16 @@ def _policy_mismatches(
     policy: AuthoredSchemaPolicy,
     lock: SchemaLock,
 ) -> tuple[str, ...]:
-    comparisons = (
-        ("workspace", lock.workspace, workspace),
-        ("kubernetesVersion", lock.policy.kubernetes_version, policy.normalized_version()),
-        ("generateFromCRDs", lock.policy.generate_from_crds, policy.generate_from_crds),
-        (
-            "kubernetes.repository",
-            lock.policy.kubernetes.repository,
-            policy.kubernetes_repository,
-        ),
-        ("kubernetes.track", lock.policy.kubernetes.track, policy.kubernetes_track),
-        ("catalog.repository", lock.policy.catalog.repository, policy.catalog_repository),
-        ("catalog.track", lock.policy.catalog.track, policy.catalog_track),
-    )
-    return tuple(
-        f"{name}: lock={locked!r}, workspace={authored!r}"
-        for name, locked, authored in comparisons
-        if locked != authored
-    )
+    return lock_policy_mismatches(policy, lock, workspace=workspace)
 
 
-def _source_coverage(lock: SchemaLock) -> dict[str, dict[str, int]]:
+def _source_coverage(
+    lock: SchemaLock,
+    inventory: tuple[SchemaRequirement, ...],
+) -> dict[str, dict[str, int]]:
     files = Counter(entry.source for entry in lock.schemas)
     requirements = Counter[str]()
-    for requirement in lock.inventory:
+    for requirement in inventory:
         for source in {entry.source for entry in lock.schemas if _entry_covers(entry, requirement)}:
             requirements[source] += 1
     return {
@@ -315,10 +307,11 @@ def _source_coverage(lock: SchemaLock) -> dict[str, dict[str, int]]:
 
 def _missing_gvks(
     lock: SchemaLock,
+    inventory: tuple[SchemaRequirement, ...],
     unavailable_paths: set[str],
 ) -> list[dict[str, str]]:
     missing: list[dict[str, str]] = []
-    for requirement in lock.inventory:
+    for requirement in inventory:
         candidates = [entry for entry in lock.schemas if _entry_covers(entry, requirement)]
         if requirement.allow_missing:
             continue
@@ -333,9 +326,9 @@ def _missing_gvks(
 
 
 def _entry_covers(entry: SchemaFile, requirement: SchemaRequirement) -> bool:
-    return entry.gvk == requirement.gvk and (
-        entry.scope is None or entry.scope.covers(requirement.scope)
-    )
+    if entry.gvk != requirement.gvk:
+        return False
+    return entry.scope is None or entry.scope.covers(requirement.scope)
 
 
 __all__ = ["KubeconformSchemaDoctor"]

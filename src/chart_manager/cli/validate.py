@@ -323,8 +323,9 @@ def validate(
         typer.Option(
             "--offline/--online",
             help=(
-                "Require all locked validation inputs to be available locally. "
-                "--online permits cache hydration (default, unless "
+                "Require the locked schema generation to be available locally. "
+                "This flag does not govern Helm dependency fetching. "
+                "--online is the default unless "
                 "CHART_MANAGER_OFFLINE or config sets offline)."
             ),
         ),

@@ -124,3 +124,31 @@ def test_raw_url_rejects_parent_traversal() -> None:
             "a" * 40,
             "../secret",
         )
+
+
+def test_token_is_sent_only_to_github_api() -> None:
+    requests = []
+
+    def opener(request, **_kwargs):
+        requests.append(request)
+        return _Response(b'{"sha":"' + b"a" * 40 + b'"}')
+
+    client = GitHubKubeconformSchemaSource(opener=opener, github_token="secret")
+    client.resolve_ref("owner/repo", "main")
+    client.fetch(KubeconformSchemaArtifactRequest("raw", "https://raw.githubusercontent.com/x"))
+
+    assert requests[0].get_header("Authorization") == "Bearer secret"
+    assert requests[1].get_header("Authorization") is None
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_github_api_rate_limit_has_actionable_diagnostic(status: int) -> None:
+    def limited(request, **_kwargs):
+        raise HTTPError(request.full_url, status, "limited", {}, None)
+
+    client = GitHubKubeconformSchemaSource(opener=limited)
+    with pytest.raises(
+        GitHubKubeconformSchemaSourceEnvironmentError,
+        match="GITHUB_TOKEN",
+    ):
+        client.resolve_ref("owner/repo", "main")

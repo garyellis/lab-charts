@@ -93,7 +93,7 @@ def test_lock_wraps_malformed_yaml_as_a_typed_failure(tmp_path: Path) -> None:
         load_schema_lock(path)
 
 
-def test_build_lock_sorts_inventory_and_schema_entries() -> None:
+def test_build_lock_omits_scope_inventory_and_sorts_schema_entries() -> None:
     scope = SchemaScope(chart="demo", environment="ci")
     config_map = GroupVersionKind(version="v1", kind="ConfigMap")
     deployment = GroupVersionKind(group="apps", version="v1", kind="Deployment")
@@ -124,5 +124,6 @@ def test_build_lock_sorts_inventory_and_schema_entries() -> None:
         ],
     )
 
-    assert [item.gvk.kind for item in lock.inventory] == ["ConfigMap", "Deployment"]
+    assert lock.inventory == ()
+    assert "inventory:" not in serialize_schema_lock(lock)
     assert [item.gvk.kind for item in lock.schemas] == ["ConfigMap", "Deployment"]

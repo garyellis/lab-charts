@@ -284,6 +284,9 @@ class RunRequest:
     # that prepares schema inputs owns enforcement; the request merely carries
     # the caller's resolved CLI/settings choice across the surface boundary.
     offline: bool = False
+    # Internal inventory renders need dependency CRDs; normal validation and
+    # its Kyverno phase must keep the historical manifest set unchanged.
+    include_crds: bool = False
 
     def __post_init__(self) -> None:
         """Reject an unknown phase name."""

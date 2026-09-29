@@ -111,8 +111,10 @@ only the exact command above; shell execution remains disabled, arguments and
 command chaining do not match the allowlist, and ordinary CI never uses
 `--update`.
 
-For a manual refresh, run `mise run schemas -- --update`, review both the
-workspace policy and `.chart-manager/schemas.lock.yaml`, then run
+For chart-derived changes, run `mise run schemas -- --refresh`; this preserves
+the committed upstream pins. To advance upstream inputs, run
+`mise run schemas -- --update`, review both the workspace policy and
+`.chart-manager/schemas.lock.yaml`, then run
 `mise run schemas` followed by `mise run validate -- --all --offline`.
 
 ## Troubleshooting

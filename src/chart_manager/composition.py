@@ -101,9 +101,6 @@ from chart_manager.services.kubeconform_schemas.app import (
     build_repository_kubeconform_schema_service,
 )
 from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.services.kubeconform_schemas.errors import (
-    KubeconformSchemaSourceEnvironmentError,
-)
 from chart_manager.services.kubeconform_schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
@@ -467,21 +464,14 @@ class Container:
         offline: bool,
         workers: int,
     ) -> KubeconformSchemaRuntime:
-        """Return a ready generation, hydrating a cold cache once when online."""
-        try:
-            return load_kubeconform_schema_runtime(workspace)
-        except KubeconformSchemaSourceEnvironmentError:
-            if offline:
-                raise
+        """Return one verified generation without hidden repository-wide work.
 
-        # Cache readiness is checked before rendering or source access. A
-        # cold online run hydrates the exact committed lock once here, before
-        # the validation runner fans rows out to workers.
-        self.kubeconform_schema_service(workspace.root).sync(
-            update=False,
-            offline=False,
-            workers=workers,
-        )
+        Validation is deliberately read-only. A cold cache fails once with the
+        explicit ``schemas sync`` remediation instead of rendering every chart
+        (and potentially downloading Helm dependencies) while the user asked
+        to validate one chart.
+        """
+        del offline, workers
         return load_kubeconform_schema_runtime(workspace)
 
     def kubeconform_schema_service(

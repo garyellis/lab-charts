@@ -78,6 +78,12 @@ def test_rejects_missing_or_remote_schema_locations(
 def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
     kc = Kubeconform(runner=runner)
+    (tmp_path / "resources.yaml").write_text(
+        "apiVersion: apiextensions.k8s.io/v1\n"
+        "kind: CustomResourceDefinition\nmetadata: {name: widgets.example.io}\n"
+        "---\napiVersion: policy/v1\nkind: PodDisruptionBudget\n"
+        "metadata: {name: demo}\n"
+    )
 
     kc.validate(
         tmp_path,
@@ -92,9 +98,33 @@ def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
     assert "-strict" not in call
     assert call[call.index("-kubernetes-version") + 1] == "1.31.2"
     assert call[call.index("-schema-location") + 1] == "/local/schemas"
-    assert call[call.index("-skip") + 1] == "CustomResourceDefinition,PodDisruptionBudget"
+    assert call[call.index("-skip") + 1] == (
+        "apiextensions.k8s.io/v1/CustomResourceDefinition,policy/v1/PodDisruptionBudget"
+    )
     assert "-ignore-missing-schemas" not in call
     assert "-cache" in call and call[call.index("-cache") + 1] == "/tmp/kc"
+
+
+def test_allow_missing_kind_is_not_skipped_when_exact_schema_exists(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered"
+    rendered.mkdir()
+    (rendered / "widget.yaml").write_text(
+        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
+    )
+    schemas = tmp_path / "schemas"
+    (schemas / "example.io").mkdir(parents=True)
+    (schemas / "example.io/widget_v1.json").write_text("{}")
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
+
+    Kubeconform(runner=runner).validate(
+        rendered,
+        schema_locations=[
+            str(schemas / "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json")
+        ],
+        skip_kinds=["Widget"],
+    )
+
+    assert "-skip" not in runner.calls[0]
 
 
 def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:

@@ -221,7 +221,7 @@ def test_schema_locations_absolutize_local_templates(
     )
 
 
-def test_chart_schema_locations_are_inserted_between_managed_sources(
+def test_managed_runtime_uses_only_verified_store_schema_locations(
     tmp_path: Path,
 ) -> None:
     target = _target(
@@ -248,7 +248,6 @@ def test_chart_schema_locations_are_inserted_between_managed_sources(
     assert config.kubernetes_version == "1.35.3"
     assert config.schema_locations == (
         "/cache/generated/{{.ResourceKind}}.json",
-        str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
         "/cache/kubernetes/{{.ResourceKind}}.json",
         "/cache/catalog/{{.ResourceKind}}.json",
     )

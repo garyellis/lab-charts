@@ -14,6 +14,7 @@ from chart_manager.services.kubeconform_schemas.models import (
     SchemaScope,
     build_lock,
     content_digest,
+    inventory_manifest_content,
 )
 from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaStore,
@@ -44,15 +45,17 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
         sha256=content_digest(content),
         source_reference="https://example/schema",
     )
+    inventory = [SchemaRequirement(gvk=gvk, scope=scope)]
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
+        inventory=inventory,
         schemas=[entry],
     )
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
+    store.write_stage_inventory(stage, inventory_manifest_content(inventory))
 
     published = store.publish_generation(stage, lock)
 
@@ -76,15 +79,17 @@ def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
         sha256=content_digest(content),
         source_reference="https://example/schema",
     )
+    inventory = [SchemaRequirement(gvk=gvk, scope=scope)]
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
+        inventory=inventory,
         schemas=[entry],
     )
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
+    store.write_stage_inventory(stage, inventory_manifest_content(inventory))
     unexpected = stage / "kubernetes/unlocked.json"
     unexpected.write_text("{}")
 
@@ -151,7 +156,7 @@ def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) ->
     locations = kubeconform_schema_locations(lock, tmp_path / "generation", scope=scope)
 
     assert len(locations.generated_schema_locations) == 1
-    assert "/generated/demo/ci/" in locations.generated_schema_locations[0]
+    assert "/generated/{{.Group}}/" in locations.generated_schema_locations[0]
     assert len(locations.fallback_schema_locations) == 1
     assert "/kubernetes/" in locations.fallback_schema_locations[0]
 

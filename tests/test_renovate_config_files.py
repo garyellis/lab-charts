@@ -51,11 +51,13 @@ def test_schema_updates_regenerate_only_the_workspace_and_lock() -> None:
         "/^\\.chart-manager/workspace\\.yaml$/"
     ]
     assert schema_policy["depTypeTemplate"] == "schema-policy"
+    assert schema_policy["extractVersionTemplate"] == "^v(?<version>.+)$"
     assert schema_lock["managerFilePatterns"] == [
         "/^\\.chart-manager/schemas\\.lock\\.yaml$/"
     ]
     assert schema_lock["depTypeTemplate"] == "schema-lock"
     assert rule["matchDepTypes"] == ["schema-policy", "schema-lock"]
+    assert rule["schedule"] == ["before 6am on monday"]
     assert rule["postUpgradeTasks"] == {
         "commands": ["chart-manager schemas sync --update"],
         "fileFilters": [
@@ -64,6 +66,9 @@ def test_schema_updates_regenerate_only_the_workspace_and_lock() -> None:
         ],
         "executionMode": "update",
     }
+    lag_rule = config["packageRules"][1]  # type: ignore[index]
+    assert lag_rule["matchPackageNames"] == ["registry.k8s.io/kube-apiserver"]
+    assert lag_rule["minimumReleaseAge"] == "14 days"
 
 
 def test_schema_regexes_extract_policy_version_and_tracking_pins() -> None:

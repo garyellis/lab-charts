@@ -12,15 +12,22 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
 from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
 from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     SchemaFile,
     SchemaLock,
+    SchemaRequirement,
     SchemaScope,
     content_digest,
+    inventory_manifest_content,
+    sort_requirements,
 )
+
+INVENTORY_MANIFEST_PATH = "inventory.json"
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,8 @@ class StoreStatus:
     present: int
     missing: tuple[StoreProblem, ...]
     corrupt: tuple[StoreProblem, ...]
+    inventory: tuple[SchemaRequirement, ...]
+    inventory_present: bool
     uncovered: tuple[str, ...]
 
     @property
@@ -79,15 +88,15 @@ def artifact_relative_path(
     # group.  Mirror that behavior in the store so one location template
     # resolves both core and grouped resources.
     template_group = gvk.group or gvk.version
-    if source in {"generated", "local"}:
+    if source == "local":
         if scope is None:
-            raise KubeconformSchemaStoreError(f"{source} schema {gvk.key} requires a scope")
+            raise KubeconformSchemaStoreError(f"local schema {gvk.key} requires a scope")
         environment = scope.environment or "_all"
         return (Path(source) / scope.chart / environment / template_group / name).as_posix()
-    if source == "catalog":
-        return (Path("catalog") / template_group / name).as_posix()
-    if source == "kubernetes":
-        return (Path("kubernetes") / template_group / name).as_posix()
+    if source in {"generated", "catalog", "kubernetes"}:
+        if source != "generated" and scope is not None:
+            raise KubeconformSchemaStoreError(f"{source} schema {gvk.key} must be shared")
+        return (Path(source) / template_group / name).as_posix()
     raise KubeconformSchemaStoreError(f"unknown schema source: {source}")
 
 
@@ -139,6 +148,19 @@ class KubeconformSchemaStore:
             ) from exc
         return destination
 
+    def write_stage_inventory(self, stage: Path, content: bytes) -> Path:
+        """Write cache-local scope metadata without coupling it to the repo lock."""
+        self._require_stage(stage)
+        _parse_inventory(content)
+        destination = stage / INVENTORY_MANIFEST_PATH
+        try:
+            destination.write_bytes(content)
+        except OSError as exc:
+            raise KubeconformSchemaStoreError(
+                f"failed to stage {INVENTORY_MANIFEST_PATH}: {exc}"
+            ) from exc
+        return destination
+
     def inspect(self, lock: SchemaLock, *, root: Path | None = None) -> StoreStatus:
         generation = (root or self.generation_path(lock)).resolve()
         expected = len(lock.schemas)
@@ -146,6 +168,23 @@ class KubeconformSchemaStore:
         present = 0
         missing: list[StoreProblem] = []
         corrupt: list[StoreProblem] = []
+        inventory = lock.inventory
+        inventory_present = False
+        expected_paths.add(INVENTORY_MANIFEST_PATH)
+        manifest = generation / INVENTORY_MANIFEST_PATH
+        if manifest.exists():
+            inventory_present = True
+            try:
+                content = manifest.read_bytes()
+            except OSError as exc:
+                corrupt.append(
+                    StoreProblem(INVENTORY_MANIFEST_PATH, f"cannot read file: {exc}")
+                )
+            else:
+                try:
+                    inventory = _parse_inventory(content)
+                except KubeconformSchemaStoreError as exc:
+                    corrupt.append(StoreProblem(INVENTORY_MANIFEST_PATH, str(exc)))
         for entry in lock.schemas:
             path = generation / schema_relative_path(entry)
             try:
@@ -195,10 +234,10 @@ class KubeconformSchemaStore:
         uncovered = tuple(
             sorted(
                 f"{requirement.scope.key}: {requirement.gvk.key}"
-                for requirement in lock.inventory
+                for requirement in inventory
                 if not requirement.allow_missing
                 and not any(
-                    _entry_covers(entry, requirement.gvk, requirement.scope)
+                    _entry_covers(entry, requirement)
                     for entry in lock.schemas
                 )
             )
@@ -209,6 +248,8 @@ class KubeconformSchemaStore:
             present=present,
             missing=tuple(missing),
             corrupt=tuple(corrupt),
+            inventory=inventory,
+            inventory_present=inventory_present,
             uncovered=uncovered,
         )
 
@@ -231,7 +272,18 @@ class KubeconformSchemaStore:
         self.require_ready(lock, root=stage)
         destination = self.generation_path(lock)
         if destination.exists():
-            # A concurrent or previous sync won. It is usable only if it matches.
+            # A concurrent or previous sync won. Schema bytes remain immutable,
+            # while refresh may replace the cache-local scope inventory even
+            # when the unique locked schema set (and generation id) is unchanged.
+            staged_inventory = stage / INVENTORY_MANIFEST_PATH
+            if staged_inventory.is_file():
+                try:
+                    os.replace(staged_inventory, destination / INVENTORY_MANIFEST_PATH)
+                    _fsync_directory(destination)
+                except OSError as exc:
+                    raise KubeconformSchemaStoreError(
+                        f"failed to refresh cache-local schema inventory: {exc}"
+                    ) from exc
             self.require_ready(lock, root=destination)
             try:
                 shutil.rmtree(stage)
@@ -309,8 +361,17 @@ def kubeconform_schema_locations(
     root = generation_path.resolve()
     preferred: list[str] = []
     fallback: list[str] = []
-    for source in ("generated", "local"):
-        target = preferred if source == "generated" else fallback
+    if any(entry.source == "generated" for entry in lock.schemas):
+        preferred.append(
+            str(
+                root
+                / "generated"
+                / "{{.Group}}"
+                / "{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+            )
+        )
+    for source in ("local",):
+        target = fallback
         for environment in (scope.environment or "", ""):
             selected_scope = SchemaScope(
                 chart=scope.chart,
@@ -336,10 +397,30 @@ def kubeconform_schema_locations(
     )
 
 
-def _entry_covers(entry: SchemaFile, gvk: GroupVersionKind, scope: SchemaScope) -> bool:
-    if entry.gvk != gvk:
+def _entry_covers(entry: SchemaFile, requirement: SchemaRequirement) -> bool:
+    if entry.gvk != requirement.gvk:
         return False
-    return entry.scope is None or entry.scope.covers(scope)
+    return entry.scope is None or entry.scope.covers(requirement.scope)
+
+
+def _parse_inventory(content: bytes) -> tuple[SchemaRequirement, ...]:
+    try:
+        decoded = json.loads(content)
+        if not isinstance(decoded, list):
+            raise ValueError("inventory JSON must be a list")
+        inventory = sort_requirements(
+            [SchemaRequirement.model_validate(item) for item in decoded]
+        )
+        if inventory_manifest_content(inventory) != content:
+            raise ValueError("inventory JSON is not canonical")
+        return inventory
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValidationError,
+        ValueError,
+    ) as exc:
+        raise KubeconformSchemaStoreError(f"invalid inventory: {exc}") from exc
 
 
 def _fsync_directory(path: Path) -> None:
@@ -356,6 +437,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "INVENTORY_MANIFEST_PATH",
     "KubeconformSchemaLocations",
     "KubeconformSchemaStore",
     "StoreProblem",

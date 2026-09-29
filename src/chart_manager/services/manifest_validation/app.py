@@ -47,6 +47,9 @@ from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+)
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
 from chart_manager.services.kubeconform_schemas.runtime import (
     KubeconformSchemaRuntime,
@@ -205,6 +208,7 @@ class RunnerSpec:
     tool_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
+    include_crds: bool = False
     validator_ids: frozenset[str] = frozenset(
         provider.validator_id for provider in VALIDATOR_REGISTRY
     )
@@ -367,9 +371,15 @@ class ManifestValidationService:
         # Every row then receives only local templates from this snapshot;
         # no validator process can resolve or download a schema on its own.
         schema_runtime: KubeconformSchemaRuntime | None = None
-        if workspace.validation is not None and "schema" in request.phases and any(
+        needs_schema_runtime = "schema" in request.phases and any(
             build.targets[row.chart].spec.validators.kubeconform for row in rows
-        ):
+        )
+        if needs_schema_runtime and workspace.authored and workspace.validation is None:
+            raise KubeconformSchemaConfigurationError(
+                f"{workspace.marker} has no spec.validation schema policy; "
+                "configure it before running schema validation"
+            )
+        if needs_schema_runtime and workspace.authored:
             schema_runtime = self._schema_runtime_factory(
                 workspace,
                 request.offline,
@@ -438,6 +448,7 @@ class ManifestValidationService:
                 request.dep_update_timeout if request.dep_update_timeout > 0 else None
             ),
             verbose=request.verbose,
+            include_crds=request.include_crds,
             validator_ids=frozenset(
                 invocation.validator_id
                 for cfg in configs
@@ -683,4 +694,5 @@ class ManifestValidationService:
             on_event=spec.on_event,
             tool_timeout=spec.tool_timeout,
             dep_update_timeout=spec.dep_update_timeout,
+            include_crds=spec.include_crds,
         )

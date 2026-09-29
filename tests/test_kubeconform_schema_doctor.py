@@ -19,10 +19,23 @@ from chart_manager.services.kubeconform_schemas.models import (
     SchemaScope,
     build_lock,
     content_digest,
+    inventory_manifest_content,
 )
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+from chart_manager.services.kubeconform_schemas.store import (
+    INVENTORY_MANIFEST_PATH,
+    KubeconformSchemaStore,
+)
 
 _CONTENT = b'{"type":"object"}\n'
+
+
+def _inventory():
+    return [
+        SchemaRequirement(
+            gvk=GroupVersionKind(group="apps", version="v1", kind="Deployment"),
+            scope=SchemaScope(chart="demo", environment="dev"),
+        )
+    ]
 
 
 def _workspace(root: Path, *, version: str = "1.35.3") -> RepositoryWorkspace:
@@ -47,8 +60,8 @@ def _workspace(root: Path, *, version: str = "1.35.3") -> RepositoryWorkspace:
 
 
 def _lock(*, version: str = "1.35.3", with_schema: bool = True):
-    gvk = GroupVersionKind(group="apps", version="v1", kind="Deployment")
-    scope = SchemaScope(chart="demo", environment="dev")
+    requirement = _inventory()[0]
+    gvk = requirement.gvk
     schemas = (
         [
             SchemaFile(
@@ -78,7 +91,7 @@ def _lock(*, version: str = "1.35.3", with_schema: bool = True):
                 resolved="b" * 40,
             ),
         ),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
+        inventory=[requirement],
         schemas=schemas,
     )
 
@@ -107,6 +120,9 @@ def test_ready_generation_reports_policy_lock_coverage_and_offline_readiness(
     schema = generation / "kubernetes/apps/deployment_v1.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(_CONTENT)
+    (generation / INVENTORY_MANIFEST_PATH).write_bytes(
+        inventory_manifest_content(_inventory())
+    )
     before_lock = lock_path.read_bytes()
     before_schema = schema.read_bytes()
 
@@ -137,6 +153,7 @@ def test_ready_generation_reports_policy_lock_coverage_and_offline_readiness(
     assert store.data["present"] == 1
     assert store.data["missing"] == 0
     assert store.data["corrupt"] == 0
+    assert store.data["inventory"] == 1
     assert store.data["uncovered"] == 0
     assert store.data["ready"] is True
     assert store.data["offlineReady"] is True
@@ -164,7 +181,7 @@ def test_missing_generation_is_environmental_and_names_missing_gvk(
     assert check.remediation == "run chart-manager schemas sync while online"
     assert check.data["missing"] == 1
     assert check.data["offlineReady"] is False
-    assert check.data["missingGVKs"] == [{"scope": "demo/dev", "gvk": "apps/v1/Deployment"}]
+    assert check.data["missingGVKs"] == []
     assert not cache_root.exists(), "doctor must not create the missing store"
 
 
@@ -182,6 +199,9 @@ def test_corrupt_generation_is_a_tool_failure_with_repair_command(
     schema = generation / "kubernetes/apps/deployment_v1.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(b"{}")
+    (generation / INVENTORY_MANIFEST_PATH).write_bytes(
+        inventory_manifest_content(_inventory())
+    )
 
     check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
 
@@ -195,12 +215,19 @@ def test_corrupt_generation_is_a_tool_failure_with_repair_command(
     assert schema.read_bytes() == b"{}", "doctor must not repair corrupt content"
 
 
-def test_uncovered_inventory_is_a_spec_failure_with_update_remediation(
+def test_local_inventory_manifest_reports_uncovered_requirement_as_spec_failure(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
     lock = _lock(with_schema=False)
     _write_lock(tmp_path, lock)
+    generation = KubeconformSchemaStore(
+        "lab-charts", cache_root=tmp_path / "cache"
+    ).generation_path(lock)
+    generation.mkdir(parents=True)
+    (generation / INVENTORY_MANIFEST_PATH).write_bytes(
+        inventory_manifest_content(_inventory())
+    )
 
     check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=tmp_path / "cache"))[
         "schema-store"
@@ -209,9 +236,10 @@ def test_uncovered_inventory_is_a_spec_failure_with_update_remediation(
     assert check.status is CheckStatus.FAILED
     assert check.outcome is Outcome.SPEC
     assert check.data["uncovered"] == 1
-    assert check.data["missingGVKs"] == [{"scope": "demo/dev", "gvk": "apps/v1/Deployment"}]
-    assert "schemas sync --update" in (check.remediation or "")
-    assert "ignoreMissingSchemas" in (check.remediation or "")
+    assert check.data["missingGVKs"] == [
+        {"scope": "demo/dev", "gvk": "apps/v1/Deployment"}
+    ]
+    assert "schemas sync --refresh" in (check.remediation or "")
 
 
 def test_lock_policy_mismatch_stops_before_store_and_prescribes_update(

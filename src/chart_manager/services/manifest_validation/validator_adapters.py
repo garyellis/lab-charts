@@ -188,7 +188,11 @@ class KubeconformValidator:
             phase="schema",
             status="FAIL",
             detail=_format_schema_findings(report.invalid()),
-            error_type="tool" if report.errors() else None,
+            error_type=(
+                "tool"
+                if any(_is_schema_readiness_error(item) for item in report.errors())
+                else None
+            ),
         )
 
 
@@ -264,6 +268,20 @@ def _format_schema_findings(resources: tuple[ResourceResult, ...]) -> str:
     return "\n".join(lines)
 
 
+def _is_schema_readiness_error(result: ResourceResult) -> bool:
+    """Distinguish absent/unreadable schemas from malformed resources."""
+    message = (result.msg or "").lower()
+    return any(
+        marker in message
+        for marker in (
+            "could not find schema",
+            "failed to download schema",
+            "failed loading schema",
+            "failed to load schema",
+        )
+    )
+
+
 def _format_policy_findings(findings: tuple[PolicyResult, ...]) -> str:
     """Render kyverno findings as one `policy/rule: kind/name: msg` line each."""
     lines: list[str] = []
@@ -288,13 +306,14 @@ class KubeconformProvider:
     def compile(self, context: ValidatorCompileContext) -> ValidatorInvocation:
         """Add chart-local schema locations to prepared repository inputs."""
         spec = context.spec
+        managed_version = context.kubeconform.kubernetes_version
         authored_locations = (
             resolve_schema_locations(
                 spec.schema_locations,
                 repo_root=context.repo_root,
                 spec_path=context.spec_path,
             )
-            if spec.validators.kubeconform
+            if spec.validators.kubeconform and managed_version is None
             else ()
         )
         locations = tuple(
@@ -312,9 +331,7 @@ class KubeconformProvider:
             order=self.order,
             enabled=spec.validators.kubeconform,
             config=KubeconformConfig(
-                kubernetes_version=(
-                    spec.kubernetes_version or context.kubeconform.kubernetes_version
-                ),
+                kubernetes_version=managed_version,
                 schema_locations=locations,
                 ignore_missing_schemas=tuple(
                     dict.fromkeys(

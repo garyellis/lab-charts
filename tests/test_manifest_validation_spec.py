@@ -31,7 +31,6 @@ def test_full_authored_shape_uses_camel_case() -> None:
             "releaseName": "demo",
             "namespaceTemplate": "lab-${env}",
             "helmVersion": "4.1.3",
-            "kubernetesVersion": "1.31.2",
             "schemaLocations": ["schemas/custom.json"],
             "ignoreMissingSchemas": ["UnpublishedKind"],
             "environments": {
@@ -51,7 +50,6 @@ def test_full_authored_shape_uses_camel_case() -> None:
 
     assert spec.release_name == "demo"
     assert spec.helm_version == "4.1.3"
-    assert spec.kubernetes_version == "1.31.2"
     assert spec.schema_locations == ["schemas/custom.json"]
     assert spec.ignore_missing_schemas == ["UnpublishedKind"]
     assert spec.unmatched_changes == "all-environments"
@@ -109,6 +107,7 @@ def test_ignore_missing_schemas_requires_unique_kind_names(kinds: list[str]) -> 
         "namespace_template",
         "helm_version",
         "helm_bin",
+        "kubernetesVersion",
         "kubernetes_version",
         "schema_locations",
         "ignore_missing_schemas",
@@ -118,7 +117,7 @@ def test_ignore_missing_schemas_requires_unique_kind_names(kinds: list[str]) -> 
         "version",
     ],
 )
-def test_rejects_legacy_manifest_field_names(legacy: str) -> None:
+def test_rejects_removed_or_legacy_manifest_field_names(legacy: str) -> None:
     raw: dict[str, object] = {
         "releaseName": "demo",
         "environments": {"dev": {"namespace": "dev"}},

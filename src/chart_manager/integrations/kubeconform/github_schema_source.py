@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from chart_manager.plumbing.errors import ChartManagerError
@@ -63,6 +64,7 @@ class GitHubKubeconformSchemaSource:
         max_workers: int = 8,
         max_bytes: int = _DEFAULT_MAX_BYTES,
         opener: OpenUrl = urlopen,
+        github_token: str | None = None,
     ) -> None:
         if timeout <= 0:
             raise ValueError("schema source timeout must be positive")
@@ -74,6 +76,9 @@ class GitHubKubeconformSchemaSource:
         self.max_workers = max_workers
         self.max_bytes = max_bytes
         self._opener = opener
+        self._github_token = github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get(
+            "RENOVATE_TOKEN"
+        )
 
     def resolve_ref(self, repository: str, ref: str) -> str:
         url = f"https://api.github.com/repos/{repository}/commits/{quote(ref, safe='')}"
@@ -161,13 +166,13 @@ class GitHubKubeconformSchemaSource:
         return KubeconformSchemaArtifactBatch(content=content, missing=missing)
 
     def _read(self, url: str, *, max_bytes: int) -> bytes:
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json, application/json",
-                "User-Agent": "chart-manager-kubeconform-schema-sync",
-            },
-        )
+        headers = {
+            "Accept": "application/vnd.github+json, application/json",
+            "User-Agent": "chart-manager-kubeconform-schema-sync",
+        }
+        if self._github_token and urlsplit(url).hostname == "api.github.com":
+            headers["Authorization"] = f"Bearer {self._github_token}"
+        request = Request(url, headers=headers)
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 raw_length = response.headers.get("Content-Length")
@@ -187,6 +192,11 @@ class GitHubKubeconformSchemaSource:
             if exc.code == 404:
                 raise GitHubKubeconformSchemaNotFoundError(
                     f"schema source has no object at {url}"
+                ) from exc
+            if exc.code in {403, 429} and urlsplit(url).hostname == "api.github.com":
+                raise GitHubKubeconformSchemaSourceEnvironmentError(
+                    "GitHub API rate limited schema pin resolution; set a valid "
+                    "GITHUB_TOKEN or retry later"
                 ) from exc
             raise GitHubKubeconformSchemaSourceEnvironmentError(
                 f"schema source request failed with HTTP {exc.code}: {url}"

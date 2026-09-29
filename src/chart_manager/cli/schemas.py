@@ -31,11 +31,18 @@ def sync(
             help="Resolve tracking refs, build a complete generation, and update the lock.",
         ),
     ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Rebuild derived requirements using the commits already pinned in the lock.",
+        ),
+    ] = False,
     offline: Annotated[
         bool | None,
         typer.Option(
             "--offline/--online",
-            help="Forbid network access and require the locked generation to be present.",
+            help="Require the locked schema generation to already be present locally.",
         ),
     ] = None,
     workers: Annotated[
@@ -44,9 +51,12 @@ def sync(
     ] = 0,
 ) -> None:
     """Eagerly render, inventory, verify, and publish all required schemas."""
+    if update and refresh:
+        raise typer.BadParameter("--update and --refresh are mutually exclusive")
     configured_offline = bool(getattr(ctx.obj, "offline", False))
     result = _make_service().sync(
         update=update,
+        refresh=refresh,
         offline=configured_offline if offline is None else offline,
         workers=workers,
     )

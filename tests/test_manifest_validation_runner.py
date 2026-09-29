@@ -228,7 +228,7 @@ def test_render_pass_triggers_schema_phase(tmp_path: Path) -> None:
     assert row_result.phases["policy"].status == "SKIP"
     assert row_result.phases["policy"].detail == "no policies discovered"
     assert result.outcome() is Outcome.SUCCESS
-    assert helm.calls[0]["include_crds"] is True
+    assert helm.calls[0]["include_crds"] is False
 
 
 @pytest.mark.parametrize(

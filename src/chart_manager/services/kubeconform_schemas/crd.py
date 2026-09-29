@@ -23,30 +23,32 @@ def generate_crd_schemas(
     crds: Iterable[RenderedResource],
 ) -> tuple[MaterializedSchema, ...]:
     """Generate deterministic schemas for every served CRD version with a schema."""
-    generated: dict[tuple[str, str, str, str, str], MaterializedSchema] = {}
+    generated: dict[tuple[str, str, str], MaterializedSchema] = {}
+    providers: dict[tuple[str, str, str], list[str]] = {}
     for resource in crds:
         for artifact in _schemas_for_crd(resource):
-            key = (
-                artifact.scope.chart,
-                artifact.scope.environment or "",
-                artifact.gvk.group,
-                artifact.gvk.version,
-                artifact.gvk.kind,
-            )
+            key = (artifact.gvk.group, artifact.gvk.version, artifact.gvk.kind)
             previous = generated.get(key)
             if previous is not None and previous.content != artifact.content:
                 raise KubeconformSchemaIntegrityError(
-                    f"conflicting rendered CRDs define {artifact.gvk.key} "
-                    f"in {artifact.scope.key}: {previous.source_reference}, "
-                    f"{artifact.source_reference}"
+                    f"conflicting rendered CRDs define {artifact.gvk.key}: "
+                    f"{', '.join(providers[key])}; {artifact.source_reference}"
                 )
-            generated[key] = artifact
+            providers.setdefault(key, []).append(artifact.source_reference)
+            generated[key] = MaterializedSchema(
+                gvk=artifact.gvk,
+                source="generated",
+                scope=None,
+                content=artifact.content,
+                # Provider fan-out is cache-local inventory metadata. Keeping
+                # chart/environment paths here would churn the compact lock
+                # even when the unique generated schema bytes are unchanged.
+                source_reference=f"rendered CRD {artifact.gvk.key}",
+            )
     return tuple(
         sorted(
             generated.values(),
             key=lambda item: (
-                item.scope.chart,
-                item.scope.environment or "",
                 item.gvk.group,
                 item.gvk.version,
                 item.gvk.kind,
@@ -110,10 +112,22 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
         # under strict validation rejects every real resource. Object metadata
         # is validated by the API server independently of custom fields, so
         # keep this envelope permissive here.
-        properties["metadata"] = {
-            "type": "object",
-            "additionalProperties": True,
-        }
+        authored_metadata = properties.get("metadata")
+        if authored_metadata is None:
+            properties["metadata"] = {
+                "type": "object",
+                "additionalProperties": True,
+            }
+        elif isinstance(authored_metadata, dict):
+            # Keep CRD-authored ObjectMeta constraints, while allowing the
+            # standard metadata fields the structural CRD schema commonly
+            # omits. Replacing this node used to silently discard constraints.
+            authored_metadata.setdefault("type", "object")
+            authored_metadata["additionalProperties"] = True
+        else:
+            raise KubeconformSchemaIntegrityError(
+                f"CRD {group}/{kind} version {version} has invalid metadata schema"
+            )
         required = normalized.setdefault("required", [])
         if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
             raise KubeconformSchemaIntegrityError(
@@ -127,10 +141,11 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
             MaterializedSchema(
                 gvk=GroupVersionKind(group=group, version=version, kind=kind),
                 source="generated",
-                scope=resource.scope,
+                scope=None,
                 content=content,
                 source_reference=(
-                    f"{resource.path.as_posix()}#document={resource.document_index + 1};"
+                    f"{resource.scope.key}:{resource.path.as_posix()}"
+                    f"#document={resource.document_index + 1};"
                     f"version={version}"
                 ),
             )
@@ -144,7 +159,7 @@ def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def _walk_schema(node: dict[str, Any]) -> None:
+def _walk_schema(node: dict[str, Any], *, close_self: bool = True) -> None:
     properties = node.get("properties")
     if isinstance(properties, dict):
         for child in properties.values():
@@ -170,12 +185,22 @@ def _walk_schema(node: dict[str, Any]) -> None:
     if isinstance(additional, dict):
         _walk_schema(additional)
 
-    for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
+    for key in ("allOf", "anyOf", "oneOf"):
         children = node.get(key)
         if isinstance(children, list):
             for child in children:
                 if isinstance(child, dict):
-                    _walk_schema(child)
+                    # A combinator branch is a constraint fragment evaluated
+                    # alongside its parent. Closing the fragment itself would
+                    # reject sibling properties declared by the parent (the
+                    # common Strimzi oneOf shape), while nested object values
+                    # inside the fragment still need normal strict handling.
+                    _walk_schema(child, close_self=False)
+    prefix_items = node.get("prefixItems")
+    if isinstance(prefix_items, list):
+        for child in prefix_items:
+            if isinstance(child, dict):
+                _walk_schema(child)
     for key in ("not", "if", "then", "else", "contains", "propertyNames"):
         child = node.get(key)
         if isinstance(child, dict):
@@ -183,7 +208,7 @@ def _walk_schema(node: dict[str, Any]) -> None:
 
     object_shape = node.get("type") == "object" or isinstance(properties, dict)
     preserve_unknown = node.get("x-kubernetes-preserve-unknown-fields") is True
-    if object_shape and "additionalProperties" not in node and not preserve_unknown:
+    if close_self and object_shape and "additionalProperties" not in node and not preserve_unknown:
         node["additionalProperties"] = False
 
 

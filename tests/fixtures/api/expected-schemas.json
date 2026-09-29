@@ -307,18 +307,6 @@
             "title": "Ignoremissingschemas",
             "type": "array"
           },
-          "kubernetesVersion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Kubernetesversion"
-          },
           "namespaceTemplate": {
             "anyOf": [
               {

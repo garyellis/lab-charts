@@ -8,10 +8,6 @@ spec:
     enabled: true
     releaseName: kiali-operator
     namespaceTemplate: "lab-${env}"
-    # Keep the local Kiali fallback additive to the repository-managed schema
-    # sources. Dependency CRD extraction can supersede it once available.
-    schemaLocations:
-      - "charts/kiali-operator/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
     environments:
       ci:
         namespace: kiali-operator
@@ -23,7 +19,6 @@ spec:
       "values.yaml":    [ci]
       "values-ci.yaml": [ci]
       "templates/**":   [ci]
-      "schemas/**":     [ci]
     unmatchedChanges: warn
 
   clusterTest:

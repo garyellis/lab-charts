@@ -43,6 +43,7 @@
       "depNameTemplate": "registry.k8s.io/kube-apiserver",
       "depTypeTemplate": "schema-policy",
       "datasourceTemplate": "docker",
+      "extractVersionTemplate": "^v(?<version>.+)$",
       "versioningTemplate": "semver"
     },
     {
@@ -70,6 +71,9 @@
       ],
       "groupName": "schema inputs",
       "groupSlug": "schema-inputs",
+      "schedule": [
+        "before 6am on monday"
+      ],
       "postUpgradeTasks": {
         "commands": [
           "chart-manager schemas sync --update"
@@ -80,6 +84,19 @@
         ],
         "executionMode": "update"
       }
+    },
+    {
+      "description": "Allow upstream Kubernetes schema publication to catch up with releases",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepTypes": [
+        "schema-policy"
+      ],
+      "matchPackageNames": [
+        "registry.k8s.io/kube-apiserver"
+      ],
+      "minimumReleaseAge": "14 days"
     }
   ]
 }

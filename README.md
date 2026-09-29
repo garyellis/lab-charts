@@ -36,7 +36,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. `--for '<command>'` narrows to one command. |
 | `uv run chart-manager chart validate <name> --env <env>` | Render one chart for one environment, then run its validators. `--all` validates every environment; with no chart named, the worklist comes from `git diff` against `origin/main`. |
 | `mise run validate -- --all` | Validate every chart and environment in the repo. |
-| `mise run schemas` | Hydrate the local schema store from the committed lock without advancing it. Use `mise run schemas -- --update` only when intentionally refreshing schema inputs. |
+| `mise run schemas` | Verify or hydrate the committed schema generation without advancing upstream pins. Use `--refresh` after chart/CRD changes and `--update` only when intentionally advancing upstream inputs. |
 | `uv run chart-manager chart test <name> --profile minimal` | Install the chart on a local kind cluster and run its Helm test hooks. |
 | `uv run chart-manager chart test <name> --skip-requires` | On an existing cluster, verify bootstrap and required releases without upgrading them, then reinstall and test only the selected target. On a new cluster, install prerequisites but Helm-test only the selected target. |
 | `uv run chart-manager local up --chart <name>` | Create or start the local cluster, run bootstrap releases, converge the chart. `--stack <name>` converges a `LocalStack` instead. |
@@ -60,7 +60,8 @@ Four authored kinds share the `chartmanager.io/v1alpha1` API under
 
 - `ChartWorkspace` (`.chart-manager/workspace.yaml`) — the checkout-owned
   chart, local-cluster, render, and policy locations, plus repository-wide
-  validation and cluster-test fanout.
+  validation and cluster-test fanout. Its validation policy pins the one
+  Kubernetes release used by every chart in a validation run.
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
   `ChartLifecycle` profile, a raw local chart, a pinned OCI chart, or an exact
@@ -202,10 +203,19 @@ chart, so unrelated charts never gate a PR. `publish` pushes every directly
 changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
 The validate job restores the XDG schema store using the committed
-`.chart-manager/schemas.lock.yaml` hash, runs `mise run schemas` to hydrate a
-cold cache from that immutable lock, then validates with
-`--offline`. Normal validation never advances source refs or rewrites the
-lock; only `schemas sync --update` does that.
+`.chart-manager/schemas.lock.yaml` hash, runs `mise run schemas` to verify or
+hydrate that generation, then validates with `--offline`. A warm generation
+does not render the repository. On a new machine, repository-derived schemas
+may be rebuilt against the already committed pins. Normal validation is
+read-only and never performs that repository-wide fallback.
+
+Use `chart-manager schemas sync --refresh` when chart resources, CRDs, or
+chart-local schemas change. It rebuilds the compact lock with the existing
+upstream commits. Only `--update` resolves moving refs. The lock records unique
+schema identities and checksums, not repeated chart/environment inventories.
+Store generations are immutable and strict: undeclared files count as
+corruption. Automatic pruning of old generations and interrupted staging
+directories is intentionally deferred to a future maintenance command.
 
 Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 `HARBOR_PROJECT` (default `charts`) in the runner environment, plus

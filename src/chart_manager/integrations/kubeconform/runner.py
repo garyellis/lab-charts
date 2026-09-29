@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
+from chart_manager.plumbing.yaml_files import load_yaml_documents
 
 _log = logging.getLogger(__name__)
 
@@ -120,7 +121,11 @@ class Kubeconform:
                 raise ExternalCommandError(
                     f"kubeconform schema locations must be local paths, got {location!r}"
                 )
-        skips = skip_kinds or []
+        skips = _uncovered_gvk_skips(
+            manifests_dir,
+            schema_locations,
+            frozenset({*(skip_kinds or []), "CustomResourceDefinition"}),
+        )
 
         args: list[str] = [self._bin, "-output", "json", "-summary"]
         if strict:
@@ -193,6 +198,61 @@ def _normalize_status(raw: str) -> ResourceStatus:
         _log.warning("kubeconform returned unknown status %r; bucketing as 'error'", raw)
         return "error"
     return normalized
+
+
+def _uncovered_gvk_skips(
+    manifests_dir: Path,
+    schema_locations: list[str],
+    allowed_kinds: frozenset[str],
+) -> list[str]:
+    """Expand authored Kind exceptions to only uncovered concrete GVKs."""
+    skips: set[str] = set()
+    for path in sorted(manifests_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+            continue
+        try:
+            documents = load_yaml_documents(path)
+        except Exception:
+            # Kubeconform owns malformed-manifest diagnostics. Preprocessing
+            # must never hide or reclassify those findings.
+            continue
+        for raw in documents:
+            candidates = (
+                raw.get("items", ())
+                if isinstance(raw, dict) and raw.get("kind") == "List"
+                else (raw,)
+            )
+            if not isinstance(candidates, (list, tuple)):
+                continue
+            for document in candidates:
+                if not isinstance(document, dict):
+                    continue
+                api_version = document.get("apiVersion")
+                kind = document.get("kind")
+                if not isinstance(api_version, str) or not isinstance(kind, str):
+                    continue
+                if kind not in allowed_kinds and f"{api_version}/{kind}" not in allowed_kinds:
+                    continue
+                group, _, version = api_version.rpartition("/")
+                if not group:
+                    version = api_version
+                template_group = group or version
+                replacements = {
+                    "{{.Group}}": template_group,
+                    "{{.ResourceKind}}": kind.lower(),
+                    "{{.ResourceAPIVersion}}": version,
+                }
+                covered = False
+                for location in schema_locations:
+                    expanded = location
+                    for marker, value in replacements.items():
+                        expanded = expanded.replace(marker, value)
+                    if Path(expanded).is_file():
+                        covered = True
+                        break
+                if not covered:
+                    skips.add(f"{api_version}/{kind}")
+    return sorted(skips)
 
 
 __all__ = [

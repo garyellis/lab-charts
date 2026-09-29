@@ -13,7 +13,6 @@ from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaSourceIntegrityError,
 )
 from chart_manager.services.kubeconform_schemas.errors import (
-    KubeconformSchemaIntegrityError,
     KubeconformSchemaLockError,
     KubeconformSchemaNotFoundError,
     KubeconformSchemaSourceEnvironmentError,
@@ -29,7 +28,10 @@ from chart_manager.services.kubeconform_schemas.models import (
 from chart_manager.services.kubeconform_schemas.source import (
     KubeconformSchemaArtifactBatch,
 )
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+from chart_manager.services.kubeconform_schemas.store import (
+    INVENTORY_MANIFEST_PATH,
+    KubeconformSchemaStore,
+)
 from chart_manager.services.kubeconform_schemas.sync import (
     KubeconformSchemaSyncRequest,
     KubeconformSchemaSyncService,
@@ -280,7 +282,7 @@ def test_lock_replace_failure_leaves_old_lock_authoritative(
     assert len(generations) == 1, "a complete orphan generation is safe for later collection"
 
 
-def test_inventory_drift_blocks_pinned_sync_before_network_or_store_mutation(
+def test_inventory_refresh_uses_existing_pins_without_resolving_refs(
     tmp_path: Path,
 ) -> None:
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
@@ -296,14 +298,46 @@ def test_inventory_drift_blocks_pinned_sync_before_network_or_store_mutation(
         }
     )
 
-    with pytest.raises(KubeconformSchemaLockError, match="inventory differs"):
-        KubeconformSchemaSyncService(store, sources).sync(drifted)
+    result = KubeconformSchemaSyncService(store, sources).refresh(drifted)
 
     assert sources.ref_calls == []
-    assert sources.download_calls == []
+    assert sources.download_calls
+    assert result.lock.policy == created.lock.policy
+    assert result.lock != created.lock
 
 
-def test_materialized_drift_blocks_warm_pinned_sync_without_mutation(tmp_path: Path) -> None:
+def test_scope_only_inventory_change_updates_local_manifest_not_repo_lock(
+    tmp_path: Path,
+) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    request = _request(tmp_path, update=True)
+    service = KubeconformSchemaSyncService(store, _Sources())
+    created = service.sync(request)
+    lock_bytes = request.lock_path.read_bytes()
+    deployment = request.requirements[0]
+    expanded = KubeconformSchemaSyncRequest(
+        **{
+            **request.__dict__,
+            "update": False,
+            "requirements": (
+                *request.requirements,
+                SchemaRequirement(
+                    gvk=deployment.gvk,
+                    scope=SchemaScope(chart="consumer", environment="dev"),
+                ),
+            ),
+        }
+    )
+
+    refreshed = service.refresh(expanded)
+
+    assert refreshed.lock == created.lock
+    assert request.lock_path.read_bytes() == lock_bytes
+    manifest = (refreshed.generation_path / INVENTORY_MANIFEST_PATH).read_text()
+    assert '"chart":"consumer"' in manifest
+
+
+def test_materialized_drift_refreshes_lock_without_moving_pins(tmp_path: Path) -> None:
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     request = _request(tmp_path, update=True)
     KubeconformSchemaSyncService(store, _Sources()).sync(request)
@@ -326,15 +360,11 @@ def test_materialized_drift_blocks_warm_pinned_sync_without_mutation(tmp_path: P
         }
     )
 
-    with pytest.raises(
-        KubeconformSchemaIntegrityError,
-        match="materialized schema drift",
-    ):
-        KubeconformSchemaSyncService(store, sources).sync(drifted)
+    result = KubeconformSchemaSyncService(store, sources).refresh(drifted)
 
     assert sources.ref_calls == []
-    assert sources.download_calls == []
-    assert request.lock_path.read_bytes() == lock_bytes
+    assert result.lock_updated
+    assert request.lock_path.read_bytes() != lock_bytes
 
 
 def test_parallel_updates_serialize_without_nested_lock_deadlock(tmp_path: Path) -> None:
