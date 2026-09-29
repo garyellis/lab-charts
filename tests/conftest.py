@@ -324,11 +324,32 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
     `register()` owns the command name, `main.py` owns the group name -- so
     they keep a plain `CliRunner` and need nothing from this table.
     """
+    # Historical tests addressed synthetic repositories with the removed
+    # `--root` option. Translate that test-only spelling onto the supported
+    # operator override so those tests continue to exercise command behavior,
+    # while dedicated surface tests assert that real argv rejects `--root`.
+    tokens: list[str] = []
+    root_override: str | None = None
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--root" and index + 1 < len(argv):
+            root_override = argv[index + 1]
+            index += 2
+            continue
+        if token.startswith("--root="):
+            root_override = token.partition("=")[2]
+            index += 1
+            continue
+        tokens.append(token)
+        index += 1
+    env = {"CHART_MANAGER_ROOT": root_override} if root_override is not None else None
     return CliRunner().invoke(
         _root_app(),
-        resolve_argv(argv),
+        resolve_argv(tokens),
         input=input,
         catch_exceptions=catch_exceptions,
+        env=env,
     )
 
 

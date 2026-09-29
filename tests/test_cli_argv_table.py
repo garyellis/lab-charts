@@ -106,15 +106,15 @@ def test_upgrade_finalize_is_never_rewritten() -> None:
 @pytest.mark.parametrize(
     "leading",
     [
-        ["--root", "/tmp/x"],
+        ["--config", "/tmp/c.yaml"],
         ["--config=/tmp/c.yaml"],
         ["-vv", "-q"],
-        ["--no-color", "-v", "--root", "/tmp/x"],
+        ["--no-color", "-v", "--config", "/tmp/c.yaml"],
     ],
     ids=["value-option", "inline-value", "clustered-short-flags", "mixed"],
 )
 def test_global_options_before_the_command_path_are_preserved(leading: list[str]) -> None:
-    """Click parses root options first, so translation must start after them.
+    """Click parses global options first, so translation must start after them.
 
     Asserted as "the options survive and the tail translates the same way it
     would on its own" rather than against a literal expected argv, so this

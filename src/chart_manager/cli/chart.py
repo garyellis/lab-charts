@@ -26,11 +26,10 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import resolve_chart
+from chart_manager.cli._container import repository_root, resolve_chart
 from chart_manager.cli._options import (
     ClusterNameOption,
     ProvisionHooksOption,
-    RootOption,
     provision_hooks_enabled,
 )
 from chart_manager.cli.streams import console, narration
@@ -96,7 +95,6 @@ def register(app: typer.Typer) -> None:
 def list_charts(
     ctx: typer.Context,
     output: ChartCatalogOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """List Helm charts and their lifecycle capability status.
 
@@ -108,6 +106,7 @@ def list_charts(
     question with the same bytes.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
+    root = repository_root()
     entries = _container().chart_catalog_service(root).list_entries()
     output_mod.emit(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
     # A chart whose lifecycle document does not load is reported *in* the
@@ -282,7 +281,6 @@ def chart_test(
             help="Chart name or chart directory. Retained alongside the CHART argument.",
         ),
     ] = None,
-    root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
@@ -339,6 +337,7 @@ def chart_test(
     output_mod.require_dry_run(output, dry_run=dry_run)
     selected = chart_argument if chart_argument is not None else chart
     assert selected is not None
+    root = repository_root()
     _run_chart_test(
         selected,
         ctx=ctx,
@@ -365,7 +364,6 @@ def chart_teardown(
         str | None,
         typer.Option("--chart", help="Chart name or chart directory."),
     ] = None,
-    root: RootOption = Path("."),
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
@@ -387,7 +385,7 @@ def chart_teardown(
         raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
     selected = chart_argument if chart_argument is not None else chart
     assert selected is not None
-    root = root.resolve()
+    root = repository_root()
     target = resolve_chart(root, selected)
     service = _container().ephemeral_test_cluster_service(
         root,
@@ -428,7 +426,6 @@ def show_lifecycle(
     ctx: typer.Context,
     chart: str,
     output: ChartCatalogOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Print one chart's normalized ChartLifecycle intent.
 
@@ -439,6 +436,7 @@ def show_lifecycle(
     selects there.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
+    root = repository_root()
     document = lifecycle_to_dict(_container().chart_catalog_service(root).get_lifecycle(chart))
     output_mod.emit(
         document,

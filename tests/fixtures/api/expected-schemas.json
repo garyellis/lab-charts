@@ -434,6 +434,133 @@
     "title": "ChartLifecycle",
     "type": "object"
   },
+  "ChartWorkspace": {
+    "$defs": {
+      "ChartWorkspaceSpec": {
+        "additionalProperties": false,
+        "description": "Checkout-owned layout, dependency, and planning policy.",
+        "properties": {
+          "chartsDir": {
+            "format": "path",
+            "title": "Chartsdir",
+            "type": "string"
+          },
+          "clusterTest": {
+            "$ref": "#/$defs/WorkspaceClusterTest"
+          },
+          "fanout": {
+            "$ref": "#/$defs/WorkspaceFanout"
+          },
+          "localCluster": {
+            "format": "path",
+            "title": "Localcluster",
+            "type": "string"
+          },
+          "policiesDir": {
+            "format": "path",
+            "title": "Policiesdir",
+            "type": "string"
+          },
+          "renderDir": {
+            "format": "path",
+            "title": "Renderdir",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chartsDir",
+          "localCluster",
+          "renderDir",
+          "policiesDir"
+        ],
+        "title": "ChartWorkspaceSpec",
+        "type": "object"
+      },
+      "WorkspaceClusterTest": {
+        "additionalProperties": false,
+        "description": "Repository-wide cluster-test policy.",
+        "properties": {
+          "sharedPrerequisites": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Sharedprerequisites",
+            "type": "array"
+          }
+        },
+        "title": "WorkspaceClusterTest",
+        "type": "object"
+      },
+      "WorkspaceFanout": {
+        "additionalProperties": false,
+        "description": "Additional repository inputs that invalidate a complete planner.",
+        "properties": {
+          "clusterTest": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Clustertest",
+            "type": "array"
+          },
+          "validation": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Validation",
+            "type": "array"
+          }
+        },
+        "title": "WorkspaceFanout",
+        "type": "object"
+      },
+      "WorkspaceMetadata": {
+        "additionalProperties": false,
+        "description": "Frozen DNS-label identity for a workspace.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkspaceMetadata",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Frozen authored envelope at ``.chart-manager/workspace.yaml``.",
+    "properties": {
+      "apiVersion": {
+        "const": "chartmanager.io/v1alpha1",
+        "title": "Apiversion",
+        "type": "string"
+      },
+      "kind": {
+        "const": "ChartWorkspace",
+        "title": "Kind",
+        "type": "string"
+      },
+      "metadata": {
+        "$ref": "#/$defs/WorkspaceMetadata"
+      },
+      "spec": {
+        "$ref": "#/$defs/ChartWorkspaceSpec"
+      }
+    },
+    "required": [
+      "apiVersion",
+      "kind",
+      "metadata",
+      "spec"
+    ],
+    "title": "ChartWorkspace",
+    "type": "object"
+  },
   "LocalCluster": {
     "$defs": {
       "BootstrapLifecycleRelease": {
@@ -889,7 +1016,7 @@
       }
     },
     "additionalProperties": false,
-    "description": "Envelope for one authored local environment.\n\nRead from `.chart-manager/local-cluster.yaml` unless\n`CHART_MANAGER_LOCAL_CONFIG` points elsewhere. One per environment.",
+    "description": "Envelope for one authored local environment.\n\nRead from the path selected by ``ChartWorkspace.localCluster`` (or the\nlegacy default when no workspace exists). One per environment.",
     "properties": {
       "apiVersion": {
         "const": "chartmanager.io/v1alpha1",

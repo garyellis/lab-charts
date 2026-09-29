@@ -49,7 +49,7 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import resolve_chart
+from chart_manager.cli._container import repository_root, resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.validate_progress import (
     LiveTableDisplay,
@@ -142,8 +142,6 @@ GithubStepSummaryOption = Annotated[
         ),
     ),
 ]
-RootOption = Annotated[Path, typer.Option("--root", help="Repository root.")]
-
 def register_validate(app: typer.Typer) -> None:
     """Attach the merged `validate` command to the given Typer app."""
     app.command("validate")(validate)
@@ -157,12 +155,14 @@ def register_cache(app: typer.Typer) -> None:
 def _make_app(
     progress: ProgressDisplay | None = None,
     *,
+    root: Path | None = None,
     charts_dir: Path | None = None,
 ) -> ManifestValidationService:
     """Build the ManifestValidationService (module-level so tests can override)."""
     return _container().validate_app(
         progress=progress,
         on_warn=_warn,
+        root=root,
         charts_dir=charts_dir,
     )
 
@@ -320,7 +320,6 @@ def validate(
     ] = False,
     output: OutputOption = None,
     github_step_summary: GithubStepSummaryOption = False,
-    root: RootOption = Path("."),
 ) -> None:
     """Render each selected chart/environment and run the selected validators.
 
@@ -338,7 +337,7 @@ def validate(
         enabled_phases = resolve_phases(phase, kubeconform=kubeconform, policy=policy)
     except ValidateInputError as exc:
         raise _bad_parameter(exc) from exc
-    root = root.resolve()
+    root = repository_root()
     target = _chart_target(selected, root=root)
     request = RunRequest(
         root=root,
@@ -428,9 +427,9 @@ def _execute(
     display = _resolve_display(progress, mode=mode)
 
     app = (
-        _make_app(display)
+        _make_app(display, root=request.root)
         if charts_dir is None
-        else _make_app(display, charts_dir=charts_dir)
+        else _make_app(display, root=request.root, charts_dir=charts_dir)
     )
     try:
         outcome = app.run(request)
@@ -656,7 +655,6 @@ def _print_summary(outcome: RunOutcome) -> None:
 
 def clean(
     ctx: typer.Context,
-    root: RootOption = Path("."),
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -679,6 +677,7 @@ def clean(
     command runs.
     """
     output_mod.require_dry_run(output, dry_run=dry_run)
+    root = repository_root()
     service = _container().render_output_service(root)
     if dry_run:
         _render_output_plan(service.state(), ctx=ctx, output=output)

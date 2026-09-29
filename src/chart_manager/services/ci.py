@@ -7,6 +7,7 @@ from typing import Protocol
 
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
@@ -95,25 +96,32 @@ class CiService:
 
     def __init__(
         self,
-        root: Path,
+        root: Path | None = None,
         *,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
         local_config: Path = DEFAULT_LOCAL_CONFIG,
+        workspace: RepositoryWorkspace | None = None,
     ) -> None:
         """Wire repository/git against `root`.
 
         `Git` is constructed inline: it is addressed by `root`, which this
         service already owns.
         """
-        self.root = root
-        self.cluster_tests = ClusterTestCatalog(root, charts_dir=charts_dir)
-        self.charts = ChartRepository(root, charts_dir=charts_dir)
+        if workspace is None:
+            if root is None:
+                raise TypeError("root or workspace is required")
+            workspace = RepositoryWorkspace(
+                root=root.resolve(), charts_dir=charts_dir, local_cluster=local_config
+            )
+        self.workspace = workspace
+        self.root = workspace.root
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
+        self.charts = ChartRepository(self.root, charts_dir=workspace.charts_dir)
         self.impact = LifecycleImpactService(
-            root,
-            charts_dir=charts_dir,
-            local_config=local_config,
+            self.root,
+            workspace=workspace,
         )
-        self.git = Git(root, charts_dir=charts_dir)
+        self.git = Git(self.root, charts_dir=workspace.charts_dir)
 
     def directly_changed_charts(self, changed_files: Path) -> list[str]:
         """Select chart owners from an explicit newline-delimited file list.

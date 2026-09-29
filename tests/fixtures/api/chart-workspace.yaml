@@ -1,0 +1,17 @@
+apiVersion: chartmanager.io/v1alpha1
+kind: ChartWorkspace
+metadata:
+  name: platform-charts
+spec:
+  chartsDir: charts
+  localCluster: .chart-manager/local-cluster.yaml
+  renderDir: .chart-manager/rendered
+  policiesDir: policies
+  fanout:
+    validation:
+      - tooling/validation/**
+    clusterTest:
+      - .github/workflows/ci.yaml
+  clusterTest:
+    sharedPrerequisites:
+      - platform-base

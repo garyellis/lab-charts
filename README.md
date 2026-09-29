@@ -54,9 +54,12 @@ the chart's `chart-lifecycle.yaml`.
 
 ## Local clusters
 
-Three authored kinds share the `chartmanager.io/v1alpha1` API under
+Four authored kinds share the `chartmanager.io/v1alpha1` API under
 [`src/chart_manager/api/v1alpha1/`](src/chart_manager/api/v1alpha1/):
 
+- `ChartWorkspace` (`.chart-manager/workspace.yaml`) — the checkout-owned
+  chart, local-cluster, render, and policy locations, plus repository-wide
+  validation and cluster-test fanout.
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
   `ChartLifecycle` profile, a raw local chart, a pinned OCI chart, or an exact
@@ -69,9 +72,8 @@ Three authored kinds share the `chartmanager.io/v1alpha1` API under
 
 All `local` commands target the single `chart-manager` cluster by default,
 avoiding duplicate kind clusters and host-port conflicts from the shared
-`kind-config.yaml`. Set `CHART_MANAGER_LOCAL_CONFIG` to another
-repository-relative `LocalCluster` file to use a different environment; named
-stacks resolve from that file's sibling `stacks/` directory.
+`kind-config.yaml`. The workspace selects the repository's `LocalCluster`;
+named stacks resolve from that file's sibling `stacks/` directory.
 
 `kind-config.yaml` owns creation-time settings: Kubernetes version, topology,
 and whether kind's default CNI is disabled. This repo installs Cilium via a
@@ -235,10 +237,29 @@ exclusions go in `triggerIgnores:`; files matching neither are reported as
 coverage gaps, and `unmatchedChanges: all-environments` fans them out to every
 environment instead.
 
-`charts/` is a default, not a fixed layout: set `CHART_MANAGER_CHARTS_DIR` to
-a repository-relative path (absolute paths and `..` are rejected) and every
-subsystem — discovery, change classification, validation, cluster services,
-upgrades, dashboards — follows it.
+## Repository workspace
+
+`.chart-manager/workspace.yaml` is the versioned repository contract. Its
+`chartsDir`, `localCluster`, `renderDir`, and `policiesDir` values are
+repository-relative, use `/`, and cannot escape the checkout. `chartsDir`
+alone may be `.`. The two `fanout` lists select the complete validation or
+cluster-test matrix when an additional shared input changes; they do not
+publish, deploy, or mutate chart dependencies.
+
+Policy changes automatically fan out validation. The workspace marker,
+selected `LocalCluster`, its kind config and repository bootstrap charts, and
+`clusterTest.sharedPrerequisites` automatically fan out cluster tests. A
+plain fanout path matches itself and descendants, `*` matches within one path
+segment, and `**` matches zero or more segments.
+
+Repository-bound commands find the nearest ancestor containing the fixed
+workspace marker, so they behave the same from the checkout root or a nested
+chart directory. `CHART_MANAGER_ROOT` (or `root:` in the operator config)
+remains the machine-specific override. There is no CLI `--root` option.
+Repositories without a workspace retain the legacy `charts/`,
+`.chart-manager/local-cluster.yaml`, `.chart-manager/rendered`, and `policies/`
+defaults. If a workspace exists, legacy `charts_dir` or `local_config`
+settings are rejected rather than silently shadowing repository policy.
 
 Logs go to stderr; stdout stays safe for JSON. `CHART_MANAGER_LOG_LEVEL`
 (default `INFO`) and `CHART_MANAGER_LOG_FORMAT=json` control detail and

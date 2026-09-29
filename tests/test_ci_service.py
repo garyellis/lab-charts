@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.ci import CiService
 from chart_manager.services.lifecycle import LifecycleImpact
@@ -13,7 +14,12 @@ from .conftest import MakeChart
 
 
 def _service(root: Path) -> CiService:
-    return CiService(root)
+    return CiService(
+        workspace=RepositoryWorkspace(
+            root=root.resolve(),
+            cluster_test_fanout=("kind-config.yaml",),
+        )
+    )
 
 
 def _dependent_test(

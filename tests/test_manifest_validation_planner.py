@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.domain.charts import ChartRepository
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
@@ -201,6 +202,10 @@ def test_validate_code_path_fanout(tmp_path: Path) -> None:
     result = build_worklist(
         root=tmp_path,
         changed_files=["src/chart_manager/services/manifest_validation/runner.py"],
+        workspace=RepositoryWorkspace(
+            root=tmp_path,
+            validation_fanout=("src/chart_manager/services/manifest_validation/**",),
+        ),
     )
 
     pairs = {(r.chart, r.env) for r in result.rows}

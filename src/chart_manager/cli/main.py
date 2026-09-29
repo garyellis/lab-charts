@@ -20,7 +20,7 @@ import sys
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.markup import escape
@@ -88,13 +88,10 @@ class GlobalOptions:
     """The resolved global options for one invocation.
 
     Stashed on `ctx.obj` so a command can read what the caller asked for
-    globally without re-deriving it. `root` is deliberately *not* read from
-    here by commands -- it reaches them through Click's `default_map` as the
-    fallback for their own `--root`, so an explicit per-command `--root`
-    still wins.
+    globally without re-deriving it. Repository roots are discovered lazily
+    by repository-bound commands, never by this callback.
     """
 
-    root: Path
     config: Path
     quiet: bool
     verbosity: int
@@ -108,47 +105,9 @@ class GlobalOptions:
     output: str
 
 
-def _root_default_map(command: Any, root: Path) -> dict[str, Any] | None:
-    """Nested Click `default_map` handing `root` to every command that takes it.
-
-    Click looks a parameter up in this order: command line, environment,
-    `default_map`, declared default. Seeding `default_map` therefore makes the
-    global `--root` a *fallback* -- the 18 per-command `--root` flags keep
-    overriding it, which is the whole point of landing this without touching
-    them.
-
-    Nested rather than flat because Click hands each subcommand
-    `parent.default_map[subcommand_name]`, so `grafana dashboard lint` needs
-    `{"grafana": {"dashboard": {"lint": {"root": ...}}}}`. Returns None for a
-    branch with nothing to configure, so empty groups are pruned rather than
-    contributing `{}`.
-
-    Typed against `Any`: typer 0.26 vendors Click as `typer._click`, so there
-    is no importable `click.Command` to annotate against, and reaching into a
-    vendored module from the surface would be worse than this.
-    """
-    subcommands: dict[str, Any] | None = getattr(command, "commands", None)
-    if subcommands is None:
-        has_root = any(param.name == "root" for param in command.params)
-        return {"root": root} if has_root else None
-    nested = {
-        name: mapping
-        for name, sub in subcommands.items()
-        if (mapping := _root_default_map(sub, root)) is not None
-    }
-    return nested or None
-
-
 @app.callback()
 def global_options(
     ctx: typer.Context,
-    root: Annotated[
-        Path | None,
-        typer.Option(
-            "--root",
-            help="Repository root for every command. Also CHART_MANAGER_ROOT, or `root:` in the config file. A command's own --root still wins.",
-        ),
-    ] = None,
     config: Annotated[
         Path,
         typer.Option(
@@ -181,7 +140,7 @@ def global_options(
     and that meaning moved to `--to` when the command was renamed. Writing to
     a path is always `--to`. The global still travels on `ctx.obj` rather
     than through `ctx.default_map` -- see `cli/output.py` for why the
-    propagation that carries `--root` is the wrong mechanism for this one.
+    repository discovery is the wrong mechanism for this one.
 
     Deliberately absent, and not an oversight:
 
@@ -194,11 +153,6 @@ def global_options(
     # Settings, because Settings is where the config file's values enter.
     set_config_file(config)
     settings = Settings()
-
-    # `flag > CHART_MANAGER_ROOT > config.yaml > default`. The first step is
-    # here because Settings never sees argv; the rest is Settings' source
-    # ordering. Settings is frozen and is not written back to.
-    resolved_root = root if root is not None else settings.root
 
     # NO_COLOR is a convention, not a value: the spec says any non-empty
     # value disables color.
@@ -222,14 +176,12 @@ def global_options(
         setup_logging("DEBUG", fmt=settings.log_format)
 
     ctx.obj = GlobalOptions(
-        root=resolved_root,
         config=config,
         quiet=quiet,
         verbosity=verbose,
         no_color=disable_color,
         output=output,
     )
-    ctx.default_map = _root_default_map(ctx.command, resolved_root)
 
 
 # --- the one command that belongs to the app itself ------------------------

@@ -53,6 +53,7 @@ def resolve_manifest_validation(
     repo_root: Path,
     *,
     providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
+    policies_dir: Path = Path("policies"),
 ) -> ResolvedManifestValidation:
     """Resolve an authored spec against its Helm chart and repository."""
     root = repo_root.resolve()
@@ -79,6 +80,7 @@ def resolve_manifest_validation(
         repo_root=root,
         chart_path=chart_path,
         spec_path=target.spec_path,
+        policies_dir=policies_dir,
     )
     invocations = tuple(
         provider.compile(context)

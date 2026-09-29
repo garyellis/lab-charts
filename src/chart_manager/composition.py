@@ -53,11 +53,13 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 from chart_manager.domain import chart_deps
 from chart_manager.domain.local_resources import LocalTargetResolver
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -124,11 +126,21 @@ class Container:
         self._settings = settings if settings is not None else Settings()
         self._command_runner: CommandRunner | None = None
         self._event_writer: EventWriter | None = None
+        self._workspaces: dict[Path | None, RepositoryWorkspace] = {}
 
     @property
     def settings(self) -> Settings:
         """The settings this container was built from."""
         return self._settings
+
+    def workspace(self, root: Path | None = None) -> RepositoryWorkspace:
+        """Resolve the single repository layout/policy used by every capability."""
+        key = root.resolve() if root is not None else None
+        if key not in self._workspaces:
+            compiled = self._settings.repository_workspace(root)
+            self._workspaces[key] = compiled
+            self._workspaces[compiled.root] = compiled
+        return self._workspaces[key]
 
     # --- adapters ---------------------------------------------------------
 
@@ -209,17 +221,18 @@ class Container:
         the order is decided here, next to the reasoning.
 
         `root` addresses the git/gh checks; it falls back to the configured
-        repository root exactly as the CLI's `--root` does.
+        repository root through the same workspace discovery as other capabilities.
         """
         runner = self.command_runner()
-        resolved_root = (root if root is not None else self._settings.root).resolve()
+        workspace = self.workspace(root)
+        resolved_root = workspace.root
         providers: dict[str, CheckProvider] = {
             "helm": self.helm().preflight,
             "kubeconform": Kubeconform(runner, timeout=self._settings.command_timeout).preflight,
             "kyverno": Kyverno(runner, timeout=self._settings.command_timeout).preflight,
             "kubectl": self.kubectl().preflight,
             "kind": self.kind().preflight,
-            "git": Git(resolved_root, runner, charts_dir=self._settings.charts_dir).preflight,
+            "git": Git(resolved_root, runner, charts_dir=workspace.charts_dir).preflight,
             "github": Github(resolved_root, runner).preflight,
             "renovate": Renovate(runner).preflight,
             "events": preflight_event_store,
@@ -293,7 +306,8 @@ class Container:
         charts at all, and a surface that supplies it itself can answer
         `chart list` from a different directory than `plan` selected against.
         """
-        return ChartCatalogService(root, charts_dir=self._settings.charts_dir)
+        workspace = self.workspace(root)
+        return ChartCatalogService(workspace.root, charts_dir=workspace.charts_dir)
 
     def render_output_service(self, root: Path) -> RenderOutputService:
         """Build the render-tree describer/remover for the repo at `root`.
@@ -304,7 +318,8 @@ class Container:
         the same place as every other repository path, not at the surface that
         calls `rmtree`.
         """
-        return RenderOutputService(root)
+        workspace = self.workspace(root)
+        return RenderOutputService(workspace.root, render_dir=workspace.render_dir)
 
     def impact_service(self, root: Path) -> LifecycleImpactService:
         """Build the changed-file impact analyzer for the repo at `root`.
@@ -313,11 +328,7 @@ class Container:
         engines, so both have to be configured identically; that is exactly
         what a surface building one of them inline cannot guarantee.
         """
-        return LifecycleImpactService(
-            root,
-            charts_dir=self._settings.charts_dir,
-            local_config=self._settings.local_config,
-        )
+        return LifecycleImpactService(workspace=self.workspace(root))
 
     def local_target_resolver(self, root: Path) -> LocalTargetResolver:
         """Resolve `--chart`/`--stack` tokens against the configured layout.
@@ -327,7 +338,8 @@ class Container:
         names against a different file than the cluster service then converges
         from.
         """
-        return LocalTargetResolver(root, local_config=self._settings.local_config)
+        workspace = self.workspace(root)
+        return LocalTargetResolver(workspace.root, local_config=workspace.local_cluster)
 
     def cluster_clients(self, handle: EnvironmentHandle) -> BoundClients:
         """Every cluster-facing client, addressed at one resolved environment.
@@ -359,15 +371,16 @@ class Container:
         `Settings`. Every cluster-facing adapter is passed in, so there is
         no path by which the service can fall back to an unconfigured one.
         """
+        workspace = self.workspace(root)
         kind = self.kind()
         return DevelopmentClusterService(
-            root,
+            workspace.root,
             helm=self.helm(),
             kind=kind,
             kubectl=self.kubectl(),
             expose=self.expose_service(),
             progress=progress,
-            local_config=self._settings.local_config,
+            local_config=workspace.local_cluster,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
             command_runner=self.command_runner(),
@@ -382,15 +395,16 @@ class Container:
         charts_dir: Path | None = None,
     ) -> EphemeralTestClusterService:
         """Build the local chart-test installer for the repository at `root`."""
+        workspace = self.workspace(root)
         kind = self.kind()
         return EphemeralTestClusterService(
-            root,
+            workspace.root,
             helm=self.helm(),
             kind=kind,
             kubectl=self.kubectl(),
             progress=progress,
-            charts_dir=charts_dir or self._settings.charts_dir,
-            local_config=self._settings.local_config,
+            charts_dir=charts_dir or workspace.charts_dir,
+            local_config=workspace.local_cluster,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
             command_runner=self.command_runner(),
@@ -399,34 +413,35 @@ class Container:
 
     def ci_service(self, root: Path) -> CiService:
         """Build the CI selection verbs for the repo at `root`."""
-        return CiService(
-            root,
-            charts_dir=self._settings.charts_dir,
-            local_config=self._settings.local_config,
-        )
+        return CiService(workspace=self.workspace(root))
 
     def publish_service(self, root: Path) -> PublishService:
         """Build the headless OCI publisher for charts below ``root``."""
+        workspace = self.workspace(root)
         return PublishService(
-            root,
+            workspace.root,
             helm=self.helm(verbose=False),
             events=self.event_writer(),
-            charts_dir=self._settings.charts_dir,
+            charts_dir=workspace.charts_dir,
         )
 
     def validate_app(
         self,
         *,
+        root: Path | None = None,
         progress: ProgressDisplay | None = None,
         on_warn: WarnCallback | None = None,
         charts_dir: Path | None = None,
     ) -> ManifestValidationService:
         """Build the validate pipeline entry point (render -> schema -> policy)."""
+        workspace = self.workspace(root)
+        if charts_dir is not None:
+            workspace = replace(workspace, charts_dir=charts_dir)
         return ManifestValidationService(
             progress=progress,
             on_warn=on_warn,
             command_runner=self.command_runner(),
-            charts_dir=charts_dir or self._settings.charts_dir,
+            workspace=workspace,
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:
@@ -437,7 +452,8 @@ class Container:
         emits through `chart-manager event emit build`, so it has to land on the
         same store or the timeline is split across two backends.
         """
-        resolved_root = root.resolve()
+        workspace = self.workspace(root)
+        resolved_root = workspace.root
         renovate = Renovate(self.command_runner())
         repository = self._repository_slug(resolved_root)
         github = Github(resolved_root, self.command_runner())
@@ -482,15 +498,15 @@ class Container:
             branch_file_reader=github.read_file_at_ref,
             repository=repository,
             telemetry=UpgradeTelemetry(writer=self.event_writer()),
-            charts_dir=self._settings.charts_dir,
+            charts_dir=workspace.charts_dir,
         )
 
     def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:
         """Build the trusted callback finalizer with the shared git runner."""
-        del root  # address is carried by FinalizeRequest; retained for surface symmetry.
+        workspace = self.workspace(root)
         return UpgradeFinalizer(
             baseline=GitBaselineReader(self.command_runner()),
-            charts_dir=self._settings.charts_dir,
+            charts_dir=workspace.charts_dir,
         )
 
     def _repository_slug(self, root: Path) -> str:

@@ -40,6 +40,7 @@ class ValidatorCompileContext:
     repo_root: Path
     chart_path: Path
     spec_path: Path
+    policies_dir: Path = Path("policies")
 
 
 def validate_registry(

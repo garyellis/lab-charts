@@ -45,11 +45,16 @@ from chart_manager.services.manifest_validation.validators import (
 # --- input resolution ------------------------------------------------------
 
 
-def discover_policy_paths(repo_root: Path, chart_path: Path) -> tuple[Path, ...]:
+def discover_policy_paths(
+    repo_root: Path,
+    chart_path: Path,
+    *,
+    policies_dir: Path = Path("policies"),
+) -> tuple[Path, ...]:
     """Return existing repository-wide and per-chart policy directories."""
     return tuple(
         candidate.resolve()
-        for candidate in (repo_root / "policies", chart_path / "policies")
+        for candidate in (repo_root / policies_dir, chart_path / "policies")
         if candidate.is_dir()
     )
 
@@ -60,9 +65,12 @@ def resolve_policy_paths(
     chart_path: Path,
     spec_path: Path,
     extras: list[str],
+    policies_dir: Path = Path("policies"),
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Resolve discovered and authored chart-relative policy directories."""
-    policies = list(discover_policy_paths(repo_root, chart_path))
+    policies = list(
+        discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir)
+    )
     warnings: list[str] = []
     for extra in extras:
         selected = (chart_path / extra).resolve()
@@ -330,6 +338,7 @@ class KyvernoProvider:
                 chart_path=context.chart_path,
                 spec_path=context.spec_path,
                 extras=context.spec.policies.extra,
+                policies_dir=context.policies_dir,
             )
             if context.spec.validators.policy
             else ((), ())

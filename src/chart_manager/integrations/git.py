@@ -49,7 +49,7 @@ class Git:
                 Check.failed(
                     "git-repository",
                     f"{self.root} is not inside a git work tree",
-                    remediation="run from a checkout, or point --root at one",
+                    remediation="run from a checkout, or set CHART_MANAGER_ROOT",
                     outcome=Outcome.ENVIRONMENT,
                 ),
             )

@@ -159,9 +159,30 @@ class RenderOutputService:
     shown cannot disagree with what the removal then does.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, render_dir: Path = RENDER_OUTPUT_DIR) -> None:
         """Resolve the output location for `root`; touches no disk."""
-        self.path = (root / RENDER_OUTPUT_DIR).resolve()
+        self._repository_root = root.resolve()
+        self._render_dir = render_dir
+        self._safe_path()
+
+    @property
+    def path(self) -> Path:
+        """Return the currently containment-checked output path."""
+        return self._safe_path()
+
+    def _safe_path(self) -> Path:
+        """Recheck containment and symlinks at each read or destructive action."""
+        candidate = self._repository_root
+        for part in self._render_dir.parts:
+            candidate /= part
+            if candidate.is_symlink():
+                raise SpecError(
+                    f"render output directory must not contain symlinks: {candidate}"
+                )
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(self._repository_root):
+            raise SpecError(f"render output directory escapes repository root: {candidate}")
+        return resolved
 
     def state(self) -> RenderOutputState:
         """Report the tree without changing it.
@@ -171,12 +192,13 @@ class RenderOutputService:
         it costs one `iterdir` on a tree that can hold thousands of rendered
         manifests.
         """
-        if not self.path.is_dir():
-            return RenderOutputState(path=self.path, exists=False, runs=0)
+        path = self._safe_path()
+        if not path.is_dir():
+            return RenderOutputState(path=path, exists=False, runs=0)
         return RenderOutputState(
-            path=self.path,
+            path=path,
             exists=True,
-            runs=sum(1 for _ in self.path.iterdir()),
+            runs=sum(1 for _ in path.iterdir()),
         )
 
     def clean(self) -> RenderOutputState:
@@ -188,5 +210,5 @@ class RenderOutputService:
         """
         state = self.state()
         if state.exists:
-            shutil.rmtree(self.path)
+            shutil.rmtree(self._safe_path())
         return state

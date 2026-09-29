@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
@@ -55,7 +56,6 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     ValidateInputError,
 )
-from chart_manager.services.manifest_validation.paths import RENDER_OUTPUT_DIR
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
 from chart_manager.services.manifest_validation.progress import (
     NullDisplay,
@@ -228,10 +228,28 @@ class ManifestValidationService:
         git_factory: Callable[[Path], Git] | None = None,
         run_id_factory: Callable[[], str] | None = None,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
+        policies_dir: Path = Path("policies"),
+        render_dir: Path = Path(".chart-manager/rendered"),
+        validation_fanout: tuple[str, ...] = (),
+        workspace: RepositoryWorkspace | None = None,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
-        self._charts_dir = validate_charts_dir(charts_dir)
+        self.workspace = workspace
+        if workspace is None:
+            self._charts_dir = (
+                Path(".")
+                if Path(charts_dir) == Path(".")
+                else validate_charts_dir(charts_dir)
+            )
+            self._policies_dir = policies_dir
+            self._render_dir = render_dir
+            self._validation_fanout = validation_fanout
+        else:
+            self._charts_dir = workspace.charts_dir
+            self._policies_dir = workspace.policies_dir
+            self._render_dir = workspace.render_dir
+            self._validation_fanout = workspace.validation_patterns()
         self._progress: ProgressDisplay = progress or NullDisplay()
         # No-op default so call sites can warn unconditionally.
         self._on_warn: WarnCallback = on_warn or (lambda _msg: None)
@@ -251,6 +269,20 @@ class ManifestValidationService:
         a warning and falls back to validating everything.
         """
         repo_root = request.root.resolve()
+        workspace = self.workspace
+        if workspace is None:
+            workspace = RepositoryWorkspace(
+                root=repo_root,
+                charts_dir=self._charts_dir,
+                policies_dir=self._policies_dir,
+                render_dir=self._render_dir,
+                validation_fanout=self._validation_fanout,
+            )
+        elif workspace.root != repo_root:
+            raise ValidateInputError(
+                f"request root {repo_root} does not match workspace root {workspace.root}",
+                hint="root",
+            )
 
         changed = self._resolve_changed_files(repo_root, request)
         build = build_worklist(
@@ -260,7 +292,7 @@ class ManifestValidationService:
             selected_charts=(
                 request.charts if request.charts and changed is None else ()
             ),
-            charts_dir=self._charts_dir,
+            workspace=workspace,
         )
 
         selection = select_rows(
@@ -331,6 +363,7 @@ class ManifestValidationService:
                     target,
                     repo_root,
                     providers=self._validator_providers,
+                    policies_dir=self._policies_dir,
                 )
                 compiled_by_chart[row.chart] = compiled
                 compile_warnings.extend(compiled.warnings)
@@ -537,7 +570,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / RENDER_OUTPUT_DIR / run_id).resolve(), keep
+        return (repo_root / self._render_dir / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".
