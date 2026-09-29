@@ -32,7 +32,8 @@ def test_full_authored_shape_uses_camel_case() -> None:
             "namespaceTemplate": "lab-${env}",
             "helmVersion": "4.1.3",
             "kubernetesVersion": "1.31.2",
-            "schemaLocations": ["default"],
+            "schemaLocations": ["schemas/custom.json"],
+            "ignoreMissingSchemas": ["UnpublishedKind"],
             "environments": {
                 "dev": {"values": ["values.yaml", "values-dev.yaml"]},
                 "prod": {"namespace": "lab-prod", "values": ["values.yaml"]},
@@ -51,6 +52,8 @@ def test_full_authored_shape_uses_camel_case() -> None:
     assert spec.release_name == "demo"
     assert spec.helm_version == "4.1.3"
     assert spec.kubernetes_version == "1.31.2"
+    assert spec.schema_locations == ["schemas/custom.json"]
+    assert spec.ignore_missing_schemas == ["UnpublishedKind"]
     assert spec.unmatched_changes == "all-environments"
     assert spec.triggers["envs/*.yaml"] == MATCH_BY_BASENAME
     assert spec.trigger_ignores == ["README.md", "docs/**"]
@@ -72,6 +75,34 @@ def test_validators_reject_unknown_names() -> None:
 
 
 @pytest.mark.parametrize(
+    "location",
+    [
+        "default",
+        "https://schemas.example.test/{{.ResourceKind}}.json",
+        "/tmp/schema.json",
+        "../schemas/custom.json",
+        "schemas/../custom.json",
+        "schemas\\custom.json",
+    ],
+)
+def test_schema_locations_are_additive_repository_local_paths(location: str) -> None:
+    with pytest.raises(ValidationError, match="schema location"):
+        _spec(schemaLocations=[location])
+
+
+def test_schema_location_accepts_local_kubeconform_template() -> None:
+    location = "charts/demo/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+    assert _spec(schemaLocations=[location]).schema_locations == [location]
+
+
+@pytest.mark.parametrize("kinds", [[""], ["Widget/v1"], ["two words"], ["Widget", "Widget"]])
+def test_ignore_missing_schemas_requires_unique_kind_names(kinds: list[str]) -> None:
+    with pytest.raises(ValidationError, match="ignoreMissingSchemas"):
+        _spec(ignoreMissingSchemas=kinds)
+
+
+@pytest.mark.parametrize(
     "legacy",
     [
         "release_name",
@@ -80,6 +111,7 @@ def test_validators_reject_unknown_names() -> None:
         "helm_bin",
         "kubernetes_version",
         "schema_locations",
+        "ignore_missing_schemas",
         "trigger_ignores",
         "triggers_strict",
         "skip",

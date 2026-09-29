@@ -11,6 +11,7 @@ from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.composition import Container
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.workspace import (
+    SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
     RepositoryWorkspace,
     discover_workspace_root,
@@ -116,10 +117,93 @@ def test_charts_dir_dot_is_authored_only() -> None:
 
 
 def test_workspace_and_nested_policy_are_frozen() -> None:
-    resource = ChartWorkspace.model_validate(_document())
+    resource = ChartWorkspace.model_validate(
+        _document(
+            validation={
+                "kubernetesVersion": "1.35.3",
+                "schemas": {
+                    "generateFromCRDs": True,
+                    "catalog": {
+                        "repository": "datreeio/CRDs-catalog",
+                        "track": "main",
+                    },
+                },
+            }
+        )
+    )
 
     with pytest.raises(ValidationError, match="frozen"):
         resource.spec.charts_dir = Path("other")
+    assert resource.spec.validation is not None
+    with pytest.raises(ValidationError, match="frozen"):
+        resource.spec.validation.schemas.generate_from_crds = False
+
+
+def test_workspace_validation_policy_is_optional_and_compiled(tmp_path: Path) -> None:
+    assert ChartWorkspace.model_validate(_document()).spec.validation is None
+
+    _write_workspace(
+        tmp_path,
+        """apiVersion: chartmanager.io/v1alpha1
+kind: ChartWorkspace
+metadata: {name: example}
+spec:
+  chartsDir: charts
+  localCluster: .chart-manager/local-cluster.yaml
+  renderDir: .chart-manager/rendered
+  policiesDir: policies
+  validation:
+    kubernetesVersion: "1.35.3"
+    schemas:
+      generateFromCRDs: true
+      catalog:
+        repository: datreeio/CRDs-catalog
+        track: main
+""",
+    )
+
+    workspace = load_repository_workspace(tmp_path)
+
+    assert workspace.validation is not None
+    assert workspace.validation.kubernetes_version == "1.35.3"
+    assert workspace.validation.schemas.generate_from_crds is True
+    assert workspace.validation.schemas.catalog.repository == "datreeio/CRDs-catalog"
+    assert workspace.validation.schemas.catalog.track == "main"
+
+
+@pytest.mark.parametrize("version", ["", "v1.35.3", "1.35", "1.35.x", " 1.35.3"])
+def test_workspace_validation_requires_pinned_kubernetes_version(version: str) -> None:
+    with pytest.raises(ValidationError, match=r"pinned X\.Y\.Z"):
+        ChartWorkspace.model_validate(
+            _document(
+                validation={
+                    "kubernetesVersion": version,
+                    "schemas": {
+                        "generateFromCRDs": True,
+                        "catalog": {
+                            "repository": "datreeio/CRDs-catalog",
+                            "track": "main",
+                        },
+                    },
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize("repository", ["", "datreeio", "/catalog", "a/b/c", "a /b"])
+def test_workspace_validation_requires_singular_catalog(repository: str) -> None:
+    with pytest.raises(ValidationError, match="owner/name"):
+        ChartWorkspace.model_validate(
+            _document(
+                validation={
+                    "kubernetesVersion": "1.35.3",
+                    "schemas": {
+                        "generateFromCRDs": True,
+                        "catalog": {"repository": repository, "track": "main"},
+                    },
+                }
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -208,6 +292,7 @@ spec:
 
     assert workspace.matches_validation_fanout("policies/rule.yaml")
     assert workspace.matches_validation_fanout(WORKSPACE_FILE)
+    assert workspace.matches_validation_fanout(SCHEMA_LOCK_FILE)
     assert workspace.matches_cluster_test_fanout(WORKSPACE_FILE)
     assert workspace.matches_cluster_test_fanout("kind/config.yaml")
     assert workspace.matches_cluster_test_fanout("charts/cni/templates/cni.yaml")

@@ -17,12 +17,13 @@ leaves an author writes to the wrapper they write around them.
 
 from __future__ import annotations
 
+import re
 from typing import Final, Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
 from chart_manager.api.v1alpha1.common import ApiModel, ApiVersion, StrictApiModel
-from chart_manager.plumbing.paths import ensure_relative
+from chart_manager.plumbing.paths import ensure_relative, relative_path
 
 __all__ = [
     "ALL_ENVIRONMENTS",
@@ -42,6 +43,8 @@ __all__ = [
     "ManifestValidationValidatorsSpec",
     "TriggerValue",
 ]
+
+_KUBERNETES_KIND = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
 # A PEP 695 alias would emit a schema `$ref` instead of an inline `const`.
 ChartLifecycleKind = Literal["ChartLifecycle"]
@@ -177,7 +180,14 @@ class ManifestValidationSpec(ApiModel):
     helm_binary: str | None = Field(default=None, alias="helmBinary")
 
     kubernetes_version: str | None = Field(default=None, alias="kubernetesVersion")
+    # Additive repository-local schema sources. Repository-wide generated,
+    # in-tree and catalog sources are supplied by ChartWorkspace and cannot be
+    # replaced by one chart.
     schema_locations: list[str] = Field(default_factory=list, alias="schemaLocations")
+    ignore_missing_schemas: list[str] = Field(
+        default_factory=list,
+        alias="ignoreMissingSchemas",
+    )
 
     environments: dict[str, ManifestValidationEnvironmentSpec]
     triggers: dict[str, TriggerValue] = Field(default_factory=dict)
@@ -218,6 +228,33 @@ class ManifestValidationSpec(ApiModel):
                     f"missing: {', '.join(sorted(missing))}"
                 )
         return self
+
+    @field_validator("schema_locations")
+    @classmethod
+    def schema_locations_must_be_local(cls, locations: list[str]) -> list[str]:
+        """Accept additive repository-local paths, never remote/default sources."""
+        for location in locations:
+            if location == "default" or "://" in location:
+                raise ValueError(
+                    "schema location must be an additive repository-local path; "
+                    f"got {location!r}"
+                )
+            relative_path(location, field="schema location")
+        return locations
+
+    @field_validator("ignore_missing_schemas")
+    @classmethod
+    def ignored_schema_kinds_must_be_explicit(cls, kinds: list[str]) -> list[str]:
+        """Require exact Kubernetes Kind names and reject ambiguous duplicates."""
+        invalid = [kind for kind in kinds if not _KUBERNETES_KIND.fullmatch(kind)]
+        if invalid:
+            raise ValueError(
+                "ignoreMissingSchemas entries must be Kubernetes Kind names: "
+                + ", ".join(repr(kind) for kind in invalid)
+            )
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("ignoreMissingSchemas must not contain duplicate Kind names")
+        return kinds
 
     @model_validator(mode="after")
     def _check_triggers(self) -> ManifestValidationSpec:

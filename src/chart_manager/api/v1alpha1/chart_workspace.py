@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal, get_args
 
@@ -13,6 +14,9 @@ from chart_manager.plumbing.paths import relative_path
 
 ChartWorkspaceKind = Literal["ChartWorkspace"]
 CHART_WORKSPACE_KIND: ChartWorkspaceKind = get_args(ChartWorkspaceKind)[0]
+
+_KUBERNETES_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_CATALOG_COMPONENT = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
 
 
 def _workspace_path(value: object, *, field: str, allow_dot: bool = False) -> Path:
@@ -89,6 +93,62 @@ class WorkspaceClusterTest(StrictApiModel):
         )
 
 
+class WorkspaceSchemaCatalog(StrictApiModel):
+    """One remote CRD schema catalog followed by the repository."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    repository: str
+    track: str
+
+    @field_validator("repository")
+    @classmethod
+    def _repository_name(cls, value: str) -> str:
+        components = value.split("/")
+        if len(components) != 2 or any(
+            not _CATALOG_COMPONENT.fullmatch(component) for component in components
+        ):
+            raise ValueError("spec.validation.schemas.catalog.repository must be 'owner/name'")
+        return value
+
+    @field_validator("track")
+    @classmethod
+    def _tracking_ref(cls, value: str) -> str:
+        if not value or value != value.strip():
+            raise ValueError(
+                "spec.validation.schemas.catalog.track must be a non-empty ref "
+                "without surrounding whitespace"
+            )
+        return value
+
+
+class WorkspaceSchemas(StrictApiModel):
+    """Repository-wide sources used to build the managed schema store."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    generate_from_crds: bool = Field(alias="generateFromCRDs")
+    catalog: WorkspaceSchemaCatalog
+
+
+class WorkspaceValidation(StrictApiModel):
+    """Repository-wide defaults for deterministic manifest validation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    kubernetes_version: str = Field(alias="kubernetesVersion")
+    schemas: WorkspaceSchemas
+
+    @field_validator("kubernetes_version")
+    @classmethod
+    def _pinned_kubernetes_version(cls, value: str) -> str:
+        if not _KUBERNETES_VERSION.fullmatch(value):
+            raise ValueError(
+                "spec.validation.kubernetesVersion must be a pinned X.Y.Z version"
+            )
+        return value
+
+
 class ChartWorkspaceSpec(StrictApiModel):
     """Checkout-owned layout, dependency, and planning policy."""
 
@@ -98,6 +158,7 @@ class ChartWorkspaceSpec(StrictApiModel):
     local_cluster: Path = Field(alias="localCluster")
     render_dir: Path = Field(alias="renderDir")
     policies_dir: Path = Field(alias="policiesDir")
+    validation: WorkspaceValidation | None = None
     fanout: WorkspaceFanout = Field(default_factory=WorkspaceFanout)
     cluster_test: WorkspaceClusterTest = Field(
         default_factory=WorkspaceClusterTest,
@@ -147,4 +208,7 @@ __all__ = [
     "WorkspaceClusterTest",
     "WorkspaceFanout",
     "WorkspaceMetadata",
+    "WorkspaceSchemaCatalog",
+    "WorkspaceSchemas",
+    "WorkspaceValidation",
 ]

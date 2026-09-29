@@ -324,6 +324,7 @@ def test_manifest_validation_spec_defaults() -> None:
     spec = _minimal_validation()
 
     assert spec.schema_locations == []
+    assert spec.ignore_missing_schemas == []
     assert spec.triggers == {}
     assert spec.trigger_ignores == []
     assert spec.validators == ManifestValidationValidatorsSpec(kubeconform=True, policy=True)

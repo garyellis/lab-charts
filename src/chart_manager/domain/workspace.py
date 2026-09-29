@@ -9,12 +9,13 @@ from pathlib import Path, PurePath
 
 from pydantic import ValidationError
 
-from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
+from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, WorkspaceValidation
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
 WORKSPACE_FILE = Path(".chart-manager/workspace.yaml")
+SCHEMA_LOCK_FILE = Path(".chart-manager/schemas.lock.yaml")
 LEGACY_CHARTS_DIR = Path("charts")
 LEGACY_LOCAL_CLUSTER = Path(".chart-manager/local-cluster.yaml")
 LEGACY_RENDER_DIR = Path(".chart-manager/rendered")
@@ -30,6 +31,7 @@ class RepositoryWorkspace:
     local_cluster: Path = LEGACY_LOCAL_CLUSTER
     render_dir: Path = LEGACY_RENDER_DIR
     policies_dir: Path = LEGACY_POLICIES_DIR
+    validation: WorkspaceValidation | None = None
     validation_fanout: tuple[str, ...] = ()
     cluster_test_fanout: tuple[str, ...] = ()
     shared_prerequisites: tuple[str, ...] = ()
@@ -88,7 +90,11 @@ class RepositoryWorkspace:
         )
 
     def validation_patterns(self) -> tuple[str, ...]:
-        implicit = (_path_pattern(self.policies_dir), WORKSPACE_FILE.as_posix())
+        implicit = (
+            _path_pattern(self.policies_dir),
+            SCHEMA_LOCK_FILE.as_posix(),
+            WORKSPACE_FILE.as_posix(),
+        )
         return tuple(sorted({*self.validation_fanout, *implicit}))
 
     def cluster_test_patterns(self) -> tuple[str, ...]:
@@ -213,6 +219,7 @@ def load_repository_workspace(
         local_cluster=spec.local_cluster,
         render_dir=spec.render_dir,
         policies_dir=spec.policies_dir,
+        validation=spec.validation,
         validation_fanout=tuple(spec.fanout.validation),
         cluster_test_fanout=tuple(spec.fanout.cluster_test),
         shared_prerequisites=tuple(spec.cluster_test.shared_prerequisites),
@@ -225,6 +232,7 @@ __all__ = [
     "LEGACY_LOCAL_CLUSTER",
     "LEGACY_POLICIES_DIR",
     "LEGACY_RENDER_DIR",
+    "SCHEMA_LOCK_FILE",
     "WORKSPACE_FILE",
     "RepositoryWorkspace",
     "discover_workspace_root",
