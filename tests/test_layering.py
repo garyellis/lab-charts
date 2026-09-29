@@ -555,11 +555,11 @@ _CONSTRUCTION_ALLOWLIST: frozenset[str] = frozenset()
 #: `cli/` modules permitted to call `Settings()` directly.
 #:
 #: Exactly one, and it is not service construction. `main.py`'s root callback
-#: has to read `--config` into `settings.set_config_file` and then resolve
-#: `--root`'s fallback and the logging configuration *before* any command
-#: body -- and therefore before any `Container` -- exists. That is process
-#: bootstrap, which is the surface's own job; every other former caller was
-#: building a service and has been routed through `container().settings`.
+#: has to read `--config` into `settings.set_config_file` and resolve logging
+#: configuration *before* any command body -- and therefore before any
+#: `Container` -- exists. That is process bootstrap, which is the surface's
+#: own job; every other former caller was building a service and has been
+#: routed through `container().settings`.
 _SETTINGS_ALLOWED_MODULES = frozenset({"main.py"})
 
 
@@ -744,6 +744,7 @@ def test_the_settings_rule_fires_on_a_direct_construction() -> None:
 #: an existing consumer parses -- which makes these the canonical spellings.
 _API_ROOT_MODELS = {
     "chart_manager.api.v1alpha1.chart_lifecycle": ("ChartLifecycle",),
+    "chart_manager.api.v1alpha1.chart_workspace": ("ChartWorkspace",),
     "chart_manager.api.v1alpha1.local_cluster": ("LocalCluster",),
     "chart_manager.api.v1alpha1.local_stack": ("LocalStack",),
 }
@@ -1039,7 +1040,7 @@ def test_the_envelope_scan_finds_the_envelopes_that_exist() -> None:
     """Guard the guard: a detector that matches nothing would pass everywhere.
 
     Calibration against the real thing rather than synthetic sources alone --
-    these three classes are the entire authored surface of the product.
+    these classes are the entire authored surface of the product.
     """
     found = {
         name
@@ -1048,7 +1049,7 @@ def test_the_envelope_scan_finds_the_envelopes_that_exist() -> None:
             path.read_text(encoding="utf-8"), str(path.relative_to(_SRC))
         )
     }
-    assert found == {"ChartLifecycle", "LocalCluster", "LocalStack"}, (
+    assert found == {"ChartLifecycle", "ChartWorkspace", "LocalCluster", "LocalStack"}, (
         f"the envelope detector no longer recognizes the authored resources: {sorted(found)}"
     )
 

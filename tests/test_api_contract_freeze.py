@@ -1,7 +1,6 @@
 """Pin the authored resource contracts in ``chart_manager.api``.
 
-The three authored kinds -- ``ChartLifecycle``, ``LocalCluster`` and
-``LocalStack`` -- are what repository authors write, so their observable
+The authored kinds are what repository authors write, so their observable
 behavior is pinned here: the checked-in documents parse, fixtures round-trip
 through the authored spellings, ``default_factory`` defaults the schema cannot
 show, strictness, rejection categories, discriminators and the JSON Schema
@@ -42,6 +41,10 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
     ManifestValidationSpec,
     ManifestValidationValidatorsSpec,
 )
+from chart_manager.api.v1alpha1.chart_workspace import (
+    CHART_WORKSPACE_KIND,
+    ChartWorkspace,
+)
 from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.api.v1alpha1.local_cluster import (
     LOCAL_CLUSTER_KIND,
@@ -68,8 +71,9 @@ from .conftest import REPO_ROOT
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "api"
 SCHEMA_SNAPSHOT = FIXTURES / "expected-schemas.json"
 
-#: The three root models whose JSON Schema is compared against the snapshot.
+#: The root models whose JSON Schema is compared against the snapshot.
 ROOT_MODELS: dict[str, type[BaseModel]] = {
+    "ChartWorkspace": ChartWorkspace,
     "ChartLifecycle": ChartLifecycle,
     "LocalCluster": LocalCluster,
     "LocalStack": LocalStack,
@@ -146,6 +150,7 @@ def test_authored_api_constants_are_frozen() -> None:
     assert ALL_ENVIRONMENTS == "all-environments"
     assert LOCAL_CLUSTER_KIND == "LocalCluster"
     assert LOCAL_STACK_KIND == "LocalStack"
+    assert CHART_WORKSPACE_KIND == "ChartWorkspace"
 
 
 # --------------------------------------------------------------------------
@@ -154,6 +159,7 @@ def test_authored_api_constants_are_frozen() -> None:
 
 LIFECYCLE_DOCUMENTS = _discover(LIFECYCLE_FILENAME)
 LOCAL_CLUSTER_DOCUMENT = REPO_ROOT / DEFAULT_LOCAL_CONFIG
+WORKSPACE_DOCUMENT = REPO_ROOT / ".chart-manager/workspace.yaml"
 LOCAL_STACK_DOCUMENTS = sorted(
     path
     for path in (REPO_ROOT / DEFAULT_LOCAL_CONFIG.parent / DEFAULT_STACKS_DIR).glob("*")
@@ -177,6 +183,7 @@ def test_checked_in_documents_are_discoverable() -> None:
     # only authored example of that kind; this assertion is what will notice
     # when a real one is added and needs adding to the sweep.
     assert LOCAL_CLUSTER_DOCUMENT.is_file()
+    assert WORKSPACE_DOCUMENT.is_file()
     assert LOCAL_STACK_DOCUMENTS == []
 
 
@@ -195,6 +202,14 @@ def test_repository_local_cluster_parses() -> None:
     assert resource.api_version == API_VERSION
     assert resource.kind == LOCAL_CLUSTER_KIND
     assert LocalCluster.model_validate(resource.model_dump(by_alias=True)) == resource
+
+
+def test_repository_chart_workspace_parses() -> None:
+    resource = ChartWorkspace.model_validate(_read_yaml(WORKSPACE_DOCUMENT))
+
+    assert resource.api_version == API_VERSION
+    assert resource.kind == CHART_WORKSPACE_KIND
+    assert ChartWorkspace.model_validate(resource.model_dump(by_alias=True)) == resource
 
 
 @pytest.mark.parametrize("path", LOCAL_STACK_DOCUMENTS, ids=_rel)
@@ -243,6 +258,16 @@ def test_local_cluster_fixture_round_trips_through_authored_aliases() -> None:
     assert isinstance(resource.spec.cluster.config, Path)
 
 
+def test_chart_workspace_fixture_round_trips_through_authored_aliases() -> None:
+    document = _read_yaml(FIXTURES / "chart-workspace.yaml")
+    resource = ChartWorkspace.model_validate(document)
+
+    dumped = resource.model_dump(mode="json", by_alias=True)
+
+    assert ChartWorkspace.model_validate(dumped) == resource
+    _assert_authored_subset(document, dumped)
+
+
 def test_local_stack_fixture_round_trips_through_authored_aliases() -> None:
     document = _read_yaml(FIXTURES / "local-stack.yaml")
     resource = LocalStack.model_validate(document)
@@ -262,10 +287,11 @@ def test_local_stack_fixture_round_trips_through_authored_aliases() -> None:
     ("model", "fixture"),
     [
         (ChartLifecycle, LIFECYCLE_FILENAME),
+        (ChartWorkspace, "chart-workspace.yaml"),
         (LocalCluster, "local-cluster.yaml"),
         (LocalStack, "local-stack.yaml"),
     ],
-    ids=["ChartLifecycle", "LocalCluster", "LocalStack"],
+    ids=["ChartLifecycle", "ChartWorkspace", "LocalCluster", "LocalStack"],
 )
 def test_field_names_are_alias_only(model: type[BaseModel], fixture: str) -> None:
     """No ``populate_by_name``: the authored spelling is the only accepted one.

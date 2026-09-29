@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
-from chart_manager.domain.local_resources import load_local_cluster
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
@@ -68,72 +67,33 @@ class LifecycleImpact:
     warnings: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class _FanoutRule:
-    """One repository-level cluster-test safety fanout rule."""
-
-    name: str
-    detail: str
-    prefix: tuple[str, ...] | None = None
-    exact: tuple[str, ...] | None = None
-
-    def matches(self, path: Path) -> bool:
-        parts = path.parts
-        if self.exact is not None:
-            return parts == self.exact
-        if self.prefix is None:
-            raise ValueError(f"fanout rule {self.name!r} declares neither prefix nor exact")
-        return parts[: len(self.prefix)] == self.prefix
-
-
-_STATIC_CLUSTER_FANOUT_RULES = (
-    _FanoutRule(
-        "chart-manager-code",
-        "chart-manager implementation changes can affect every cluster workflow",
-        prefix=("src", "chart_manager"),
-    ),
-    _FanoutRule(
-        "kind-config",
-        "the Kind cluster blueprint affects every ephemeral cluster",
-        exact=("kind-config.yaml",),
-    ),
-    _FanoutRule(
-        "mise-tool-pins",
-        "tool version pins affect every cluster-test executor",
-        exact=(".mise.toml",),
-    ),
-    _FanoutRule(
-        "python-project",
-        "Python dependency and command configuration affects cluster-test execution",
-        exact=("pyproject.toml",),
-    ),
-    _FanoutRule(
-        "python-lock",
-        "locked Python dependencies affect cluster-test execution",
-        exact=("uv.lock",),
-    ),
-    _FanoutRule(
-        "ci-workflow",
-        "the CI workflow controls every cluster-test matrix entry",
-        exact=(".github", "workflows", "ci.yaml"),
-    ),
-)
-
-
 class LifecycleImpactService:
     """Derive both lifecycle worklists from an explicit changed-file list."""
 
     def __init__(
         self,
-        root: Path,
+        root: Path | None = None,
         *,
         charts_dir: Path = DEFAULT_CHARTS_DIR,
         local_config: Path = DEFAULT_LOCAL_CONFIG,
+        workspace: RepositoryWorkspace | None = None,
     ) -> None:
-        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+        if workspace is None:
+            if root is None:
+                raise TypeError("root or workspace is required")
+            workspace = RepositoryWorkspace(
+                root=root.resolve(), charts_dir=charts_dir, local_cluster=local_config
+            )
+        self.workspace = workspace
+        self.layout = RepositoryLayout(
+            root=self.workspace.root,
+            charts_dir=self.workspace.charts_dir,
+        )
         self.root = self.layout.root
-        self.local_config = local_config
-        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=charts_dir)
+        self.local_config = self.workspace.local_cluster
+        self.cluster_catalog = ClusterTestCatalog(
+            self.root, charts_dir=self.workspace.charts_dir
+        )
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -148,7 +108,7 @@ class LifecycleImpactService:
             single = build_worklist(
                 root=self.root,
                 changed_files=[changed_file.as_posix()],
-                charts_dir=self.layout.charts_dir,
+                workspace=self.workspace,
             )
             for row in single.rows:
                 key = (row.chart, row.env)
@@ -159,13 +119,14 @@ class LifecycleImpactService:
                         changed_file,
                         selected_chart=row.chart,
                         layout=self.layout,
+                        workspace=self.workspace,
                     ),
                 )
 
         combined = build_worklist(
             root=self.root,
             changed_files=[path.as_posix() for path in changes],
-            charts_dir=self.layout.charts_dir,
+            workspace=self.workspace,
         )
         rows_by_key = {(row.chart, row.env): row for row in combined.rows}
         validation = tuple(
@@ -214,21 +175,20 @@ class LifecycleImpactService:
         selected: dict[tuple[str, str], list[ImpactReason]] = {}
         errors: list[str] = []
         fanout_matches = [
-            (path, rule)
+            (path, pattern)
             for path in changes
-            for rule in _cluster_fanout_rules(self.layout, self.local_config)
-            if rule.matches(path)
+            for pattern in self.workspace.matching_cluster_test_patterns(path)
         ]
         if fanout_matches:
             for chart in enabled:
-                for path, rule in fanout_matches:
+                for path, pattern in fanout_matches:
                     _append_reason(
                         selected,
                         (chart, profiles[chart]),
                         ImpactReason(
                             ImpactReasonCode.CLUSTER_SAFETY_FANOUT,
                             path,
-                            f"{rule.name}: {rule.detail}",
+                            self._cluster_fanout_detail(pattern),
                         ),
                     )
 
@@ -272,6 +232,17 @@ class LifecycleImpactService:
                 )
         return selected, errors
 
+    def _cluster_fanout_detail(self, pattern: str) -> str:
+        for chart in self.workspace.shared_prerequisites:
+            if pattern == self.workspace.repo_chart_path(chart).as_posix():
+                return f"{chart} is a shared runtime prerequisite across cluster tests"
+        if pattern not in self.workspace.cluster_test_fanout and pattern not in {
+            self.workspace.local_cluster.as_posix(),
+            self.workspace.marker.relative_to(self.workspace.root).as_posix(),
+        }:
+            return f"{pattern} is a LocalCluster bootstrap prerequisite used by every cluster test"
+        return f"workspace cluster-test fanout matched {pattern}"
+
 
 def _default_profile(profiles: Mapping[str, object]) -> str:
     """Preserve CI's minimal convention with a deterministic safe fallback."""
@@ -285,20 +256,18 @@ def _validation_reason(
     *,
     selected_chart: str,
     layout: RepositoryLayout,
+    workspace: RepositoryWorkspace,
 ) -> ImpactReason:
     """Classify the existing validation worklist rule that selected a row."""
-    parts = changed_file.parts
-    if parts and parts[0] == "policies":
+    if changed_file == workspace.marker.relative_to(workspace.root) or _path_is_within(
+        changed_file, workspace.policies_dir
+    ):
         return ImpactReason(
             ImpactReasonCode.REPOSITORY_POLICY,
             changed_file,
             "repository policy changes validate every configured environment",
         )
-    if parts[:3] == ("src", "chart_manager", "services") or parts[:3] == (
-        "src",
-        "chart_manager",
-        "integrations",
-    ):
+    if workspace.matches_validation_fanout(changed_file):
         return ImpactReason(
             ImpactReasonCode.VALIDATION_ENGINE,
             changed_file,
@@ -318,44 +287,9 @@ def _validation_reason(
     )
 
 
-def _cluster_fanout_rules(
-    layout: RepositoryLayout,
-    local_config: Path,
-) -> tuple[_FanoutRule, ...]:
-    """Return static rules plus repository-defined bootstrap prerequisites."""
-    rules = [
-        *_STATIC_CLUSTER_FANOUT_RULES,
-        _FanoutRule(
-            "local-cluster",
-            "LocalCluster configuration affects every local cluster test",
-            exact=local_config.parts,
-        ),
-        _FanoutRule(
-            "istio-base",
-            "Istio base is a shared runtime prerequisite across cluster tests",
-            prefix=(*layout.charts_dir.parts, "istio-base"),
-        ),
-    ]
-    cluster_path = layout.root / local_config
-    if cluster_path.is_file():
-        try:
-            cluster = load_local_cluster(cluster_path)
-        except SpecError:
-            pass
-        else:
-            for release in cluster.spec.bootstrap.releases:
-                if isinstance(release, (LifecycleRelease, LocalChartRelease)):
-                    rules.append(
-                        _FanoutRule(
-                            f"local-bootstrap-{release.chart.name}",
-                            (
-                                f"{release.chart} is a LocalCluster bootstrap "
-                                "prerequisite used by every cluster test"
-                            ),
-                            prefix=release.chart.parts,
-                        )
-                    )
-    return tuple(rules)
+def _path_is_within(path: Path, relative: Path) -> bool:
+    prefix = relative.parts
+    return path.parts[: len(prefix)] == prefix
 
 
 def _append_reason(

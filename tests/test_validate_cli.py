@@ -488,7 +488,7 @@ def _outcome(out_dir: Path, *, outcome: Outcome = Outcome.SUCCESS, **kwargs) -> 
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeApp) -> None:
-    monkeypatch.setattr(validate_cli, "_make_app", lambda progress=None: fake)
+    monkeypatch.setattr(validate_cli, "_make_app", lambda progress=None, **_kwargs: fake)
 
 
 def test_chart_resolves_a_bare_configured_name_through_the_service(
@@ -1021,7 +1021,7 @@ def test_verbose_forces_plain_progress_and_warns_about_serial_execution(
     fake = _FakeApp(_outcome(tmp_path / "out"))
     seen: list[object] = []
 
-    def _make(progress=None):
+    def _make(progress=None, **_kwargs):
         seen.append(progress)
         return fake
 

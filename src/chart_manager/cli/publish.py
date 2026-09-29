@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape
 
 from chart_manager.cli._container import container as _container
+from chart_manager.cli._container import repository_root
 from chart_manager.cli.streams import console as data
 from chart_manager.cli.streams import narration
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
@@ -31,7 +32,6 @@ def publish(
             help="Destination OCI repository, for example oci://ghcr.io/owner/charts.",
         ),
     ],
-    root: Annotated[Path, typer.Option("--root", help="Repository root.")] = Path("."),
     version_suffix: Annotated[
         str | None,
         typer.Option(
@@ -81,6 +81,7 @@ def publish(
     ] = False,
 ) -> None:
     """Package all requested charts before pushing any of them."""
+    root = repository_root()
     result = _container().publish_service(root).publish(
         charts,
         repository=repository,

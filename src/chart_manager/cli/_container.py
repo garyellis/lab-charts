@@ -80,6 +80,11 @@ def exit_if_failed(ok: bool) -> None:
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
+def repository_root() -> Path:
+    """Discover the current repository through the composition boundary."""
+    return container().workspace().root
+
+
 def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
     """Resolve either a configured chart name or an explicit chart directory.
 
@@ -97,13 +102,13 @@ def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
     `Settings()`, which is what the three former copies of these five lines
     each did independently.
     """
-    settings = container().settings
+    workspace = container().workspace(root)
     return resolve_chart_target(
-        root,
+        workspace.root,
         chart,
-        charts_dir=settings.charts_dir,
-        local_config=settings.local_config,
+        charts_dir=workspace.charts_dir,
+        local_config=workspace.local_cluster,
     )
 
 
-__all__ = ["container", "exit_if_failed", "resolve_chart"]
+__all__ = ["container", "exit_if_failed", "repository_root", "resolve_chart"]

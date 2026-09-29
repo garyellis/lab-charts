@@ -16,6 +16,7 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
 )
 from chart_manager.domain.chart_deps import build_helm_dependency_index
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import (
     ManifestValidationTarget,
@@ -79,6 +80,7 @@ def build_worklist(
     skip_change_detection: bool = False,
     selected_charts: tuple[str, ...] = (),
     charts_dir: Path = DEFAULT_CHARTS_DIR,
+    workspace: RepositoryWorkspace | None = None,
 ) -> WorklistBuildResult:
     """Build the deterministic chart/environment worklist.
 
@@ -86,7 +88,8 @@ def build_worklist(
     those charts are loaded. Callers performing change-impact analysis must
     leave it empty so repository-wide dependencies and fanout remain visible.
     """
-    layout = RepositoryLayout(root=root, charts_dir=charts_dir)
+    workspace = workspace or RepositoryWorkspace(root=root.resolve(), charts_dir=charts_dir)
+    layout = RepositoryLayout(root=workspace.root, charts_dir=workspace.charts_dir)
     root = layout.root
     catalog = build_catalog(
         root,
@@ -115,13 +118,8 @@ def build_worklist(
         if not raw:
             continue
         parts = Path(raw).parts
-        if parts and parts[0] == "policies":
+        if workspace.matches_validation_fanout(Path(raw)):
             fanout_all = True
-            continue
-        if _is_validate_code_path(parts):
-            fanout_all = True
-            continue
-        if _is_other_chart_manager_path(parts):
             continue
         chart_name = layout.chart_name_from_repo_path(Path(raw))
         if chart_name is None:
@@ -178,7 +176,6 @@ def build_worklist(
         targets=targets,
     )
 
-
 def select_rows(
     rows: tuple[WorklistRow, ...],
     *,
@@ -218,8 +215,6 @@ def select_rows(
 
 
 _CHART_WIDE_FILES = {"Chart.yaml"}
-_VALIDATE_CODE_PREFIXES = (("src", "chart_manager", "services", "manifest_validation"),)
-_VALIDATE_INTEGRATIONS = {"helm.py", "kubeconform.py", "kyverno.py"}
 
 
 def _is_chart_wide_trigger(chart_relative: Path) -> bool:
@@ -333,17 +328,3 @@ def _cross_product(specs: dict[str, ManifestValidationSpec]) -> tuple[WorklistRo
             for environment in sorted(specs[chart].environments)
         ],
     )
-
-
-def _is_validate_code_path(parts: tuple[str, ...]) -> bool:
-    if any(parts[: len(prefix)] == prefix for prefix in _VALIDATE_CODE_PREFIXES):
-        return True
-    return (
-        len(parts) >= 4
-        and parts[:3] == ("src", "chart_manager", "integrations")
-        and parts[3] in _VALIDATE_INTEGRATIONS
-    )
-
-
-def _is_other_chart_manager_path(parts: tuple[str, ...]) -> bool:
-    return len(parts) >= 2 and parts[:2] == ("src", "chart_manager")

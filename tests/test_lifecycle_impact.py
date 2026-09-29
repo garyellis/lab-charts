@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
     ImpactReasonCode,
@@ -15,6 +16,29 @@ from chart_manager.services.lifecycle import (
 )
 
 from .conftest import MakeChart
+
+
+def _service(root: Path) -> LifecycleImpactService:
+    return LifecycleImpactService(
+        workspace=RepositoryWorkspace(
+            root=root.resolve(),
+            validation_fanout=(
+                "src/chart_manager/services/manifest_validation/**",
+                "src/chart_manager/integrations/helm.py",
+                "src/chart_manager/integrations/kubeconform.py",
+                "src/chart_manager/integrations/kyverno.py",
+            ),
+            cluster_test_fanout=(
+                "src/chart_manager/**",
+                "kind-config.yaml",
+                ".mise.toml",
+                "pyproject.toml",
+                "uv.lock",
+                ".github/workflows/ci.yaml",
+            ),
+            shared_prerequisites=("istio-base",),
+        )
+    )
 
 
 def _with_validation(chart: Path, *, environments: tuple[str, ...] = ("dev",)) -> None:
@@ -66,7 +90,7 @@ def test_ordinary_chart_change_selects_validation_cluster_and_declared_dependent
         dependent_profile="full",
     )
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["charts/source/values-dev.yaml"]
     )
 
@@ -90,7 +114,7 @@ def test_chart_lifecycle_change_selects_all_validation_environments_and_cluster_
     chart = make_chart("app")
     _with_validation(chart, environments=("dev", "prod"))
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["charts/app/chart-lifecycle.yaml"],
     )
 
@@ -110,7 +134,7 @@ def test_shared_runtime_change_fans_out_every_enabled_cluster_test_with_reasons(
     make_chart("alpha")
     make_chart("beta")
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["charts/istio-base/templates/crd.yaml"],
     )
 
@@ -158,7 +182,7 @@ spec:
         encoding="utf-8",
     )
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["platform/network/templates/daemonset.yaml"],
     )
 
@@ -184,7 +208,7 @@ def test_safety_fanout_unions_declared_dependent_profiles_from_chart_changes(
         dependent_profile="full",
     )
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["kind-config.yaml", "charts/source/values.yaml"],
     )
 
@@ -214,12 +238,12 @@ def test_tool_workflow_and_chart_manager_rules_are_typed_safety_fanout(
         "src/chart_manager/services/ci.py",
         "kind-config.yaml",
         ".mise.toml",
-            "pyproject.toml",
-            "uv.lock",
-            ".github/workflows/ci.yaml",
-            ".chart-manager/local-cluster.yaml",
-        ):
-        impact = LifecycleImpactService(chart_root).analyze([changed_file])
+        "pyproject.toml",
+        "uv.lock",
+        ".github/workflows/ci.yaml",
+        ".chart-manager/local-cluster.yaml",
+    ):
+        impact = _service(chart_root).analyze([changed_file])
         assert [(case.chart, case.profile) for case in impact.cluster_tests] == [
             ("app", "minimal")
         ]
@@ -237,7 +261,7 @@ def test_repository_policy_change_uses_existing_validation_safety_fanout(
     _with_validation(alpha, environments=("dev", "prod"))
     _with_validation(beta)
 
-    impact = LifecycleImpactService(chart_root).analyze(
+    impact = _service(chart_root).analyze(
         ["policies/require-resources.yaml"],
     )
 
@@ -252,6 +276,54 @@ def test_repository_policy_change_uses_existing_validation_safety_fanout(
     )
 
 
+def test_workspace_marker_change_fans_out_both_matrices(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    alpha = make_chart("alpha")
+    beta = make_chart("beta")
+    _with_validation(alpha, environments=("dev", "prod"))
+    _with_validation(beta)
+
+    impact = _service(chart_root).analyze([".chart-manager/workspace.yaml"])
+
+    assert [(case.chart, case.environment) for case in impact.validation] == [
+        ("alpha", "dev"),
+        ("alpha", "prod"),
+        ("beta", "dev"),
+    ]
+    assert [(case.chart, case.profile) for case in impact.cluster_tests] == [
+        ("alpha", "minimal"),
+        ("beta", "minimal"),
+    ]
+
+
+def test_validation_and_cluster_fanout_lists_are_independent(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    chart = make_chart("app")
+    _with_validation(chart)
+    workspace = RepositoryWorkspace(
+        root=chart_root,
+        validation_fanout=("validation-tool/**",),
+        cluster_test_fanout=("cluster-tool/**",),
+    )
+    service = LifecycleImpactService(workspace=workspace)
+
+    validation_only = service.analyze(["validation-tool/config.yaml"])
+    cluster_only = service.analyze(["cluster-tool/config.yaml"])
+
+    assert [(case.chart, case.environment) for case in validation_only.validation] == [
+        ("app", "dev")
+    ]
+    assert validation_only.cluster_tests == ()
+    assert cluster_only.validation == ()
+    assert [(case.chart, case.profile) for case in cluster_only.cluster_tests] == [
+        ("app", "minimal")
+    ]
+
+
 def test_impact_is_deterministic_deduplicated_and_json_serializable(
     chart_root: Path,
     make_chart: MakeChart,
@@ -264,7 +336,7 @@ def test_impact_is_deterministic_deduplicated_and_json_serializable(
         "README.md",
     ]
 
-    impact = LifecycleImpactService(chart_root).analyze(changes)
+    impact = _service(chart_root).analyze(changes)
     projected = impact_to_dict(impact)
 
     assert projected["changed_files"] == [
@@ -284,7 +356,7 @@ def test_unrelated_non_chart_change_selects_no_lifecycle_work(
     app = make_chart("app")
     _with_validation(app)
 
-    impact = LifecycleImpactService(chart_root).analyze(["docs/architecture.md"])
+    impact = _service(chart_root).analyze(["docs/architecture.md"])
 
     assert impact.validation == ()
     assert impact.cluster_tests == ()

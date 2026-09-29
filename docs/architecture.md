@@ -30,6 +30,7 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | `domain/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
 | `domain/install_plan.py` | Dependency resolution and install order |
 | `domain/local_resources.py` | Loading `LocalCluster`/`LocalStack`; resolving a CLI target |
+| `domain/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
 
 ## What `api/` is for
 
@@ -38,6 +39,7 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | Version | Kind | Module |
 |---|---|---|
 | `chartmanager.io/v1alpha1` | `ChartLifecycle` | `api/v1alpha1/chart_lifecycle.py` |
+| `chartmanager.io/v1alpha1` | `ChartWorkspace` | `api/v1alpha1/chart_workspace.py` |
 | `chartmanager.io/v1alpha1` | `LocalCluster` | `api/v1alpha1/local_cluster.py` |
 | `chartmanager.io/v1alpha1` | `LocalStack` | `api/v1alpha1/local_stack.py` |
 
@@ -88,8 +90,25 @@ Absolute or existence-checked paths. Helm metadata from `Chart.yaml`.
 Name-agreement checks. Cross-resource references. Capability selection.
 Resolved namespaces and release names. Dependency graphs and install order.
 Compiled plans, worklists, results. Command execution and cluster
-observation. Filesystem *layout* too: `LIFECYCLE_FILENAME` and friends
-describe where documents are found, not what a document may say.
+observation. `ChartWorkspace` owns authored repository-relative layout;
+compiled absolute paths, existence checks, symlink containment, and
+cross-resource dependencies remain domain concerns.
+
+## Workspace boundary
+
+Repository-bound commands resolve `CHART_MANAGER_ROOT`/operator config first,
+then the nearest ancestor containing `.chart-manager/workspace.yaml`, then the
+current directory as the legacy fallback. Non-repository commands do not
+perform discovery. The composition boundary compiles one
+`RepositoryWorkspace` for chart discovery, local resources, validation policy
+and render locations, CI impact, publishing, upgrades/finalization, and
+Grafana discovery.
+
+Repository policy is checkout-owned. Machine settings such as kube context,
+Docker host, timeouts, logging, credentials, and backend endpoints remain in
+`Settings`. When the marker exists, legacy `charts_dir` and `local_config`
+operator values are an error; silent per-operator reinterpretation is not
+allowed.
 
 ## Rules `api/` must obey
 

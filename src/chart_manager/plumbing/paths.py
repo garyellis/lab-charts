@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from chart_manager.plumbing.errors import SpecError
 
@@ -53,7 +53,8 @@ def relative_path(value: object, *, field: str) -> Path:
             f"{field} must be a repository-relative path without empty, '.' or '..' segments"
         )
     path = Path(raw)
-    if path.is_absolute():
+    windows_path = PureWindowsPath(raw)
+    if path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
         raise ValueError(f"{field} must be a repository-relative path")
     return path
 

@@ -17,7 +17,7 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import resolve_chart
+from chart_manager.cli._container import repository_root, resolve_chart
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.upgrader import (
     FinalizeRequest,
@@ -116,7 +116,7 @@ def upgrade(
 ) -> None:
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
     mode = output_mod.resolve(output, ctx, allowed=_UPGRADE_OUTPUTS)
-    root = Path(".").resolve()
+    root = repository_root()
     result = _make_upgrade_service(root).upgrade(
         UpgradeRequest(root=root, chart_path=_chart_path(chart, path, root=root), dry_run=dry_run)
     )
@@ -156,7 +156,7 @@ def upgrade_finalize(
     """Finalize the Renovate callback (internal; invoked by trusted configuration)."""
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
-    root = Path(".").resolve()
+    root = repository_root()
     update_data = load_update_data(data_file)
     result = _make_finalize_service(root).finalize(
         FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)

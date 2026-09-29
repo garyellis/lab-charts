@@ -19,8 +19,16 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-DEFAULT_CHARTS_DIR = Path("charts")
-DEFAULT_LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
+from chart_manager.domain.workspace import (
+    LEGACY_CHARTS_DIR,
+    LEGACY_LOCAL_CLUSTER,
+    RepositoryWorkspace,
+    load_repository_workspace,
+    resolve_repository_root,
+)
+
+DEFAULT_CHARTS_DIR = LEGACY_CHARTS_DIR
+DEFAULT_LOCAL_CONFIG = LEGACY_LOCAL_CLUSTER
 DEFAULT_CONFIG_FILE = Path(".chart-manager/config.yaml")
 DEFAULT_ROOT = Path(".")
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -94,11 +102,8 @@ class Settings(BaseSettings):
     #: repository-relative path: `.` is its default and an absolute path is
     #: the normal way to point at a checkout elsewhere.
     #:
-    #: Note what this field does and does not do. It supplies the value a
-    #: command's `--root` falls back to; it is not read by services, which
-    #: continue to take `root` as an argument. Settings is frozen, so the
-    #: surface reads this once and threads it through Click's `default_map`
-    #: rather than writing back to it.
+    #: Explicit operator override. When absent, repository-bound entry points
+    #: discover the nearest workspace marker; non-repository commands ignore it.
     root: Path = DEFAULT_ROOT
 
     @classmethod
@@ -118,10 +123,8 @@ class Settings(BaseSettings):
         and leaving it in would add a fourth, undocumented precedence step
         between env and the config file.
 
-        The remaining step of design-doc 6.5's precedence -- a command-line
-        flag beating the environment -- cannot live here, because Settings
-        never sees argv. The CLI's root callback implements it by preferring
-        an explicitly passed flag over this object.
+        Repository roots intentionally have no command-line source. Environment
+        or this config file overrides nearest-marker discovery.
         """
         return (
             init_settings,
@@ -154,18 +157,41 @@ class Settings(BaseSettings):
         """Bind this process configuration to one repository root."""
         return RepositoryLayout(root=root, charts_dir=self.charts_dir)
 
+    def repository_workspace(
+        self,
+        root: Path | None = None,
+        *,
+        start: Path | None = None,
+    ) -> RepositoryWorkspace:
+        """Discover and compile one checkout-invariant repository policy."""
+        configured_root = root
+        if configured_root is None and "root" in self.model_fields_set:
+            configured_root = self.root
+        resolved_root = resolve_repository_root(configured=configured_root, start=start)
+        explicit_legacy = bool(
+            {"charts_dir", "local_config"}.intersection(self.model_fields_set)
+        )
+        return load_repository_workspace(
+            resolved_root,
+            legacy_charts_dir=self.charts_dir,
+            legacy_local_cluster=self.local_config,
+            legacy_layout_explicit=explicit_legacy,
+        )
+
 
 class RepositoryLayout:
     """Resolved repository root plus the configured managed-chart prefix."""
 
     def __init__(self, *, root: Path, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
         self.root = root.resolve()
-        self.charts_dir = validate_charts_dir(charts_dir)
+        self.charts_dir = (
+            Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
+        )
 
     @property
     def charts_root(self) -> Path:
         """Absolute directory containing managed chart directories."""
-        return self.root / self.charts_dir
+        return self.root if self.charts_dir == Path(".") else self.root / self.charts_dir
 
     def chart_path(self, name: str) -> Path:
         """Absolute path for one managed chart name."""
@@ -174,7 +200,7 @@ class RepositoryLayout:
     def chart_name_from_repo_path(self, path: PurePath | str) -> str | None:
         """Return the managed chart name owning a repository-relative path."""
         parts = PurePath(path).parts
-        prefix = self.charts_dir.parts
+        prefix = () if self.charts_dir == Path(".") else self.charts_dir.parts
         if len(parts) <= len(prefix) or parts[: len(prefix)] != prefix:
             return None
         return parts[len(prefix)]
@@ -192,6 +218,7 @@ __all__ = [
     "LogFormat",
     "LogLevel",
     "RepositoryLayout",
+    "RepositoryWorkspace",
     "Settings",
     "config_file",
     "set_config_file",

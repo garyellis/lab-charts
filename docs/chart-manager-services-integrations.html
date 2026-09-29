@@ -285,7 +285,7 @@
   <div class="layerstack">
     <div class="lrow lc-cli"><div class="lname">cli/</div><div class="lbody">7 command groups — <code>events</code>, <code>charts</code>, <code>local</code>, <code>ci</code>, <code>grafana</code>, <code>validate</code>, <code>helmrelease</code> — and 25 visible leaf commands (26 including hidden <code>upgrade-finalize</code>). The shape of every handler: parse flags → call a service → render a returned result. Visible root commands are <code>upgrade</code> and <code>publish</code>; <code>upgrade-finalize</code> is a hidden Renovate callback. A single error-catch lives in <code>main()</code>. <span class="pill p-green">surfaces are portable</span> <a href="#commands/surface" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ Commands tab: the surface</a> <a href="#commands/upgrade" style="color:var(--green);font-size:12px;text-decoration:none;border-bottom:1px dotted var(--green)">→ upgrade</a></div></div>
     <div class="ldivider">▼ requests in, frozen results out · no integrations import (ruff TID251 — and <b>zero</b> import sites remain)</div>
-    <div class="lrow lc-comp"><div class="lname">settings.py + composition.py</div><div class="lbody"><span class="ref" data-tip="settings.py — frozen Pydantic BaseSettings model">Settings</span> owns process configuration: <code>kube_context</code>, <code>docker_host</code>, <code>command_timeout</code>, <code>event_source</code>, the repository-relative <code>charts_dir</code>, and the repository-relative <code>local_config</code>. Pydantic supplies environment overrides with the <code>CHART_MANAGER_</code> prefix, so the managed-chart root is overridden by <code>CHART_MANAGER_CHARTS_DIR</code> and the <code>LocalCluster</code> file by <code>CHART_MANAGER_LOCAL_CONFIG</code>. <span class="ref" data-tip="settings.py — RepositoryLayout(root, charts_dir)">RepositoryLayout</span> binds that path to a repository and provides shared discovery/path-prefix rules. <code>composition.py</code> remains the <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>. Its <span class="ref" data-tip="composition.py — class Container(settings=None)">Container</span> threads one settings instance into cluster, CI, validation, upgrader, finalizer, and event capabilities. There is no module-level singleton: the CLI builds configuration from the environment per process, while a server can construct one container at startup.</div></div>
+    <div class="lrow lc-comp"><div class="lname">workspace.py + settings.py + composition.py</div><div class="lbody"><span class="ref" data-tip="domain/workspace.py — frozen compiled repository policy">RepositoryWorkspace</span> owns checkout policy from <code>.chart-manager/workspace.yaml</code>: chart, local-cluster, render and policy locations plus validation/cluster-test fanout. <span class="ref" data-tip="settings.py — frozen Pydantic BaseSettings model">Settings</span> retains machine/operator configuration such as root override, kube context, Docker host, timeouts, logging and endpoints. <code>composition.py</code> remains the <b>only module outside <code>integrations/</code> and <code>services/</code> allowed to import an adapter</b>, and threads the same compiled workspace into every repository-aware capability.</div></div>
     <div class="ldivider">▼ constructor-injected adapters — <b>required</b>, not <code>or Helm()</code> fallbacks</div>
     <div class="lrow lc-svc"><div class="lname">services/</div><div class="lbody">78 modules across the shared chart domain and bounded service contexts: <span class="pill p-blue">chart domain</span> <span class="pill p-teal">local cluster ops</span> <span class="pill p-green">static validation</span> <span class="pill p-purple">gitops delivery</span> <span class="pill p-amber">dependency intake</span> <span class="pill p-pink">events</span> <span class="pill p-amber">ci</span> <span class="pill p-slate">grafana</span>. The validation context carries a closed provider registry plus provider-owned input resolution and adapters; <code>services/upgrader/</code> owns chart-scoped upgrade policy. The <code>services/lifecycle/</code> context owns versioned ordered action plans, input digests, impact reasoning, environment projection and cluster execution — six modules: <code>__init__.py</code>, <code>compiler.py</code>, <code>models.py</code>, <code>impact.py</code>, <code>cluster_executor.py</code>, <code>plan_projection.py</code>. <span class="ref" data-tip="api/v1alpha1/ — LocalCluster · LocalStack; api/v1alpha1/chart_lifecycle.py — ChartLifecycle"><code>chart_manager/api/</code></span> owns every authored resource contract; <code>services/local_resources.py</code> and <code>services/domain/</code> own loading, resolution and policy over them. Runtime facts never flow back into the contract. Zero Rich, zero Typer, zero <code>sys.exit</code> — asserted by <span class="ref" data-tip="tests/test_layering.py — service imports, presentation bans, domain-boundary checks">tests/test_layering.py</span>.</div></div>
     <div class="ldivider">▼ typed results; one intentional shared-policy edge</div>
@@ -296,7 +296,7 @@
 
   <div class="callout good" style="margin-top:18px"><b>The boundaries are machine-enforced.</b> Ruff <code>TID251</code> guards adapter imports; service import tests keep Rich and Typer out of capabilities; AST checks keep process exits in the CLI; and dedicated layering tests keep chart- and validation-domain modules out of <code>plumbing/</code>. Current verification: <b>1,031 tests passing</b>, with 6 integration tests deselected from the default invocation, mypy clean, workflow lint clean, and diff checks clean.</div>
 
-  <div class="callout good" style="margin-top:10px"><b>The managed chart root is configuration, not convention.</b> <code>Settings</code> is a frozen Pydantic settings model with <code>charts_dir=Path("charts")</code> and the environment override <code>CHART_MANAGER_CHARTS_DIR</code>. A shared <code>RepositoryLayout</code> owns prefix parsing and containment-safe path construction. Chart discovery, Git change classification, lifecycle impact and compilation, manifest validation, ephemeral/development/CI services, the upgrader/finalizer, and Grafana dashboard discovery receive that value. <code>charts test --chart</code> and <code>validate chart --chart</code> also accept explicit repository-contained chart directories and bind their catalog to the selected directory's parent.</div>
+  <div class="callout good" style="margin-top:10px"><b>The managed chart root is repository policy.</b> The versioned <code>ChartWorkspace</code> permits a safe relative <code>chartsDir</code> (including <code>.</code>). Nearest-marker discovery makes nested invocations agree, while <code>CHART_MANAGER_ROOT</code> remains an operator override. Chart discovery, Git classification, lifecycle impact, validation, cluster services, publishing, upgrades/finalization, and Grafana discovery consume the compiled workspace.</div>
 
   <div class="callout info" style="margin-top:10px"><b>How to read the rest:</b> paths written as <code>charts/…</code> below illustrate the default configured root. The <b>Commands</b> tab is the entry surface. The <b>Services</b> tab covers the shared chart domain and each bounded service, including the validation lifecycle. The <b>Integrations</b> tab documents external adapters. The <b>Plumbing</b> tab separates genuinely generic utilities from the service-domain panels that share its deep-link routes. The <b>Matrix</b> and <b>Flows</b> show cross-layer communication; <b>Productionize</b> evaluates the current package shape.</div>
 </section>
@@ -432,10 +432,10 @@
       <div class="panel" id="cmd-charts">
         <div class="phead"><h2><code>chart-manager charts</code></h2><span class="loc">cli/main.py 167–211 · 2 commands</span><span class="pill p-green">thin</span></div>
         <p class="oneliner">Read-only inspection of the chart repo. Both commands are a service call plus a renderer — the shape every other group should converge on.</p>
-        <div class="api"><span class="m">charts list</span>   <span class="r">--root PATH=.</span>
+        <div class="api"><span class="m">charts list</span>
             <span class="r">→ ChartCatalogService.list_charts() + get_chart(name) → Rich table (Chart, Version, Dependencies, Profiles)</span>
 
-<span class="m">charts lifecycle</span> <span class="s">CHART</span>  <span class="r">--root PATH=.</span>
+<span class="m">charts lifecycle</span> <span class="s">CHART</span>
             <span class="r">→ ChartCatalogService.get_lifecycle(chart).model_dump(by_alias=True) → canonical resource JSON</span></div>
         <div class="two-col">
           <div class="block"><h4>What the CLI owns</h4><ul>
@@ -478,9 +478,9 @@
       <div class="panel" id="cmd-local">
         <div class="phead"><h2><code>chart-manager local</code></h2><span class="loc">cli/main.py · 3 commands</span><span class="pill p-green">target-oriented</span></div>
         <p class="oneliner">A provider-backed lifecycle for the configured persistent local Kubernetes environment. <code>up</code> and <code>reset</code> select exactly one chart directory/name or authored LocalStack; <code>down</code> stops the configured cluster while preserving state.</p>
-        <div class="api"><span class="m">local up</span>      <span class="r">--chart CHART | --stack STACK  --profile  --skip-installed  --root</span>
-<span class="m">local down</span>    <span class="r">--root</span>
-<span class="m">local reset</span>   <span class="r">--chart CHART | --stack STACK  --profile  --root</span></div>
+        <div class="api"><span class="m">local up</span>      <span class="r">--chart CHART | --stack STACK  --profile  --skip-installed</span>
+<span class="m">local down</span>
+<span class="m">local reset</span>   <span class="r">--chart CHART | --stack STACK  --profile</span></div>
 
         <div class="ft-wrap">
         <table class="ft">
@@ -515,9 +515,8 @@
       <div class="panel" id="cmd-validate">
         <div class="phead"><h2><code>chart-manager validate</code></h2><span class="loc">cli/validate.py · 666 ln · 3 commands</span><span class="pill p-green">one execution boundary</span></div>
         <p class="oneliner">The static gate has two entry shapes and one implementation. <span class="ref" data-tip="cli/validate.py:167 — chart"><code>chart</code></span> is optimized for local development; <span class="ref" data-tip="cli/validate.py:248 — run"><code>run</code></span> preserves changed-file CI aggregation and repository health checks. Both construct a frozen <code>RunRequest</code> and delegate independently to the shared private <span class="ref" data-tip="cli/validate.py:398 — _execute"><code>_execute</code></span> boundary, which alone owns display selection, service invocation, output emission, cleanup and process exit.</p>
-        <div class="api"><span class="m">validate chart</span>   <span class="r">--chart NAME|DIRECTORY  (--env ENV)… | --all  --kubeconform|--no-kubeconform  --policy|--no-policy  --out  --keep  --progress  --timings  --format  --github-step-summary  --root</span>
-<span class="m">validate run</span>     <span class="r">--chart…  --env…  --base  --changed-files  --all  --phases  --fail-fast|--no-fail-fast  --out  --keep  --workers  --progress  --timings  --verbose  --tool-timeout  --dep-update-timeout  --format  --github-step-summary  --root</span>
-<span class="m">validate clean</span>   <span class="r">--root PATH=.</span></div>
+        <div class="api"><span class="m">chart validate</span>   <span class="r">--chart NAME|DIRECTORY  --env ENV…  --all  --phase…  --out  --keep  --progress</span>
+<span class="m">chart cache clean</span></div>
 
         <div class="callout good"><b>Selection semantics are consistent across local workflows.</b> <code>validate chart --chart grafana --all</code> and <code>validate chart --chart ./charts/grafana --all</code> resolve the same chart. Relative and absolute chart directories are containment-checked with the resolver shared by <code>charts test</code>. <code>--env</code> selects named environments and is mutually exclusive with chart-scoped <code>--all</code>. <code>validate run</code> keeps the repository capability: diff-derived or supplied changed paths compile every affected chart/environment row, explicit <code>--chart</code> validates all authored environments, and repository-wide <code>--all</code> reports monorepo health.</div>
 
@@ -612,7 +611,7 @@
       <div class="panel" id="cmd-ci">
         <div class="phead"><h2><code>chart-manager ci</code></h2><span class="loc">cli/main.py · 7 commands</span><span class="pill p-green">thin</span></div>
         <p class="oneliner">Seven helpers for the GitHub Actions chart pipeline. The important boundary is typed: GitHub Actions asks Chart Manager for exact publish selection and chart/profile test matrices instead of maintaining parallel path and fanout policy.</p>
-        <div class="api"><span class="m">ci changed</span>   <span class="r">--root PATH=.  --base TEXT=origin/main</span>
+        <div class="api"><span class="m">plan</span>   <span class="r">--base TEXT=origin/main</span>
              <span class="r">→ CiService.changed_charts(base) → one chart name per line</span>
 
 <span class="m">ci cluster-test-charts</span> <span class="r">→ every chart with enabled spec.clusterTest</span>
@@ -621,10 +620,10 @@
              <span class="r">→ same selection as cluster-test-matrix, with the reasons kept; exit 1 on spec errors</span>
 <span class="m">ci publish-charts</span> <span class="r">--changed-file PATH… → directly owned charts</span>
 
-<span class="m">ci install</span>   <span class="s">CHART</span>  <span class="r">--root  --profile TEXT=minimal  --namespace TEXT=observability</span>
+<span class="m">chart test</span>   <span class="s">CHART</span>  <span class="r">--profile TEXT=minimal  --namespace TEXT=observability</span>
              <span class="r">→ CiService.install_source_chart(chart, profile, namespace)</span>
 
-<span class="m">ci upgrade</span>   <span class="s">CHART</span>  <span class="r">--from-oci REF  --root  --profile  --namespace</span>
+<span class="m">chart upgrade</span>   <span class="s">CHART</span>
              <span class="r">→ CiService.upgrade_from_oci(chart, profile, namespace, oci_ref)</span></div>
         <div class="two-col">
           <div class="block"><h4>Correct as written</h4><ul>
@@ -647,7 +646,7 @@
         <div class="api"><span class="m">grafana export-dashboard</span>  <span class="s">UID</span>  <span class="r">--cluster-name  --namespace  --release TEXT=grafana  --output/-o PATH</span>
                           <span class="r">→ GrafanaExporter().fetch(ExportRequest) → dict, then the CLI serializes and writes</span>
 
-<span class="m">grafana lint-dashboards</span>   <span class="r">--root PATH=.  --path PATH…  (default: charts/grafana-dashboards/dashboards/)</span>
+<span class="m">grafana dashboard lint</span>   <span class="r">--path PATH…  (default: workspace chartsDir/grafana-dashboards/dashboards/)</span>
                           <span class="r">→ discover_dashboards(root) / lint_paths(targets) → findings, then the CLI decides pass/fail</span></div>
         <div class="two-col">
           <div class="block"><h4><code>export-dashboard</code> · what leaked up</h4><ul>
@@ -1056,7 +1055,7 @@
 
         <div class="comm">
           <div class="comm-title">Loading path — file to resolved target</div>
-          <div class="cnode c-store">.chart-manager/<br>local-cluster.yaml<small>CHART_MANAGER_LOCAL_CONFIG overrides</small></div>
+          <div class="cnode c-store">.chart-manager/<br>local-cluster.yaml<small>ChartWorkspace selects</small></div>
           <div class="carrow">▸<small>strict load</small></div>
           <div class="cnode c-svc2"><span class="ref" data-tip="services/local_resources.py — load_local_cluster(path) · load_local_stack(path)">load_local_cluster · load_local_stack</span><small>pydantic, extra=&quot;forbid&quot;</small></div>
           <div class="carrow">▸<small>containment + existence</small></div>
@@ -1161,7 +1160,7 @@
           <div class="sq alt"><div class="who">chart-only entry points</div><div class="what"><span class="ref" data-tip="services/local_resources.py — resolve_chart_target(root, chart, *, charts_dir, local_config) → ResolvedChartTarget"><code>resolve_chart_target</code></span> backs <code>--chart</code>: a bare name falls back to <code>&lt;charts_dir&gt;/&lt;name&gt;</code> when it is not a path in the repository root, and a resolved stack is rejected — <code>--chart must select a chart directory</code></div></div>
         </div>
 
-        <div class="callout good"><b>Defaults and configuration.</b> <span class="ref" data-tip="services/local_resources.py — DEFAULT_LOCAL_CONFIG = Path('.chart-manager/local-cluster.yaml')"><code>DEFAULT_LOCAL_CONFIG</code></span> is <code>.chart-manager/local-cluster.yaml</code> and <span class="ref" data-tip="services/local_resources.py — DEFAULT_STACKS_DIR = Path('stacks')"><code>DEFAULT_STACKS_DIR</code></span> is <code>stacks</code>, resolved relative to the selected config file's own directory. The active value is <code>Settings.local_config</code>, so <code>CHART_MANAGER_LOCAL_CONFIG</code> selects a different environment definition — and its sibling stack directory moves with it. <a href="#services/environment" style="color:var(--green);font-weight:700">→ the provider boundary that consumes it</a></div>
+        <div class="callout good"><b>Defaults and configuration.</b> <code>ChartWorkspace.spec.localCluster</code> selects the repository's LocalCluster resource; without a workspace the legacy default is <code>.chart-manager/local-cluster.yaml</code>. Named stacks remain relative to that resource's sibling <code>stacks/</code> directory. <a href="#services/environment" style="color:var(--green);font-weight:700">→ the provider boundary that consumes it</a></div>
       </div>
 
       <!-- environment -->

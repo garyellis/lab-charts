@@ -27,10 +27,9 @@ from rich.table import Table
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import exit_if_failed as _exit_if_failed
-from chart_manager.cli._container import resolve_chart
+from chart_manager.cli._container import repository_root, resolve_chart
 from chart_manager.cli._options import (
     ProvisionHooksOption,
-    RootOption,
     provision_hooks_enabled,
 )
 from chart_manager.cli.streams import console, narration
@@ -143,7 +142,6 @@ def local_up(
     dry_run: DryRunOption = False,
     run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Create or start a local cluster and converge the chart or stack.
 
@@ -163,6 +161,7 @@ def local_up(
     the apiserver.
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
@@ -192,7 +191,6 @@ def local_down(
     ctx: typer.Context,
     dry_run: DryRunOption = False,
     output: LocalOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Stop the configured local cluster while preserving its state.
 
@@ -202,6 +200,7 @@ def local_down(
 
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    root = repository_root()
     service = _container().development_cluster_service(root, progress=_print_progress)
     if dry_run:
         _render_plan(service.plan_down(DEFAULT_CLUSTER_NAME), output)
@@ -235,7 +234,6 @@ def local_reset(
     dry_run: DryRunOption = False,
     run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Destroy and recreate a local cluster, then converge the chart or stack.
 
@@ -245,6 +243,7 @@ def local_reset(
     after the delete.
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
     service = _container().development_cluster_service(root, progress=_print_progress)
@@ -273,7 +272,6 @@ def local_reset(
 def local_status(
     ctx: typer.Context,
     output: LocalOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Report the local cluster: whether it exists, its releases, and its URLs.
 
@@ -288,6 +286,7 @@ def local_status(
     URLs are the same VirtualService hosts it prints when it finishes.
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
+    root = repository_root()
     status = (
         _container()
         .development_cluster_service(root, progress=_print_progress)

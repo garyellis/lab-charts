@@ -23,7 +23,7 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._options import RootOption
+from chart_manager.cli._container import repository_root
 from chart_manager.cli.streams import console
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
@@ -203,7 +203,6 @@ def plan(
     ] = None,
     for_: PlanForOption = "all",
     output: PlanOutputOption = None,
-    root: RootOption = Path("."),
 ) -> None:
     """Answer "given a change set, what work is selected?".
 
@@ -227,6 +226,7 @@ def plan(
     names `-o table` explicitly for exactly that reason.
     """
     output = output_mod.resolve(output, ctx, allowed=_PLAN_OUTPUTS, console=console)
+    root = repository_root()
     if output == "github" and for_ in {"validate", "publish"}:
         raise typer.BadParameter(
             f"-o github is the cluster-test matrix, which has no '{for_}' projection",

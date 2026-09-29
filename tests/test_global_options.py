@@ -1,20 +1,15 @@
 """The root callback: global options, their precedence, and the `version` command.
 
-Precedence, from design doc 6.5, is:
+Repository-root precedence is:
 
-    flag > CHART_MANAGER_* env > .chart-manager/config.yaml > default
+    CHART_MANAGER_ROOT env > config.yaml > nearest workspace > cwd fallback
 
 It is split across two mechanisms and neither half is obvious, which is why
 each step below is asserted rather than assumed:
 
-  * `Settings` implements `env > config.yaml > default`, via its source
-    ordering. It cannot implement the first step because it never sees argv.
-  * The root callback implements `flag > (whatever Settings resolved)`, and
-    then hands the answer to commands through Click's `default_map` -- NOT by
-    writing to `Settings`, which is frozen (`model_config` `frozen=True`).
-    `default_map` sits *below* the command line in Click's lookup order, so
-    the 18 per-command `--root` flags keep overriding it. That is what makes
-    this callback a non-breaking addition.
+`Settings` implements environment over config-file precedence. Repository
+commands then perform nearest-marker discovery; non-repository commands do
+not. There is deliberately no CLI `--root` spelling.
 
 Also pinned here: the global `-o/--output` reaches commands through
 `ctx.obj` and never through `default_map`, and there is deliberately no
@@ -29,7 +24,7 @@ from pathlib import Path
 
 import pytest
 import typer.main
-from typer.testing import Result
+from typer.testing import CliRunner, Result
 
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
@@ -74,7 +69,7 @@ def _charts(*argv: str) -> Result:
 
 
 # --------------------------------------------------------------------------
-# --root precedence, one step at a time
+# root precedence, one step at a time
 # --------------------------------------------------------------------------
 
 
@@ -87,6 +82,17 @@ def test_root_defaults_to_the_working_directory(
 
     assert result.exit_code == 0
     assert "zeta" in result.stdout
+
+
+def test_non_repository_command_never_discovers_a_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("version must not load repository state")
+
+    monkeypatch.setattr(Settings, "repository_workspace", fail)
+
+    assert cli("version").exit_code == 0
 
 
 def test_config_file_beats_the_default(
@@ -116,53 +122,27 @@ def test_env_beats_the_config_file(
     assert "beta" not in result.stdout
 
 
-def test_flag_beats_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    from_env = _repo_with_chart(tmp_path / "env", "gama")
-    from_flag = _repo_with_chart(tmp_path / "flag", "zeta")
-    monkeypatch.setenv("CHART_MANAGER_ROOT", str(from_env))
+@pytest.mark.parametrize(
+    "argv",
+    [("--root", "/tmp/repo", "chart", "list"), ("chart", "list", "--root", "/tmp/repo")],
+)
+def test_cli_root_option_is_removed(argv: tuple[str, ...]) -> None:
+    result = CliRunner().invoke(main.app, list(argv))
 
-    result = _charts("--root", str(from_flag), "chart", "list")
-
-    assert result.exit_code == 0
-    assert "zeta" in result.stdout
-    assert "gama" not in result.stdout
+    assert result.exit_code == 2
+    assert "No such option: --root" in result.stderr
 
 
-def test_a_commands_own_root_beats_the_global_root(
+def test_environment_root_reaches_a_nested_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The 18 per-command `--root` flags must keep working as overrides.
-
-    This is the property that makes the callback non-breaking. `default_map`
-    is consulted *after* the command line, so a per-command flag wins.
-    """
-    monkeypatch.chdir(tmp_path)
-    global_root = _repo_with_chart(tmp_path / "global", "gama")
-    command_root = _repo_with_chart(tmp_path / "cmd", "zeta")
-
-    result = _charts(
-        "--root", str(global_root), "chart", "list", "--root", str(command_root)
-    )
-
-    assert result.exit_code == 0
-    assert "zeta" in result.stdout
-    assert "gama" not in result.stdout
-
-
-def test_the_global_root_reaches_a_nested_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`default_map` is nested per command name, so depth is a real risk.
-
-    `grafana dashboard lint` sits three levels below the root group. If the
-    map were flat this would silently keep using the working directory.
-    """
+    """A deeply nested repository command uses the same operator override."""
     monkeypatch.chdir(_repo_with_chart(tmp_path / "cwd", "zeta"))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(elsewhere))
 
-    result = cli("--root", str(elsewhere), "grafana", "dashboard", "lint")
+    result = cli("grafana", "dashboard", "lint")
 
     # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
@@ -170,23 +150,18 @@ def test_the_global_root_reaches_a_nested_group(
     assert "no dashboards found" in result.stderr
 
 
-def test_settings_is_never_mutated_to_carry_the_root(
+def test_settings_remains_frozen_while_carrying_the_operator_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The callback threads root through `default_map`, not through Settings.
-
-    Settings is frozen; an implementation that tried to write back would
-    raise. Asserting the frozen config *and* that a `--root` run leaves a
-    freshly built Settings at its default keeps a future refactor from
-    quietly introducing a mutable global.
-    """
+    """Root configuration is source-loaded, never mutated by the CLI."""
     monkeypatch.chdir(tmp_path)
     assert Settings.model_config["frozen"] is True
 
     other = _repo_with_chart(tmp_path / "other", "zeta")
-    assert _charts("--root", str(other), "chart", "list").exit_code == 0
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(other))
+    assert _charts("chart", "list").exit_code == 0
 
-    assert Settings().root == Path(".")
+    assert Settings().root == other
 
 
 def test_an_absent_config_file_is_not_an_error(
@@ -211,9 +186,10 @@ def test_quiet_suppresses_narration_but_not_the_projection(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     root = _repo_with_chart(tmp_path / "repo", "zeta")
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(root))
 
-    loud = _charts("--root", str(root), "grafana", "dashboard", "lint")
-    quiet = _charts("-q", "--root", str(root), "grafana", "dashboard", "lint")
+    loud = _charts("grafana", "dashboard", "lint")
+    quiet = _charts("-q", "grafana", "dashboard", "lint")
 
     assert "no dashboards found" in loud.stderr
     assert quiet.stderr == ""
@@ -316,35 +292,17 @@ def test_there_is_a_global_output_flag() -> None:
     assert result.exit_code == 0
 
 
-def test_the_global_output_travels_on_ctx_obj_and_not_through_default_map() -> None:
-    """`--root` is propagated by parameter name; `-o` must not be.
-
-    `cli/main.global_options` seeds `ctx.default_map` for `--root`, which
-    Click looks up *below* the command line but *above* the declared default.
-    Seeding `output` the same way would hand every command's `-o` the global
-    value in place of `None`, and `None`-means-not-given is what
-    `cli/output.resolve` builds its `command -o > global -o > auto`
-    precedence on. The flag reaches commands through `ctx.obj` instead.
-
-    Checked against the whole nested tree rather than its top level:
-    `_root_default_map` returns `{"grafana": {"dashboard": {...}}}`, so a
-    top-level `"output" not in ...` would pass no matter what.
-    """
+def test_root_is_not_exposed_by_any_cli_command() -> None:
+    """Repository addressing is environment/config/discovery only."""
     root_command = typer.main.get_command(main.app)
 
-    def _keys(mapping: dict[str, object]) -> set[str]:
-        found: set[str] = set()
-        for key, value in mapping.items():
-            if isinstance(value, dict):
-                found |= _keys(value)
-            else:
-                found.add(key)
+    def _root_parameters(command) -> list[str]:  # type: ignore[no-untyped-def]
+        found = [param.name for param in command.params if param.name == "root"]
+        for subcommand in (getattr(command, "commands", None) or {}).values():
+            found.extend(_root_parameters(subcommand))
         return found
 
-    seeded = main._root_default_map(root_command, Path(".")) or {}
-    assert _keys(seeded) == {"root"}, (
-        "the global callback may seed only `root` into default_map"
-    )
+    assert _root_parameters(root_command) == []
 
 
 def test_no_command_reads_output_as_a_file_path() -> None:

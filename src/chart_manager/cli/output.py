@@ -54,17 +54,13 @@ into a file called `json` -- silently, exiting 0. The command now takes
 so by name when a rejected token looks like a path, because the old spelling
 lives on in muscle memory and in scripts.
 
-Why the global `-o` is not propagated through `default_map`
------------------------------------------------------------
-`cli/main.py` hands the global `--root` down with a nested Click
-`default_map` keyed by parameter *name*. Doing the same for `output` would
-seed every parameter that happens to be called `output`, whatever it means
-there, and would defeat this module's precedence rule: `default_map` sits
-below the command line but *above* the declared default, so a command's own
-`-o` would arrive as the global value rather than as `None`, and "not given"
-would become indistinguishable from "given globally".
-
-So the global travels on `ctx.obj` instead, and only commands that opt in by
+Why the global `-o` travels through `ctx.obj`
+---------------------------------------------
+The global format must reach only commands that implement a projection.
+Seeding a Click `default_map` by parameter name would reach every parameter
+that happens to be called `output` and would erase the distinction between a
+command value and a global fallback. The global therefore travels on
+`ctx.obj`, and only commands that opt in by
 calling `resolve()` ever see it -- by construction rather than by an
 exclusion list someone has to remember to update.
 """
@@ -238,8 +234,7 @@ def resolve(
 ) -> str:
     """Resolve the output mode for one command invocation.
 
-    Precedence is `command -o` > global `-o` > `auto`, which is the same
-    shape as the global `--root` and its per-command override.
+    Precedence is `command -o` > global `-o` > `auto`.
 
     `console` is the stream the projection will land on; `auto` probes it for
     `is_terminal`. Callers that already hold their stdout console pass it so
