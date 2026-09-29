@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import re
 import stat
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from ruamel.yaml import YAML
-
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.errors import YamlError
+from chart_manager.plumbing.yaml_files import (
+    edit_yaml_documents,
+    load_yaml_file,
+    parse_yaml_mapping,
+)
 from chart_manager.services.upgrader.errors import UpgradeError
 from chart_manager.services.upgrader.models import (
     FinalizeRequest,
@@ -145,15 +148,11 @@ class UpgradeFinalizer:
             request.dry_run,
         )
         baseline_text = self._baseline.read(root, request.baseline_ref, chart_rel / "Chart.yaml")
-        yaml = YAML()
-        yaml.preserve_quotes = True
         try:
-            baseline_doc = yaml.load(baseline_text)
-            current = yaml.load((chart_path / "Chart.yaml").read_text(encoding="utf-8"))
-        except Exception as exc:
+            baseline_doc = parse_yaml_mapping(baseline_text, source="baseline Chart.yaml")
+            current = load_yaml_file(chart_path / "Chart.yaml")
+        except YamlError as exc:
             raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
-        if not isinstance(baseline_doc, Mapping) or not isinstance(current, MutableMapping):
-            raise UpgradeError("current and baseline Chart.yaml must contain mappings")
         baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
         current_version = _semver(current.get("version"), source="current wrapper version")
         updates = tuple(
@@ -223,10 +222,15 @@ class UpgradeFinalizer:
         changelog_changed = new_changelog != old_changelog
         if not request.dry_run:
             if chart_changed:
-                current["version"] = target
-                output = io.StringIO()
-                yaml.dump(current, output)
-                chart_file.write_text(output.getvalue(), encoding="utf-8")
+                def update_version(documents: list[Any]) -> None:
+                    if len(documents) != 1 or not isinstance(documents[0], dict):
+                        raise YamlError("current Chart.yaml must contain one mapping document")
+                    documents[0]["version"] = target
+
+                try:
+                    edit_yaml_documents(chart_file, update_version)
+                except YamlError as exc:
+                    raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
             if changelog_changed:
                 changelog_file.write_text(new_changelog, encoding="utf-8")
         files = tuple(

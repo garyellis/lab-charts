@@ -15,7 +15,6 @@ dependencies = [
   "packaging>=24",
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
-  "pyyaml>=6.0",
   "rich>=13.9",
   "ruamel-yaml>=0.18",
   "typer>=0.15",
@@ -27,7 +26,6 @@ dev = [
   "pytest-cov>=6.0",
   "ruff>=0.8",
   "mypy>=1.13",
-  "types-PyYAML>=6.0",
   "vulture>=2.13",
   "pip-audit>=2.7",
 ]

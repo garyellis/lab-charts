@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
-
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_documents
 
 _YAML_SUFFIXES = (".yaml", ".yml")
 
@@ -22,15 +20,6 @@ class HelmReleaseMatch:
     name: str
     namespace: str | None
     current_version: str | None
-
-
-def _yaml_loader() -> YAML:
-    """Build a read-only YAML loader."""
-    # `safe`, not `rt`: `scan` reads five scalars and discards the tree, and
-    # it does that for every YAML file under the root. Round-trip parsing
-    # buys comment and quoting fidelity nothing here consumes, at roughly an
-    # order of magnitude the cost. `editor.py` is where `rt` is load-bearing.
-    return YAML(typ="safe")
 
 
 def is_helmrelease(doc: Any) -> bool:
@@ -81,12 +70,11 @@ def scan(path: Path, *, chart_name: str) -> list[HelmReleaseMatch]:
     """Find HelmRelease docs under `path` whose `.spec.chart.spec.chart == chart_name`."""
     if not path.exists():
         raise ChartManagerError(f"scan path does not exist: {path}")
-    yaml = _yaml_loader()
     matches: list[HelmReleaseMatch] = []
     for file_path in _iter_yaml_files(path):
         try:
-            docs = list(yaml.load_all(file_path.read_text()))
-        except YAMLError as exc:
+            docs = load_yaml_documents(file_path)
+        except YamlError as exc:
             raise ChartManagerError(f"failed to parse {file_path}: {exc}") from exc
         for index, doc in enumerate(docs):
             if not is_helmrelease(doc):

@@ -141,6 +141,35 @@ spec:
     assert raw.readiness.workloads_ready.namespace == "platform"
 
 
+def test_cluster_loading_rejects_malformed_chart_metadata_before_execution(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path, "kind.yaml", "kind: Cluster\n")
+    _chart(tmp_path, "charts/raw", name="raw", lifecycle=False)
+    _write(
+        tmp_path,
+        "charts/raw/Chart.yaml",
+        "apiVersion: v2\nname: raw\nversion: 0.1.0\ndependencies: invalid\n",
+    )
+    _write(
+        tmp_path,
+        ".chart-manager/local-cluster.yaml",
+        """
+apiVersion: chartmanager.io/v1alpha1
+kind: LocalCluster
+metadata: {name: local}
+spec:
+  cluster: {config: kind.yaml}
+  bootstrap:
+    releases:
+      - {type: local, name: raw, chart: charts/raw, namespace: default, values: [], timeout: 5m}
+""",
+    )
+
+    with pytest.raises(SpecError, match="field 'dependencies' must be a list"):
+        LocalResourceLoader(tmp_path).load_cluster()
+
+
 def test_stack_accepts_lifecycle_oci_and_https_repo_releases(tmp_path: Path) -> None:
     stack = _write(
         tmp_path,

@@ -8,10 +8,10 @@ import tarfile
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 
 pytestmark = pytest.mark.integration
 
@@ -34,9 +34,9 @@ def _stage_without_dependencies(chart_dir: Path, staging_root: Path) -> Path:
     shutil.rmtree(staged / "charts", ignore_errors=True)
 
     metadata_path = staged / "Chart.yaml"
-    metadata = yaml.safe_load(metadata_path.read_text())
+    metadata = parse_yaml(metadata_path.read_text())
     if metadata.pop("dependencies", None) is not None:
-        metadata_path.write_text(yaml.safe_dump(metadata, sort_keys=False))
+        metadata_path.write_text(dump_yaml(metadata))
     return staged
 
 
@@ -75,5 +75,5 @@ def test_every_production_chart_package_contains_chart_lifecycle(
             assert len(packaged_configs) == 1, archive.name
             config = package.extractfile(packaged_configs[0])
             assert config is not None
-            document = yaml.safe_load(config)
+            document = parse_yaml(config)
         assert document["apiVersion"] == API_VERSION, archive.name

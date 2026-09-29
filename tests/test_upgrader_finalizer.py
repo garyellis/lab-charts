@@ -25,7 +25,10 @@ def _write_chart(tmp_path: Path, *, version: str = "1.2.3", dependency: str = "2
     chart = tmp_path / "charts" / "demo"
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text(
+        "---\n"
         "apiVersion: v2\n"
+        "annotations:\n"
+        '  example.com/long: "This deliberately long annotation stays on one line while only the wrapper version changes during finalization and review."\n'
         "name: demo\n"
         "# wrapper stays independent\n"
         f'version: "{version}"\n'
@@ -46,7 +49,7 @@ def _request(tmp_path: Path, chart: Path, updates: tuple[UpdateMetadata, ...]) -
     )
 
 
-def test_major_image_update_bumps_wrapper_major_and_preserves_yaml(tmp_path: Path) -> None:
+def test_major_image_update_changes_only_the_quoted_wrapper_version(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("api", "2.9.0", "3.0.0", datasource="docker")
@@ -54,7 +57,7 @@ def test_major_image_update_bumps_wrapper_major_and_preserves_yaml(tmp_path: Pat
     written = (chart / "Chart.yaml").read_text(encoding="utf-8")
     assert result.version == "2.0.0"
     assert result.bump == "major"
-    assert '# wrapper stays independent\nversion: "2.0.0"' in written
+    assert written == baseline.replace('version: "1.2.3"', 'version: "2.0.0"', 1)
     assert (chart / "changelog.md").read_text(encoding="utf-8") == (
         "## 2.0.0\n\n- api: 2.9.0 -> 3.0.0\n\n"
     )

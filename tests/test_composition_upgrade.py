@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 from chart_manager.composition import Container
+from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.services.upgrader import FinalizeRequest, UpgradeRequest
 from tests.conftest import FakeCommandRunner, Reply
 
@@ -24,7 +23,7 @@ def _chart(root: Path) -> Path:
     chart = root / "charts" / "loki"
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text(
-        yaml.safe_dump({"apiVersion": "v2", "name": "loki", "version": "1.2.3"}),
+        dump_yaml({"apiVersion": "v2", "name": "loki", "version": "1.2.3"}),
         encoding="utf-8",
     )
     return chart
@@ -65,7 +64,7 @@ def test_upgrade_service_uses_shared_runner_for_git_and_renovate(
 def test_finalizer_baseline_read_uses_shared_runner(tmp_path: Path) -> None:
     chart = _chart(tmp_path)
     runner = FakeCommandRunner(
-        stdout=yaml.safe_dump({"apiVersion": "v2", "name": "loki", "version": "1.2.3"})
+        stdout=dump_yaml({"apiVersion": "v2", "name": "loki", "version": "1.2.3"})
     )
 
     result = (

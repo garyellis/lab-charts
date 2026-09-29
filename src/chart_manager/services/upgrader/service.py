@@ -8,9 +8,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from ruamel.yaml import YAML, YAMLError
-
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.yaml_files import parse_yaml_mapping
 from chart_manager.services.upgrader.errors import UpgradeError
 from chart_manager.services.upgrader.models import (
     UpgradePlan,
@@ -300,10 +299,8 @@ class UpgradeService:
 def _chart_version(text: str) -> str | None:
     """Return the wrapper version from a Chart.yaml document, if it has one."""
     try:
-        document = YAML(typ="safe").load(text)
-    except YAMLError:
-        return None
-    if not isinstance(document, Mapping):
+        document = parse_yaml_mapping(text, source="proposed Chart.yaml")
+    except YamlError:
         return None
     version = document.get("version")
     return version if isinstance(version, str) else None

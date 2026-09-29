@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import yaml
-
 from chart_manager.domain.workspace import RepositoryWorkspace
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
     ImpactReasonCode,
@@ -42,7 +41,7 @@ def _service(root: Path) -> LifecycleImpactService:
 
 
 def _with_validation(chart: Path, *, environments: tuple[str, ...] = ("dev",)) -> None:
-    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle = parse_yaml((chart / "chart-lifecycle.yaml").read_text())
     lifecycle["spec"]["validation"] = {
         "releaseName": chart.name,
         "namespaceTemplate": "lab-${env}",
@@ -60,7 +59,7 @@ def _with_validation(chart: Path, *, environments: tuple[str, ...] = ("dev",)) -
     }
     for environment in environments:
         (chart / f"values-{environment}.yaml").write_text("{}\n")
-    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
+    (chart / "chart-lifecycle.yaml").write_text(dump_yaml(lifecycle))
 
 
 def _with_dependent_test(
@@ -69,11 +68,11 @@ def _with_dependent_test(
     dependent_chart: str,
     dependent_profile: str,
 ) -> None:
-    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle = parse_yaml((chart / "chart-lifecycle.yaml").read_text())
     lifecycle["spec"]["clusterTest"]["dependentTests"] = [
         {"chart": dependent_chart, "profile": dependent_profile}
     ]
-    (chart / "chart-lifecycle.yaml").write_text(yaml.safe_dump(lifecycle))
+    (chart / "chart-lifecycle.yaml").write_text(dump_yaml(lifecycle))
 
 
 def test_ordinary_chart_change_selects_validation_cluster_and_declared_dependent(

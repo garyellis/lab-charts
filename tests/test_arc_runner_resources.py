@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-import yaml
+from chart_manager.plumbing.yaml_files import parse_yaml
 
 
 def test_arc_runner_has_ci_sized_cpu_and_memory() -> None:
     root = Path(__file__).resolve().parents[1]
-    values = yaml.safe_load((root / "charts/arc-runner-set/values.yaml").read_text())
+    values = parse_yaml((root / "charts/arc-runner-set/values.yaml").read_text())
     runner = values["gha-runner-scale-set"]["template"]["spec"]["containers"][0]
 
     assert runner["name"] == "runner"

@@ -13,14 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
 from chart_manager.domain.charts import (
     ChartDependency,
     ChartRepository,
     load_chart_metadata,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import ChartManagerError, SpecError, YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_file, parse_yaml_mapping
 from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml
@@ -136,10 +135,8 @@ def deps_are_fresh(chart_path: Path) -> bool:
 def _load_lock_dependencies(lock_path: Path) -> tuple[ChartDependency, ...] | None:
     """Strictly parse the dependency identity fields in Chart.lock."""
     try:
-        data = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
-    except (OSError, UnicodeError, yaml.YAMLError):
-        return None
-    if not isinstance(data, dict):
+        data = load_yaml_file(lock_path)
+    except YamlError:
         return None
     dependencies = data.get("dependencies")
     if not isinstance(dependencies, list):
@@ -288,7 +285,7 @@ def _packaged_chart_identity(path: Path) -> _DependencyIdentity | None:
                 if len(raw) > _MAX_CHART_YAML_BYTES:
                     return None
                 candidates.append(_identity_from_chart_yaml(raw))
-    except (OSError, EOFError, tarfile.TarError, UnicodeError, yaml.YAMLError):
+    except (OSError, EOFError, tarfile.TarError, YamlError):
         return None
 
     if len(candidates) != 1:
@@ -297,10 +294,8 @@ def _packaged_chart_identity(path: Path) -> _DependencyIdentity | None:
 
 
 def _identity_from_chart_yaml(raw: bytes) -> _DependencyIdentity:
-    data = yaml.safe_load(raw)
-    if not isinstance(data, dict):
-        raise yaml.YAMLError("packaged Chart.yaml must contain a mapping")
+    data = parse_yaml_mapping(raw, source="packaged Chart.yaml")
     identity = _metadata_identity(data.get("name"), data.get("version"))
     if identity is None:
-        raise yaml.YAMLError("packaged Chart.yaml has invalid name or version")
+        raise YamlError("packaged Chart.yaml has invalid name or version")
     return identity

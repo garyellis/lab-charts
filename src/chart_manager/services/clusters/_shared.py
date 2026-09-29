@@ -18,19 +18,15 @@ from pathlib import Path
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, OciChartRelease
+from chart_manager.domain.charts import load_chart_name
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.yaml_files import load_yaml_file
 
 
 def chart_name(root: Path, chart_relative: Path) -> str:
     """The `name:` a repository-relative chart directory declares."""
-    document = load_yaml_file(root / chart_relative / "Chart.yaml")
-    name = document.get("name")
-    if not isinstance(name, str):
-        raise ChartManagerError(f"{chart_relative}/Chart.yaml must define a string name")
-    return name
+    return load_chart_name(root / chart_relative / "Chart.yaml")
 
 
 def lifecycle_install_plan(

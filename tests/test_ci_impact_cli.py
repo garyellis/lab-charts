@@ -17,10 +17,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from chart_manager.cli import plan as plan_cli
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
     ClusterTestImpact,
@@ -228,6 +228,6 @@ def test_impact_yaml_preserves_machine_envelope(
     )
 
     assert result.exit_code == 0
-    payload = yaml.safe_load(result.stdout)
+    payload = parse_yaml(result.stdout)
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["cluster_test_matrix"][0]["profile"] == "minimal"
