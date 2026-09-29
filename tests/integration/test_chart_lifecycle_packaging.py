@@ -75,5 +75,5 @@ def test_every_production_chart_package_contains_chart_lifecycle(
             assert len(packaged_configs) == 1, archive.name
             config = package.extractfile(packaged_configs[0])
             assert config is not None
-            document = parse_yaml(config)
+            document = parse_yaml(config.read(), source=packaged_configs[0].name)
         assert document["apiVersion"] == API_VERSION, archive.name
