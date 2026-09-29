@@ -35,12 +35,15 @@ from pathlib import Path
 import re
 import sys
 
-import yaml
+from ruamel.yaml import YAML
+
+yaml = YAML(typ="safe")
+
 
 def load_documents(path: str) -> list[dict]:
     return [
         document
-        for document in yaml.safe_load_all(Path(path).read_text())
+        for document in yaml.load_all(Path(path).read_text())
         if document
     ]
 

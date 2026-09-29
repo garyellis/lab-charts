@@ -18,13 +18,15 @@ from pathlib import Path
 import re
 import sys
 
-import yaml
+from ruamel.yaml import YAML
+
+yaml = YAML(typ="safe")
 
 
 def resources(render_path: str, kind: str) -> list[dict]:
     return [
         document
-        for document in yaml.safe_load_all(Path(render_path).read_text())
+        for document in yaml.load_all(Path(render_path).read_text())
         if document and document.get("kind") == kind
     ]
 

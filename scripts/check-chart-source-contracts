@@ -46,7 +46,7 @@ prepare_locked_dependencies() {
         ;;
     esac
   done < <(
-    awk '$1 == "repository:" {gsub(/^['\''\"]|['\''\"]$/, "", $2); print $2}' \
+    awk '$1 == "repository:" {gsub(/^['\''"]|['\''"]$/, "", $2); print $2}' \
       "$chart_root/Chart.lock" | LC_ALL=C sort -u
   )
 
