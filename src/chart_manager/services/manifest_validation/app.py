@@ -47,6 +47,11 @@ from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.services.kubeconform_schemas.models import SchemaScope
+from chart_manager.services.kubeconform_schemas.runtime import (
+    KubeconformSchemaRuntime,
+    load_kubeconform_schema_runtime,
+)
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
@@ -82,8 +87,6 @@ from chart_manager.services.manifest_validation.validators import (
     validate_registry,
 )
 from chart_manager.services.manifest_validation.wire import to_json
-from chart_manager.services.schemas.models import SchemaScope
-from chart_manager.services.schemas.runtime import SchemaRuntime, load_schema_runtime
 from chart_manager.settings import (
     DEFAULT_CHARTS_DIR,
     validate_charts_dir,
@@ -208,7 +211,10 @@ class RunnerSpec:
 
 
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
-SchemaRuntimeFactory = Callable[[RepositoryWorkspace, bool, int], SchemaRuntime]
+KubeconformSchemaRuntimeFactory = Callable[
+    [RepositoryWorkspace, bool, int],
+    KubeconformSchemaRuntime,
+]
 
 
 # --- the app ---------------------------------------------------------------
@@ -238,7 +244,7 @@ class ManifestValidationService:
         validation_fanout: tuple[str, ...] = (),
         workspace: RepositoryWorkspace | None = None,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
-        schema_runtime_factory: SchemaRuntimeFactory | None = None,
+        schema_runtime_factory: KubeconformSchemaRuntimeFactory | None = None,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self.workspace = workspace
@@ -265,7 +271,7 @@ class ManifestValidationService:
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
         self._schema_runtime_factory = schema_runtime_factory or (
-            lambda workspace, _offline, _workers: load_schema_runtime(workspace)
+            lambda workspace, _offline, _workers: load_kubeconform_schema_runtime(workspace)
         )
 
     # --- spec-driven run ---------------------------------------------------
@@ -360,7 +366,7 @@ class ManifestValidationService:
         # Load and verify the immutable generation once for the whole run.
         # Every row then receives only local templates from this snapshot;
         # no validator process can resolve or download a schema on its own.
-        schema_runtime: SchemaRuntime | None = None
+        schema_runtime: KubeconformSchemaRuntime | None = None
         if workspace.validation is not None and "schema" in request.phases and any(
             build.targets[row.chart].spec.validators.kubeconform for row in rows
         ):

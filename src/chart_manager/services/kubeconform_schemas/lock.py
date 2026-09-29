@@ -11,8 +11,8 @@ from pydantic import ValidationError
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.yaml_files import dump_yaml, load_yaml_file
-from chart_manager.services.schemas.errors import SchemaLockError
-from chart_manager.services.schemas.models import SchemaLock
+from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaLockError
+from chart_manager.services.kubeconform_schemas.models import SchemaLock
 
 
 def load_schema_lock(path: Path) -> SchemaLock:
@@ -21,7 +21,7 @@ def load_schema_lock(path: Path) -> SchemaLock:
         document = load_yaml_file(path)
         return SchemaLock.model_validate(document)
     except (OSError, ValidationError, ValueError, YamlError) as exc:
-        raise SchemaLockError(f"invalid schema lock {path}: {exc}") from exc
+        raise KubeconformSchemaLockError(f"invalid schema lock {path}: {exc}") from exc
 
 
 def serialize_schema_lock(lock: SchemaLock) -> str:
@@ -29,7 +29,7 @@ def serialize_schema_lock(lock: SchemaLock) -> str:
     try:
         return dump_yaml(lock.model_dump(mode="json", by_alias=True, exclude_none=True))
     except YamlError as exc:
-        raise SchemaLockError(f"failed to serialize schema lock: {exc}") from exc
+        raise KubeconformSchemaLockError(f"failed to serialize schema lock: {exc}") from exc
 
 
 def write_schema_lock_atomic(path: Path, lock: SchemaLock) -> None:
@@ -48,7 +48,9 @@ def write_schema_lock_atomic(path: Path, lock: SchemaLock) -> None:
         temporary = None
         _fsync_directory(path.parent)
     except OSError as exc:
-        raise SchemaLockError(f"failed to atomically write schema lock {path}: {exc}") from exc
+        raise KubeconformSchemaLockError(
+            f"failed to atomically write schema lock {path}: {exc}"
+        ) from exc
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

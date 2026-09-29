@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from chart_manager.plumbing.yaml_files import load_yaml_documents
-from chart_manager.services.schemas.errors import SchemaIntegrityError
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaIntegrityError,
+)
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     SchemaRequirement,
     SchemaScope,
@@ -63,7 +65,7 @@ def scan_rendered_directory(
     """Read all YAML documents under one rendered chart/environment directory."""
     root = directory.resolve()
     if not root.is_dir():
-        raise SchemaIntegrityError(f"rendered directory does not exist: {root}")
+        raise KubeconformSchemaIntegrityError(f"rendered directory does not exist: {root}")
     resources: list[RenderedResource] = []
     for path in sorted(
         candidate
@@ -73,13 +75,15 @@ def scan_rendered_directory(
         try:
             documents = load_yaml_documents(path)
         except Exception as exc:
-            raise SchemaIntegrityError(f"failed to inventory rendered YAML {path}: {exc}") from exc
+            raise KubeconformSchemaIntegrityError(
+                f"failed to inventory rendered YAML {path}: {exc}"
+            ) from exc
         for index, raw in enumerate(documents):
             for document in _resource_documents(raw, path=path, document_index=index):
                 try:
                     gvk = GroupVersionKind.from_document(document)
                 except (TypeError, ValueError) as exc:
-                    raise SchemaIntegrityError(
+                    raise KubeconformSchemaIntegrityError(
                         f"invalid Kubernetes resource in {path} document {index + 1}: {exc}"
                     ) from exc
                 resources.append(
@@ -101,7 +105,8 @@ def scan_rendered_directory(
                 gvk=resource.gvk,
                 scope=scope,
                 allow_missing=(
-                    resource.gvk.kind in allow_missing or resource.gvk.key in allow_missing
+                    resource.gvk.kind in allow_missing
+                    or resource.gvk.key in allow_missing
                     # yannh/kubernetes-json-schema publishes CRD component
                     # definitions but no top-level CustomResourceDefinition
                     # schema. Keep the exception explicit in the lock so the
@@ -129,13 +134,13 @@ def _resource_documents(
     if raw is None:
         return ()
     if not isinstance(raw, dict):
-        raise SchemaIntegrityError(
+        raise KubeconformSchemaIntegrityError(
             f"rendered YAML {path} document {document_index + 1} must be a mapping"
         )
     if raw.get("kind") == "List" and isinstance(raw.get("items"), list):
         items = raw["items"]
         if any(not isinstance(item, dict) for item in items):
-            raise SchemaIntegrityError(
+            raise KubeconformSchemaIntegrityError(
                 f"Kubernetes List in {path} document {document_index + 1} "
                 "contains a non-mapping item"
             )

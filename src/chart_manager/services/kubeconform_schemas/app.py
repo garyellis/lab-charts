@@ -7,48 +7,48 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
-from chart_manager.integrations.schema_sources import SchemaSourceClient
+from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaIntegrityError,
+)
+from chart_manager.services.kubeconform_schemas.inventory import (
+    SchemaInventory,
+    scan_rendered_directory,
+)
+from chart_manager.services.kubeconform_schemas.models import (
+    AuthoredSchemaPolicy,
+    MaterializedSchema,
+    SchemaRequirement,
+    SchemaScope,
+)
+from chart_manager.services.kubeconform_schemas.source import KubeconformSchemaSource
+from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+from chart_manager.services.kubeconform_schemas.sync import (
+    KubeconformSchemaSyncRequest,
+    KubeconformSchemaSyncResult,
+    KubeconformSchemaSyncService,
+)
 from chart_manager.services.manifest_validation.app import ManifestValidationService
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import (
     ManifestValidationTarget,
     RunRequest,
 )
-from chart_manager.services.schemas.crd import generate_crd_schemas
-from chart_manager.services.schemas.errors import (
-    SchemaConfigurationError,
-    SchemaIntegrityError,
-)
-from chart_manager.services.schemas.inventory import (
-    SchemaInventory,
-    scan_rendered_directory,
-)
-from chart_manager.services.schemas.models import (
-    AuthoredSchemaPolicy,
-    MaterializedSchema,
-    SchemaRequirement,
-    SchemaScope,
-)
-from chart_manager.services.schemas.store import SchemaStore
-from chart_manager.services.schemas.sync import (
-    SchemaSyncRequest,
-    SchemaSyncResult,
-    SchemaSyncService,
-)
 
 
 @dataclass(frozen=True)
-class RepositorySchemaSyncResult:
+class RepositoryKubeconformSchemaSyncResult:
     """One complete repository inventory and its published store generation."""
 
-    sync: SchemaSyncResult
+    sync: KubeconformSchemaSyncResult
     rows: int
     required: int
     generated: int
     local: int
 
 
-class RepositorySchemaService:
+class RepositoryKubeconformSchemaService:
     """Render every validation row and publish one complete schema generation."""
 
     def __init__(
@@ -56,7 +56,7 @@ class RepositorySchemaService:
         *,
         workspace: RepositoryWorkspace,
         validation: ManifestValidationService,
-        sync: SchemaSyncService,
+        sync: KubeconformSchemaSyncService,
     ) -> None:
         self.workspace = workspace
         self.validation = validation
@@ -68,11 +68,11 @@ class RepositorySchemaService:
         update: bool = False,
         offline: bool = False,
         workers: int = 0,
-    ) -> RepositorySchemaSyncResult:
+    ) -> RepositoryKubeconformSchemaSyncResult:
         """Build the complete inventory before advancing any active generation."""
         policy = self.workspace.validation
         if policy is None:
-            raise SchemaConfigurationError(
+            raise KubeconformSchemaConfigurationError(
                 f"{self.workspace.marker} has no spec.validation; configure schema policy "
                 "before running `chart-manager schemas sync --update`"
             )
@@ -83,12 +83,14 @@ class RepositorySchemaService:
             charts_dir=self.workspace.charts_dir,
         )
         if catalog.errors:
-            raise SchemaConfigurationError(
+            raise KubeconformSchemaConfigurationError(
                 "cannot build schema inventory: " + "; ".join(catalog.errors)
             )
         targets = catalog.by_name()
         if not targets:
-            raise SchemaConfigurationError("no enabled chart validation targets were found")
+            raise KubeconformSchemaConfigurationError(
+                "no enabled chart validation targets were found"
+            )
 
         with TemporaryDirectory(prefix="chart-manager-schema-render-") as temporary:
             render_root = Path(temporary)
@@ -111,7 +113,7 @@ class RepositorySchemaService:
             if outcome.result.spec_errors:
                 failures.extend(outcome.result.spec_errors)
             if failures:
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     "schema inventory render failed: " + "; ".join(failures)
                 )
 
@@ -119,7 +121,7 @@ class RepositorySchemaService:
             for row in outcome.result.rows:
                 target = targets.get(row.row.chart)
                 if target is None:
-                    raise SchemaIntegrityError(
+                    raise KubeconformSchemaIntegrityError(
                         f"rendered schema row has no catalog target: {row.row.chart}"
                     )
                 inventories.append(
@@ -135,16 +137,14 @@ class RepositorySchemaService:
 
             inventory = SchemaInventory.merge(*inventories)
             generated = (
-                generate_crd_schemas(inventory.crds)
-                if policy.schemas.generate_from_crds
-                else ()
+                generate_crd_schemas(inventory.crds) if policy.schemas.generate_from_crds else ()
             )
             local = _materialize_local_schemas(
                 self.workspace.root,
                 inventory.requirements,
                 targets,
             )
-            request = SchemaSyncRequest(
+            request = KubeconformSchemaSyncRequest(
                 workspace=workspace_name,
                 policy=AuthoredSchemaPolicy(
                     kubernetes_version=policy.kubernetes_version,
@@ -160,7 +160,7 @@ class RepositorySchemaService:
             )
             synchronized = self.sync_service.sync(request)
 
-        return RepositorySchemaSyncResult(
+        return RepositoryKubeconformSchemaSyncResult(
             sync=synchronized,
             rows=len(outcome.result.rows),
             required=len(inventory.requirements),
@@ -200,7 +200,7 @@ def _materialize_local_schemas(
             )
             previous = materialized.get(key)
             if previous is not None and previous.content != artifact.content:
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     f"conflicting local schemas for {requirement.gvk.key} "
                     f"in {requirement.scope.key}"
                 )
@@ -224,32 +224,35 @@ def _expand_schema_template(
     return Path(expanded)
 
 
-def build_repository_schema_service(
+def build_repository_kubeconform_schema_service(
     *,
     workspace: RepositoryWorkspace,
     validation: ManifestValidationService,
-    source_client: SchemaSourceClient,
+    source: KubeconformSchemaSource,
     cache_root: Path | None = None,
-) -> RepositorySchemaService:
+) -> RepositoryKubeconformSchemaService:
     """Compose the high-level service without importing adapters into the CLI."""
-    store = SchemaStore(_require_workspace_name(workspace), cache_root=cache_root)
-    return RepositorySchemaService(
+    store = KubeconformSchemaStore(
+        _require_workspace_name(workspace),
+        cache_root=cache_root,
+    )
+    return RepositoryKubeconformSchemaService(
         workspace=workspace,
         validation=validation,
-        sync=SchemaSyncService(store, source_client),
+        sync=KubeconformSchemaSyncService(store, source),
     )
 
 
 def _require_workspace_name(workspace: RepositoryWorkspace) -> str:
     if not workspace.name:
-        raise SchemaConfigurationError(
+        raise KubeconformSchemaConfigurationError(
             f"{workspace.marker} must declare metadata.name before schemas can be synchronized"
         )
     return workspace.name
 
 
 __all__ = [
-    "RepositorySchemaService",
-    "RepositorySchemaSyncResult",
-    "build_repository_schema_service",
+    "RepositoryKubeconformSchemaService",
+    "RepositoryKubeconformSchemaSyncResult",
+    "build_repository_kubeconform_schema_service",
 ]

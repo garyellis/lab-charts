@@ -6,6 +6,7 @@ services/manifest_validation/models) because they're integration-local: the rest
 the pipeline consumes them via the schema phase, which collapses the
 report into a PhaseResult.
 """
+
 from __future__ import annotations
 
 import json
@@ -117,8 +118,7 @@ class Kubeconform:
             parsed = urlsplit(location)
             if not location.strip() or location == "default" or parsed.scheme or parsed.netloc:
                 raise ExternalCommandError(
-                    "kubeconform schema locations must be local paths, "
-                    f"got {location!r}"
+                    f"kubeconform schema locations must be local paths, got {location!r}"
                 )
         skips = skip_kinds or []
 
@@ -193,3 +193,11 @@ def _normalize_status(raw: str) -> ResourceStatus:
         _log.warning("kubeconform returned unknown status %r; bucketing as 'error'", raw)
         return "error"
     return normalized
+
+
+__all__ = [
+    "Kubeconform",
+    "KubeconformReport",
+    "ResourceResult",
+    "ResourceStatus",
+]

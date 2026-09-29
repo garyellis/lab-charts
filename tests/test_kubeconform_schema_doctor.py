@@ -8,9 +8,9 @@ from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
-from chart_manager.services.schemas.doctor import SchemaDoctor
-from chart_manager.services.schemas.lock import write_schema_lock_atomic
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
+from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     LockedSchemaPolicy,
     RepositoryPin,
@@ -20,7 +20,7 @@ from chart_manager.services.schemas.models import (
     build_lock,
     content_digest,
 )
-from chart_manager.services.schemas.store import SchemaStore
+from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
 
 _CONTENT = b'{"type":"object"}\n'
 
@@ -89,7 +89,7 @@ def _write_lock(root: Path, lock) -> Path:
     return path
 
 
-def _by_name(doctor: SchemaDoctor):
+def _by_name(doctor: KubeconformSchemaDoctor):
     return {check.name: check for check in doctor.preflight()}
 
 
@@ -100,14 +100,17 @@ def test_ready_generation_reports_policy_lock_coverage_and_offline_readiness(
     lock = _lock()
     lock_path = _write_lock(tmp_path, lock)
     cache_root = tmp_path / "cache"
-    generation = SchemaStore("lab-charts", cache_root=cache_root).generation_path(lock)
+    generation = KubeconformSchemaStore(
+        "lab-charts",
+        cache_root=cache_root,
+    ).generation_path(lock)
     schema = generation / "kubernetes/apps/deployment_v1.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(_CONTENT)
     before_lock = lock_path.read_bytes()
     before_schema = schema.read_bytes()
 
-    checks = _by_name(SchemaDoctor(workspace, cache_root=cache_root))
+    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))
 
     assert checks["schema-policy"].status is CheckStatus.OK
     assert checks["schema-policy"].data == {
@@ -154,16 +157,14 @@ def test_missing_generation_is_environmental_and_names_missing_gvk(
     _write_lock(tmp_path, lock)
     cache_root = tmp_path / "cache"
 
-    check = _by_name(SchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
+    check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
 
     assert check.status is CheckStatus.FAILED
     assert check.outcome is Outcome.ENVIRONMENT
     assert check.remediation == "run chart-manager schemas sync while online"
     assert check.data["missing"] == 1
     assert check.data["offlineReady"] is False
-    assert check.data["missingGVKs"] == [
-        {"scope": "demo/dev", "gvk": "apps/v1/Deployment"}
-    ]
+    assert check.data["missingGVKs"] == [{"scope": "demo/dev", "gvk": "apps/v1/Deployment"}]
     assert not cache_root.exists(), "doctor must not create the missing store"
 
 
@@ -174,12 +175,15 @@ def test_corrupt_generation_is_a_tool_failure_with_repair_command(
     lock = _lock()
     _write_lock(tmp_path, lock)
     cache_root = tmp_path / "cache"
-    generation = SchemaStore("lab-charts", cache_root=cache_root).generation_path(lock)
+    generation = KubeconformSchemaStore(
+        "lab-charts",
+        cache_root=cache_root,
+    ).generation_path(lock)
     schema = generation / "kubernetes/apps/deployment_v1.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(b"{}")
 
-    check = _by_name(SchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
+    check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
 
     assert check.status is CheckStatus.FAILED
     assert check.outcome is Outcome.TOOL
@@ -198,16 +202,14 @@ def test_uncovered_inventory_is_a_spec_failure_with_update_remediation(
     lock = _lock(with_schema=False)
     _write_lock(tmp_path, lock)
 
-    check = _by_name(
-        SchemaDoctor(workspace, cache_root=tmp_path / "cache")
-    )["schema-store"]
+    check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=tmp_path / "cache"))[
+        "schema-store"
+    ]
 
     assert check.status is CheckStatus.FAILED
     assert check.outcome is Outcome.SPEC
     assert check.data["uncovered"] == 1
-    assert check.data["missingGVKs"] == [
-        {"scope": "demo/dev", "gvk": "apps/v1/Deployment"}
-    ]
+    assert check.data["missingGVKs"] == [{"scope": "demo/dev", "gvk": "apps/v1/Deployment"}]
     assert "schemas sync --update" in (check.remediation or "")
     assert "ignoreMissingSchemas" in (check.remediation or "")
 
@@ -219,7 +221,7 @@ def test_lock_policy_mismatch_stops_before_store_and_prescribes_update(
     _write_lock(tmp_path, _lock(version="1.34.0"))
     cache_root = tmp_path / "cache"
 
-    checks = _by_name(SchemaDoctor(workspace, cache_root=cache_root))
+    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))
 
     lock = checks["schema-lock"]
     assert lock.status is CheckStatus.FAILED
@@ -241,12 +243,10 @@ def test_malformed_lock_is_reported_without_mutation(tmp_path: Path) -> None:
     lock_path.write_text("not: [valid\n", encoding="utf-8")
     before = lock_path.read_bytes()
 
-    checks = _by_name(SchemaDoctor(workspace, cache_root=tmp_path / "cache"))
+    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=tmp_path / "cache"))
 
     assert checks["schema-lock"].status is CheckStatus.FAILED
     assert checks["schema-lock"].outcome is Outcome.SPEC
-    assert checks["schema-lock"].remediation == (
-        "run chart-manager schemas sync --update"
-    )
+    assert checks["schema-lock"].remediation == ("run chart-manager schemas sync --update")
     assert checks["schema-store"].status is CheckStatus.SKIPPED
     assert lock_path.read_bytes() == before

@@ -7,22 +7,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.integrations.schema_sources import (
-    SchemaDownload,
-    SchemaSourceClient,
-    raw_github_url,
+from chart_manager.integrations.kubeconform.github_schema_source import (
+    GitHubKubeconformSchemaNotFoundError,
+    GitHubKubeconformSchemaSourceEnvironmentError,
+    GitHubKubeconformSchemaSourceError,
+    GitHubKubeconformSchemaSourceIntegrityError,
 )
-from chart_manager.services.schemas.errors import (
-    SchemaConfigurationError,
-    SchemaIntegrityError,
-    SchemaLockError,
-    SchemaSourceEnvironmentError,
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaIntegrityError,
+    KubeconformSchemaLockError,
+    KubeconformSchemaNotFoundError,
+    KubeconformSchemaSourceEnvironmentError,
+    KubeconformSchemaSourceError,
+    KubeconformSchemaSourceIntegrityError,
 )
-from chart_manager.services.schemas.lock import (
+from chart_manager.services.kubeconform_schemas.lock import (
     load_schema_lock,
     write_schema_lock_atomic,
 )
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.models import (
     AuthoredSchemaPolicy,
     GroupVersionKind,
     LockedSchemaPolicy,
@@ -36,16 +40,20 @@ from chart_manager.services.schemas.models import (
     content_digest,
     sort_requirements,
 )
-from chart_manager.services.schemas.store import (
+from chart_manager.services.kubeconform_schemas.source import (
+    KubeconformSchemaArtifactRequest,
+    KubeconformSchemaSource,
+)
+from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaLocations,
-    SchemaStore,
+    KubeconformSchemaStore,
     artifact_relative_path,
     kubeconform_schema_locations,
 )
 
 
 @dataclass(frozen=True)
-class SchemaSyncRequest:
+class KubeconformSchemaSyncRequest:
     workspace: str
     policy: AuthoredSchemaPolicy
     requirements: tuple[SchemaRequirement, ...]
@@ -56,7 +64,7 @@ class SchemaSyncRequest:
 
 
 @dataclass(frozen=True)
-class SchemaSyncResult:
+class KubeconformSchemaSyncResult:
     lock: SchemaLock
     generation_path: Path
     lock_updated: bool
@@ -71,14 +79,21 @@ class SchemaSyncResult:
         )
 
 
-class SchemaSyncService:
+class KubeconformSchemaSyncService:
     """Build complete immutable generations without exposing partial state."""
 
-    def __init__(self, store: SchemaStore, source_client: SchemaSourceClient) -> None:
+    def __init__(
+        self,
+        store: KubeconformSchemaStore,
+        source: KubeconformSchemaSource,
+    ) -> None:
         self.store = store
-        self.source_client = source_client
+        self.source = source
 
-    def sync(self, request: SchemaSyncRequest) -> SchemaSyncResult:
+    def sync(
+        self,
+        request: KubeconformSchemaSyncRequest,
+    ) -> KubeconformSchemaSyncResult:
         """Return a ready generation, using a valid cache before any source access.
 
         With ``update=False`` the committed lock is read-only: even a cold-cache
@@ -86,15 +101,31 @@ class SchemaSyncService:
         update resolves tracking refs and replaces the repository lock.
         """
         if request.workspace != self.store.workspace:
-            raise SchemaConfigurationError(
+            raise KubeconformSchemaConfigurationError(
                 f"sync workspace {request.workspace!r} does not match store "
                 f"workspace {self.store.workspace!r}"
             )
+        try:
+            return self._sync(request)
+        except GitHubKubeconformSchemaSourceEnvironmentError as exc:
+            raise KubeconformSchemaSourceEnvironmentError(str(exc)) from exc
+        except GitHubKubeconformSchemaNotFoundError as exc:
+            raise KubeconformSchemaNotFoundError(str(exc)) from exc
+        except GitHubKubeconformSchemaSourceIntegrityError as exc:
+            raise KubeconformSchemaSourceIntegrityError(str(exc)) from exc
+        except GitHubKubeconformSchemaSourceError as exc:
+            raise KubeconformSchemaSourceError(str(exc)) from exc
+
+    def _sync(
+        self,
+        request: KubeconformSchemaSyncRequest,
+    ) -> KubeconformSchemaSyncResult:
+        """Synchronize after translating adapter failures at the public boundary."""
         requirements = sort_requirements(list(request.requirements))
         with self.store.serialized_sync():
             if request.update:
                 if request.offline:
-                    raise SchemaSourceEnvironmentError(
+                    raise KubeconformSchemaSourceEnvironmentError(
                         "schemas sync --update cannot resolve tracking refs offline"
                     )
                 lock, content = self._build_updated_lock(request, requirements)
@@ -107,14 +138,14 @@ class SchemaSyncService:
             lock = self._load_existing(request, requirements)
             status = self.store.inspect(lock)
             if status.ready:
-                return SchemaSyncResult(
+                return KubeconformSchemaSyncResult(
                     lock=lock,
                     generation_path=status.generation_path,
                     lock_updated=False,
                     generation_published=False,
                 )
             if request.offline:
-                raise SchemaSourceEnvironmentError(
+                raise KubeconformSchemaSourceEnvironmentError(
                     f"schema generation {lock.generation} is not available offline; "
                     "run `chart-manager schemas sync` while online"
                 )
@@ -128,16 +159,14 @@ class SchemaSyncService:
 
     def _build_updated_lock(
         self,
-        request: SchemaSyncRequest,
+        request: KubeconformSchemaSyncRequest,
         requirements: tuple[SchemaRequirement, ...],
     ) -> tuple[SchemaLock, dict[str, bytes]]:
         policy = request.policy
-        kubernetes_resolved = self.source_client.resolve_github_ref(
+        kubernetes_resolved = self.source.resolve_ref(
             policy.kubernetes_repository, policy.kubernetes_track
         )
-        catalog_resolved = self.source_client.resolve_github_ref(
-            policy.catalog_repository, policy.catalog_track
-        )
+        catalog_resolved = self.source.resolve_ref(policy.catalog_repository, policy.catalog_track)
         locked_policy = LockedSchemaPolicy(
             kubernetes_version=policy.normalized_version(),
             generate_from_crds=policy.generate_from_crds,
@@ -169,24 +198,27 @@ class SchemaSyncService:
         ] = {}
         unresolved_gvks = _unique_gvks(unresolved)
         kubernetes_requests = [
-            SchemaDownload(
+            KubeconformSchemaArtifactRequest(
                 key=gvk.key,
-                url=_kubernetes_schema_url(locked_policy, gvk),
+                url=_kubernetes_schema_url(self.source, locked_policy, gvk),
             )
             for gvk in unresolved_gvks
         ]
-        kubernetes_batch = self.source_client.download_many(
+        kubernetes_batch = self.source.fetch_many(
             kubernetes_requests,
             allow_not_found=True,
         )
         for gvk in unresolved_gvks:
             content = kubernetes_batch.content.get(gvk.key)
             if content is not None:
-                _validate_schema_json(content, source=_kubernetes_schema_url(locked_policy, gvk))
+                _validate_schema_json(
+                    content,
+                    source=_kubernetes_schema_url(self.source, locked_policy, gvk),
+                )
                 remote_by_gvk[_gvk_key(gvk)] = (
                     "kubernetes",
                     content,
-                    _kubernetes_schema_url(locked_policy, gvk),
+                    _kubernetes_schema_url(self.source, locked_policy, gvk),
                 )
 
         kubernetes_missing = set(kubernetes_batch.missing)
@@ -194,21 +226,27 @@ class SchemaSyncService:
             gvk for gvk in unresolved_gvks if gvk.key in kubernetes_missing and gvk.group
         ]
         catalog_requests = [
-            SchemaDownload(key=gvk.key, url=_catalog_schema_url(locked_policy, gvk))
+            KubeconformSchemaArtifactRequest(
+                key=gvk.key,
+                url=_catalog_schema_url(self.source, locked_policy, gvk),
+            )
             for gvk in catalog_gvks
         ]
-        catalog_batch = self.source_client.download_many(
+        catalog_batch = self.source.fetch_many(
             catalog_requests,
             allow_not_found=True,
         )
         for gvk in catalog_gvks:
             content = catalog_batch.content.get(gvk.key)
             if content is not None:
-                _validate_schema_json(content, source=_catalog_schema_url(locked_policy, gvk))
+                _validate_schema_json(
+                    content,
+                    source=_catalog_schema_url(self.source, locked_policy, gvk),
+                )
                 remote_by_gvk[_gvk_key(gvk)] = (
                     "catalog",
                     content,
-                    _catalog_schema_url(locked_policy, gvk),
+                    _catalog_schema_url(self.source, locked_policy, gvk),
                 )
 
         missing = [
@@ -217,10 +255,8 @@ class SchemaSyncService:
             if _gvk_key(requirement.gvk) not in remote_by_gvk and not requirement.allow_missing
         ]
         if missing:
-            detail = ", ".join(
-                sorted(f"{item.scope.key}: {item.gvk.key}" for item in missing)
-            )
-            raise SchemaIntegrityError(
+            detail = ", ".join(sorted(f"{item.scope.key}: {item.gvk.key}" for item in missing))
+            raise KubeconformSchemaIntegrityError(
                 "required schemas were not found in generated, local, Kubernetes, "
                 f"or catalog sources: {detail}"
             )
@@ -269,17 +305,17 @@ class SchemaSyncService:
 
     def _load_existing(
         self,
-        request: SchemaSyncRequest,
+        request: KubeconformSchemaSyncRequest,
         requirements: tuple[SchemaRequirement, ...],
     ) -> SchemaLock:
         if not request.lock_path.is_file():
-            raise SchemaLockError(
+            raise KubeconformSchemaLockError(
                 f"schema lock does not exist: {request.lock_path}; "
                 "run `chart-manager schemas sync --update`"
             )
         lock = load_schema_lock(request.lock_path)
         if lock.workspace != request.workspace:
-            raise SchemaLockError(
+            raise KubeconformSchemaLockError(
                 f"schema lock is for workspace {lock.workspace!r}, not {request.workspace!r}"
             )
         expected_policy = request.policy
@@ -301,12 +337,12 @@ class SchemaSyncService:
             if locked != authored:
                 mismatches.append(f"{name}: lock={locked!r}, workspace={authored!r}")
         if mismatches:
-            raise SchemaLockError(
+            raise KubeconformSchemaLockError(
                 "schema lock does not match workspace policy; run "
                 "`chart-manager schemas sync --update`: " + "; ".join(mismatches)
             )
         if lock.inventory != requirements:
-            raise SchemaLockError(
+            raise KubeconformSchemaLockError(
                 "rendered schema inventory differs from the lock; run "
                 "`chart-manager schemas sync --update`"
             )
@@ -325,12 +361,12 @@ class SchemaSyncService:
                 continue
             artifact = materialized.get(_schema_file_artifact_key(entry))
             if artifact is None:
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     f"locked {entry.source} schema is not materialized: "
                     f"{entry.scope.key if entry.scope else '*'} {entry.gvk.key}"
                 )
             if artifact.sha256 != entry.sha256:
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     f"materialized schema drift for {entry.gvk.key}: expected "
                     f"{entry.sha256}, got {artifact.sha256}; run "
                     "`chart-manager schemas sync --update`"
@@ -343,18 +379,18 @@ class SchemaSyncService:
     ) -> dict[str, bytes]:
         materialized = _index_materialized(materialized_values)
         content_by_path: dict[str, bytes] = {}
-        downloads: list[SchemaDownload] = []
+        downloads: list[KubeconformSchemaArtifactRequest] = []
         entries_by_key: dict[str, SchemaFile] = {}
         for entry in lock.schemas:
             if entry.source in {"generated", "local"}:
                 artifact = materialized.get(_schema_file_artifact_key(entry))
                 if artifact is None:
-                    raise SchemaIntegrityError(
+                    raise KubeconformSchemaIntegrityError(
                         f"locked {entry.source} schema is not materialized: "
                         f"{entry.scope.key if entry.scope else '*'} {entry.gvk.key}"
                     )
                 if artifact.sha256 != entry.sha256:
-                    raise SchemaIntegrityError(
+                    raise KubeconformSchemaIntegrityError(
                         f"materialized schema drift for {entry.gvk.key}: "
                         f"expected {entry.sha256}, got {artifact.sha256}; run "
                         "`chart-manager schemas sync --update`"
@@ -365,13 +401,13 @@ class SchemaSyncService:
             key = entry.path
             entries_by_key[key] = entry
             downloads.append(
-                SchemaDownload(
+                KubeconformSchemaArtifactRequest(
                     key=key,
                     url=entry.source_reference,
                     expected_sha256=entry.sha256,
                 )
             )
-        batch = self.source_client.download_many(downloads)
+        batch = self.source.fetch_many(downloads)
         for key, content in batch.content.items():
             _validate_schema_json(content, source=entries_by_key[key].source_reference)
             _put_content(content_by_path, key, content)
@@ -379,12 +415,12 @@ class SchemaSyncService:
 
     def _publish(
         self,
-        request: SchemaSyncRequest,
+        request: KubeconformSchemaSyncRequest,
         lock: SchemaLock,
         content: dict[str, bytes],
         *,
         replace_lock: bool,
-    ) -> SchemaSyncResult:
+    ) -> KubeconformSchemaSyncResult:
         stage = self.store.create_stage()
         destination_existed = self.store.generation_path(lock).exists()
         try:
@@ -392,7 +428,7 @@ class SchemaSyncService:
             if set(content) != set(entries):
                 missing = sorted(set(entries) - set(content))
                 extra = sorted(set(content) - set(entries))
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     f"staged schema content differs from lock: missing={missing}, extra={extra}"
                 )
             for path, value in content.items():
@@ -403,7 +439,7 @@ class SchemaSyncService:
                 # The generation is immutable and complete before the lock becomes
                 # authoritative. A failed replace leaves the old lock usable.
                 write_schema_lock_atomic(request.lock_path, lock)
-            return SchemaSyncResult(
+            return KubeconformSchemaSyncResult(
                 lock=lock,
                 generation_path=destination,
                 lock_updated=replace_lock,
@@ -422,7 +458,7 @@ def _index_materialized(
         key = _artifact_key(value)
         previous = indexed.get(key)
         if previous is not None and previous.content != value.content:
-            raise SchemaIntegrityError(
+            raise KubeconformSchemaIntegrityError(
                 f"conflicting {value.source} schema bytes for {value.scope.key} {value.gvk.key}"
             )
         indexed[key] = value
@@ -481,41 +517,57 @@ def _gvk_key(gvk: GroupVersionKind) -> tuple[str, str, str]:
     return gvk.group, gvk.version, gvk.kind
 
 
-def _kubernetes_schema_url(policy: LockedSchemaPolicy, gvk: GroupVersionKind) -> str:
+def _kubernetes_schema_url(
+    source: KubeconformSchemaSource,
+    policy: LockedSchemaPolicy,
+    gvk: GroupVersionKind,
+) -> str:
     # kubernetes-json-schema filenames use the API group prefix (``rbac``),
     # not the fully-qualified DNS group (``rbac.authorization.k8s.io``).
     group = gvk.group.split(".", 1)[0] if gvk.group else ""
-    suffix = "-" + "-".join(
-        part for part in ([group] if group else []) + [gvk.version]
-    )
+    suffix = "-" + "-".join(part for part in ([group] if group else []) + [gvk.version])
     filename = f"{gvk.kind.lower()}{suffix.lower()}.json"
     path = f"v{policy.kubernetes_version}-standalone-strict/{filename}"
-    return raw_github_url(policy.kubernetes.repository, policy.kubernetes.resolved, path)
+    return source.artifact_url(
+        policy.kubernetes.repository,
+        policy.kubernetes.resolved,
+        path,
+    )
 
 
-def _catalog_schema_url(policy: LockedSchemaPolicy, gvk: GroupVersionKind) -> str:
+def _catalog_schema_url(
+    source: KubeconformSchemaSource,
+    policy: LockedSchemaPolicy,
+    gvk: GroupVersionKind,
+) -> str:
     path = f"{gvk.group}/{gvk.kind.lower()}_{gvk.version}.json"
-    return raw_github_url(policy.catalog.repository, policy.catalog.resolved, path)
+    return source.artifact_url(
+        policy.catalog.repository,
+        policy.catalog.resolved,
+        path,
+    )
 
 
 def _validate_schema_json(content: bytes, *, source: str) -> None:
     try:
         document = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SchemaIntegrityError(f"schema from {source} is invalid JSON: {exc}") from exc
+        raise KubeconformSchemaIntegrityError(
+            f"schema from {source} is invalid JSON: {exc}"
+        ) from exc
     if not isinstance(document, dict):
-        raise SchemaIntegrityError(f"schema from {source} must be a JSON object")
+        raise KubeconformSchemaIntegrityError(f"schema from {source} must be a JSON object")
 
 
 def _put_content(target: dict[str, bytes], path: str, content: bytes) -> None:
     previous = target.get(path)
     if previous is not None and previous != content:
-        raise SchemaIntegrityError(f"two schemas resolve to the same store path: {path}")
+        raise KubeconformSchemaIntegrityError(f"two schemas resolve to the same store path: {path}")
     target[path] = content
 
 
 __all__ = [
-    "SchemaSyncRequest",
-    "SchemaSyncResult",
-    "SchemaSyncService",
+    "KubeconformSchemaSyncRequest",
+    "KubeconformSchemaSyncResult",
+    "KubeconformSchemaSyncService",
 ]

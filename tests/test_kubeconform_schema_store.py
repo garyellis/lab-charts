@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.schemas.errors import SchemaStoreError
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     LockedSchemaPolicy,
     RepositoryPin,
@@ -15,8 +15,8 @@ from chart_manager.services.schemas.models import (
     build_lock,
     content_digest,
 )
-from chart_manager.services.schemas.store import (
-    SchemaStore,
+from chart_manager.services.kubeconform_schemas.store import (
+    KubeconformSchemaStore,
     artifact_relative_path,
     kubeconform_schema_locations,
 )
@@ -29,9 +29,7 @@ def _policy() -> LockedSchemaPolicy:
         kubernetes=RepositoryPin(
             repository="yannh/kubernetes-json-schema", track="master", resolved="a" * 40
         ),
-        catalog=RepositoryPin(
-            repository="datreeio/CRDs-catalog", track="main", resolved="b" * 40
-        ),
+        catalog=RepositoryPin(repository="datreeio/CRDs-catalog", track="main", resolved="b" * 40),
     )
 
 
@@ -52,7 +50,7 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
         inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=[entry],
     )
-    store = SchemaStore("lab", cache_root=tmp_path / "cache")
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
 
@@ -63,7 +61,7 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
     assert not stage.exists()
 
     (published / entry.path).write_text("{}")
-    with pytest.raises(SchemaStoreError, match="checksum"):
+    with pytest.raises(KubeconformSchemaStoreError, match="checksum"):
         store.require_ready(lock)
 
 
@@ -84,13 +82,16 @@ def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
         inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=[entry],
     )
-    store = SchemaStore("lab", cache_root=tmp_path / "cache")
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
     unexpected = stage / "kubernetes/unlocked.json"
     unexpected.write_text("{}")
 
-    with pytest.raises(SchemaStoreError, match="not declared by the lock"):
+    with pytest.raises(
+        KubeconformSchemaStoreError,
+        match="not declared by the lock",
+    ):
         store.publish_generation(stage, lock)
     assert not store.generation_path(lock).exists()
 
@@ -111,10 +112,10 @@ def test_store_rejects_incomplete_generation_before_rename(tmp_path: Path) -> No
         inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=[entry],
     )
-    store = SchemaStore("lab", cache_root=tmp_path / "cache")
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
 
-    with pytest.raises(SchemaStoreError, match="missing"):
+    with pytest.raises(KubeconformSchemaStoreError, match="missing"):
         store.publish_generation(stage, lock)
     assert not store.generation_path(lock).exists()
 

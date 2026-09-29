@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.schemas.errors import SchemaLockError
-from chart_manager.services.schemas.lock import (
+from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaLockError
+from chart_manager.services.kubeconform_schemas.lock import (
     load_schema_lock,
     serialize_schema_lock,
     write_schema_lock_atomic,
 )
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     LockedSchemaPolicy,
     RepositoryPin,
@@ -81,7 +81,7 @@ def test_lock_rejects_a_generation_digest_that_does_not_describe_content(
     text = serialize_schema_lock(_lock()).replace("generation: sha256:", "generation: sha256:0")
     path.write_text(text)
 
-    with pytest.raises(SchemaLockError, match="generation"):
+    with pytest.raises(KubeconformSchemaLockError, match="generation"):
         load_schema_lock(path)
 
 
@@ -89,7 +89,7 @@ def test_lock_wraps_malformed_yaml_as_a_typed_failure(tmp_path: Path) -> None:
     path = tmp_path / "schemas.lock.yaml"
     path.write_text("inventory: [\n")
 
-    with pytest.raises(SchemaLockError, match="invalid schema lock"):
+    with pytest.raises(KubeconformSchemaLockError, match="invalid schema lock"):
         load_schema_lock(path)
 
 

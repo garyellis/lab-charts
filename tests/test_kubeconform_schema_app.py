@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from chart_manager.services.kubeconform_schemas.app import (
+    RepositoryKubeconformSchemaService,
+)
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
@@ -14,7 +17,6 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.schemas.app import RepositorySchemaService
 
 
 class _Validation:
@@ -118,7 +120,7 @@ def test_sync_renders_inventory_and_generates_exact_crd_schema(
         )
     )
     monkeypatch.setattr(
-        "chart_manager.services.schemas.app.build_catalog",
+        "chart_manager.services.kubeconform_schemas.app.build_catalog",
         lambda *_args, **_kwargs: SimpleNamespace(
             errors=(),
             targets=(target,),
@@ -126,7 +128,7 @@ def test_sync_renders_inventory_and_generates_exact_crd_schema(
         ),
     )
     sync = _Sync()
-    service = RepositorySchemaService(
+    service = RepositoryKubeconformSchemaService(
         workspace=workspace,
         validation=_Validation(),  # type: ignore[arg-type]
         sync=sync,  # type: ignore[arg-type]

@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.schemas.crd import generate_crd_schemas
-from chart_manager.services.schemas.errors import SchemaIntegrityError
-from chart_manager.services.schemas.inventory import scan_rendered_directory
-from chart_manager.services.schemas.models import SchemaScope
+from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaIntegrityError,
+)
+from chart_manager.services.kubeconform_schemas.inventory import scan_rendered_directory
+from chart_manager.services.kubeconform_schemas.models import SchemaScope
 
 
 def _crd(*, nested_type: str = "string") -> str:
@@ -132,5 +134,8 @@ def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
         scope=SchemaScope(chart="operator", environment="ci"),
     )
 
-    with pytest.raises(SchemaIntegrityError, match="conflicting rendered CRDs"):
+    with pytest.raises(
+        KubeconformSchemaIntegrityError,
+        match="conflicting rendered CRDs",
+    ):
         generate_crd_schemas(inventory.crds)

@@ -7,9 +7,11 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from chart_manager.services.schemas.errors import SchemaIntegrityError
-from chart_manager.services.schemas.inventory import RenderedResource
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaIntegrityError,
+)
+from chart_manager.services.kubeconform_schemas.inventory import RenderedResource
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     MaterializedSchema,
 )
@@ -33,7 +35,7 @@ def generate_crd_schemas(
             )
             previous = generated.get(key)
             if previous is not None and previous.content != artifact.content:
-                raise SchemaIntegrityError(
+                raise KubeconformSchemaIntegrityError(
                     f"conflicting rendered CRDs define {artifact.gvk.key} "
                     f"in {artifact.scope.key}: {previous.source_reference}, "
                     f"{artifact.source_reference}"
@@ -57,38 +59,42 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
     document = resource.document
     spec = document.get("spec")
     if not isinstance(spec, dict):
-        raise SchemaIntegrityError(f"CRD in {resource.path} has no mapping spec")
+        raise KubeconformSchemaIntegrityError(f"CRD in {resource.path} has no mapping spec")
     group = spec.get("group")
     names = spec.get("names")
     versions = spec.get("versions")
     kind = names.get("kind") if isinstance(names, dict) else None
     if not isinstance(group, str) or not group or not isinstance(kind, str) or not kind:
-        raise SchemaIntegrityError(f"CRD in {resource.path} has invalid spec.group/spec.names.kind")
+        raise KubeconformSchemaIntegrityError(
+            f"CRD in {resource.path} has invalid spec.group/spec.names.kind"
+        )
     if not isinstance(versions, list) or not versions:
-        raise SchemaIntegrityError(f"CRD {group}/{kind} in {resource.path} has no versions")
+        raise KubeconformSchemaIntegrityError(
+            f"CRD {group}/{kind} in {resource.path} has no versions"
+        )
 
     artifacts: list[MaterializedSchema] = []
     for raw_version in versions:
         if not isinstance(raw_version, dict):
-            raise SchemaIntegrityError(f"CRD {group}/{kind} has a non-mapping version")
+            raise KubeconformSchemaIntegrityError(f"CRD {group}/{kind} has a non-mapping version")
         if raw_version.get("served") is not True:
             continue
         version = raw_version.get("name")
         schema_container = raw_version.get("schema")
         openapi = (
-            schema_container.get("openAPIV3Schema")
-            if isinstance(schema_container, dict)
-            else None
+            schema_container.get("openAPIV3Schema") if isinstance(schema_container, dict) else None
         )
         # Non-structural/legacy CRDs remain eligible for the local/catalog fallback.
         if openapi is None:
             continue
         if not isinstance(version, str) or not version or not isinstance(openapi, dict):
-            raise SchemaIntegrityError(f"CRD {group}/{kind} has an invalid served version schema")
+            raise KubeconformSchemaIntegrityError(
+                f"CRD {group}/{kind} has an invalid served version schema"
+            )
         normalized = copy.deepcopy(openapi)
         properties = normalized.setdefault("properties", {})
         if not isinstance(properties, dict):
-            raise SchemaIntegrityError(
+            raise KubeconformSchemaIntegrityError(
                 f"CRD {group}/{kind} version {version} has non-mapping properties"
             )
         # A CRD's OpenAPI schema describes the custom fields admitted by the API
@@ -110,7 +116,7 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
         }
         required = normalized.setdefault("required", [])
         if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
-            raise SchemaIntegrityError(
+            raise KubeconformSchemaIntegrityError(
                 f"CRD {group}/{kind} version {version} has invalid required fields"
             )
         normalized["required"] = sorted({*required, "apiVersion", "kind", "metadata"})

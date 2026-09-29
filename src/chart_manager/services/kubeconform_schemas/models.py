@@ -11,7 +11,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from chart_manager.services.schemas.errors import SchemaConfigurationError
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+)
 
 SchemaSourceKind = Literal["generated", "local", "kubernetes", "catalog"]
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -243,7 +245,9 @@ class MaterializedSchema:
 
     def __post_init__(self) -> None:
         if not self.content:
-            raise SchemaConfigurationError("materialized schema content must not be empty")
+            raise KubeconformSchemaConfigurationError(
+                "materialized schema content must not be empty"
+            )
 
     @property
     def sha256(self) -> str:
@@ -304,7 +308,7 @@ def sort_requirements(
         )
         previous = keyed.get(key)
         if previous is not None and previous.allow_missing != value.allow_missing:
-            raise SchemaConfigurationError(
+            raise KubeconformSchemaConfigurationError(
                 f"conflicting missing-schema policy for {value.gvk.key} in {value.scope.key}"
             )
         keyed[key] = value
@@ -324,7 +328,7 @@ def sort_schema_files(values: tuple[SchemaFile, ...] | list[SchemaFile]) -> tupl
         )
         previous = keyed.get(key)
         if previous is not None and previous != value:
-            raise SchemaConfigurationError(
+            raise KubeconformSchemaConfigurationError(
                 f"conflicting {value.source} schemas for {value.gvk.key}"
             )
         keyed[key] = value

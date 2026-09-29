@@ -8,16 +8,18 @@ import typer
 
 from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import console, narration
-from chart_manager.services.schemas.app import RepositorySchemaService
+from chart_manager.services.kubeconform_schemas.app import (
+    RepositoryKubeconformSchemaService,
+)
 
 
 def register(app: typer.Typer) -> None:
     app.command("sync")(sync)
 
 
-def _make_service() -> RepositorySchemaService:
+def _make_service() -> RepositoryKubeconformSchemaService:
     container = _container()
-    return container.schema_service(container.workspace().root)
+    return container.kubeconform_schema_service(container.workspace().root)
 
 
 def sync(

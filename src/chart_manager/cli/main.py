@@ -47,11 +47,11 @@ from chart_manager.plumbing.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
-from chart_manager.services.schemas.errors import (
-    SchemaConfigurationError,
-    SchemaError,
-    SchemaSourceEnvironmentError,
-    SchemaSourceError,
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaError,
+    KubeconformSchemaSourceEnvironmentError,
+    KubeconformSchemaSourceError,
 )
 from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
 
@@ -276,10 +276,10 @@ app.add_typer(schemas_app, name="schemas")
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
-    (SchemaSourceEnvironmentError, Outcome.ENVIRONMENT),
-    (SchemaSourceError, Outcome.TOOL),
-    (SchemaConfigurationError, Outcome.SPEC),
-    (SchemaError, Outcome.TOOL),
+    (KubeconformSchemaSourceEnvironmentError, Outcome.ENVIRONMENT),
+    (KubeconformSchemaSourceError, Outcome.TOOL),
+    (KubeconformSchemaConfigurationError, Outcome.SPEC),
+    (KubeconformSchemaError, Outcome.TOOL),
     (SpecError, Outcome.SPEC),
     (ChartManagerError, Outcome.FAILED),
 )

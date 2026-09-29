@@ -12,9 +12,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.services.schemas.errors import SchemaStoreError
-from chart_manager.services.schemas.lock import write_schema_lock_atomic
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
+from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
+from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     SchemaFile,
     SchemaLock,
@@ -56,7 +56,7 @@ def default_schema_cache_root() -> Path:
     if configured:
         path = Path(configured).expanduser()
         if not path.is_absolute():
-            raise SchemaStoreError("XDG_CACHE_HOME must be an absolute path")
+            raise KubeconformSchemaStoreError("XDG_CACHE_HOME must be an absolute path")
         return path / "chart-manager" / "schemas"
     return Path.home() / ".cache" / "chart-manager" / "schemas"
 
@@ -81,24 +81,22 @@ def artifact_relative_path(
     template_group = gvk.group or gvk.version
     if source in {"generated", "local"}:
         if scope is None:
-            raise SchemaStoreError(f"{source} schema {gvk.key} requires a scope")
+            raise KubeconformSchemaStoreError(f"{source} schema {gvk.key} requires a scope")
         environment = scope.environment or "_all"
-        return (
-            Path(source) / scope.chart / environment / template_group / name
-        ).as_posix()
+        return (Path(source) / scope.chart / environment / template_group / name).as_posix()
     if source == "catalog":
         return (Path("catalog") / template_group / name).as_posix()
     if source == "kubernetes":
         return (Path("kubernetes") / template_group / name).as_posix()
-    raise SchemaStoreError(f"unknown schema source: {source}")
+    raise KubeconformSchemaStoreError(f"unknown schema source: {source}")
 
 
-class SchemaStore:
-    """Manage immutable content-addressed generations for one workspace."""
+class KubeconformSchemaStore:
+    """Manage immutable kubeconform schema generations for one workspace."""
 
     def __init__(self, workspace: str, *, cache_root: Path | None = None) -> None:
         if not workspace or any(character in workspace for character in "/\\"):
-            raise SchemaStoreError("workspace must be a non-empty path-safe name")
+            raise KubeconformSchemaStoreError("workspace must be a non-empty path-safe name")
         self.workspace = workspace
         self.cache_root = (cache_root or default_schema_cache_root()).resolve()
         self.root = self.cache_root / workspace
@@ -106,12 +104,10 @@ class SchemaStore:
 
     def generation_path(self, lock_or_digest: SchemaLock | str) -> Path:
         digest = (
-            lock_or_digest.generation
-            if isinstance(lock_or_digest, SchemaLock)
-            else lock_or_digest
+            lock_or_digest.generation if isinstance(lock_or_digest, SchemaLock) else lock_or_digest
         )
         if not digest.startswith("sha256:") or len(digest) != 71:
-            raise SchemaStoreError(f"invalid generation digest: {digest}")
+            raise KubeconformSchemaStoreError(f"invalid generation digest: {digest}")
         return self.root / digest.removeprefix("sha256:")
 
     def create_stage(self) -> Path:
@@ -119,20 +115,28 @@ class SchemaStore:
             self.root.mkdir(parents=True, exist_ok=True)
             return Path(tempfile.mkdtemp(prefix=".staging-", dir=self.root))
         except OSError as exc:
-            raise SchemaStoreError(f"failed to create schema staging directory: {exc}") from exc
+            raise KubeconformSchemaStoreError(
+                f"failed to create schema staging directory: {exc}"
+            ) from exc
 
     def write_stage_file(self, stage: Path, entry: SchemaFile, content: bytes) -> Path:
         self._require_stage(stage)
         if content_digest(content) != entry.sha256:
-            raise SchemaStoreError(f"content checksum does not match lock entry {entry.path}")
+            raise KubeconformSchemaStoreError(
+                f"content checksum does not match lock entry {entry.path}"
+            )
         destination = (stage / schema_relative_path(entry)).resolve()
         if not destination.is_relative_to(stage.resolve()):
-            raise SchemaStoreError(f"schema path escapes staged generation: {entry.path}")
+            raise KubeconformSchemaStoreError(
+                f"schema path escapes staged generation: {entry.path}"
+            )
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
         except OSError as exc:
-            raise SchemaStoreError(f"failed to stage schema {entry.path}: {exc}") from exc
+            raise KubeconformSchemaStoreError(
+                f"failed to stage schema {entry.path}: {exc}"
+            ) from exc
         return destination
 
     def inspect(self, lock: SchemaLock, *, root: Path | None = None) -> StoreStatus:
@@ -216,7 +220,7 @@ class SchemaStore:
                 *(f"corrupt {problem.path}: {problem.detail}" for problem in status.corrupt),
                 *(f"uncovered {item}" for item in status.uncovered),
             ]
-            raise SchemaStoreError(
+            raise KubeconformSchemaStoreError(
                 f"schema generation {lock.generation} is not ready: " + "; ".join(details)
             )
         return status.generation_path
@@ -232,7 +236,7 @@ class SchemaStore:
             try:
                 shutil.rmtree(stage)
             except OSError as exc:
-                raise SchemaStoreError(
+                raise KubeconformSchemaStoreError(
                     f"published generation is ready but staging cleanup failed: {exc}"
                 ) from exc
             return destination
@@ -244,7 +248,9 @@ class SchemaStore:
                 self.require_ready(lock, root=destination)
                 shutil.rmtree(stage, ignore_errors=True)
                 return destination
-            raise SchemaStoreError(f"failed to publish schema generation: {exc}") from exc
+            raise KubeconformSchemaStoreError(
+                f"failed to publish schema generation: {exc}"
+            ) from exc
         return destination
 
     def publish_transaction(
@@ -272,12 +278,14 @@ class SchemaStore:
                 finally:
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         except OSError as exc:
-            raise SchemaStoreError(f"failed to lock schema store {self._lock_path}: {exc}") from exc
+            raise KubeconformSchemaStoreError(
+                f"failed to lock schema store {self._lock_path}: {exc}"
+            ) from exc
 
     def discard_stage(self, stage: Path) -> None:
         try:
             self._require_stage(stage)
-        except SchemaStoreError:
+        except KubeconformSchemaStoreError:
             return
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -288,7 +296,7 @@ class SchemaStore:
             or not resolved.name.startswith(".staging-")
             or not resolved.is_dir()
         ):
-            raise SchemaStoreError(f"not a schema-store staging directory: {stage}")
+            raise KubeconformSchemaStoreError(f"not a schema-store staging directory: {stage}")
 
 
 def kubeconform_schema_locations(
@@ -309,8 +317,7 @@ def kubeconform_schema_locations(
                 environment=environment or None,
             )
             if not any(
-                entry.source == source and entry.scope == selected_scope
-                for entry in lock.schemas
+                entry.source == source and entry.scope == selected_scope for entry in lock.schemas
             ):
                 continue
             base = root / source / scope.chart / (environment or "_all")
@@ -350,7 +357,7 @@ def _fsync_directory(path: Path) -> None:
 
 __all__ = [
     "KubeconformSchemaLocations",
-    "SchemaStore",
+    "KubeconformSchemaStore",
     "StoreProblem",
     "StoreStatus",
     "artifact_relative_path",

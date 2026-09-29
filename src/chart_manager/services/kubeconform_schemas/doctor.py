@@ -9,16 +9,22 @@ from typing import Any
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
-from chart_manager.services.schemas.errors import SchemaLockError, SchemaStoreError
-from chart_manager.services.schemas.lock import load_schema_lock
-from chart_manager.services.schemas.models import (
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaLockError,
+    KubeconformSchemaStoreError,
+)
+from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
+from chart_manager.services.kubeconform_schemas.models import (
     AuthoredSchemaPolicy,
     SchemaFile,
     SchemaLock,
     SchemaRequirement,
     SchemaSourceKind,
 )
-from chart_manager.services.schemas.store import SchemaStore, StoreStatus
+from chart_manager.services.kubeconform_schemas.store import (
+    KubeconformSchemaStore,
+    StoreStatus,
+)
 
 _UPDATE = "run chart-manager schemas sync --update"
 _HYDRATE = "run chart-manager schemas sync while online"
@@ -30,8 +36,8 @@ _SOURCES: tuple[SchemaSourceKind, ...] = (
 )
 
 
-class SchemaDoctor:
-    """Inspect schema state without rendering, resolving refs, downloading, or writing."""
+class KubeconformSchemaDoctor:
+    """Inspect kubeconform schema readiness without network or write access."""
 
     def __init__(
         self,
@@ -65,9 +71,12 @@ class SchemaDoctor:
             )
 
         try:
-            store = SchemaStore(self.workspace.name, cache_root=self.cache_root)
+            store = KubeconformSchemaStore(
+                self.workspace.name,
+                cache_root=self.cache_root,
+            )
             status = store.inspect(lock)
-        except (OSError, SchemaStoreError) as exc:
+        except (OSError, KubeconformSchemaStoreError) as exc:
             return (
                 policy_check,
                 lock_check,
@@ -75,16 +84,13 @@ class SchemaDoctor:
                     "schema-store",
                     f"schema store cannot be inspected: {exc}",
                     remediation=(
-                        "set XDG_CACHE_HOME to an absolute readable path, then "
-                        + _HYDRATE
+                        "set XDG_CACHE_HOME to an absolute readable path, then " + _HYDRATE
                     ),
                     outcome=Outcome.ENVIRONMENT,
                     data={"offlineReady": False},
                 ),
             )
-        policy_matches = bool(
-            lock_check.data and lock_check.data.get("matchesPolicy", False)
-        )
+        policy_matches = bool(lock_check.data and lock_check.data.get("matchesPolicy", False))
         return (
             policy_check,
             lock_check,
@@ -95,9 +101,7 @@ class SchemaDoctor:
         validation = self.workspace.validation
         if validation is None or not self.workspace.name:
             missing = (
-                "metadata.name"
-                if not self.workspace.name
-                else "spec.validation schema policy"
+                "metadata.name" if not self.workspace.name else "spec.validation schema policy"
             )
             return (
                 Check.failed(
@@ -144,7 +148,7 @@ class SchemaDoctor:
             )
         try:
             lock = load_schema_lock(path)
-        except SchemaLockError as exc:
+        except KubeconformSchemaLockError as exc:
             return (
                 Check.failed(
                     "schema-lock",
@@ -210,9 +214,7 @@ def _store_check(
         "ready": status.ready,
         "offlineReady": status.ready and policy_matches,
     }
-    sources = ", ".join(
-        f"{source}={source_coverage[source]['files']}" for source in _SOURCES
-    )
+    sources = ", ".join(f"{source}={source_coverage[source]['files']}" for source in _SOURCES)
     detail = (
         f"{status.generation_path}; generation={lock.generation}; "
         f"expected={status.expected} present={status.present} "
@@ -231,8 +233,7 @@ def _store_check(
             "schema-store",
             detail,
             remediation=(
-                _UPDATE
-                + "; if a schema is intentionally unavailable, add its kind to "
+                _UPDATE + "; if a schema is intentionally unavailable, add its kind to "
                 "spec.validation.ignoreMissingSchemas"
             ),
             outcome=Outcome.SPEC,
@@ -301,9 +302,7 @@ def _source_coverage(lock: SchemaLock) -> dict[str, dict[str, int]]:
     files = Counter(entry.source for entry in lock.schemas)
     requirements = Counter[str]()
     for requirement in lock.inventory:
-        for source in {
-            entry.source for entry in lock.schemas if _entry_covers(entry, requirement)
-        }:
+        for source in {entry.source for entry in lock.schemas if _entry_covers(entry, requirement)}:
             requirements[source] += 1
     return {
         source: {
@@ -339,4 +338,4 @@ def _entry_covers(entry: SchemaFile, requirement: SchemaRequirement) -> bool:
     )
 
 
-__all__ = ["SchemaDoctor"]
+__all__ = ["KubeconformSchemaDoctor"]
