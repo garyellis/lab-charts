@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.cli import _container
 from chart_manager.cli import chart as chart_cli
 from chart_manager.cli import local as local_cli
 from chart_manager.composition import Container
 from chart_manager.domain.local_resources import ResolvedStackTarget
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.clusters.development import (
     DevelopmentClusterActionResult,
     DevelopmentClusterPlan,
@@ -374,7 +374,7 @@ def test_every_local_command_emits_yaml(
     result = cli(*_local_argv(command, tmp_path), "-o", "yaml")
 
     assert result.exit_code == 0, result.output
-    assert yaml.safe_load(result.stdout)["command"] == command
+    assert parse_yaml(result.stdout)["command"] == command
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
@@ -787,7 +787,7 @@ def test_chart_test_dry_run_takes_the_invocation_wide_output(
     )
 
     assert result.exit_code == 0, result.output
-    assert yaml.safe_load(result.stdout)["schema_version"] == SCHEMA_VERSION
+    assert parse_yaml(result.stdout)["schema_version"] == SCHEMA_VERSION
 
 
 def test_chart_test_output_without_dry_run_is_a_usage_error(

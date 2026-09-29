@@ -17,9 +17,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import yaml
 
 from chart_manager.cli import plan as plan_cli
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
     ClusterTestImpact,
@@ -236,7 +236,7 @@ def test_publish_plan_is_direct_ownership_and_never_the_impact_service(
 
 @pytest.mark.parametrize(
     ("output", "load"),
-    [("json", json.loads), ("yaml", yaml.safe_load)],
+    [("json", json.loads), ("yaml", parse_yaml)],
 )
 def test_publish_plan_machine_projections_are_a_bare_list_of_names(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, output: str, load: Any

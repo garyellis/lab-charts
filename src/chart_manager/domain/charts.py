@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec
-from chart_manager.plumbing.errors import ChartNotFoundError, SpecError
+from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
@@ -74,8 +72,8 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
     """
     try:
         data = load_yaml_file(path)
-    except yaml.YAMLError as exc:
-        raise SpecError(f"failed to parse {path}: {exc}") from exc
+    except YamlError as exc:
+        raise SpecError(f"failed to load {path}: {exc}") from exc
 
     name = _required_string(data, "name", path)
     version = _optional_string(data, "version", path)
@@ -110,6 +108,15 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
         chart_type=chart_type,
         dependencies=tuple(dependencies),
     )
+
+
+def load_chart_name(path: Path) -> str:
+    """Load only the required chart name without validating unrelated metadata."""
+    try:
+        data = load_yaml_file(path)
+    except YamlError as exc:
+        raise SpecError(f"failed to load {path}: {exc}") from exc
+    return _required_string(data, "name", path)
 
 
 class ChartRepository:

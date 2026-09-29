@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver, InstallPlanEntry
@@ -17,6 +16,7 @@ from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
     DependencyCycleError,
 )
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 
 from .conftest import REPO_ROOT, MakeChart
 
@@ -152,9 +152,9 @@ def test_install_plan_rejects_a_disabled_required_chart(
 ) -> None:
     disabled = make_chart("base")
     path = disabled / "chart-lifecycle.yaml"
-    config = yaml.safe_load(path.read_text())
+    config = parse_yaml(path.read_text())
     config["spec"]["enabled"] = False
-    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    path.write_text(dump_yaml(config), encoding="utf-8")
     make_chart("app", profiles={"minimal": _requires("base")})
 
     resolver = DependencyResolver(ClusterTestCatalog(chart_root).get)
@@ -172,9 +172,9 @@ def test_dependent_tests_rejects_a_disabled_cluster_test_section(
 ) -> None:
     chart = make_chart("source")
     path = chart / "chart-lifecycle.yaml"
-    config = yaml.safe_load(path.read_text())
+    config = parse_yaml(path.read_text())
     config["spec"]["clusterTest"]["enabled"] = False
-    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    path.write_text(dump_yaml(config), encoding="utf-8")
 
     resolver = DependencyResolver(ClusterTestCatalog(chart_root).get)
 

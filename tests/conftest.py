@@ -25,11 +25,11 @@ from typing import Any, Literal
 import pytest
 import typer
 import typer.main
-import yaml
 from typer.testing import CliRunner, Result
 
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -129,7 +129,7 @@ def make_chart(chart_root: Path) -> MakeChart:
         chart_dir = chart_root / "charts" / name
         chart_dir.mkdir(parents=True, exist_ok=True)
         (chart_dir / "Chart.yaml").write_text(
-            yaml.safe_dump({"apiVersion": "v2", "name": name, "version": version}),
+            dump_yaml({"apiVersion": "v2", "name": name, "version": version}),
             encoding="utf-8",
         )
 
@@ -144,7 +144,7 @@ def make_chart(chart_root: Path) -> MakeChart:
             (chart_dir / value_file).write_text("", encoding="utf-8")
 
         (chart_dir / "chart-lifecycle.yaml").write_text(
-            yaml.safe_dump(
+            dump_yaml(
                 {
                     "apiVersion": "chartmanager.io/v1alpha1",
                     "kind": "ChartLifecycle",

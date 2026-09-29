@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
-import yaml
-
 from chart_manager.integrations.kind import Kind
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.clusters.development.models import PortMappingDrift
 from chart_manager.services.progress import ProgressCallback, warn
 
@@ -32,13 +32,23 @@ def kind_config_host_ports(kind_config: Path) -> set[int]:
     if not kind_config.is_file():
         return set()
     try:
-        data = yaml.safe_load(kind_config.read_text()) or {}
-    except yaml.YAMLError:
+        data = load_yaml_file(kind_config)
+    except YamlError:
+        return set()
+    nodes = data.get("nodes") or []
+    if not isinstance(nodes, list):
         return set()
     ports: set[int] = set()
-    for node in data.get("nodes") or []:
-        for mapping in (node or {}).get("extraPortMappings") or []:
-            host_port = (mapping or {}).get("hostPort")
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            return set()
+        mappings = node.get("extraPortMappings") or []
+        if not isinstance(mappings, list):
+            return set()
+        for mapping in mappings:
+            if not isinstance(mapping, Mapping):
+                return set()
+            host_port = mapping.get("hostPort")
             if isinstance(host_port, int):
                 ports.add(host_port)
     return ports

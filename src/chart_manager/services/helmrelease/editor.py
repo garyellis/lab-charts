@@ -1,15 +1,12 @@
 """In-place version edits for HelmRelease YAML files."""
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
-
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.yaml_files import edit_yaml_documents
 
 from .scanner import is_helmrelease
 
@@ -22,16 +19,6 @@ class EditResult:
     changed_docs: int
 
 
-def _editor_yaml() -> YAML:
-    """Build a round-trip YAML instance tuned for minimal-diff edits."""
-    yaml = YAML(typ="rt")
-    yaml.preserve_quotes = True
-    # Match common Flux repo formatting: don't rewrap long lines, keep the
-    # block-style nesting humans expect to review in PRs.
-    yaml.width = 4096
-    return yaml
-
-
 def set_version(
     file_path: Path,
     *,
@@ -39,32 +26,24 @@ def set_version(
     new_version: str,
 ) -> EditResult:
     """Rewrite `.spec.chart.spec.version` for every matching HelmRelease in `file_path`."""
-    yaml = _editor_yaml()
-    try:
-        docs = list(yaml.load_all(file_path.read_text()))
-    except YAMLError as exc:
-        raise ChartManagerError(f"failed to parse {file_path}: {exc}") from exc
-
     changed = 0
-    for doc in docs:
-        if not is_helmrelease(doc):
-            continue
-        inner = _chart_spec_inner(doc)
-        if inner is None:
-            continue
-        if inner.get("chart") != chart_name:
-            continue
-        if str(inner.get("version")) == new_version:
-            continue
-        inner["version"] = new_version
-        changed += 1
+    def edit(docs: list[Any]) -> None:
+        nonlocal changed
+        for doc in docs:
+            if not is_helmrelease(doc):
+                continue
+            inner = _chart_spec_inner(doc)
+            if inner is None or inner.get("chart") != chart_name:
+                continue
+            if str(inner.get("version")) == new_version:
+                continue
+            inner["version"] = new_version
+            changed += 1
 
-    if changed == 0:
-        return EditResult(path=file_path, changed_docs=0)
-
-    buf = io.StringIO()
-    yaml.dump_all(docs, buf)
-    file_path.write_text(buf.getvalue())
+    try:
+        edit_yaml_documents(file_path, edit)
+    except YamlError as exc:
+        raise ChartManagerError(f"failed to edit {file_path}: {exc}") from exc
     return EditResult(path=file_path, changed_docs=changed)
 
 

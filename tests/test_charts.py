@@ -10,12 +10,12 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.chart_catalog import ChartCatalogService
 
 from .conftest import REPO_ROOT, MakeChart, cli
@@ -101,7 +101,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
     (unmanaged / "chart-lifecycle.yaml").unlink()
     disabled = make_chart("disabled")
     (disabled / "chart-lifecycle.yaml").write_text(
-        yaml.safe_dump(
+        dump_yaml(
             {
                 "apiVersion": "chartmanager.io/v1alpha1",
                 "kind": "ChartLifecycle",
@@ -113,7 +113,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
     )
     section_disabled = make_chart("section-disabled")
     (section_disabled / "chart-lifecycle.yaml").write_text(
-        yaml.safe_dump(
+        dump_yaml(
             {
                 "apiVersion": "chartmanager.io/v1alpha1",
                 "kind": "ChartLifecycle",
@@ -151,10 +151,10 @@ def test_chart_catalog_rejects_lifecycle_identity_mismatch(
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("actual")
-    lifecycle = yaml.safe_load((chart / "chart-lifecycle.yaml").read_text())
+    lifecycle = parse_yaml((chart / "chart-lifecycle.yaml").read_text())
     lifecycle["metadata"]["name"] = "other"
     (chart / "chart-lifecycle.yaml").write_text(
-        yaml.safe_dump(lifecycle),
+        dump_yaml(lifecycle),
         encoding="utf-8",
     )
 
@@ -265,7 +265,7 @@ def test_chart_list_yaml_carries_the_same_document(
     as_json = cli("chart", "list", "-o", "json", "--root", str(chart_root))
     as_yaml = cli("chart", "list", "-o", "yaml", "--root", str(chart_root))
 
-    assert yaml.safe_load(as_yaml.stdout) == json.loads(as_json.stdout)
+    assert parse_yaml(as_yaml.stdout) == json.loads(as_json.stdout)
 
 
 def test_chart_list_table_is_the_projection_a_terminal_gets(
@@ -343,7 +343,7 @@ def test_chart_show_yaml_is_the_authored_envelope(
     result = cli("chart", "show", "alloy", "-o", "yaml", "--root", str(chart_root))
 
     assert result.exit_code == 0, result.output
-    document = yaml.safe_load(result.stdout)
+    document = parse_yaml(result.stdout)
     assert document["apiVersion"] == "chartmanager.io/v1alpha1"
     assert document["metadata"] == {"name": "alloy"}
     assert document["spec"]["clusterTest"]["enabled"] is True

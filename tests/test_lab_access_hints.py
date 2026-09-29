@@ -35,6 +35,7 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterService,
 )
+from chart_manager.services.clusters.development.drift import kind_config_host_ports
 from chart_manager.services.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
@@ -483,6 +484,13 @@ def test_webhook_wait_warning_does_not_abort_run(tmp_path: Path) -> None:
 
 
 # ----- port-mapping drift ---------------------------------------------------
+
+
+def test_port_mapping_drift_treats_malformed_nested_shape_as_unknown(tmp_path: Path) -> None:
+    config = tmp_path / "kind-config.yaml"
+    config.write_text("nodes:\n  - extraPortMappings: not-a-list\n", encoding="utf-8")
+
+    assert kind_config_host_ports(config) == set()
 
 
 def test_port_mapping_drift_warning_when_live_missing_expected(tmp_path: Path) -> None:

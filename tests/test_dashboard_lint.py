@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-import yaml
 from typer.testing import Result
 
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.grafana.dashboard_lint import (
     expand_targets,
     lint_dashboard,
@@ -231,7 +231,7 @@ def test_json_and_yaml_projections_are_the_same_wire_document(
 
     assert as_json.exit_code == 1
     assert json.loads(as_json.stdout) == expected
-    assert yaml.safe_load(as_yaml.stdout) == expected
+    assert parse_yaml(as_yaml.stdout) == expected
 
 
 def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:

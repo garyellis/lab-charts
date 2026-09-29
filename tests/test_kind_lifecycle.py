@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
+from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import FakeCommandRunner, Predicate
 
 
@@ -233,7 +232,7 @@ def test_repository_kind_configs_own_the_digest_pinned_node_image() -> None:
     configs = (root / "kind-config.yaml",)
 
     for config in configs:
-        document = yaml.safe_load(config.read_text(encoding="utf-8"))
+        document = parse_yaml(config.read_text(encoding="utf-8"))
         nodes = document["nodes"]
         assert nodes
         images = {node["image"] for node in nodes}

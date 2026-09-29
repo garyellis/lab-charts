@@ -1,11 +1,11 @@
-import yaml
+from chart_manager.plumbing.yaml_files import parse_yaml
 
 from .conftest import REPO_ROOT
 
 
 def _yaml(path: str) -> dict:
     content = (REPO_ROOT / path).read_text(encoding="utf-8")
-    loaded = yaml.safe_load(content)
+    loaded = parse_yaml(content)
     assert isinstance(loaded, dict)
     return loaded
 

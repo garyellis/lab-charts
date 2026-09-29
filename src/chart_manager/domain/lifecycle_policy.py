@@ -20,15 +20,13 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-import yaml
-
 from chart_manager.api.v1alpha1.chart_lifecycle import (
     ChartLifecycle,
     ClusterTestProfile,
     ClusterTestSpec,
     ManifestValidationSpec,
 )
-from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
+from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
 LIFECYCLE_FILENAME = "chart-lifecycle.yaml"
@@ -52,7 +50,7 @@ def load_chart_lifecycle(path: Path) -> ChartLifecycle:
         raise SpecError(f"missing chart lifecycle configuration: {path}")
     try:
         document = load_yaml_file(path)
-    except (SpecError, yaml.YAMLError) as exc:
+    except YamlError as exc:
         raise SpecError(f"invalid chart lifecycle configuration {path}: {exc}") from exc
     try:
         return ChartLifecycle.model_validate(document)

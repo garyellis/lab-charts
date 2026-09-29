@@ -259,10 +259,9 @@ def test_domain_modules_are_discoverable() -> None:
 #: `chart_manager.settings` is on the list and `api/` is denied it, and the
 #: asymmetry is the point: a contract must describe what a YAML file may say
 #: without knowing which repository it was found in, while resolving
-#: `charts/<name>/Chart.yaml` is most of what domain does. `yaml` and
-#: `pydantic` are here for the same reason -- turning bytes into a validated
-#: document is the loading boundary domain owns, which is exactly the work
-#: `api/` is forbidden from doing.
+#: `charts/<name>/Chart.yaml` is most of what domain does. `pydantic` remains
+#: here because domain owns model loading; byte decoding is centralized in
+#: `plumbing.yaml_files`.
 _DOMAIN_ALLOWED_IMPORTS = frozenset(
     {
         "chart_manager.api",
@@ -270,9 +269,40 @@ _DOMAIN_ALLOWED_IMPORTS = frozenset(
         "chart_manager.plumbing",
         "chart_manager.settings",
         "pydantic",
-        "yaml",
     }
 )
+
+
+def test_yaml_libraries_are_private_to_the_yaml_plumbing_boundary() -> None:
+    """Keep parser policy, error translation, and formatting in one module."""
+    boundary = _PKG / "plumbing" / "yaml_files.py"
+    offenders: list[str] = []
+    boundary_imports: set[str] = set()
+    for path in sorted(_PKG.rglob("*.py")):
+        label = str(path.relative_to(_SRC))
+        source = path.read_text(encoding="utf-8")
+        imports = {
+            module
+            for _, module in _imports_in(
+                source, label, _package_of(path)
+            )
+            if module.split(".")[0] in {"yaml", "ruamel"}
+        }
+        if path == boundary:
+            boundary_imports.update(imports)
+        else:
+            offenders.extend(f"{label}: {module}" for module in sorted(imports))
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "YamlConfigSettingsSource" for alias in node.names
+            ):
+                offenders.append(f"{label}: pydantic_settings.YamlConfigSettingsSource")
+
+    assert not offenders, "YAML libraries may be imported only by yaml_files.py:\n  " + "\n  ".join(
+        offenders
+    )
+    assert any(module == "ruamel" or module.startswith("ruamel.") for module in boundary_imports)
+    assert not any(module == "yaml" or module.startswith("yaml.") for module in boundary_imports)
 
 
 def test_domain_imports_only_api_plumbing_and_the_standard_library() -> None:

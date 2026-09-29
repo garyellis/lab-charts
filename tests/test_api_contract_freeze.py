@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from pydantic import BaseModel, ValidationError
 
 from chart_manager.api.v1alpha1.chart_lifecycle import (
@@ -64,6 +63,7 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 from chart_manager.domain.local_resources import DEFAULT_STACKS_DIR
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.settings import DEFAULT_LOCAL_CONFIG
 
 from .conftest import REPO_ROOT
@@ -86,7 +86,7 @@ ROOT_MODELS: dict[str, type[BaseModel]] = {
 
 
 def _read_yaml(path: Path) -> Any:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    return parse_yaml(path.read_text(encoding="utf-8"))
 
 
 def _discover(filename: str) -> list[Path]:

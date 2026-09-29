@@ -3,10 +3,10 @@
 from pathlib import Path
 
 import pytest
-import yaml
 
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.ci import CiService
 from chart_manager.services.lifecycle import LifecycleImpact
 
@@ -29,11 +29,11 @@ def _dependent_test(
     profile: str,
 ) -> None:
     path = chart / "chart-lifecycle.yaml"
-    config = yaml.safe_load(path.read_text())
+    config = parse_yaml(path.read_text())
     config["spec"]["clusterTest"]["dependentTests"] = [
         {"chart": target, "profile": profile}
     ]
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(dump_yaml(config))
 
 
 def test_directly_changed_charts_uses_only_explicit_file_ownership(
@@ -178,9 +178,9 @@ def test_explicit_matrix_rejects_unknown_and_unavailable_charts_together(
     make_chart("enabled")
     disabled = make_chart("disabled")
     path = disabled / "chart-lifecycle.yaml"
-    config = yaml.safe_load(path.read_text())
+    config = parse_yaml(path.read_text())
     config["spec"]["clusterTest"]["enabled"] = False
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(dump_yaml(config))
 
     with pytest.raises(SpecError) as caught:
         _service(chart_root).explicit_cluster_test_matrix(

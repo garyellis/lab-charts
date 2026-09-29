@@ -7,12 +7,11 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path, PurePath
 
-import yaml
 from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
 WORKSPACE_FILE = Path(".chart-manager/workspace.yaml")
@@ -188,7 +187,7 @@ def load_repository_workspace(
     try:
         document = load_yaml_file(marker)
         resource = ChartWorkspace.model_validate(document)
-    except (SpecError, yaml.YAMLError, ValidationError, ValueError) as exc:
+    except (YamlError, ValidationError, ValueError) as exc:
         raise SpecError(f"invalid ChartWorkspace {marker}: {exc}") from exc
     spec = resource.spec
     for field, relative in (

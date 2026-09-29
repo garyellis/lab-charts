@@ -14,9 +14,9 @@ from typing import Literal
 from pydantic import field_validator
 from pydantic_settings import (
     BaseSettings,
+    InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    YamlConfigSettingsSource,
 )
 
 from chart_manager.domain.workspace import (
@@ -26,6 +26,7 @@ from chart_manager.domain.workspace import (
     load_repository_workspace,
     resolve_repository_root,
 )
+from chart_manager.plumbing.yaml_files import load_yaml_file
 
 DEFAULT_CHARTS_DIR = LEGACY_CHARTS_DIR
 DEFAULT_LOCAL_CONFIG = LEGACY_LOCAL_CLUSTER
@@ -129,7 +130,10 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            YamlConfigSettingsSource(settings_cls, yaml_file=config_file()),
+            InitSettingsSource(
+                settings_cls,
+                load_yaml_file(config_file()) if config_file().is_file() else {},
+            ),
             file_secret_settings,
         )
 

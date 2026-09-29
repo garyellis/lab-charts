@@ -73,11 +73,11 @@ from collections.abc import Sequence
 from typing import Annotated, Any
 
 import typer
-import yaml
 from rich.console import Console
 from rich.table import Table
 
 from chart_manager.cli import streams
+from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Resolved from the environment rather than named by the caller.
 AUTO = "auto"
@@ -321,7 +321,7 @@ def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
     if mode == JSON:
         typer.echo(json.dumps(data, indent=2, sort_keys=True))
     elif mode == YAML:
-        typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
+        typer.echo(dump_yaml(data), nl=False)
     elif table is None:
         raise ValueError(f"no table projection was supplied for --output {mode}")
     else:

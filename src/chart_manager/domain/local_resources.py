@@ -17,7 +17,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from pydantic import BaseModel, ConfigDict
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
@@ -30,12 +29,13 @@ from chart_manager.api.v1alpha1.releases import (
     RepoChartRelease,
     StackRelease,
 )
+from chart_manager.domain.charts import load_chart_metadata, load_chart_name
 from chart_manager.domain.lifecycle_policy import (
     LIFECYCLE_FILENAME,
     load_chart_lifecycle,
     require_cluster_test_profile,
 )
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
@@ -49,7 +49,7 @@ def _load_resource(path: Path, model: type[LocalCluster] | type[LocalStack]):
         raise SpecError(f"local resource file does not exist: {path}")
     try:
         document = load_yaml_file(path)
-    except (SpecError, yaml.YAMLError) as exc:
+    except YamlError as exc:
         raise SpecError(f"invalid local resource {path}: {exc}") from exc
     try:
         return model.model_validate(document)
@@ -145,10 +145,7 @@ class LocalResourceLoader:
             chart_yaml = chart / "Chart.yaml"
             if not chart_yaml.is_file():
                 raise SpecError(f"release.chart has no Chart.yaml: {release.chart}")
-            chart_document = load_yaml_file(chart_yaml)
-            chart_name = chart_document.get("name")
-            if not isinstance(chart_name, str):
-                raise SpecError(f"{chart_yaml} must define a string name")
+            chart_name = load_chart_metadata(chart_yaml).name
             if isinstance(release, LocalChartRelease) and release.name != chart_name:
                 raise SpecError(
                     f"local release name {release.name!r} does not match "
@@ -228,10 +225,7 @@ class LocalTargetResolver(LocalResourceLoader):
             chart_yaml = absolute / "Chart.yaml"
             if not chart_yaml.is_file():
                 raise SpecError(f"local target directory has no Chart.yaml: {path}")
-            chart_document = load_yaml_file(chart_yaml)
-            name = chart_document.get("name")
-            if not isinstance(name, str):
-                raise SpecError(f"{chart_yaml} must define a string name")
+            name = load_chart_name(chart_yaml)
             try:
                 dns_label(name, field="Chart.yaml name")
             except ValueError as exc:

@@ -5,6 +5,10 @@ class ChartManagerError(Exception):
     """Base exception for expected CLI failures."""
 
 
+class YamlError(ChartManagerError):
+    """Raised when YAML cannot be decoded, parsed, encoded, read, or written."""
+
+
 class SpecError(ChartManagerError):
     """Raised when authored chart-manager configuration is missing or invalid."""
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-
+from chart_manager.plumbing.errors import YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.services.upgrader.errors import UpgradeError
 from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
@@ -54,13 +54,10 @@ def resolve_chart_path(
         raise UpgradeError(f"Chart.yaml must not be a symlink: {chart_file}")
     if not chart_file.is_file():
         raise UpgradeError(f"missing Chart.yaml: {chart_file}")
-    yaml = YAML(typ="safe")
     try:
-        document = yaml.load(chart_file.read_text(encoding="utf-8"))
-    except Exception as exc:
+        document = load_yaml_file(chart_file)
+    except YamlError as exc:
         raise UpgradeError(f"invalid Chart.yaml {chart_file}: {exc}") from exc
-    if not isinstance(document, dict):
-        raise UpgradeError(f"Chart.yaml must contain a mapping: {chart_file}")
     name = document.get("name")
     if not isinstance(name, str) or name != resolved.name:
         raise UpgradeError(

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import yaml
 
 from chart_manager.cli import grafana as grafana_cli
+from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.grafana.dashboard_export import (
     ExportRequest,
     GrafanaExporter,
@@ -299,7 +299,7 @@ def test_yaml_projection_is_the_same_object(exporter: list[ExportRequest]) -> No
     result = cli("grafana", "dashboard", "export", "u", "-o", "yaml")
 
     assert result.exit_code == 0
-    assert yaml.safe_load(result.stdout) == _DASHBOARD
+    assert parse_yaml(result.stdout) == _DASHBOARD
 
 
 def test_to_writes_canonical_json_and_stdout_carries_the_summary(
