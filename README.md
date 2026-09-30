@@ -228,15 +228,27 @@ Validation can still update Helm dependencies and retain rendered files with
 `--keep`; schema resolution itself has no online fallback.
 
 Generated CRD schemas are automatic, disposable build outputs in a separate
-cache. With `generateFromCRDs` enabled, an empty cache renders all enabled charts
-once to discover CRD providers. Later validations render only changed charts for
-schema discovery, keyed by chart files (including untracked templates and
-vendored dependencies), chart-manager Python code, and the Helm executable. Charts with
-local file dependencies or an explicit Helm version selector are conservatively
-rendered each time. Broken providers still fail preparation. Changed or removed
+cache. With `generateFromCRDs` enabled, dependencies are materialized before
+provider discovery, without parsing environment values or rendering charts.
+Discovery scans chart sources and packaged dependencies for CRDs; dynamic
+resource templates are conservatively treated as potential providers. Plain
+nonprovider charts are skipped. Uncached providers render together in one batch,
+and their schemas are cached immediately, including on a fresh checkout. Later
+validations reuse results keyed by chart files (including untracked templates
+and vendored dependencies), chart-manager Python code, and the Helm executable.
+Potential providers with local file dependencies or an explicit Helm version
+selector are conservatively rendered each time. Broken potential providers and
+unavailable dependencies still fail preparation. Changed or removed
 CRDs take effect on the next validate, without editing the upstream lock. CI
-restores this derived cache separately across commits. INFO logs report upstream
-verification, CRD cache hits and renders, and validation totals. The final timing
+restores per-chart derived results separately, keyed by chart, implementation,
+and tool inputs instead of the commit SHA. Before saving, CI drops entries that
+were not used by the current preparation and excludes merged schema generations.
+It also caches materialized Helm dependencies, restoring only files absent from
+the checkout when that chart's metadata and lock still match. Tracked vendored
+archives are never replaced. Upstream snapshots are saved immediately after a
+successful sync, so a later chart failure does not discard those downloads.
+INFO logs report upstream verification, CRD cache hits and renders, and
+validation totals. The final timing
 separates preparation from execution; detailed runner logs are DEBUG-only.
 
 Each generated group/version/kind must have one identical schema across all

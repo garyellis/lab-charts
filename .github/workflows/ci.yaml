@@ -96,11 +96,12 @@ jobs:
             tests/integration/test_chart_lifecycle_packaging.py \
             tests/integration/test_manifest_validation_schema_e2e.py \
             tests/integration/test_crd_schema_constraints.py
+            tests/integration/test_schema_precedence.py
 
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
-        run: uv run --extra dev ruff check src/ tests/
+        run: uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py
 
       # Mypy is intentionally scoped to production code. The package baseline
       # is clean; test annotations stay lightweight by design.
@@ -372,20 +373,38 @@ jobs:
         uses: jdx/mise-action@v4
 
       - name: Restore locked schema generation
+        id: schema_cache
         if: steps.validation_scope.outputs.needed == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/repositories
           key: schema-repos-v3-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
 
-      - name: Restore derived CRD schemas
+      - name: Restore Helm dependencies
+        id: dependency_cache
         if: steps.validation_scope.outputs.needed == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
-          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived
-          key: schema-derived-v1-${{ runner.os }}-${{ github.sha }}
+          path: ${{ github.workspace }}/.cache/chart-manager/helm-dependencies
+          key: helm-dependencies-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.mise.toml', '.github/scripts/validation_cache.py') }}-${{ hashFiles('charts/**/Chart.yaml', 'charts/**/Chart.lock') }}
           restore-keys: |
-            schema-derived-v1-${{ runner.os }}-
+            helm-dependencies-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.mise.toml', '.github/scripts/validation_cache.py') }}-
+
+      # Restore only per-chart results. The merged schema tree is cheap to
+      # rebuild; retaining it would accumulate every previous generation.
+      - name: Restore derived CRD schemas
+        id: derived_cache
+        if: steps.validation_scope.outputs.needed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived/charts
+          key: schema-derived-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('charts/**', 'src/chart_manager/**/*.py', '.chart-manager/**', '.mise.toml', 'pyproject.toml', 'uv.lock', '.github/scripts/validation_cache.py') }}
+          restore-keys: |
+            schema-derived-v2-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Materialize cached Helm dependencies
+        if: steps.validation_scope.outputs.needed == 'true'
+        run: python .github/scripts/validation_cache.py restore-dependencies
 
       # Upstream sync never renders charts or changes the committed pins.
       # Derived CRD schemas are prepared automatically by validate.
@@ -413,6 +432,14 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
+
+      # Persist completed downloads even if a later chart validation fails.
+      - name: Save locked schema generation
+        if: steps.schemas.outcome == 'success' && steps.schema_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/repositories
+          key: ${{ steps.schema_cache.outputs.cache-primary-key }}
 
       - name: Validate
         id: validate
@@ -464,13 +491,33 @@ jobs:
           fi
           mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 
+      - name: Prepare validation caches for save
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success'
+        run: |
+          python .github/scripts/validation_cache.py stage-dependencies
+          python .github/scripts/validation_cache.py prune-derived
+
+      - name: Save Helm dependencies
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success' && steps.dependency_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/helm-dependencies
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
+      - name: Save derived CRD schemas
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success' && steps.derived_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived/charts
+          key: ${{ steps.derived_cache.outputs.cache-primary-key }}
+
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
         # on the validate step the JOB never enters "failure" state until the
         # gate fires, so `if: failure()` would never trigger here. `!cancelled()`
         # skips artifact upload during workflow cancellation (no point keeping
         # a half-rendered tree from a killed run).
-        # Schema-sync renders live in a temporary directory and are not part
+        # CRD-discovery renders live in a temporary directory and are not part
         # of this artifact; upload only validation's retained render tree.
         if: ${{ !cancelled() && (steps.validate.outcome == 'failure' || steps.schemas.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
