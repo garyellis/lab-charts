@@ -232,8 +232,8 @@ def _test_req(**overrides: Any) -> TestRequest:
     base: dict[str, Any] = {
         "chart_name": CHART,
         "version": VERSION,
-        "per_hr_timeout": "1m",
-        "total_timeout": "5m",
+        "per_hr_timeout_seconds": 60.0,
+        "total_timeout_seconds": 300.0,
         "environment": ENV,
     }
     base.update(overrides)

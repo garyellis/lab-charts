@@ -27,6 +27,8 @@ from chart_manager.cli.helmrelease_render import (
     render_test_pretty,
 )
 from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.plumbing.duration import parse_duration
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     PROMOTE_OUTCOME,
@@ -144,6 +146,18 @@ def _make_narration_console(no_color: bool) -> Console:
     return narration_console(no_color=no_color)
 
 
+def _duration_option(value: str, *, flag: str) -> float:
+    """Parse a duration option; a bad value is a usage error naming the flag.
+
+    Parsed once, here, so services only ever see seconds. Cross-field
+    ordering stays with the request's own validation (exit 1).
+    """
+    try:
+        return parse_duration(value)
+    except ChartManagerError as exc:
+        raise typer.BadParameter(str(exc), param_hint=flag) from exc
+
+
 def _pr_url(result: PromoteResult) -> str:
     """The PR url for a status that carries one; empty is not reachable today."""
     return result.pull_request.url if result.pull_request is not None else ""
@@ -188,9 +202,9 @@ def monitor(
         version=version,
         namespace=_coerce_namespace(namespace),
         concurrency=concurrency,
-        per_poll_timeout=per_poll_timeout,
-        per_hr_timeout=per_hr_timeout,
-        total_timeout=total_timeout,
+        per_poll_timeout_seconds=_duration_option(per_poll_timeout, flag="--per-poll-timeout"),
+        per_hr_timeout_seconds=_duration_option(per_hr_timeout, flag="--per-hr-timeout"),
+        total_timeout_seconds=_duration_option(total_timeout, flag="--total-timeout"),
         fail_fast=fail_fast,
         environment=environment,
     )
@@ -258,9 +272,9 @@ def test(
         version=version,
         namespace=_coerce_namespace(namespace),
         concurrency=concurrency,
-        per_poll_timeout=per_poll_timeout,
-        per_hr_timeout=per_hr_timeout,
-        total_timeout=total_timeout,
+        per_poll_timeout_seconds=_duration_option(per_poll_timeout, flag="--per-poll-timeout"),
+        per_hr_timeout_seconds=_duration_option(per_hr_timeout, flag="--per-hr-timeout"),
+        total_timeout_seconds=_duration_option(total_timeout, flag="--total-timeout"),
         pod_log_tail=pod_log_tail,
         environment=environment,
     )

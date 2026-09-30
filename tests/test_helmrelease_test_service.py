@@ -255,9 +255,9 @@ def _req(**overrides: Any) -> TestRequest:
         "chart_name": CHART,
         "version": VERSION,
         "concurrency": 2,
-        "per_poll_timeout": "10s",
-        "per_hr_timeout": "1m",
-        "total_timeout": "5m",
+        "per_poll_timeout_seconds": 10.0,
+        "per_hr_timeout_seconds": 60.0,
+        "total_timeout_seconds": 300.0,
     }
     base.update(overrides)
     return TestRequest(**base)
@@ -282,15 +282,37 @@ def test_request_rejects_zero_concurrency() -> None:
 
 
 def test_request_rejects_per_hr_below_30s() -> None:
-    with pytest.raises(ChartManagerError):
-        TestRequest(chart_name=CHART, version=VERSION, per_hr_timeout="10s")
+    with pytest.raises(ChartManagerError, match="must be >= 30s"):
+        TestRequest(chart_name=CHART, version=VERSION, per_hr_timeout_seconds=29.5)
+
+
+def test_request_accepts_per_hr_of_exactly_30s() -> None:
+    req = TestRequest(
+        chart_name=CHART,
+        version=VERSION,
+        per_hr_timeout_seconds=30.0,
+        total_timeout_seconds=30.0,
+    )
+    assert req.per_hr_timeout_seconds == 30.0
 
 
 def test_request_rejects_total_lt_per_hr() -> None:
-    with pytest.raises(ChartManagerError):
+    with pytest.raises(ChartManagerError, match="total_timeout_seconds"):
         TestRequest(
-            chart_name=CHART, version=VERSION, per_hr_timeout="5m", total_timeout="1m"
+            chart_name=CHART,
+            version=VERSION,
+            per_hr_timeout_seconds=300.0,
+            total_timeout_seconds=60.0,
         )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["per_poll_timeout_seconds", "per_hr_timeout_seconds", "total_timeout_seconds"],
+)
+def test_request_rejects_nan(field_name: str) -> None:
+    with pytest.raises(ChartManagerError, match=field_name):
+        TestRequest(chart_name=CHART, version=VERSION, **{field_name: float("nan")})
 
 
 def test_request_rejects_pod_log_tail_below_one() -> None:
@@ -826,7 +848,7 @@ def test_total_deadline_trips_between_reap_and_helm_skips_helm() -> None:
         statuses={("loki", "loki"): _released_status(ref)},
     )
     helm = _FakeHelm(result=_ok_result())
-    # Clock advances 200s per call. total_timeout=5m=300s. After a handful
+    # Clock advances 200s per call. total_timeout_seconds=300. After a handful
     # of get_status/list_test_pods calls the clock exceeds 300s before
     # _run_helm sees the deadline check.
     clock = _Clock(start=0.0, step=200.0)
@@ -852,7 +874,9 @@ def test_helm_test_called_with_logs_and_subprocess_timeout() -> None:
     (release,), kwargs = helm.calls[0]
     assert release == "loki"
     assert kwargs["namespace"] == "loki"
-    assert kwargs["timeout"] == "1m"
+    # Canonical seconds, not the operator's spelling: "60s" and "1m" are the
+    # same Go duration to helm.
+    assert kwargs["timeout"] == "60s"
     assert kwargs["logs"] is True
     assert isinstance(kwargs["subprocess_timeout"], float)
     assert kwargs["subprocess_timeout"] > 0
@@ -1086,9 +1110,11 @@ def test_subprocess_cap_is_per_hr_plus_thirty_seconds() -> None:
         list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
     )
     helm = _FakeHelm(result=_ok_result())
-    _make_service(cluster, helm).test(_req(per_hr_timeout="1m", total_timeout="5m"))
+    _make_service(cluster, helm).test(_req(per_hr_timeout_seconds=60.0, total_timeout_seconds=300.0))
     [(_args, kwargs)] = helm.calls
     assert kwargs["subprocess_timeout"] == 90.0
+    # helm's per-hook --timeout is the per-HR budget alone, never the cap.
+    assert kwargs["timeout"] == "60s"
 
 
 def test_subprocess_cap_is_bounded_by_remaining_total_budget() -> None:
@@ -1098,9 +1124,46 @@ def test_subprocess_cap_is_bounded_by_remaining_total_budget() -> None:
     )
     helm = _FakeHelm(result=_ok_result())
     # total == per_hr: the 30s allowance would overrun the run's budget.
-    _make_service(cluster, helm).test(_req(per_hr_timeout="1m", total_timeout="1m"))
+    _make_service(cluster, helm).test(_req(per_hr_timeout_seconds=60.0, total_timeout_seconds=60.0))
     [(_args, kwargs)] = helm.calls
     assert kwargs["subprocess_timeout"] == 60.0
+    # Capping the subprocess does not shrink the per-hook timeout helm sees.
+    assert kwargs["timeout"] == "60s"
+
+
+def test_subprocess_cap_tracks_remaining_total_after_time_elapses() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+    helm = _FakeHelm(result=_ok_result())
+    # The run starts at t=0, but the clock reads t=250 by the time helm is
+    # invoked: 50s of the 300s total remain, which is less than 60 + 30.
+    clock = _Clock(start=0.0)
+    service = _make_service(cluster, helm, clock=clock)
+    original = service._run_helm
+
+    def _run_helm_late(ctx: Any) -> Any:
+        clock.t = 250.0
+        return original(ctx)
+
+    service._run_helm = _run_helm_late  # type: ignore[method-assign]
+    service.test(_req(per_hr_timeout_seconds=60.0, total_timeout_seconds=300.0))
+    [(_args, kwargs)] = helm.calls
+    assert kwargs["subprocess_timeout"] == 50.0
+    assert kwargs["timeout"] == "60s"
+
+
+def test_helm_timeout_preserves_fractional_seconds() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+    helm = _FakeHelm(result=_ok_result())
+    _make_service(cluster, helm).test(_req(per_hr_timeout_seconds=45.5, total_timeout_seconds=300.0))
+    [(_args, kwargs)] = helm.calls
+    assert kwargs["timeout"] == "45.5s"
+    assert kwargs["subprocess_timeout"] == 75.5
 
 
 def test_diagnostics_snapshot_at_most_five_test_pods() -> None:

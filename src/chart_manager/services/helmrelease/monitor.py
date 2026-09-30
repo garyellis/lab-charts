@@ -27,7 +27,7 @@ from chart_manager.integrations.helmrelease import (
     WorkloadRollout,
 )
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.duration import parse_duration
+from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
@@ -62,9 +62,11 @@ class MonitorRequest:
     version: str
     namespace: str | None = None
     concurrency: int = 4
-    per_poll_timeout: str = "10s"
-    per_hr_timeout: str = "5m"
-    total_timeout: str = "15m"
+    # Budgets in seconds. The CLI parses its duration strings once, at the
+    # input boundary; every caller gets the same numeric validation below.
+    per_poll_timeout_seconds: float = 10.0
+    per_hr_timeout_seconds: float = 300.0
+    total_timeout_seconds: float = 900.0
     # When True, the first failed/timed-out outcome triggers cancellation of
     # remaining in-flight watchers; their outcomes carry `TotalBudgetExhausted`.
     fail_fast: bool = False
@@ -81,17 +83,18 @@ class MonitorRequest:
             raise ChartManagerError("version must be non-empty")
         if self.concurrency < 1:
             raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
-        per_hr = parse_duration(self.per_hr_timeout)
-        if per_hr < _POLL_INTERVAL_SEC:
+        require_positive_seconds("per_poll_timeout_seconds", self.per_poll_timeout_seconds)
+        require_positive_seconds("per_hr_timeout_seconds", self.per_hr_timeout_seconds)
+        require_positive_seconds("total_timeout_seconds", self.total_timeout_seconds)
+        if self.per_hr_timeout_seconds < _POLL_INTERVAL_SEC:
             raise ChartManagerError(
-                f"per_hr_timeout ({self.per_hr_timeout}) must be >= the "
+                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s) must be >= the "
                 f"{_POLL_INTERVAL_SEC:g}s poll interval"
             )
-        total = parse_duration(self.total_timeout)
-        if total < per_hr:
+        if self.total_timeout_seconds < self.per_hr_timeout_seconds:
             raise ChartManagerError(
-                f"total_timeout ({self.total_timeout}) must be >= per_hr_timeout "
-                f"({self.per_hr_timeout})"
+                f"total_timeout_seconds ({self.total_timeout_seconds:g}s) must be >= "
+                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s)"
             )
 
 
@@ -201,7 +204,7 @@ class MonitorService:
         (kubectl/watcher crashes) raise, after cancelling peer watchers.
         """
         start = self._clock()
-        per_poll = parse_duration(request.per_poll_timeout)
+        per_poll = request.per_poll_timeout_seconds
         matched = filter_matched_statuses(
             self._client,
             namespace=request.namespace,
@@ -212,16 +215,16 @@ class MonitorService:
 
         _LOG.info(
             "monitor run started: chart=%s version=%s namespace=%s matched=%d "
-            "concurrency=%d fail_fast=%s per_poll=%s per_hr=%s total=%s poll_interval=%.1fs",
+            "concurrency=%d fail_fast=%s per_poll=%gs per_hr=%gs total=%gs poll_interval=%.1fs",
             request.chart_name,
             request.version,
             request.namespace or "(all)",
             len(matched),
             request.concurrency,
             request.fail_fast,
-            request.per_poll_timeout,
-            request.per_hr_timeout,
-            request.total_timeout,
+            request.per_poll_timeout_seconds,
+            request.per_hr_timeout_seconds,
+            request.total_timeout_seconds,
             _POLL_INTERVAL_SEC,
         )
 
@@ -234,7 +237,7 @@ class MonitorService:
             environment=request.environment,
             strict=self._strict_events,
         )
-        total_deadline = start + parse_duration(request.total_timeout)
+        total_deadline = start + request.total_timeout_seconds
         return run_matched(
             matched,
             start=start,
@@ -276,9 +279,7 @@ class MonitorService:
             request,
             state,
             per_poll=per_poll,
-            hr_deadline=min(
-                started_mono + parse_duration(request.per_hr_timeout), total_deadline
-            ),
+            hr_deadline=min(started_mono + request.per_hr_timeout_seconds, total_deadline),
             total_deadline=total_deadline,
             cancel_event=cancel_event,
         )
@@ -350,12 +351,12 @@ class MonitorService:
                 # budgets tripped is the whole content of the answer.
                 _LOG.warning(
                     "monitor deadline reached: ns=%s name=%s reason=%s "
-                    "per_hr=%s total=%s",
+                    "per_hr=%gs total=%gs",
                     state.ref.namespace,
                     state.ref.name,
                     reason,
-                    request.per_hr_timeout,
-                    request.total_timeout,
+                    request.per_hr_timeout_seconds,
+                    request.total_timeout_seconds,
                 )
                 return Verdict.TIMED_OUT, reason
 

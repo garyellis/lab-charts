@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.commands import SubprocessRunner
-from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    CommandTimeout,
+    ExternalCommandError,
+)
 from chart_manager.services.lifecycle.hooks import ClusterTestHookRunner
 from chart_manager.services.lifecycle.models import ActionKind, ActionTarget, LifecycleAction
 
@@ -86,6 +90,15 @@ def test_hook_timeout_is_the_profile_timeout_and_output_is_captured(tmp_path: Pa
     assert record.timeout == 420.0
     assert record.capture is True
     assert record.cwd == tmp_path.resolve()
+
+
+def test_hook_with_a_non_finite_timeout_is_refused_before_it_runs(tmp_path: Path) -> None:
+    # float("nan") used to become the subprocess timeout, which never fires:
+    # the hook could hang forever. It is now an invalid duration.
+    runner = FakeCommandRunner()
+    with pytest.raises(ChartManagerError, match="invalid duration: 'nan'"):
+        _runner(tmp_path, runner).run(_action(tmp_path, ("tool",), timeout="nan"))
+    assert runner.records == []
 
 
 def test_failed_hook_reports_exit_code_and_verbatim_stderr_tail(tmp_path: Path) -> None:
