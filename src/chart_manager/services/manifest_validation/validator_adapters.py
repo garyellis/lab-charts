@@ -26,6 +26,7 @@ from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.schema_locations import validate_schema_location
 from chart_manager.services.manifest_validation.models import PhaseResult
 from chart_manager.services.manifest_validation.paths import has_manifests, require_within
 from chart_manager.services.manifest_validation.validators import (
@@ -67,9 +68,7 @@ def resolve_policy_paths(
     policies_dir: Path = Path("policies"),
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Resolve discovered and authored chart-relative policy directories."""
-    policies = list(
-        discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir)
-    )
+    policies = list(discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir))
     warnings: list[str] = []
     for extra in extras:
         selected = (chart_path / extra).resolve()
@@ -98,8 +97,7 @@ def resolve_schema_locations(
 ) -> tuple[str, ...]:
     """Resolve chart additions as repository-local schema templates."""
     return tuple(
-        _resolve_schema_location(location, repo_root, spec_path=spec_path)
-        for location in locations
+        _resolve_schema_location(location, repo_root, spec_path=spec_path) for location in locations
     )
 
 
@@ -111,6 +109,7 @@ def _resolve_schema_location(
 ) -> str:
     if not location.strip():
         raise SpecError(f"{spec_path}: schema location must not be empty")
+    validate_schema_location(location)
 
     resolved = (repo_root / location).resolve()
     label = f"{spec_path}: local schema location {location!r}"
@@ -126,9 +125,7 @@ def _resolve_schema_location(
 
     static_prefix = location[:template_start]
     prefix_path = Path(static_prefix)
-    anchor_relative = (
-        prefix_path if static_prefix.endswith(("/", "\\")) else prefix_path.parent
-    )
+    anchor_relative = prefix_path if static_prefix.endswith(("/", "\\")) else prefix_path.parent
     anchor = (repo_root / anchor_relative).resolve()
     require_within(anchor, repo_root, label=label)
     if not anchor.exists():
@@ -173,6 +170,8 @@ class KubeconformValidator:
                 schema_locations=list(config.schema_locations),
                 skip_kinds=list(config.ignore_missing_schemas),
             )
+        except SpecError as exc:
+            return PhaseResult(phase="schema", status="FAIL", detail=str(exc), error_type="spec")
         except ExternalCommandError as exc:
             return PhaseResult(
                 phase="schema",
@@ -184,10 +183,18 @@ class KubeconformValidator:
         if not report.has_failures():
             return PhaseResult(phase="schema", status="PASS")
 
+        detail = _format_schema_findings(report.invalid())
+        if any(_is_schema_readiness_error(item) for item in report.errors()):
+            detail += (
+                "\nSchema unavailable: run `chart-manager schemas sync` to verify and hydrate "
+                "the lock; if chart schema inputs changed, run "
+                "`chart-manager schemas sync --refresh`. For unmanaged repositories, check "
+                "spec.validation.schemaLocations in the chart's chart-lifecycle.yaml."
+            )
         return PhaseResult(
             phase="schema",
             status="FAIL",
-            detail=_format_schema_findings(report.invalid()),
+            detail=detail,
             error_type=(
                 "tool"
                 if any(_is_schema_readiness_error(item) for item in report.errors())
@@ -219,16 +226,12 @@ class KyvernoValidator:
         if not isinstance(config, KyvernoConfig):
             raise TypeError("kyverno received incompatible compiled config")
         if not config.policy_paths:
-            return PhaseResult(
-                phase="policy", status="SKIP", detail="no policies discovered"
-            )
+            return PhaseResult(phase="policy", status="SKIP", detail="no policies discovered")
         if not rendered_dir.exists() or not has_manifests(rendered_dir):
             return PhaseResult(phase="policy", status="SKIP", detail="no manifests")
 
         try:
-            report = self.integration.apply(
-                rendered_dir, policy_paths=list(config.policy_paths)
-            )
+            report = self.integration.apply(rendered_dir, policy_paths=list(config.policy_paths))
         except ExternalCommandError as exc:
             return PhaseResult(
                 phase="policy",
@@ -351,9 +354,7 @@ class KubeconformProvider:
         timeout: float | None,
     ) -> ManifestValidator:
         """Build the kubeconform executor without probing its binary."""
-        return KubeconformValidator(
-            Kubeconform(runner=command_runner, timeout=timeout)
-        )
+        return KubeconformValidator(Kubeconform(runner=command_runner, timeout=timeout))
 
 
 class KyvernoProvider:

@@ -18,8 +18,9 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.plumbing.preflight import Check, probe_binary
+from chart_manager.plumbing.schema_locations import expand_schema_location, validate_schema_location
 from chart_manager.plumbing.yaml_files import load_yaml_documents
 
 _log = logging.getLogger(__name__)
@@ -112,10 +113,13 @@ class Kubeconform:
         report (``check=False``); invalid configuration or output raises.
         """
         if not schema_locations:
-            raise ExternalCommandError(
-                "kubeconform requires at least one explicit local schema location"
+            raise SpecError(
+                "schema validation has no schema locations; configure spec.validation in "
+                ".chart-manager/workspace.yaml and run `chart-manager schemas sync --update`, "
+                "or supply spec.validation.schemaLocations in the chart's chart-lifecycle.yaml"
             )
         for location in schema_locations:
+            validate_schema_location(location)
             parsed = urlsplit(location)
             if not location.strip() or location == "default" or parsed.scheme or parsed.netloc:
                 raise ExternalCommandError(
@@ -236,17 +240,11 @@ def _uncovered_gvk_skips(
                 group, _, version = api_version.rpartition("/")
                 if not group:
                     version = api_version
-                template_group = group or version
-                replacements = {
-                    "{{.Group}}": template_group,
-                    "{{.ResourceKind}}": kind.lower(),
-                    "{{.ResourceAPIVersion}}": version,
-                }
                 covered = False
                 for location in schema_locations:
-                    expanded = location
-                    for marker, value in replacements.items():
-                        expanded = expanded.replace(marker, value)
+                    expanded = expand_schema_location(
+                        location, group=group, version=version, kind=kind
+                    )
                     if Path(expanded).is_file():
                         covered = True
                         break

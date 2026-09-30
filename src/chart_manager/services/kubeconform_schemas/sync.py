@@ -249,7 +249,11 @@ class KubeconformSchemaSyncService:
             tuple[str, str, str],
             tuple[Literal["kubernetes", "catalog"], bytes, str],
         ] = {}
-        unresolved_gvks = _unique_gvks(unresolved)
+        # Optional-only GVKs never cause remote discovery. They are validated
+        # when a derived schema or a remote schema required elsewhere exists.
+        unresolved_gvks = _unique_gvks(
+            [requirement for requirement in unresolved if not requirement.allow_missing]
+        )
         kubernetes_requests = [
             KubeconformSchemaArtifactRequest(
                 key=gvk.key,
@@ -312,7 +316,7 @@ class KubeconformSchemaSyncService:
             raise KubeconformSchemaConfigurationError(
                 "required schemas were not found in generated, local, Kubernetes, "
                 f"or catalog sources: {detail}; add an exact local schema or "
-                "spec.validation.ignoreMissingSchemas entry"
+                "spec.validation.ignoreMissingSchemas entry in the chart's chart-lifecycle.yaml"
             )
 
         files: list[SchemaFile] = []
@@ -371,6 +375,12 @@ class KubeconformSchemaSyncService:
         absent: another use of an already-covered repository schema is harmless.
         """
         materialized = _index_materialized(materialized_values)
+        strict_remote_gvks = {
+            _gvk_key(requirement.gvk)
+            for requirement in requirements
+            if not requirement.allow_missing
+            and _select_materialized(materialized, requirement) is None
+        }
         remote_by_gvk: dict[tuple[str, str, str], list[SchemaFile]] = {}
         for entry in lock.schemas:
             if entry.source in {"kubernetes", "catalog"}:
@@ -399,19 +409,19 @@ class KubeconformSchemaSyncService:
                 )
                 continue
 
-            remote = remote_by_gvk.get(_gvk_key(requirement.gvk), [])
+            remote = (
+                remote_by_gvk.get(_gvk_key(requirement.gvk), [])
+                if _gvk_key(requirement.gvk) in strict_remote_gvks
+                else []
+            )
             if len(remote) == 1:
                 expected.append(remote[0])
                 continue
             if len(remote) > 1:
-                problems.append(
-                    f"{requirement.gvk.key} has multiple locked remote sources"
-                )
+                problems.append(f"{requirement.gvk.key} has multiple locked remote sources")
                 continue
             if not requirement.allow_missing:
-                problems.append(
-                    f"{requirement.scope.key}: {requirement.gvk.key} is not covered"
-                )
+                problems.append(f"{requirement.scope.key}: {requirement.gvk.key} is not covered")
 
         try:
             ordered_expected = sort_schema_files(expected)

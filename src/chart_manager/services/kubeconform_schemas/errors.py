@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 
 
 class KubeconformSchemaError(ChartManagerError):
@@ -11,6 +12,14 @@ class KubeconformSchemaError(ChartManagerError):
 
 class KubeconformSchemaConfigurationError(KubeconformSchemaError):
     """The authored schema policy or requested inventory is inconsistent."""
+
+
+class KubeconformSchemaRenderError(KubeconformSchemaError):
+    """Inventory rendering failed; preserve the validation runner's classification."""
+
+    def __init__(self, message: str, *, outcome: Outcome) -> None:
+        super().__init__(message)
+        self.outcome = outcome
 
 
 class KubeconformSchemaIntegrityError(KubeconformSchemaError):
@@ -47,6 +56,7 @@ __all__ = [
     "KubeconformSchemaIntegrityError",
     "KubeconformSchemaLockError",
     "KubeconformSchemaNotFoundError",
+    "KubeconformSchemaRenderError",
     "KubeconformSchemaSourceEnvironmentError",
     "KubeconformSchemaSourceError",
     "KubeconformSchemaSourceIntegrityError",

@@ -51,6 +51,7 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaError,
     KubeconformSchemaLockError,
+    KubeconformSchemaRenderError,
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaSourceError,
 )
@@ -137,7 +138,9 @@ def global_options(
     ] = 0,
     no_color: Annotated[
         bool,
-        typer.Option("--no-color", help="Disable color. The NO_COLOR environment variable does the same."),
+        typer.Option(
+            "--no-color", help="Disable color. The NO_COLOR environment variable does the same."
+        ),
     ] = False,
     output: output_mod.GlobalOutputOption = output_mod.AUTO,
 ) -> None:
@@ -284,6 +287,8 @@ _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
 
 def _outcome_for(exc: ChartManagerError) -> Outcome:
     """Classify a domain error against `_ERROR_OUTCOMES`."""
+    if isinstance(exc, KubeconformSchemaRenderError):
+        return exc.outcome
     for error_type, outcome in _ERROR_OUTCOMES:
         if isinstance(exc, error_type):
             return outcome

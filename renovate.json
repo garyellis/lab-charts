@@ -40,9 +40,9 @@
       "matchStrings": [
         "kubernetesVersion:\\s*[\"']?(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)[\"']?"
       ],
-      "depNameTemplate": "registry.k8s.io/kube-apiserver",
+      "depNameTemplate": "kubernetes/kubernetes",
       "depTypeTemplate": "schema-policy",
-      "datasourceTemplate": "docker",
+      "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.+)$",
       "versioningTemplate": "semver"
     },
@@ -94,7 +94,7 @@
         "schema-policy"
       ],
       "matchPackageNames": [
-        "registry.k8s.io/kube-apiserver"
+        "kubernetes/kubernetes"
       ],
       "minimumReleaseAge": "14 days"
     }

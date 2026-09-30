@@ -31,12 +31,19 @@ def test_extracts_chart_dependency_and_literal_test_images() -> None:
         ),
     }
 
+    # Resolve both tools through mise. Executing Renovate's /usr/bin/env node
+    # shebang can otherwise pick a system Node ahead of the pinned runtime.
+    renovate = subprocess.run(
+        ["mise", "which", "renovate"], cwd=ROOT, env=env,
+        check=True, text=True, capture_output=True, timeout=30,
+    ).stdout.strip()
     completed = subprocess.run(
         [
             "mise",
             "exec",
             "--",
-            "renovate",
+            "node",
+            renovate,
             "--platform=local",
             "--dry-run=extract",
         ],

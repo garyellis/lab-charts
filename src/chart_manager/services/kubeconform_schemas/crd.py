@@ -159,31 +159,31 @@ def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def _walk_schema(node: dict[str, Any], *, close_self: bool = True) -> None:
+def _walk_schema(node: dict[str, Any], *, in_fragment: bool = False) -> None:
     properties = node.get("properties")
     if isinstance(properties, dict):
         for child in properties.values():
             if isinstance(child, dict):
-                _walk_schema(child)
+                _walk_schema(child, in_fragment=in_fragment)
 
     for key in ("patternProperties", "definitions", "$defs", "dependentSchemas"):
         children = node.get(key)
         if isinstance(children, dict):
             for child in children.values():
                 if isinstance(child, dict):
-                    _walk_schema(child)
+                    _walk_schema(child, in_fragment=in_fragment or key == "dependentSchemas")
 
     items = node.get("items")
     if isinstance(items, dict):
-        _walk_schema(items)
+        _walk_schema(items, in_fragment=in_fragment)
     elif isinstance(items, list):
         for child in items:
             if isinstance(child, dict):
-                _walk_schema(child)
+                _walk_schema(child, in_fragment=in_fragment)
 
     additional = node.get("additionalProperties")
     if isinstance(additional, dict):
-        _walk_schema(additional)
+        _walk_schema(additional, in_fragment=in_fragment)
 
     for key in ("allOf", "anyOf", "oneOf"):
         children = node.get(key)
@@ -192,23 +192,27 @@ def _walk_schema(node: dict[str, Any], *, close_self: bool = True) -> None:
                 if isinstance(child, dict):
                     # A combinator branch is a constraint fragment evaluated
                     # alongside its parent. Closing the fragment itself would
-                    # reject sibling properties declared by the parent (the
-                    # common Strimzi oneOf shape), while nested object values
-                    # inside the fragment still need normal strict handling.
-                    _walk_schema(child, close_self=False)
+                    # reject sibling properties declared by the parent. Its
+                    # descendants are partial constraints too.
+                    _walk_schema(child, in_fragment=True)
     prefix_items = node.get("prefixItems")
     if isinstance(prefix_items, list):
         for child in prefix_items:
             if isinstance(child, dict):
-                _walk_schema(child)
+                _walk_schema(child, in_fragment=in_fragment)
     for key in ("not", "if", "then", "else", "contains", "propertyNames"):
         child = node.get(key)
         if isinstance(child, dict):
-            _walk_schema(child)
+            _walk_schema(child, in_fragment=True)
 
     object_shape = node.get("type") == "object" or isinstance(properties, dict)
     preserve_unknown = node.get("x-kubernetes-preserve-unknown-fields") is True
-    if close_self and object_shape and "additionalProperties" not in node and not preserve_unknown:
+    if (
+        not in_fragment
+        and object_shape
+        and "additionalProperties" not in node
+        and not preserve_unknown
+    ):
         node["additionalProperties"] = False
 
 

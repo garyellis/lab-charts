@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.kubeconform_schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
 from tests.conftest import FakeCommandRunner
 
@@ -56,7 +56,6 @@ def test_args_require_local_schemas_without_implicit_crd_skip(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "locations",
     [
-        [],
         [""],
         ["default"],
         ["//schemas.example.test/schema.json"],
@@ -72,6 +71,29 @@ def test_rejects_missing_or_remote_schema_locations(
 
     with pytest.raises(ExternalCommandError, match="local"):
         kc.validate(tmp_path, schema_locations=locations)
+
+
+def test_missing_schema_configuration_is_actionable_spec_error(tmp_path: Path) -> None:
+    runner = FakeCommandRunner()
+    with pytest.raises(SpecError, match=r"workspace.yaml.*schemas sync --update.*schemaLocations"):
+        Kubeconform(runner=runner).validate(tmp_path, schema_locations=[])
+    assert not runner.calls
+
+
+@pytest.mark.parametrize("variable", ["Typo", "NormalizedKubernetesVersion"])
+def test_unknown_template_variable_cannot_silently_skip_allowed_kind(
+    tmp_path: Path, variable: str,
+) -> None:
+    (tmp_path / "resource.yaml").write_text(
+        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
+    )
+    runner = FakeCommandRunner()
+    with pytest.raises(SpecError, match="unsupported schema location expression"):
+        Kubeconform(runner=runner).validate(
+            tmp_path, schema_locations=[f"/schemas/{{{{.{variable}}}}}/widget.json"],
+            skip_kinds=["Widget"],
+        )
+    assert not runner.calls
 
     assert runner.calls == []
 

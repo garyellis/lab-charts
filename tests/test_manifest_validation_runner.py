@@ -639,7 +639,7 @@ def test_dependency_prefetch_failure_isolated_by_chart(
         ) -> bool:
             super().dependency_update_if_stale(chart_path, timeout=timeout)
             if chart_path.name == "bad":
-                raise RuntimeError("registry unavailable")
+                raise ExternalCommandError("registry unavailable", returncode=1)
             return True
 
     runner = ManifestValidationRunner(
@@ -659,10 +659,22 @@ def test_dependency_prefetch_failure_isolated_by_chart(
     by_chart = {row.row.chart: row for row in result.rows}
     bad = by_chart["bad"].phases["render"]
     assert bad.status == "FAIL"
-    assert bad.error_type == "tool"
+    assert bad.error_type == "environment"
     assert "dependency prefetch failed" in (bad.detail or "")
     assert "registry unavailable" in (bad.detail or "")
     assert by_chart["good"].phases["render"].status == "PASS"
+
+
+@pytest.mark.parametrize("returncode,expected", [(1, Outcome.FAILED), (-9, Outcome.TOOL),
+                                               (None, Outcome.TOOL)])
+def test_template_rejection_is_distinct_from_process_failure(tmp_path, returncode, expected):
+    runner = ManifestValidationRunner(
+        helm=_StubHelm(succeed=False, raise_exc=ExternalCommandError(
+            "template failed", returncode=returncode)),
+        output_root=tmp_path / "out", kubeconform=_StubKubeconform(_ok_report()),
+    )
+    result = runner.run([_cfg(_row("demo"), tmp_path / "chart")])
+    assert result.outcome() is expected
 
 
 class _SleepingDependencyRunner:

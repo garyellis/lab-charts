@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -350,6 +350,40 @@ def test_allow_missing_new_gvk_does_not_change_compact_lock(tmp_path: Path) -> N
 
     assert result.lock == created.lock
     assert sources.download_calls == []
+
+
+def test_optional_upstream_schema_does_not_appear_only_after_refresh(tmp_path: Path) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    sources = _Sources()
+    service = KubeconformSchemaSyncService(store, sources)
+    request = _request(tmp_path, update=True)
+    request = replace(request, requirements=tuple(
+        item.model_copy(update={"allow_missing": True}) if item.gvk.kind == "Widget" else item
+        for item in request.requirements
+    ))
+    initial = service.sync(request)
+    assert not any(entry.gvk.kind == "Widget" for entry in initial.lock.schemas)
+    assert not any("widget" in url for batch in sources.download_calls for url in batch)
+    request = replace(request, update=False)
+    assert service.sync(request).lock == initial.lock
+    assert service.refresh(request).lock == initial.lock
+
+
+def test_legacy_inventory_cache_does_not_block_new_format_sync(tmp_path: Path) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    service = KubeconformSchemaSyncService(store, _Sources())
+    request = _request(tmp_path, update=True)
+    initial = service.sync(request)
+    legacy = store.cache_root / store.workspace / initial.generation_path.name
+    legacy.parent.mkdir(parents=True)
+    initial.generation_path.rename(legacy)
+    (legacy / "inventory.json").write_text("{}")
+
+    hydrated = service.sync(replace(request, update=False))
+    assert store.inspect(hydrated.lock).ready
+    assert hydrated.lock == initial.lock
+    assert (legacy / "inventory.json").is_file()
+    assert not (hydrated.generation_path / "inventory.json").exists()
 
 
 @pytest.mark.parametrize("cache_is_warm", [True, False])

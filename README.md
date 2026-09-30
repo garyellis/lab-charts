@@ -202,14 +202,26 @@ heuristic in workflow YAML. `sandbox-test` runs one kind job per changed
 chart, so unrelated charts never gate a PR. `publish` pushes every directly
 changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
-The validate job restores the XDG schema store using the committed
-`.chart-manager/schemas.lock.yaml` hash, then runs `mise run schemas`.
+The validate job skips repository rendering for changes limited to documentation,
+tests, or Renovate configuration. Other paths (including chart inputs, Python
+code, tool pins, and workflows), and explicit `all`/`list` runs, verify the whole
+repository. It restores the XDG schema store using a versioned cache key and the
+committed `.chart-manager/schemas.lock.yaml` hash, then runs `mise run schemas`.
 Synchronization always renders the enabled chart/environment rows and compares
 their current requirements and derived schema bytes with the committed compact
 lock before accepting either a warm or cold cache. It hydrates a missing locked
 generation only after that comparison succeeds. Normal chart validation is
-read-only, uses that verified local generation, and never contacts schema
-sources or renders the rest of the repository.
+read-only with respect to schema locks and caches, uses that verified local
+generation, and never contacts schema sources or renders the rest of the
+repository. Local `chart validate` does not detect chart-derived lock staleness:
+run `mise run schemas` after chart changes. Validation can still update Helm
+dependencies and retain rendered files with `--keep`.
+
+Schema preparation failures include their actual diagnostics in the CI summary.
+CI then runs render-only validation across the repository and uploads retained
+manifests; this diagnostic fallback never turns a schema-preparation failure green.
+Template rejection is a validation failure, dependency-fetch failure is an
+environment failure, and process crashes remain tool failures.
 
 Use `chart-manager schemas sync --refresh` when chart resources, CRDs, or
 chart-local schemas change. It rebuilds the compact lock with the existing
@@ -218,6 +230,32 @@ schema identities and checksums, not repeated chart/environment inventories.
 Store generations are immutable and strict: undeclared files count as
 corruption. Automatic pruning of old generations and interrupted staging
 directories is intentionally deferred to a future maintenance command.
+
+The store format now lives under `$XDG_CACHE_HOME/chart-manager/schemas/v2/`
+(default `~/.cache/chart-manager/schemas/v2/`). Old generations containing
+`inventory.json` are left untouched and never reused. Run `mise run schemas`
+once to hydrate the new store. For corruption inside the current format, use
+`chart-manager doctor --for 'chart validate'` to locate the exact generation,
+move that generation directory aside, and rerun `mise run schemas`; `--refresh`
+does not repair a corrupt immutable cache.
+
+`ignoreMissingSchemas` does not fetch remote schemas for optional-only GVKs.
+An optional kind is still validated when its generated or local schema exists,
+or another chart strictly requires its remote schema. Refreshing the same inputs
+therefore cannot change skipping solely because an optional schema exists upstream.
+Local schema templates accept only `{{.Group}}`, `{{.ResourceKind}}`, and
+`{{.ResourceAPIVersion}}`; unsupported variables are configuration errors.
+
+Repositories without workspace schema policy must supply local schema locations
+in each chart's `spec.validation.schemaLocations` to enable schema validation.
+Alternatively, configure `.chart-manager/workspace.yaml` and initialize the lock
+with `chart-manager schemas sync --update`. No implicit online schema fallback exists.
+
+Breaking v1alpha1 change: chart-local `spec.validation.kubernetesVersion` has been
+removed and is rejected. Move it to `spec.validation.kubernetesVersion` in
+`.chart-manager/workspace.yaml`; all managed charts use that shared version.
+Renovate follows `kubernetes/kubernetes` GitHub releases, whose publication
+timestamps support the 14-day delay before updating the schema policy.
 
 Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 `HARBOR_PROJECT` (default `charts`) in the runner environment, plus

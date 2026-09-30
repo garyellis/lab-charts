@@ -22,15 +22,11 @@ def test_repository_config_enables_only_supported_chart_managers() -> None:
         "custom.regex",
     ]
     assert config["ignorePaths"] == []
-    assert config["helm-values"] == {
-        "managerFilePatterns": ["/(^|/)values(?:-[^/]+)?\\.ya?ml$/"]
-    }
+    assert config["helm-values"] == {"managerFilePatterns": ["/(^|/)values(?:-[^/]+)?\\.ya?ml$/"]}
     assert "extends" not in config
     custom_manager = config["customManagers"][0]  # type: ignore[index]
     assert custom_manager["datasourceTemplate"] == "docker"
-    assert custom_manager["managerFilePatterns"] == [
-        "/(^|/)templates/.+\\.(?:ya?ml|tpl)$/"
-    ]
+    assert custom_manager["managerFilePatterns"] == ["/(^|/)templates/.+\\.(?:ya?ml|tpl)$/"]
     assert "image:" in custom_manager["matchStrings"][0]
     assert "allowedCommands" not in config
     assert "repositories" not in config
@@ -47,14 +43,12 @@ def test_schema_updates_regenerate_only_the_workspace_and_lock() -> None:
     schema_lock = config["customManagers"][3]  # type: ignore[index]
     rule = config["packageRules"][0]  # type: ignore[index]
 
-    assert schema_policy["managerFilePatterns"] == [
-        "/^\\.chart-manager/workspace\\.yaml$/"
-    ]
+    assert schema_policy["managerFilePatterns"] == ["/^\\.chart-manager/workspace\\.yaml$/"]
     assert schema_policy["depTypeTemplate"] == "schema-policy"
+    assert schema_policy["datasourceTemplate"] == "github-releases"
+    assert schema_policy["depNameTemplate"] == "kubernetes/kubernetes"
     assert schema_policy["extractVersionTemplate"] == "^v(?<version>.+)$"
-    assert schema_lock["managerFilePatterns"] == [
-        "/^\\.chart-manager/schemas\\.lock\\.yaml$/"
-    ]
+    assert schema_lock["managerFilePatterns"] == ["/^\\.chart-manager/schemas\\.lock\\.yaml$/"]
     assert schema_lock["depTypeTemplate"] == "schema-lock"
     assert rule["matchDepTypes"] == ["schema-policy", "schema-lock"]
     assert rule["schedule"] == ["before 6am on monday"]
@@ -67,7 +61,7 @@ def test_schema_updates_regenerate_only_the_workspace_and_lock() -> None:
         "executionMode": "update",
     }
     lag_rule = config["packageRules"][1]  # type: ignore[index]
-    assert lag_rule["matchPackageNames"] == ["registry.k8s.io/kube-apiserver"]
+    assert lag_rule["matchPackageNames"] == ["kubernetes/kubernetes"]
     assert lag_rule["minimumReleaseAge"] == "14 days"
 
 

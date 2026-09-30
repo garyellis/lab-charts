@@ -7,10 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from chart_manager.plumbing.schema_locations import expand_schema_location
 from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
+    KubeconformSchemaRenderError,
 )
 from chart_manager.services.kubeconform_schemas.inventory import (
     SchemaInventory,
@@ -77,19 +79,6 @@ class RepositoryKubeconformSchemaService:
                 "before running `chart-manager schemas sync --update`"
             )
         workspace_name = _require_workspace_name(self.workspace)
-        base_request = KubeconformSchemaSyncRequest(
-            workspace=workspace_name,
-            policy=AuthoredSchemaPolicy(
-                kubernetes_version=policy.kubernetes_version,
-                generate_from_crds=policy.schemas.generate_from_crds,
-                catalog_repository=policy.schemas.catalog.repository,
-                catalog_track=policy.schemas.catalog.track,
-            ),
-            requirements=(),
-            materialized=(),
-            lock_path=self.workspace.root / SCHEMA_LOCK_FILE,
-            update=False,
-        )
 
         catalog = build_catalog(
             self.workspace.root,
@@ -126,8 +115,9 @@ class RepositoryKubeconformSchemaService:
             if outcome.result.spec_errors:
                 failures.extend(outcome.result.spec_errors)
             if failures:
-                raise KubeconformSchemaIntegrityError(
-                    "schema inventory render failed: " + "; ".join(failures)
+                raise KubeconformSchemaRenderError(
+                    "schema inventory render failed:\n" + "\n".join(failures),
+                    outcome=outcome.result.outcome(),
                 )
 
             inventories: list[SchemaInventory] = []
@@ -158,8 +148,13 @@ class RepositoryKubeconformSchemaService:
                 targets,
             )
             request = KubeconformSchemaSyncRequest(
-                workspace=base_request.workspace,
-                policy=base_request.policy,
+                workspace=workspace_name,
+                policy=AuthoredSchemaPolicy(
+                    kubernetes_version=policy.kubernetes_version,
+                    generate_from_crds=policy.schemas.generate_from_crds,
+                    catalog_repository=policy.schemas.catalog.repository,
+                    catalog_track=policy.schemas.catalog.track,
+                ),
                 requirements=inventory.requirements,
                 materialized=(*generated, *local),
                 lock_path=self.workspace.root / SCHEMA_LOCK_FILE,
@@ -168,10 +163,8 @@ class RepositoryKubeconformSchemaService:
             if refresh:
                 synchronized = self.sync_service.refresh(request)
             else:
-                # ``update`` and a cold default hydration both flow through
-                # sync.  The latter verifies locally-derived bytes against the
-                # committed lock and must never rewrite that lock as a side
-                # effect of populating an empty cache.
+                # Plain sync verifies current inputs before accepting either
+                # cache state and preserves the committed lock.
                 synchronized = self.sync_service.sync(request)
 
         return RepositoryKubeconformSchemaSyncResult(
@@ -194,7 +187,12 @@ def _materialize_local_schemas(
         target = targets[requirement.scope.chart]
         locations = target.spec.schema_locations
         for template in locations:
-            relative = _expand_schema_template(template, requirement)
+            relative = expand_schema_location(
+                template,
+                group=requirement.gvk.group,
+                version=requirement.gvk.version,
+                kind=requirement.gvk.kind,
+            )
             path = (root / relative).resolve()
             if not path.is_relative_to(root.resolve()) or not path.is_file():
                 continue
@@ -221,21 +219,6 @@ def _materialize_local_schemas(
             materialized[key] = artifact
             break
     return tuple(materialized[key] for key in sorted(materialized))
-
-
-def _expand_schema_template(
-    template: str,
-    requirement: SchemaRequirement,
-) -> Path:
-    replacements = {
-        "{{.Group}}": requirement.gvk.group or requirement.gvk.version,
-        "{{.ResourceKind}}": requirement.gvk.kind.lower(),
-        "{{.ResourceAPIVersion}}": requirement.gvk.version,
-    }
-    expanded = template
-    for marker, value in replacements.items():
-        expanded = expanded.replace(marker, value)
-    return Path(expanded)
 
 
 def build_repository_kubeconform_schema_service(

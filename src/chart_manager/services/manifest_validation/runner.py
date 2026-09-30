@@ -165,7 +165,11 @@ def crash_row(
         phase="render",
         status="FAIL",
         detail=f"{context}: {detail}",
-        error_type="tool",
+        error_type=(
+            "environment"
+            if context == "dependency prefetch failed" and isinstance(exc, ExternalCommandError)
+            else "tool"
+        ),
     )
     return RowResult(
         row=cfg.row,
@@ -502,8 +506,7 @@ class ManifestValidationRunner:
             thread_name_prefix="validate-deps-",
         ) as pool:
             futures = {
-                pool.submit(_update, binding, path): (binding, path)
-                for binding, path in distinct
+                pool.submit(_update, binding, path): (binding, path) for binding, path in distinct
             }
             for future in as_completed(futures):
                 try:
@@ -652,14 +655,14 @@ class ManifestValidationRunner:
                 cfg.row.namespace,
                 exc,
             )
-            # error_type="tool" promotes the row to `Outcome.TOOL` — the
-            # underlying issue is a helm crash, not a chart-author problem.
+            # A normal Helm rejection is a chart failure; process crashes,
+            # timeouts and missing executables remain tool failures.
             return PhaseResult(
                 phase="render",
                 status="FAIL",
                 detail=str(exc),
                 artifacts=(),
-                error_type="tool",
+                error_type=None if exc.returncode is not None and exc.returncode > 0 else "tool",
             )
 
         return PhaseResult(
@@ -678,14 +681,10 @@ class ManifestValidationRunner:
     ) -> tuple[PhaseResult, dict[str, PhaseResult]]:
         """Run enabled validators in one stable gate and aggregate their result."""
         invocations = cfg.invocations_for(category)
-        phase: PhaseName = (
-            "schema" if category is ValidatorCategory.SCHEMA else "policy"
-        )
+        phase: PhaseName = "schema" if category is ValidatorCategory.SCHEMA else "policy"
         if category.value not in active:
             result = PhaseResult(phase=phase, status="NOT_RUN")
-            return result, {
-                invocation.validator_id: result for invocation in invocations
-            }
+            return result, {invocation.validator_id: result for invocation in invocations}
 
         enabled = tuple(invocation for invocation in invocations if invocation.enabled)
         disabled_result = PhaseResult(
@@ -751,19 +750,14 @@ class ManifestValidationRunner:
     ) -> PhaseResult:
         """Fold concrete validator outcomes into the stable category phase."""
         selected = tuple(
-            (invocation.validator_id, results[invocation.validator_id])
-            for invocation in enabled
+            (invocation.validator_id, results[invocation.validator_id]) for invocation in enabled
         )
         if len(selected) == 1:
             return selected[0][1]
 
         statuses = {result.status for _, result in selected}
         status: PhaseStatus = (
-            "FAIL"
-            if "FAIL" in statuses
-            else "PASS"
-            if "PASS" in statuses
-            else "SKIP"
+            "FAIL" if "FAIL" in statuses else "PASS" if "PASS" in statuses else "SKIP"
         )
         error_type: ErrorType | None = (
             "spec"
@@ -779,11 +773,7 @@ class ManifestValidationRunner:
             for validator_id, result in selected
             if result.detail
         ]
-        artifacts = tuple(
-            artifact
-            for _, result in selected
-            for artifact in result.artifacts
-        )
+        artifacts = tuple(artifact for _, result in selected for artifact in result.artifacts)
         return PhaseResult(
             phase=category.value,
             status=status,

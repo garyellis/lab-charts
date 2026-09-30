@@ -76,8 +76,10 @@ class GitHubKubeconformSchemaSource:
         self.max_workers = max_workers
         self.max_bytes = max_bytes
         self._opener = opener
-        self._github_token = github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get(
-            "RENOVATE_TOKEN"
+        # Renovate maintenance uses its GitHub token for API ref resolution.
+        # _read only sends credentials to api.github.com, never artifact hosts.
+        self._github_token = (
+            github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("RENOVATE_TOKEN")
         )
 
     def resolve_ref(self, repository: str, ref: str) -> str:
@@ -193,12 +195,26 @@ class GitHubKubeconformSchemaSource:
                 raise GitHubKubeconformSchemaNotFoundError(
                     f"schema source has no object at {url}"
                 ) from exc
-            if exc.code in {403, 429} and urlsplit(url).hostname == "api.github.com":
+            if urlsplit(url).hostname == "api.github.com" and (
+                exc.code == 429
+                or (
+                    exc.code == 403
+                    and (
+                        exc.headers.get("X-RateLimit-Remaining") == "0"
+                        or exc.headers.get("Retry-After") is not None
+                    )
+                )
+            ):
                 raise GitHubKubeconformSchemaSourceEnvironmentError(
                     _rate_limit_message(
                         token_configured=bool(self._github_token),
                         headers=exc.headers,
                     )
+                ) from exc
+            if exc.code == 403 and urlsplit(url).hostname == "api.github.com":
+                raise GitHubKubeconformSchemaSourceEnvironmentError(
+                    "GitHub API returned HTTP 403; check GITHUB_TOKEN permissions and "
+                    f"organization SSO authorization: {url}"
                 ) from exc
             raise GitHubKubeconformSchemaSourceEnvironmentError(
                 f"schema source request failed with HTTP {exc.code}: {url}"

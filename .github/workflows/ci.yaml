@@ -337,39 +337,73 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Decide validation scope
+        id: validation_scope
+        env:
+          MODE: ${{ needs.prep.outputs.mode }}
+          CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
+        run: |
+          needed=false
+          if [[ "$MODE" == all || "$MODE" == list ]]; then
+            needed=true
+          else
+            # Only known non-runtime paths bypass repository verification.
+            # Unknown paths stay conservative: local schemas and values can
+            # live outside charts/. Python, tool pins and workflows must check.
+            while IFS= read -r path; do
+              case "$path" in
+                ''|docs/*|*.md|tests/*|renovate.json|renovate-global.json) ;;
+                *) needed=true; break ;;
+              esac
+            done <<< "$CHANGED_FILES"
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          if [[ "$needed" == false ]]; then
+            echo "Chart validation skipped: only documentation, tests or Renovate configuration changed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Install mise + tools
+        if: steps.validation_scope.outputs.needed == 'true'
         uses: jdx/mise-action@v4
 
       - name: Restore locked schema generation
+        if: steps.validation_scope.outputs.needed == 'true'
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/.cache/chart-manager/schemas
-          key: schema-store-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v2
+          key: schema-store-v2-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
 
       # Ordinary CI is lock-preserving: discover current chart-derived inputs,
       # compare them with the committed lock, then hydrate that exact generation.
       # Only the narrowly allowlisted Renovate maintenance path runs --update.
       - name: Synchronize locked schemas
         id: schemas
+        if: steps.validation_scope.outputs.needed == 'true'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
-          mise run schemas
-          status=$?
+          set -o pipefail
+          mise run schemas 2>&1 | tee schemas-output.txt
+          status=${PIPESTATUS[0]}
           if (( status != 0 )); then
             {
               echo "## Schema preparation failed"
               echo
-              echo "Run \`mise run schemas\` locally; use \`chart-manager schemas sync --refresh\` after chart-derived schema changes."
+              echo "Run \`mise run schemas\` locally and address the error below. A render-only diagnostic run follows; schema validation remains blocked."
+              echo
+              echo '````text'
+              tail -c 60000 schemas-output.txt
+              echo
+              echo '````'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
 
       - name: Validate
         id: validate
-        if: ${{ !cancelled() && steps.schemas.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.validation_scope.outputs.needed == 'true' }}
         # Don't fail-fast the job on a non-zero CLI exit: every post-step
         # (artifact upload, future post-processing) must run to completion
         # so the PR has full diagnostic context. The final "Gate" step below
@@ -380,6 +414,7 @@ jobs:
           MODE: ${{ needs.prep.outputs.mode }}
           CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
           CHART_LIST: ${{ needs.prep.outputs.chart_list_newline }}
+          SCHEMAS_OUTCOME: ${{ steps.schemas.outcome }}
         run: |
           set -euo pipefail
           # `mise run validate` is the literal local command — CI parity by
@@ -411,6 +446,9 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
+          if [[ "$SCHEMAS_OUTCOME" != success ]]; then
+            args=(--all --phase render)
+          fi
           mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
@@ -421,7 +459,7 @@ jobs:
         # a half-rendered tree from a killed run).
         # Schema-sync renders live in a temporary directory and are not part
         # of this artifact; upload only validation's retained render tree.
-        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.validate.outcome == 'failure' || steps.schemas.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: rendered-manifests-${{ github.run_id }}

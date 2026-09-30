@@ -111,3 +111,19 @@ def test_schema_violator_renders_and_fails_schema(tmp_path: Path) -> None:
     assert "Deployment/schema-violator" in detail
     assert "/spec/replicas" in detail
     assert result.outcome() is Outcome.FAILED
+
+
+def test_real_missing_schema_reports_remediation(tmp_path: Path) -> None:
+    _skip_if_missing("kubeconform")
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "widget.yaml").write_text(
+        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
+    )
+    result = KubeconformValidator(Kubeconform()).validate(
+        manifests, KubeconformConfig(None, (str(tmp_path / "missing.json"),)),
+    )
+    assert result.status == "FAIL"
+    assert result.error_type == "tool"
+    assert "could not find schema" in result.detail
+    assert "schemas sync --refresh" in result.detail

@@ -5,11 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
+from chart_manager.cli.main import _outcome_for
 from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.kubeconform_schemas.app import (
     RepositoryKubeconformSchemaService,
 )
+from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaRenderError
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
@@ -93,6 +98,33 @@ class _Sync:
             lock_updated=request.update,
             generation_published=True,
         )
+
+
+@pytest.mark.parametrize("error_type,expected", [(None, Outcome.FAILED),
+    ("spec", Outcome.SPEC), ("environment", Outcome.ENVIRONMENT), ("tool", Outcome.TOOL)])
+def test_inventory_render_retains_row_outcome(tmp_path, monkeypatch, error_type, expected):
+    target = SimpleNamespace(spec=SimpleNamespace(ignore_missing_schemas=[], schema_locations=[]))
+    monkeypatch.setattr(
+        "chart_manager.services.kubeconform_schemas.app.build_catalog",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=(), by_name=lambda: {"demo": target}),
+    )
+    class BrokenValidation:
+        def run(self, request):
+            return RunOutcome(result=RunResult(rows=(RowResult(
+                row=WorklistRow(chart="demo", env="dev", release="demo", namespace="default"),
+                phases={"render": PhaseResult(phase="render", status="FAIL",
+                    detail="specific failure", error_type=error_type)},
+            ),), rendered_root=request.out), out_dir=request.out, keep=True)
+    service = RepositoryKubeconformSchemaService(
+        workspace=RepositoryWorkspace(root=tmp_path, name="lab", authored=True,
+            validation=WorkspaceValidation.model_validate({"kubernetesVersion": "1.35.3",
+                "schemas": {"generateFromCRDs": True,
+                    "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"}}})),
+        validation=BrokenValidation(), sync=_Sync(),
+    )
+    with pytest.raises(KubeconformSchemaRenderError, match="demo/dev: specific failure") as caught:
+        service.sync()
+    assert _outcome_for(caught.value) is expected
 
 
 def test_sync_renders_inventory_and_generates_exact_crd_schema(

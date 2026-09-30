@@ -181,4 +181,4 @@ def test_strimzi_style_combinator_fragments_are_not_closed(tmp_path: Path) -> No
 
     assert "additionalProperties" not in branches[0]
     assert "additionalProperties" not in branches[1]
-    assert branches[1]["properties"]["valueFrom"]["additionalProperties"] is False
+    assert "additionalProperties" not in branches[1]["properties"]["valueFrom"]

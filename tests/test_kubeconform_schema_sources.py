@@ -188,3 +188,16 @@ def test_github_api_rate_limit_has_actionable_diagnostic(
     else:
         assert "configured token" in message
         assert token not in message
+
+
+def test_github_permission_denied_is_not_reported_as_rate_limit() -> None:
+    def forbidden(request, **_kwargs):
+        raise HTTPError(request.full_url, 403, "forbidden", {}, None)
+
+    client = GitHubKubeconformSchemaSource(opener=forbidden, github_token="secret")
+    with pytest.raises(GitHubKubeconformSchemaSourceEnvironmentError) as caught:
+        client.resolve_ref("owner/repo", "main")
+    assert "HTTP 403" in str(caught.value)
+    assert "permissions" in str(caught.value)
+    assert "rate limited" not in str(caught.value)
+    assert "secret" not in str(caught.value)

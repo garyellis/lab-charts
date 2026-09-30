@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from chart_manager.plumbing.schema_locations import expand_schema_location
 from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
 from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
 from chart_manager.services.kubeconform_schemas.models import (
@@ -72,21 +73,19 @@ def artifact_relative_path(
     scope: SchemaScope | None,
 ) -> str:
     """Choose a deterministic collision-free store path for one schema."""
-    name = f"{gvk.kind.lower()}_{gvk.version}.json"
-    # Kubeconform exposes the core API version (for example ``v1``) through
-    # its ``.Group`` template variable.  Named API groups use their literal
-    # group.  Mirror that behavior in the store so one location template
-    # resolves both core and grouped resources.
-    template_group = gvk.group or gvk.version
+    relative = expand_schema_location(
+        "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json",
+        group=gvk.group, version=gvk.version, kind=gvk.kind,
+    )
     if source == "local":
         if scope is None:
             raise KubeconformSchemaStoreError(f"local schema {gvk.key} requires a scope")
         environment = scope.environment or "_all"
-        return (Path(source) / scope.chart / environment / template_group / name).as_posix()
+        return (Path(source) / scope.chart / environment / relative).as_posix()
     if source in {"generated", "catalog", "kubernetes"}:
         if source != "generated" and scope is not None:
             raise KubeconformSchemaStoreError(f"{source} schema {gvk.key} must be shared")
-        return (Path(source) / template_group / name).as_posix()
+        return (Path(source) / relative).as_posix()
     raise KubeconformSchemaStoreError(f"unknown schema source: {source}")
 
 
@@ -98,7 +97,9 @@ class KubeconformSchemaStore:
             raise KubeconformSchemaStoreError("workspace must be a non-empty path-safe name")
         self.workspace = workspace
         self.cache_root = (cache_root or default_schema_cache_root()).resolve()
-        self.root = self.cache_root / workspace
+        # Store layout is independent of lock content. Never reuse pre-v2
+        # generations containing the retired inventory.json sidecar.
+        self.root = self.cache_root / "v2" / workspace
         self._lock_path = self.root / ".sync.lock"
 
     def generation_path(self, lock_or_digest: SchemaLock | str) -> Path:
@@ -299,10 +300,7 @@ def kubeconform_schema_locations(
     if any(entry.source == "generated" for entry in lock.schemas):
         preferred.append(
             str(
-                root
-                / "generated"
-                / "{{.Group}}"
-                / "{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+                root / "generated" / "{{.Group}}" / "{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
             )
         )
     for source in ("local",):
