@@ -10,6 +10,10 @@ from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
+class RepositorySnapshotDirectoryNotFoundError(ExternalCommandError):
+    """The pinned repository has no requested schema directory."""
+
+
 class RepositorySnapshot:
     """Fetch once; inspect locally with lazy fetching and hooks disabled."""
 
@@ -65,6 +69,12 @@ class RepositorySnapshot:
             online=True,
         )
         if directory is not None:
+            if not self._git(
+                destination, "ls-tree", "-d", "--name-only", "FETCH_HEAD", "--", directory
+            ):
+                raise RepositorySnapshotDirectoryNotFoundError(
+                    f"{repository}@{revision} has no schema directory {directory}"
+                )
             self._git(destination, "sparse-checkout", "set", "--cone", directory)
         self._git(destination, "checkout", "--quiet", "--detach", "FETCH_HEAD", online=True)
         problem = self.inspect(destination, revision, directory=directory)
@@ -82,6 +92,8 @@ class RepositorySnapshot:
                 root, "ls-tree", "-rz", "--full-tree", revision, "--", directory or "."
             )
             expected: set[str] = set()
+            resolved_root = root.resolve()
+            checked_parents: set[Path] = set()
             for record in tree.split("\0"):
                 if not record:
                     continue
@@ -93,8 +105,12 @@ class RepositorySnapshot:
                 path = root / name
                 if mode not in {"100644", "100755"} or kind != "blob":
                     return f"schema is not a regular Git blob: {name}"
-                if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+                if path.is_symlink():
                     return f"schema path escapes the snapshot: {name}"
+                if path.parent not in checked_parents:
+                    if not path.parent.resolve().is_relative_to(resolved_root):
+                        return f"schema path escapes the snapshot: {name}"
+                    checked_parents.add(path.parent)
                 if not path.is_file():
                     return f"schema is missing: {name}"
                 content = path.read_bytes()

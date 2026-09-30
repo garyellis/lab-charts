@@ -143,8 +143,8 @@ class KubeconformValidator:
 
     Empty rendered_dir -> SKIP. Tool crash -> FAIL with error_type="tool"
     (`Outcome.TOOL`), because the underlying issue is kubeconform breaking,
-    not a chart-author problem. ``statusInvalid`` is a chart failure;
-    ``statusError`` is a tool/schema-readiness failure. Both retain a
+    not a chart-author problem. Invalid or unparseable resources are chart
+    failures; schema loading errors are tool failures. Both retain a
     human-scannable one-line-per-finding detail block.
     """
 
@@ -184,23 +184,21 @@ class KubeconformValidator:
             return PhaseResult(phase="schema", status="PASS")
 
         detail = _format_schema_findings(report.invalid())
-        if any(_is_schema_readiness_error(item) for item in report.errors()):
+        readiness_error = any(_is_schema_readiness_error(item) for item in report.errors())
+        if readiness_error:
             detail += (
-                "\nSchema unavailable: run `chart-manager schemas sync` to verify and hydrate "
-                "upstream snapshots; if the kind is absent from those pins, "
-                "check the current CRD providers or add a chart-local schema. "
-                "For unmanaged repositories, check "
-                "spec.validation.schemaLocations in the chart's chart-lifecycle.yaml."
+                "\nSchema unavailable or unreadable: check schema JSON and "
+                "spec.validation.schemaLocations in the chart's chart-lifecycle.yaml. "
+                "Run `chart-manager schemas sync` for missing upstream snapshots; "
+                "if the kind is absent from those pins, check the current CRD providers "
+                "or add a chart-local schema. Generated schemas are checked and rebuilt "
+                "as needed on the next validate run."
             )
         return PhaseResult(
             phase="schema",
             status="FAIL",
             detail=detail,
-            error_type=(
-                "tool"
-                if any(_is_schema_readiness_error(item) for item in report.errors())
-                else None
-            ),
+            error_type="tool" if readiness_error else None,
         )
 
 
@@ -273,15 +271,19 @@ def _format_schema_findings(resources: tuple[ResourceResult, ...]) -> str:
 
 
 def _is_schema_readiness_error(result: ResourceResult) -> bool:
-    """Distinguish absent/unreadable schemas from malformed resources."""
+    """Keep resource parsing failures distinct from schema/tool errors.
+
+    Kubeconform 0.8 forwards loader errors verbatim (including ``unexpected
+    EOF`` for truncated schema JSON), so schema-message allowlists miss real
+    failures. Its resource parsing/rejection errors have explicit prefixes.
+    Unknown errors remain tool failures rather than blaming the chart.
+    """
     message = (result.msg or "").lower()
-    return any(
-        marker in message
-        for marker in (
-            "could not find schema",
-            "failed to download schema",
-            "failed loading schema",
-            "failed to load schema",
+    return result.status == "error" and not message.startswith(
+        (
+            "error unmarshalling resource:",
+            "error while parsing:",
+            "prohibited resource kind ",
         )
     )
 
@@ -317,7 +319,7 @@ class KubeconformProvider:
                 repo_root=context.repo_root,
                 spec_path=context.spec_path,
             )
-            if spec.validators.kubeconform and managed_version is None
+            if spec.validators.kubeconform
             else ()
         )
         locations = tuple(

@@ -11,9 +11,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.integrations.kubeconform.repository_snapshot import RepositorySnapshot
+from chart_manager.integrations.kubeconform.repository_snapshot import (
+    RepositorySnapshot,
+    RepositorySnapshotDirectoryNotFoundError,
+)
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaStoreError,
 )
@@ -120,6 +124,11 @@ class KubeconformSchemaStore:
                     )
                     stage.rename(destination)
                     published = True
+                except RepositorySnapshotDirectoryNotFoundError as exc:
+                    raise KubeconformSchemaConfigurationError(
+                        f"{exc}; choose a Kubernetes version available at the pinned commit "
+                        "or update the upstream pin with `chart-manager schemas sync --update`"
+                    ) from exc
                 except ExternalCommandError as exc:
                     raise KubeconformSchemaSourceEnvironmentError(
                         f"cannot cache {pin.repository}@{pin.resolved}: {exc}"

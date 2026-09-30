@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.integrations.kubeconform import (
     Kubeconform,
     KubeconformReport,
@@ -131,7 +133,15 @@ def test_schema_fail_formats_findings_one_per_line(tmp_path: Path) -> None:
     assert "/spec/replicas" in lines[0]
 
 
-def test_schema_status_error_is_a_tool_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        "could not find schema for Widget",
+        "failed downloading schema at /cache/widget.json: permission denied",
+        "unexpected EOF",
+    ],
+)
+def test_schema_status_error_is_a_tool_failure(tmp_path: Path, message: str) -> None:
     _seed_manifest(tmp_path)
     report = KubeconformReport(
         resources=(
@@ -140,7 +150,7 @@ def test_schema_status_error_is_a_tool_failure(tmp_path: Path) -> None:
                 kind="Widget",
                 name="example",
                 status="error",
-                msg="could not find schema for Widget",
+                msg=message,
             ),
         ),
         summary={"valid": 0, "invalid": 0, "errors": 1, "skipped": 0},
@@ -153,6 +163,34 @@ def test_schema_status_error_is_a_tool_failure(tmp_path: Path) -> None:
     assert "Widget/example" in (result.detail or "")
     assert "chart-local schema" in (result.detail or "")
     assert "schemaLocations" in (result.detail or "")
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "error unmarshalling resource: invalid YAML",
+        "error while parsing: missing 'kind' key",
+        "prohibited resource kind Widget",
+    ],
+)
+def test_schema_resource_errors_remain_chart_failures(tmp_path: Path, message: str) -> None:
+    _seed_manifest(tmp_path)
+    report = KubeconformReport(
+        resources=(
+            ResourceResult(
+                filename="/r/widget.yaml",
+                kind="Widget",
+                name="example",
+                status="error",
+                msg=message,
+            ),
+        ),
+        summary={"errors": 1},
+    )
+    result = _schema(_StubKubeconform(report=report), tmp_path)
+    assert result.status == "FAIL"
+    assert result.error_type is None
+    assert "chart-manager schemas sync" not in result.detail
 
 
 def test_schema_tool_crash_returns_fail_with_tool_error_type(tmp_path: Path) -> None:
@@ -330,9 +368,7 @@ def test_policy_empty_rendered_dir_returns_skip(tmp_path: Path) -> None:
 def test_policy_missing_rendered_dir_returns_skip(tmp_path: Path) -> None:
     ky = _StubKyverno(report=KyvernoReport(results=(), summary={}))
 
-    result = _policy(
-        ky, tmp_path / "does-not-exist", policy_paths=(Path("/p"),)
-    )
+    result = _policy(ky, tmp_path / "does-not-exist", policy_paths=(Path("/p"),))
 
     assert result.status == "SKIP"
     assert result.detail == "no manifests"

@@ -31,7 +31,8 @@ def test_sync_caches_complete_selected_version_and_catalog_once(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "damage", ["modify", "delete", "extra", "symlink", "staged", "assume-unchanged"]
+    "damage",
+    ["modify", "delete", "extra", "symlink", "staged", "assume-unchanged", "skip-worktree"],
 )
 def test_inspection_verifies_schema_bytes_against_pinned_tree(tmp_path, damage):
     lock, store, _ = schema_store(tmp_path)
@@ -51,8 +52,8 @@ def test_inspection_verifies_schema_bytes_against_pinned_tree(tmp_path, damage):
         path.write_text("{}")
         if damage == "staged":
             git(root, "add", ".")
-        if damage == "assume-unchanged":
-            git(root, "update-index", "--assume-unchanged", str(path.relative_to(root)))
+        if damage in {"assume-unchanged", "skip-worktree"}:
+            git(root, "update-index", "--" + damage, str(path.relative_to(root)))
     status = store.inspect(lock)
     assert not status.ready
     assert len(status.corrupt) == 1
@@ -111,6 +112,17 @@ def test_partial_sparse_checkout_materializes_all_selected_blobs_for_offline_use
     )
     assert any("--filter=blob:none" in args for args, _ in calls)
     assert not (destination / "v1.34.0-standalone-strict").exists()
+    from chart_manager.integrations.kubeconform.repository_snapshot import (
+        RepositorySnapshotDirectoryNotFoundError,
+    )
+
+    with pytest.raises(RepositorySnapshotDirectoryNotFoundError, match="no schema directory"):
+        snapshots.checkout(
+            lock.policy.kubernetes.repository,
+            lock.policy.kubernetes.resolved,
+            tmp_path / "missing-version",
+            directory="v9.99.0-standalone-strict",
+        )
     # Make the only origin unreachable; checking and reading schemas still works.
     git(destination, "remote", "set-url", "origin", (tmp_path / "absent").as_uri())
     calls.clear()
@@ -131,3 +143,24 @@ def test_unwritable_cache_reports_a_store_error(tmp_path):
     store.cache_root.write_text("not a directory")
     with pytest.raises(KubeconformSchemaStoreError, match="cannot write schema cache"):
         store.sync(lock)
+
+
+def test_missing_upstream_version_is_a_configuration_error(tmp_path, monkeypatch):
+    from chart_manager.integrations.kubeconform.repository_snapshot import (
+        RepositorySnapshotDirectoryNotFoundError,
+    )
+    from chart_manager.services.kubeconform_schemas.errors import (
+        KubeconformSchemaConfigurationError,
+    )
+
+    lock, store, snapshots = schema_store(tmp_path)
+
+    def missing(*args, **kwargs):
+        raise RepositorySnapshotDirectoryNotFoundError(
+            "no schema directory v9.99.0-standalone-strict"
+        )
+
+    monkeypatch.setattr(snapshots, "checkout", missing)
+    with pytest.raises(KubeconformSchemaConfigurationError, match="choose a Kubernetes version"):
+        store.sync(lock)
+    assert not list(store.root.rglob(".staging-*"))

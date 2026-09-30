@@ -41,6 +41,11 @@ class KubeconformSchemaDoctor:
 
     def preflight(self) -> tuple[Check, ...]:
         """Report policy, lock, and immutable generation readiness from disk only."""
+        if not self.workspace.authored:
+            return tuple(
+                Check.skipped(name, "legacy workspace uses chart-local schema configuration")
+                for name in ("schema-policy", "schema-lock", "schema-store")
+            )
         policy_check, policy = self._policy_check()
         if policy is None or not self.workspace.name:
             return (

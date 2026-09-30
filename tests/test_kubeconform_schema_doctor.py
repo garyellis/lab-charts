@@ -57,3 +57,24 @@ def test_bad_lock_fails_before_store_inspection(tmp_path):
     result = checks(tmp_path, tmp_path / "cache")
     assert result["schema-lock"].outcome is Outcome.SPEC
     assert result["schema-store"].status is CheckStatus.SKIPPED
+
+
+def test_legacy_workspace_skips_managed_schema_checks(tmp_path):
+    from chart_manager.domain.workspace import RepositoryWorkspace
+
+    result = KubeconformSchemaDoctor(
+        RepositoryWorkspace(root=tmp_path, authored=False), cache_root=tmp_path / "cache"
+    ).preflight()
+    assert [check.name for check in result] == ["schema-policy", "schema-lock", "schema-store"]
+    assert all(check.status is CheckStatus.SKIPPED for check in result)
+    assert not (tmp_path / "cache").exists()
+
+
+def test_managed_workspace_still_requires_schema_policy(tmp_path):
+    from chart_manager.domain.workspace import RepositoryWorkspace
+
+    result = KubeconformSchemaDoctor(
+        RepositoryWorkspace(root=tmp_path, name="managed", authored=True)
+    ).preflight()
+    assert result[0].status is CheckStatus.FAILED
+    assert result[0].outcome is Outcome.SPEC
