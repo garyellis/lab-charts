@@ -47,6 +47,11 @@ from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 _LOG = logging.getLogger(__name__)
 
 _DIAGNOSTICS_WORKLOAD_CAP = 5
+#: Seconds between status polls of one HelmRelease; also the upper bound of
+#: each watcher's initial jitter sleep.
+_POLL_INTERVAL_SEC = 3.0
+#: Transitions retained per HelmRelease on `MonitorOutcome.recent_transitions`.
+_RECENT_TRANSITIONS_MAX = 5
 
 
 @dataclass(frozen=True)
@@ -60,8 +65,6 @@ class MonitorRequest:
     per_poll_timeout: str = "10s"
     per_hr_timeout: str = "5m"
     total_timeout: str = "15m"
-    poll_interval: float = 3.0
-    recent_transitions_size: int = 5
     # When True, the first failed/timed-out outcome triggers cancellation of
     # remaining in-flight watchers; their outcomes carry `TotalBudgetExhausted`.
     fail_fast: bool = False
@@ -78,17 +81,11 @@ class MonitorRequest:
             raise ChartManagerError("version must be non-empty")
         if self.concurrency < 1:
             raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
-        if self.poll_interval <= 0:
-            raise ChartManagerError(f"poll_interval must be > 0 (got {self.poll_interval})")
-        if self.recent_transitions_size < 1:
-            raise ChartManagerError(
-                f"recent_transitions_size must be >= 1 (got {self.recent_transitions_size})"
-            )
         per_hr = parse_duration(self.per_hr_timeout)
-        if per_hr < self.poll_interval:
+        if per_hr < _POLL_INTERVAL_SEC:
             raise ChartManagerError(
-                f"per_hr_timeout ({self.per_hr_timeout}) must be >= poll_interval "
-                f"({self.poll_interval}s)"
+                f"per_hr_timeout ({self.per_hr_timeout}) must be >= the "
+                f"{_POLL_INTERVAL_SEC:g}s poll interval"
             )
         total = parse_duration(self.total_timeout)
         if total < per_hr:
@@ -225,7 +222,7 @@ class MonitorService:
             request.per_poll_timeout,
             request.per_hr_timeout,
             request.total_timeout,
-            request.poll_interval,
+            _POLL_INTERVAL_SEC,
         )
 
         # Built unconditionally, but inert until `run_matched` finds a match:
@@ -271,7 +268,7 @@ class MonitorService:
         started_mono = self._clock()
         state = _WatchState(
             ref=initial_status.ref,
-            ring=deque(maxlen=request.recent_transitions_size),
+            ring=deque(maxlen=_RECENT_TRANSITIONS_MAX),
             last_status=initial_status,
         )
         verdict, reason = self._poll_until_terminal(
@@ -323,7 +320,7 @@ class MonitorService:
 
         # Jittered start desynchronizes the pollers so N watchers don't hit
         # the apiserver in lockstep.
-        self._sleep(self._rand(0.0, request.poll_interval))
+        self._sleep(self._rand(0.0, _POLL_INTERVAL_SEC))
         if cancel_event.is_set():
             return self._cancelled(state)
 
@@ -362,7 +359,7 @@ class MonitorService:
                 )
                 return Verdict.TIMED_OUT, reason
 
-            self._sleep(request.poll_interval)
+            self._sleep(_POLL_INTERVAL_SEC)
             if cancel_event.is_set():
                 return self._cancelled(state)
 

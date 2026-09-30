@@ -1805,7 +1805,7 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
         <h3 class="sub">Lifecycle emission — <span class="ref" data-tip="services/helmrelease/telemetry.py:51 — class PromotionTelemetry — started(stage, matched) / finished(...)"><code>telemetry.PromotionTelemetry</code></span></h3>
         <div class="callout info"><b>9 of the 11 <code>PromotionPhase</code> members are emitted.</b> That is what makes a promotion's duration computable end to end — <code>promoted.timestamp − flux_pr_open.timestamp</code>, grouped by <code>(correlation_id, environment)</code>. Emission is gated on <code>MonitorRequest.environment</code> / <code>TestRequest.environment</code>: a run invoked <b>without <code>--environment</code></b> emits nothing at all, because that is the ad-hoc case (someone running <code>monitor</code> at a terminal) and a placeholder environment would silently corrupt a real timeline. Emission is non-fatal everywhere via <span class="ref" data-tip="services/events/failure.py — emit_non_fatal(emit, *, strict, what)"><code>events.failure.emit_non_fatal</code></span>. <b><code>detected</code> and <code>reached_prod</code> are deliberately never emitted</b> — <code>detected</code> belongs to a dependency watcher, while upgrader correctly emits the build-side <code>PR_OPEN</code>; <code>reached_prod</code> needs an environment-chain model this repo does not have.</div>
 
-        <h3 class="sub">The request contract — <span class="ref" data-tip="services/helmrelease/monitor.py:55 — @dataclass(frozen) MonitorRequest">MonitorRequest</span>, every field + guard</h3>
+        <h3 class="sub">The request contract — <span class="ref" data-tip="services/helmrelease/monitor.py:57 — @dataclass(frozen) MonitorRequest">MonitorRequest</span>, every field + guard</h3>
         <div class="two-col">
           <div class="block"><h4>Fields (defaults from source)</h4>
             <div class="api"><span class="m">chart_name</span> · <span class="m">version</span>        <span class="r">required, non-empty</span>
@@ -1815,18 +1815,19 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
 <span class="m">per_poll_timeout</span>= <span class="s">"10s"</span>      <span class="r">one kubectl call</span>
 <span class="m">per_hr_timeout</span>  = <span class="s">"5m"</span>       <span class="r">one HR's watch loop</span>
 <span class="m">total_timeout</span>   = <span class="s">"15m"</span>      <span class="r">the whole run's budget</span>
-<span class="m">poll_interval</span>   = <span class="s">3.0</span>
-<span class="m">recent_transitions_size</span> = <span class="s">5</span>  <span class="r">ring of Transition snapshots kept per HR</span>
 <span class="m">fail_fast</span>       = <span class="s">False</span>      <span class="r">first failure cancels in-flight watchers;</span>
                              <span class="r">their outcomes read TotalBudgetExhausted</span>
 <span class="m">environment</span>     = <span class="s">None</span>       <span class="r">None ⇒ ad-hoc run, emits NO lifecycle events.</span>
                              <span class="r">Set it and the run brackets the timeline with</span>
-                             <span class="r">WAITING_ROLLOUT → ROLLOUT_OK | ABANDONED</span></div>
+                             <span class="r">WAITING_ROLLOUT → ROLLOUT_OK | ABANDONED</span>
+<span class="s"># fixed service policy (module constants, not request options)</span>
+<span class="m">_POLL_INTERVAL_SEC</span>      = <span class="s">3.0</span>  <span class="r">poll cadence + upper bound of the initial jitter</span>
+<span class="m">_RECENT_TRANSITIONS_MAX</span> = <span class="s">5</span>    <span class="r">ring of Transition snapshots kept per HR</span></div>
           </div>
           <div class="block"><h4><code>__post_init__</code> cross-field guards (all raise ChartManagerError)</h4>
             <ul>
-              <li><code>concurrency ≥ 1</code> · <code>poll_interval &gt; 0</code> · <code>recent_transitions_size ≥ 1</code></li>
-              <li><code>per_hr_timeout ≥ poll_interval</code> — a per-HR budget shorter than one poll can never observe anything</li>
+              <li><code>concurrency ≥ 1</code></li>
+              <li><code>per_hr_timeout ≥</code> the fixed 3s poll interval — a per-HR budget shorter than one poll can never observe anything</li>
               <li><code>total_timeout ≥ per_hr_timeout</code> — the outer budget can't be tighter than one inner watch</li>
               <li>durations parsed once here; a bad string (<code>5 mins</code>) fails at request construction, not mid-run</li>
             </ul>
@@ -1886,14 +1887,17 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
           </div>
         </div>
 
-        <h3 class="sub">The request contract — <span class="ref" data-tip="services/helmrelease/test.py:68 — @dataclass(frozen) TestRequest">TestRequest</span> (MonitorRequest's fields, including <code>environment</code>, plus truncation budgets)</h3>
+        <h3 class="sub">The request contract — <span class="ref" data-tip="services/helmrelease/helm_test.py:74 — @dataclass(frozen) TestRequest">TestRequest</span> (MonitorRequest's fields, including <code>environment</code>, plus <code>pod_log_tail</code>)</h3>
         <div class="api"><span class="m">chart_name</span> · <span class="m">version</span> · <span class="m">namespace</span>=<span class="s">None</span> · <span class="m">concurrency</span>=<span class="s">4</span>
 <span class="m">per_poll_timeout</span>=<span class="s">"10s"</span> · <span class="m">per_hr_timeout</span>=<span class="s">"5m"</span> · <span class="m">total_timeout</span>=<span class="s">"15m"</span>
-<span class="m">subprocess_slack</span>=<span class="s">"30s"</span>   <span class="r">— extra allowance the helm subprocess gets beyond the</span>
-                          <span class="r">  in-cluster test budget, so kill-the-subprocess loses the race to helm's own timeout</span>
+<span class="m">pod_log_tail</span>=<span class="s">200</span> <span class="r">lines</span>
+<span class="s"># fixed service policy (module constants, not request options)</span>
+<span class="m">_SUBPROCESS_SLACK_SEC</span>=<span class="s">30.0</span>   <span class="r">— extra allowance the helm subprocess gets beyond the</span>
+                          <span class="r">  in-cluster test budget, so kill-the-subprocess loses the race to helm's own timeout;</span>
+                          <span class="r">  still capped by the remaining total budget</span>
 <span class="s"># diagnostics truncation budgets (keep TestOutcome bounded)</span>
-<span class="m">pod_log_tail</span>=<span class="s">200</span> <span class="r">lines</span> · <span class="m">pod_log_max_bytes</span>=<span class="s">16_384</span>
-<span class="m">diagnostics_pod_cap</span>=<span class="s">5</span> <span class="r">pods max snapshotted per HR</span> · <span class="m">helm_test_stdout_max_bytes</span>=<span class="s">32_768</span></div>
+<span class="m">_POD_LOG_MAX_BYTES</span>=<span class="s">16_384</span> <span class="r">per current/previous log stream</span>
+<span class="m">_DIAGNOSTICS_POD_CAP</span>=<span class="s">5</span> <span class="r">pods max snapshotted per HR</span> · <span class="m">_HELM_OUTPUT_MAX_BYTES</span>=<span class="s">32_768</span> <span class="r">stdout and stderr each</span></div>
 
         <h3 class="sub">Stale-pod guard + verdict classification</h3>
         <div class="two-col">
@@ -2655,7 +2659,7 @@ promo_correlation_id = flux-repo PR</div>
             <ul>
               <li><span class="ref" data-tip="integrations/kubectl.py — deadline = time.monotonic() + parse_duration(timeout)">Kubectl</span> — converts the wait-gate <code>timeout</code> string into a monotonic deadline for its poll loops</li>
               <li><span class="ref" data-tip="services/helmrelease/monitor.py — MonitorRequest.__post_init__ budget guards">hr MonitorService</span> — <code>__post_init__</code> budget guards (per-poll &lt; per-HR ≤ total) plus deadline math in the poll loop</li>
-              <li><span class="ref" data-tip="services/helmrelease/test.py — TestRequest.__post_init__ budget guards + subprocess slack">hr TestService</span> — same budget-triangle validation + subprocess-slack conversion for the CommandRunner timeout</li>
+              <li><span class="ref" data-tip="services/helmrelease/helm_test.py — TestRequest.__post_init__ budget guards">hr TestService</span> — same budget-triangle validation; the parsed per-HR budget plus the fixed subprocess slack becomes the CommandRunner timeout</li>
             </ul>
             <p style="font-size:12px;color:var(--muted);margin-top:6px">Why <code>ChartManagerError</code> and not <code>ValueError</code>: a bad <code>--timeout 5x</code> flag is operator input, so it must ride the <a href="#plumbing/errors" style="color:var(--blue)">exit-1 funnel</a> as a one-liner instead of a traceback.</p>
           </div>
@@ -2674,7 +2678,7 @@ promo_correlation_id = flux-repo PR</div>
 <span class="m">truncate_bytes</span>(blob, max_bytes) <span class="r">→ str</span></div>
             <ul style="margin-top:8px">
               <li>They cap text that came off a subprocess or a log stream — <b>a property of subprocess output, not of HelmReleases</b> — so any service that shells out can use them</li>
-              <li>Consumed by <code>TestService</code> for pod logs (<code>pod_log_tail</code>, <code>pod_log_max_bytes</code>) and helm-test stdout (<code>helm_test_stdout_max_bytes</code>) — the budgets that keep <code>TestOutcome</code> bounded</li>
+              <li>Consumed by <code>TestService</code> for pod logs (<code>pod_log_tail</code>, <code>_POD_LOG_MAX_BYTES</code>) and helm-test stdout/stderr (<code>_HELM_OUTPUT_MAX_BYTES</code>) — the budgets that keep <code>TestOutcome</code> bounded</li>
             </ul>
           </div>
           <div class="block"><h4><span class="ref" data-tip="plumbing/paths.py · plumbing/yaml_files.py">paths.py + yaml_files.py</span> — shared mechanics</h4>
