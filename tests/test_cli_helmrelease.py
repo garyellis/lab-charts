@@ -484,6 +484,105 @@ def test_monitor_fail_fast_plumbed(runner: CliRunner, monkeypatch: pytest.Monkey
     assert fake.captured_requests[0].fail_fast is True
 
 
+# ----- timeout options: parsed once, at the CLI boundary -------------------
+
+
+_TEST_BASE = ["test", "--chart", "loki", "--version", "0.2.0"]
+
+
+def _passed_test_result() -> TestResult:
+    return TestResult(
+        outcomes=(_passed_test_outcome(_ref()),),
+        total_duration_seconds=2.0,
+        total_timed_out=False,
+    )
+
+
+def _timeouts(request: Any) -> tuple[float, float, float]:
+    return (
+        request.per_poll_timeout_seconds,
+        request.per_hr_timeout_seconds,
+        request.total_timeout_seconds,
+    )
+
+
+def test_monitor_default_timeouts_reach_the_service_as_seconds(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
+    res = runner.invoke(_build_app(), _BASE)
+    assert res.exit_code == 0, res.output
+    assert _timeouts(fake.captured_requests[0]) == (10.0, 300.0, 900.0)
+
+
+def test_test_default_timeouts_reach_the_service_as_seconds(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _install_fake_test(monkeypatch, result=_passed_test_result())
+    res = runner.invoke(_build_app(), _TEST_BASE)
+    assert res.exit_code == 0, res.output
+    assert _timeouts(fake.captured_requests[0]) == (10.0, 300.0, 900.0)
+
+
+@pytest.mark.parametrize("command", ["monitor", "test"])
+def test_timeout_duration_syntax_is_parsed_to_seconds(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monitor_fake = _install_fake_monitor(monkeypatch, result=_ok_result())
+    test_fake = _install_fake_test(monkeypatch, result=_passed_test_result())
+    base = _BASE if command == "monitor" else _TEST_BASE
+    res = runner.invoke(
+        _build_app(),
+        [
+            *base,
+            "--per-poll-timeout",
+            "2.5s",
+            "--per-hr-timeout",
+            "90",
+            "--total-timeout",
+            "1h",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    fake = monitor_fake if command == "monitor" else test_fake
+    assert _timeouts(fake.captured_requests[0]) == (2.5, 90.0, 3600.0)
+
+
+@pytest.mark.parametrize("command", ["monitor", "test"])
+@pytest.mark.parametrize("flag", ["--per-poll-timeout", "--per-hr-timeout", "--total-timeout"])
+@pytest.mark.parametrize("value", ["5 mins", "abc", "", "nan", "inf", "0s", "-5m"])
+def test_malformed_timeout_is_a_usage_error_before_any_service_runs(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    flag: str,
+    value: str,
+) -> None:
+    monitor_fake = _install_fake_monitor(monkeypatch, result=_ok_result())
+    test_fake = _install_fake_test(monkeypatch, result=_passed_test_result())
+    base = _BASE if command == "monitor" else _TEST_BASE
+    res = runner.invoke(_build_app(), [*base, flag, value])
+    # Exit 2 is click's usage-error code; the message names the flag and no
+    # traceback reaches the operator.
+    assert res.exit_code == 2, res.output
+    assert flag in res.stderr
+    assert res.exception is None or isinstance(res.exception, SystemExit)
+    assert monitor_fake.captured_requests == []
+    assert test_fake.captured_requests == []
+
+
+def test_timeout_ordering_violation_is_a_clean_domain_error(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each value is well-formed on its own; only the request can judge the
+    # relationship between them, and it reports through the exit-1 funnel.
+    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
+    res = runner.invoke(_build_app(), [*_BASE, "--per-hr-timeout", "10m", "--total-timeout", "1m"])
+    assert res.exit_code == 1, res.output
+    assert "total_timeout_seconds (60s) must be >= per_hr_timeout_seconds (600s)" in res.stderr
+    assert fake.captured_requests == []
+
+
 # ----- progress driver thread safety smoke --------------------------------
 
 

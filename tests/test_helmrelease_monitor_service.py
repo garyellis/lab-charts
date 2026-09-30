@@ -253,9 +253,9 @@ def _req(**overrides: Any) -> MonitorRequest:
     base: dict[str, Any] = {
         "chart_name": CHART,
         "version": VERSION,
-        "per_poll_timeout": "10s",
-        "per_hr_timeout": "5m",
-        "total_timeout": "15m",
+        "per_poll_timeout_seconds": 10.0,
+        "per_hr_timeout_seconds": 300.0,
+        "total_timeout_seconds": 900.0,
         "concurrency": 2,
     }
     base.update(overrides)
@@ -275,19 +275,54 @@ def test_request_validation_rejects_per_hr_lt_poll_interval() -> None:
         MonitorRequest(
             chart_name=CHART,
             version=VERSION,
-            per_hr_timeout="1s",
-            total_timeout="2s",
+            per_hr_timeout_seconds=1.0,
+            total_timeout_seconds=2.0,
         )
 
 
 def test_request_validation_rejects_total_lt_per_hr() -> None:
-    with pytest.raises(ChartManagerError):
+    with pytest.raises(ChartManagerError, match="total_timeout_seconds"):
         MonitorRequest(
             chart_name=CHART,
             version=VERSION,
-            per_hr_timeout="10m",
-            total_timeout="1m",
+            per_hr_timeout_seconds=600.0,
+            total_timeout_seconds=60.0,
         )
+
+
+def test_request_validation_accepts_per_hr_equal_to_poll_interval() -> None:
+    # The bound is inclusive: exactly one poll interval is a usable budget.
+    req = MonitorRequest(
+        chart_name=CHART,
+        version=VERSION,
+        per_hr_timeout_seconds=3.0,
+        total_timeout_seconds=3.0,
+    )
+    assert req.per_hr_timeout_seconds == 3.0
+
+
+def test_request_defaults_are_ten_seconds_five_and_fifteen_minutes() -> None:
+    req = MonitorRequest(chart_name=CHART, version=VERSION)
+    assert (
+        req.per_poll_timeout_seconds,
+        req.per_hr_timeout_seconds,
+        req.total_timeout_seconds,
+    ) == (10.0, 300.0, 900.0)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["per_poll_timeout_seconds", "per_hr_timeout_seconds", "total_timeout_seconds"],
+)
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -5.0, "5m", True])
+def test_request_validation_rejects_non_positive_or_non_finite(
+    field_name: str, bad: object
+) -> None:
+    # NaN is the case the old string path let through: every ordering
+    # comparison against it is False. A direct Python caller must be held to
+    # the same numeric rules the CLI's parsed values are.
+    with pytest.raises(ChartManagerError, match=field_name):
+        MonitorRequest(chart_name=CHART, version=VERSION, **{field_name: bad})
 
 
 def test_request_validation_rejects_zero_concurrency() -> None:
@@ -849,7 +884,7 @@ def test_per_poll_timeout_plumbed_to_flux_calls() -> None:
         conditions=(_cond("Ready", "False", reason="InstallFailed", message="m"),),
     )
     cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): [bad]})
-    _make_service(cluster).monitor(_req(per_poll_timeout="7s"))
+    _make_service(cluster).monitor(_req(per_poll_timeout_seconds=7.0))
     for name, _args, kwargs in cluster.calls:
         if name in ("list", "get_status", "list_owned_workloads", "namespace_events", "workload_events"):
             assert kwargs.get("timeout") == 7.0

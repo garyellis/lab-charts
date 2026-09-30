@@ -1765,7 +1765,7 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
               <li class="good">Fan-out and cancellation live in <span class="ref" data-tip="services/helmrelease/fanout.py:50 — run_fanout(...) · :96 — sorted_by_ref(outcomes)"><code>fanout.run_fanout</code></span>, shared with TestService, so <code>--fail-fast</code> semantics and result ordering can't diverge between the two</li>
               <li class="good">Concurrency bounded for laptop exec-auth caches (raise to 8 with care — CLI caps <code>--concurrency</code> at 8)</li>
               <li class="good">Strongest embedding candidate: typed aggregates, no printing, <b>caller owns the kube context explicitly</b> rather than inheriting the ambient one</li>
-              <li>Timeout flags are kube-style strings (<code>10s</code>/<code>5m</code>/<code>1h</code>) parsed by <span class="ref" data-tip="plumbing/duration.py — parse_duration"><code>plumbing/duration.py</code></span> — invalid input raises <code>ChartManagerError</code>, not a traceback</li>
+              <li>Timeout flags are kube-style strings (<code>10s</code>/<code>5m</code>/<code>1h</code>) parsed <b>once, in the CLI</b> by <span class="ref" data-tip="plumbing/duration.py — parse_duration">parse_duration</span> — a malformed, zero, negative or non-finite value is a usage error (exit 2) naming the flag, raised before any service is built. Requests and services carry only float seconds</li>
             </ul>
           </div>
         </div>
@@ -1812,9 +1812,9 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
 <span class="m">namespace</span>       = <span class="s">None</span>       <span class="r">None ⇒ all namespaces</span>
 <span class="m">concurrency</span>     = <span class="s">4</span>          <span class="r">CLI caps at 8 (exec-auth cache)</span>
 <span class="s"># the three timeout tiers</span>
-<span class="m">per_poll_timeout</span>= <span class="s">"10s"</span>      <span class="r">one kubectl call</span>
-<span class="m">per_hr_timeout</span>  = <span class="s">"5m"</span>       <span class="r">one HR's watch loop</span>
-<span class="m">total_timeout</span>   = <span class="s">"15m"</span>      <span class="r">the whole run's budget</span>
+<span class="m">per_poll_timeout_seconds</span>= <span class="s">10.0</span>   <span class="r">one kubectl call</span>
+<span class="m">per_hr_timeout_seconds</span>  = <span class="s">300.0</span>  <span class="r">one HR's watch loop</span>
+<span class="m">total_timeout_seconds</span>   = <span class="s">900.0</span>  <span class="r">the whole run's budget</span>
 <span class="m">fail_fast</span>       = <span class="s">False</span>      <span class="r">first failure cancels in-flight watchers;</span>
                              <span class="r">their outcomes read TotalBudgetExhausted</span>
 <span class="m">environment</span>     = <span class="s">None</span>       <span class="r">None ⇒ ad-hoc run, emits NO lifecycle events.</span>
@@ -1827,9 +1827,10 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
           <div class="block"><h4><code>__post_init__</code> cross-field guards (all raise ChartManagerError)</h4>
             <ul>
               <li><code>concurrency ≥ 1</code></li>
-              <li><code>per_hr_timeout ≥</code> the fixed 3s poll interval — a per-HR budget shorter than one poll can never observe anything</li>
-              <li><code>total_timeout ≥ per_hr_timeout</code> — the outer budget can't be tighter than one inner watch</li>
-              <li>durations parsed once here; a bad string (<code>5 mins</code>) fails at request construction, not mid-run</li>
+              <li>all three budgets positive and finite — NaN included, which a bare <code>&lt;</code> comparison would wave through</li>
+              <li><code>per_hr_timeout_seconds ≥</code> the fixed 3s poll interval — a per-HR budget shorter than one poll can never observe anything</li>
+              <li><code>total_timeout_seconds ≥ per_hr_timeout_seconds</code> — the outer budget can't be tighter than one inner watch</li>
+              <li>numeric only: duration syntax (<code>5m</code>) is the CLI's job, so direct Python callers pass seconds and get the same checks</li>
             </ul>
           </div>
         </div>
@@ -1889,7 +1890,8 @@ MonitorResult.<span class="m">ok</span> · .<span class="m">failures</span> <spa
 
         <h3 class="sub">The request contract — <span class="ref" data-tip="services/helmrelease/helm_test.py:74 — @dataclass(frozen) TestRequest">TestRequest</span> (MonitorRequest's fields, including <code>environment</code>, plus <code>pod_log_tail</code>)</h3>
         <div class="api"><span class="m">chart_name</span> · <span class="m">version</span> · <span class="m">namespace</span>=<span class="s">None</span> · <span class="m">concurrency</span>=<span class="s">4</span>
-<span class="m">per_poll_timeout</span>=<span class="s">"10s"</span> · <span class="m">per_hr_timeout</span>=<span class="s">"5m"</span> · <span class="m">total_timeout</span>=<span class="s">"15m"</span>
+<span class="m">per_poll_timeout_seconds</span>=<span class="s">10.0</span> · <span class="m">per_hr_timeout_seconds</span>=<span class="s">300.0</span> <span class="r">(≥ 30s)</span> · <span class="m">total_timeout_seconds</span>=<span class="s">900.0</span>
+<span class="r">per-HR seconds reach helm's per-hook --timeout via format_helm_duration (300.0 → "300s", 1.5 → "1.5s")</span>
 <span class="m">pod_log_tail</span>=<span class="s">200</span> <span class="r">lines</span>
 <span class="s"># fixed service policy (module constants, not request options)</span>
 <span class="m">_SUBPROCESS_SLACK_SEC</span>=<span class="s">30.0</span>   <span class="r">— extra allowance the helm subprocess gets beyond the</span>
@@ -2574,7 +2576,7 @@ promo_correlation_id = flux-repo PR</div>
               <li><b>check=True</b> (default): rc≠0 ⇒ <span class="ref" data-tip="plumbing/commands.py:126 — raise ExternalCommandError(msg, stderr=..., returncode=...)">ExternalCommandError</span> — detail is <code>stderr.strip() or stdout.strip()</code>, and the structured <code>.stderr</code>/<code>.returncode</code> fields <b>are populated at every raise site</b>, so a caller never has to parse the message string</li>
               <li><b>check=False</b>: caller reads <code>result.returncode</code> itself — how CI/ephemeral testing turn a <code>helm test</code> rc≠0 into a richer error, and how hr/test avoids aborting a fan-out</li>
               <li><b>capture=False</b>: child inherits the terminal; <code>stdout</code>/<code>stderr</code> come back as <code>""</code></li>
-              <li><b>timeout</b>: seconds or None ⇒ <span class="ref" data-tip="plumbing/errors.py:50 — class CommandTimeout(ExternalCommandError)"><code>CommandTimeout</code></span>. The hr monitor/test budgets land here after <a href="#plumbing/duration" style="color:var(--blue)">parse_duration</a></li>
+              <li><b>timeout</b>: seconds or None ⇒ <span class="ref" data-tip="plumbing/errors.py:50 — class CommandTimeout(ExternalCommandError)"><code>CommandTimeout</code></span>. The hr monitor/test budgets land here as the seconds the CLI parsed once with <a href="#plumbing/duration" style="color:var(--blue)">parse_duration</a></li>
               <li><b>env</b>: <b>overlaid on <code>os.environ</code>, never substituted for it</b> — a bare <code>env=</code> drops <code>PATH</code>, and the next thing that happens is the tool isn't found, which surfaces as <code>MissingToolError</code> and reads like a broken install rather than like the caller having scoped one variable. Lets a caller pin <code>KUBECONFIG</code> or <code>DOCKER_HOST</code> to a single invocation</li>
               <li><b>credential redaction</b>: <code>--set</code>, <code>--set-string</code>, <code>--token</code>, <code>--password</code>, <code>--docker-password</code> values are masked in every error message. <code>--set key=value</code> keeps the <i>key</i> so the message still says which setting failed — rendered errors travel into logs and event payloads</li>
             </ul>
@@ -2658,13 +2660,13 @@ promo_correlation_id = flux-repo PR</div>
           <div class="block"><h4>Who calls it</h4>
             <ul>
               <li><span class="ref" data-tip="integrations/kubectl.py — deadline = time.monotonic() + parse_duration(timeout)">Kubectl</span> — converts the wait-gate <code>timeout</code> string into a monotonic deadline for its poll loops</li>
-              <li><span class="ref" data-tip="services/helmrelease/monitor.py — MonitorRequest.__post_init__ budget guards">hr MonitorService</span> — <code>__post_init__</code> budget guards (per-poll &lt; per-HR ≤ total) plus deadline math in the poll loop</li>
-              <li><span class="ref" data-tip="services/helmrelease/helm_test.py — TestRequest.__post_init__ budget guards">hr TestService</span> — same budget-triangle validation; the parsed per-HR budget plus the fixed subprocess slack becomes the CommandRunner timeout</li>
+              <li><span class="ref" data-tip="cli/helmrelease.py — _timeout_seconds(value, flag=)">helmrelease CLI</span> — parses <code>--per-poll-timeout</code> / <code>--per-hr-timeout</code> / <code>--total-timeout</code> once into <code>MonitorRequest</code> / <code>TestRequest</code> seconds; a bad value is a usage error</li>
+              <li>The hr services themselves no longer call it: they validate and consume float seconds (<span class="ref" data-tip="plumbing/duration.py — require_positive_seconds(name, value)">require_positive_seconds</span>); the per-HR budget plus the fixed subprocess slack, capped by the remaining total, becomes the CommandRunner timeout</li>
             </ul>
             <p style="font-size:12px;color:var(--muted);margin-top:6px">Why <code>ChartManagerError</code> and not <code>ValueError</code>: a bad <code>--timeout 5x</code> flag is operator input, so it must ride the <a href="#plumbing/errors" style="color:var(--blue)">exit-1 funnel</a> as a one-liner instead of a traceback.</p>
           </div>
         </div>
-        <div class="callout info"><b>Note the asymmetry:</b> helm-facing timeouts (cluster-test configuration's <code>timeout: 10m</code>) are passed to helm <i>verbatim</i> as strings — helm parses its own durations. Only chart-manager's <i>own</i> deadline arithmetic (kubectl polls, hr budgets) needs seconds, and that's the only place this function appears.</div>
+        <div class="callout info"><b>Note the asymmetry:</b> helm-facing timeouts (cluster-test configuration's <code>timeout: 10m</code>) are passed to helm <i>verbatim</i> as strings — helm parses its own durations. The one exception is <code>helmrelease test</code>, whose per-HR budget is already seconds and is rendered back to a Go duration by <span class="ref" data-tip="integrations/helm.py — format_helm_duration(seconds)">format_helm_duration</span> at the Helm boundary. Only chart-manager's <i>own</i> deadline arithmetic (kubectl polls, hr budgets) needs seconds, and that's the only place this function appears.</div>
       </div>
 
       <!-- pure helpers -->

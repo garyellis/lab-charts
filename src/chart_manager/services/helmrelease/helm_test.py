@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from functools import partial
 
 import chart_manager.services.helmrelease.report as report
-from chart_manager.integrations.helm import Helm
+from chart_manager.integrations.helm import Helm, format_helm_duration
 from chart_manager.integrations.helmrelease import (
     HelmReleaseClient,
     HelmReleaseRef,
@@ -27,7 +27,7 @@ from chart_manager.integrations.helmrelease import (
 )
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandResult
-from chart_manager.plumbing.duration import parse_duration
+from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
@@ -53,7 +53,7 @@ _IN_FLIGHT_PHASES = frozenset({"Pending", "Running", "Unknown", ""})
 _STALE_PHASES = frozenset({"Succeeded", "Failed"})
 
 _PHASE_LOG_MAX = 5
-#: Allowance the `helm test` subprocess gets beyond `per_hr_timeout` (helm's
+#: Allowance the `helm test` subprocess gets beyond `per_hr_timeout_seconds` (helm's
 #: own `--timeout`), so helm's timeout fires before we kill the subprocess;
 #: still capped by the remaining total budget.
 _SUBPROCESS_SLACK_SEC = 30.0
@@ -79,13 +79,15 @@ class TestRequest:
     version: str
     namespace: str | None = None
     concurrency: int = 4
-    per_poll_timeout: str = "10s"
-    # per_hr_timeout: per-pod readiness wait passed to helm `--timeout`.
+    # Budgets in seconds. The CLI parses its duration strings once, at the
+    # input boundary; every caller gets the same numeric validation below.
+    per_poll_timeout_seconds: float = 10.0
+    # per_hr_timeout_seconds: per-pod readiness wait passed to helm `--timeout`.
     # Charts with multiple test hooks may exceed this wall-clock; the
     # subprocess cap (per_hr + _SUBPROCESS_SLACK_SEC, bounded by total) is the
     # hard stop.
-    per_hr_timeout: str = "5m"
-    total_timeout: str = "15m"
+    per_hr_timeout_seconds: float = 300.0
+    total_timeout_seconds: float = 900.0
     pod_log_tail: int = 200
     # concurrency: each helm test creates 1+ test pods. concurrency=4
     # against 4 HRs with multi-pod suites may create 8-16 pods concurrently
@@ -105,16 +107,17 @@ class TestRequest:
             raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
         if self.pod_log_tail < 1:
             raise ChartManagerError(f"pod_log_tail must be >= 1 (got {self.pod_log_tail})")
-        per_hr = parse_duration(self.per_hr_timeout)
-        if per_hr < 30.0:
+        require_positive_seconds("per_poll_timeout_seconds", self.per_poll_timeout_seconds)
+        require_positive_seconds("per_hr_timeout_seconds", self.per_hr_timeout_seconds)
+        require_positive_seconds("total_timeout_seconds", self.total_timeout_seconds)
+        if self.per_hr_timeout_seconds < 30.0:
             raise ChartManagerError(
-                f"per_hr_timeout ({self.per_hr_timeout}) must be >= 30s"
+                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s) must be >= 30s"
             )
-        total = parse_duration(self.total_timeout)
-        if total < per_hr:
+        if self.total_timeout_seconds < self.per_hr_timeout_seconds:
             raise ChartManagerError(
-                f"total_timeout ({self.total_timeout}) must be >= per_hr_timeout "
-                f"({self.per_hr_timeout})"
+                f"total_timeout_seconds ({self.total_timeout_seconds:g}s) must be >= "
+                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s)"
             )
 
 
@@ -168,15 +171,6 @@ def _no_match_outcome(elapsed: float) -> TestOutcome:
     )
 
 
-@dataclass
-class _ParsedRequest:
-    """The request's duration strings parsed once into seconds."""
-
-    per_poll_sec: float
-    per_hr_sec: float
-    total_sec: float
-
-
 # Internal aggregate for a single watcher; lets us thread state through
 # the phase methods without dragging 8 positional args.
 @dataclass
@@ -185,7 +179,6 @@ class _RunContext:
 
     ref: HelmReleaseRef
     initial_status: HelmReleaseStatus
-    parsed: _ParsedRequest
     request: TestRequest
     started_mono: float
     total_deadline: float
@@ -242,32 +235,26 @@ class TestService:
         propagates; other crashes are wrapped as ChartManagerError.
         """
         start = self._clock()
-        parsed = _ParsedRequest(
-            per_poll_sec=parse_duration(request.per_poll_timeout),
-            per_hr_sec=parse_duration(request.per_hr_timeout),
-            total_sec=parse_duration(request.total_timeout),
-        )
-
         matched = filter_matched_statuses(
             self._client,
             namespace=request.namespace,
             chart_name=request.chart_name,
             version=request.version,
-            per_poll=parsed.per_poll_sec,
+            per_poll=request.per_poll_timeout_seconds,
         )
 
         _LOG.info(
             "helm test run started: chart=%s version=%s namespace=%s environment=%s "
-            "matched=%d concurrency=%d per_hr=%s total=%s per_poll=%s",
+            "matched=%d concurrency=%d per_hr=%gs total=%gs per_poll=%gs",
             request.chart_name,
             request.version,
             request.namespace or "(all)",
             request.environment or "(none)",
             len(matched),
             request.concurrency,
-            request.per_hr_timeout,
-            request.total_timeout,
-            request.per_poll_timeout,
+            request.per_hr_timeout_seconds,
+            request.total_timeout_seconds,
+            request.per_poll_timeout_seconds,
         )
 
         # Built unconditionally, but inert until `run_matched` finds a match:
@@ -279,7 +266,7 @@ class TestService:
             environment=request.environment,
             strict=self._strict_events,
         )
-        total_deadline = start + parsed.total_sec
+        total_deadline = start + request.total_timeout_seconds
         return run_matched(
             matched,
             start=start,
@@ -291,7 +278,7 @@ class TestService:
             success=Verdict.PASSED,
             no_match=_no_match_outcome,
             work=lambda status, cancel_event: self._test_one(
-                status, parsed, request, total_deadline, cancel_event
+                status, request, total_deadline, cancel_event
             ),
             crash_label="test watcher",
             # No `cancel_on`: unlike monitor there is no --fail-fast here.
@@ -308,7 +295,6 @@ class TestService:
     def _test_one(
         self,
         initial_status: HelmReleaseStatus,
-        parsed: _ParsedRequest,
         request: TestRequest,
         total_deadline: float,
         cancel_event: threading.Event,
@@ -317,7 +303,6 @@ class TestService:
         ctx = _RunContext(
             ref=initial_status.ref,
             initial_status=initial_status,
-            parsed=parsed,
             request=request,
             started_mono=self._clock(),
             total_deadline=total_deadline,
@@ -374,7 +359,9 @@ class TestService:
         """
         self._fire(ctx, "Reaping", "checking for existing test pods")
         try:
-            pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
+            pods = self._client.list_test_pods(
+                ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
+            )
         except ExternalCommandError as exc:
             _LOG.error(
                 "test pod listing failed during reap: ns=%s name=%s: %s",
@@ -403,7 +390,7 @@ class TestService:
         residual: list[str] = []
         for ns, name, _phase in [p for p in pods if p[2] in _STALE_PHASES]:
             try:
-                self._kubectl.delete_pod(ns, name, timeout=ctx.parsed.per_poll_sec)
+                self._kubectl.delete_pod(ns, name, timeout=ctx.request.per_poll_timeout_seconds)
             except ExternalCommandError as exc:
                 # Carry the stderr, not just the pod name: "delete denied by
                 # RBAC", "apiserver unreachable" and "stuck on a finalizer"
@@ -440,7 +427,7 @@ class TestService:
         # --timeout claims another N minutes.
         remaining_total = max(0.0, ctx.total_deadline - self._clock())
         subprocess_cap = min(
-            ctx.parsed.per_hr_sec + _SUBPROCESS_SLACK_SEC, remaining_total
+            ctx.request.per_hr_timeout_seconds + _SUBPROCESS_SLACK_SEC, remaining_total
         )
         if subprocess_cap <= 0:
             return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
@@ -449,7 +436,9 @@ class TestService:
             result = self._helm.test(
                 ctx.ref.release_name,
                 namespace=ctx.ref.storage_namespace,
-                timeout=ctx.request.per_hr_timeout,
+                # helm's per-hook `--timeout` stays the uncapped per-HR budget;
+                # `subprocess_cap` above is the hard wall-clock stop.
+                timeout=format_helm_duration(ctx.request.per_hr_timeout_seconds),
                 logs=True,
                 subprocess_timeout=subprocess_cap,
             )
@@ -464,12 +453,12 @@ class TestService:
                 # Which budget tripped decides whether the operator raises
                 # --per-hr-timeout or accepts the run was too big.
                 _LOG.warning(
-                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%s total=%s",
+                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%gs total=%gs",
                     ctx.ref.namespace,
                     ctx.ref.name,
                     reason,
-                    ctx.request.per_hr_timeout,
-                    ctx.request.total_timeout,
+                    ctx.request.per_hr_timeout_seconds,
+                    ctx.request.total_timeout_seconds,
                 )
                 return self._finalize_timed_out(ctx, reason)
             _LOG.error(
@@ -664,7 +653,10 @@ class TestService:
         the pre-run status it falls back to, so the detail comes back with it.
         """
         try:
-            return self._client.get_status(ctx.ref, timeout=ctx.parsed.per_poll_sec), None
+            status = self._client.get_status(
+                ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
+            )
+            return status, None
         except ExternalCommandError as exc:
             detail = report.failure_detail(exc)
             _LOG.warning(
@@ -741,7 +733,7 @@ class TestService:
                     partial(
                         self._kubectl.namespace_events,
                         ctx.ref.target_namespace,
-                        timeout=ctx.parsed.per_poll_sec,
+                        timeout=ctx.request.per_poll_timeout_seconds,
                     )
                 )
             )
@@ -770,7 +762,9 @@ class TestService:
         empty list.
         """
         try:
-            pods = self._client.list_test_pods(ctx.ref, timeout=ctx.parsed.per_poll_sec)
+            pods = self._client.list_test_pods(
+                ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
+            )
         except ExternalCommandError as exc:
             detail = report.failure_detail(exc)
             # "we never got to look" vs "the chart left nothing behind": the
@@ -792,7 +786,7 @@ class TestService:
                     pod_name,
                     tail=ctx.request.pod_log_tail,
                     previous=False,
-                    timeout=ctx.parsed.per_poll_sec,
+                    timeout=ctx.request.per_poll_timeout_seconds,
                 )
             except ExternalCommandError as exc:
                 log_error = report.failure_detail(exc)
@@ -823,7 +817,7 @@ class TestService:
                         pod_name,
                         tail=ctx.request.pod_log_tail,
                         previous=True,
-                        timeout=ctx.parsed.per_poll_sec,
+                        timeout=ctx.request.per_poll_timeout_seconds,
                     )
                 except ExternalCommandError as exc:
                     # The only capture site with nowhere to render: a failed

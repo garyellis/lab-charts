@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from chart_manager.integrations import helm as helm_module
-from chart_manager.integrations.helm import Helm
+from chart_manager.integrations.helm import Helm, format_helm_duration
 from chart_manager.plumbing.commands import CommandResult
 from tests.conftest import FakeCommandRunner
 
@@ -80,3 +80,35 @@ def test_context_default_omits_kube_context_flag() -> None:
     Helm(runner=runner).test("loki", namespace="loki")
     call = runner.records[0]
     assert "--kube-context" not in call.args
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (300.0, "300s"),
+        (300, "300s"),
+        (1.5, "1.5s"),
+        (45.25, "45.25s"),
+        (0.1, "0.1s"),
+        (1e-05, "0.00001s"),
+        (3600.0, "3600s"),
+        (0.0, "0s"),
+    ],
+)
+def test_format_helm_duration_is_plain_go_seconds(seconds: float, expected: str) -> None:
+    # No exponent form and no trailing ".0": both would be either rejected by
+    # Go's time.ParseDuration or needlessly noisy on the helm command line.
+    assert format_helm_duration(seconds) == expected
+
+
+@pytest.mark.parametrize("seconds", [float("nan"), float("inf"), -1.0])
+def test_format_helm_duration_rejects_invalid_seconds(seconds: float) -> None:
+    with pytest.raises(ValueError):
+        format_helm_duration(seconds)
+
+
+def test_formatted_fractional_timeout_reaches_helm_args_as_a_string() -> None:
+    runner = FakeCommandRunner()
+    Helm(runner=runner).test("loki", namespace="loki", timeout=format_helm_duration(1.5))
+    call = runner.records[0]
+    assert call.args[call.args.index("--timeout") + 1] == "1.5s"

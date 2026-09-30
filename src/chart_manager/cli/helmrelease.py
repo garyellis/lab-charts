@@ -7,6 +7,7 @@ Business logic lives entirely in services/helmrelease.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from collections.abc import Callable
@@ -27,6 +28,8 @@ from chart_manager.cli.helmrelease_render import (
     render_test_pretty,
 )
 from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.plumbing.duration import parse_duration
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.helmrelease import (
     PROMOTE_OUTCOME,
@@ -144,6 +147,26 @@ def _make_narration_console(no_color: bool) -> Console:
     return narration_console(no_color=no_color)
 
 
+def _timeout_seconds(value: str, *, flag: str) -> float:
+    """Parse one duration option (`10s`, `5m`, `1h`) into seconds, once.
+
+    The CLI owns duration syntax; services only ever see seconds. A bad
+    value is a usage error (exit 2, naming the flag) raised before any
+    service is built, rather than a failure mid-run. `parse_duration`
+    accepts `nan`/`inf` and negatives syntactically, so those are refused
+    here too; cross-field ordering stays with the request's own validation.
+    """
+    try:
+        seconds = parse_duration(value)
+    except ChartManagerError as exc:
+        raise typer.BadParameter(str(exc), param_hint=flag) from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise typer.BadParameter(
+            f"must be a positive, finite duration (got {value!r})", param_hint=flag
+        )
+    return seconds
+
+
 def _pr_url(result: PromoteResult) -> str:
     """The PR url for a status that carries one; empty is not reachable today."""
     return result.pull_request.url if result.pull_request is not None else ""
@@ -188,9 +211,9 @@ def monitor(
         version=version,
         namespace=_coerce_namespace(namespace),
         concurrency=concurrency,
-        per_poll_timeout=per_poll_timeout,
-        per_hr_timeout=per_hr_timeout,
-        total_timeout=total_timeout,
+        per_poll_timeout_seconds=_timeout_seconds(per_poll_timeout, flag="--per-poll-timeout"),
+        per_hr_timeout_seconds=_timeout_seconds(per_hr_timeout, flag="--per-hr-timeout"),
+        total_timeout_seconds=_timeout_seconds(total_timeout, flag="--total-timeout"),
         fail_fast=fail_fast,
         environment=environment,
     )
@@ -258,9 +281,9 @@ def test(
         version=version,
         namespace=_coerce_namespace(namespace),
         concurrency=concurrency,
-        per_poll_timeout=per_poll_timeout,
-        per_hr_timeout=per_hr_timeout,
-        total_timeout=total_timeout,
+        per_poll_timeout_seconds=_timeout_seconds(per_poll_timeout, flag="--per-poll-timeout"),
+        per_hr_timeout_seconds=_timeout_seconds(per_hr_timeout, flag="--per-hr-timeout"),
+        total_timeout_seconds=_timeout_seconds(total_timeout, flag="--total-timeout"),
         pod_log_tail=pod_log_tail,
         environment=environment,
     )

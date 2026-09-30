@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 from weakref import WeakKeyDictionary
@@ -14,6 +16,21 @@ from weakref import WeakKeyDictionary
 from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
+
+
+def format_helm_duration(seconds: float) -> str:
+    """Render seconds as a Go duration string for helm's `--timeout` flag.
+
+    Plain decimal seconds only, fractional part preserved: 300.0 -> "300s",
+    1.5 -> "1.5s", 1e-05 -> "0.00001s". Going through `Decimal(repr(...))`
+    keeps the shortest round-tripping digits and avoids both the "1e-05s"
+    exponent form (Go's `time.ParseDuration` rejects it) and a noisy
+    trailing ".0". Negative and non-finite values are programming errors:
+    request validation rejects them long before a subprocess is built.
+    """
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(f"helm duration must be finite and >= 0 (got {seconds!r})")
+    return f"{Decimal(repr(float(seconds))).normalize():f}s"
 
 
 def _assume_stale(_chart_path: Path) -> bool:
