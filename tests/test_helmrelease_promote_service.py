@@ -572,6 +572,37 @@ def test_non_semver_current_version_does_not_gate(tmp_path: Path) -> None:
     assert result.downgrades == []
 
 
+@pytest.mark.parametrize(
+    ("current", "target", "downgrade"),
+    [
+        ("1.0.0-pr.2", "1.0.0-pr.1", True),
+        ("1.0.0-1", "1.0.0", False),  # a prerelease, not a PEP 440 post-release
+        ("1.0.0+build.2", "1.0.0+build.1", False),  # build metadata has no precedence
+    ],
+)
+def test_downgrade_gate_uses_semver_precedence(
+    tmp_path: Path, current: str, target: str, downgrade: bool
+) -> None:
+    fixture = tmp_path / "fixture"
+    _write_hr(fixture, "prod/loki.yaml", chart="loki", version=current)
+    service = PromoteService(
+        git_factory=_FakeGit,
+        github_factory=_FakeGithub,
+        clone_fn=_cloner(fixture),
+    )
+    result = service.promote(
+        PromoteRequest(
+            flux_repo=_FAKE_URL,
+            path=Path("prod/"),
+            environment="prod",
+            chart_name="loki",
+            version=target,
+            dry_run=True,
+        )
+    )
+    assert len(result.downgrades) == int(downgrade)
+
+
 # ----- telemetry failure policy ---------------------------------------------
 #
 # The promotion event is emitted *after* the PR is already open, so an

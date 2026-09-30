@@ -13,6 +13,7 @@ from chart_manager.services.publish import (
     PublishKind,
     PublishService,
     target_reference,
+    validate_semver,
     with_version_suffix,
 )
 
@@ -82,6 +83,12 @@ def test_version_suffix_preserves_existing_prerelease_and_build() -> None:
 def test_invalid_suffix_is_rejected(suffix: str) -> None:
     with pytest.raises(SpecError, match="suffix"):
         with_version_suffix("1.2.3", suffix)
+
+
+def test_validate_semver_allows_leading_zeros_only_in_build_metadata() -> None:
+    assert validate_semver("1.0.0+001") == "1.0.0+001"
+    with pytest.raises(SpecError, match="invalid SemVer version"):
+        validate_semver("1.0.0-01")
 
 
 def test_batch_prepares_every_chart_before_any_push(

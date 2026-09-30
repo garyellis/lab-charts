@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.semver import parse_bare_version
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
 from chart_manager.services.upgrader.errors import UpgradeError
 from chart_manager.services.upgrader.models import (
@@ -335,9 +335,13 @@ def build_upgrade_plan(
         chart_path,
         charts_dir=charts_dir,
     )
-    version = chart.get("version")
-    if not isinstance(version, str) or not re.fullmatch(r"(0|[1-9]\d*)\.\d+\.\d+", version):
-        raise UpgradeError(f"Chart.yaml version must be a strict x.y.z version, got {version!r}")
+    raw_version = chart.get("version")
+    try:
+        version = str(parse_bare_version(raw_version))
+    except ValueError as exc:
+        raise UpgradeError(
+            f"Chart.yaml version must be a strict x.y.z version, got {raw_version!r}"
+        ) from exc
     name = resolved.name
     group = f"chart-manager:{name}"
     # Renovate's stale-branch pruning is scoped by `branchPrefix` alone, while

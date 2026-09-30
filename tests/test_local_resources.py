@@ -192,7 +192,7 @@ spec:
       name: ingress
       repo: https://example.test/helm
       chart: ingress
-      version: 2.3.4
+      version: 2.3.4-rc.1+001
       namespace: ingress
       values: []
       timeout: 5m
@@ -204,6 +204,7 @@ spec:
     assert isinstance(resource.spec.releases[0], LifecycleRelease)
     assert isinstance(resource.spec.releases[1], OciChartRelease)
     assert isinstance(resource.spec.releases[2], RepoChartRelease)
+    assert resource.spec.releases[2].version == "2.3.4-rc.1+001"
 
     bad = stack.read_text(encoding="utf-8").replace(
         "type: lifecycle, chart: charts/demo, profile: minimal",
@@ -294,6 +295,7 @@ spec:
         "",
         "version: latest",
         "version: '1.2'",
+        "version: '1.0.0-01'",
         "digest: sha256:ABC",
         (
             "version: 1.2.3\n"
@@ -332,6 +334,7 @@ spec:
         ("https://example.test/helm", "org/demo", "1.2.3"),
         ("https://example.test/helm", "demo", "latest"),
         ("https://example.test/helm", "demo", "1.2"),
+        ("https://example.test/helm", "demo", "1.0.0-01"),
     ],
 )
 def test_repo_release_requires_https_bare_chart_and_exact_version(
