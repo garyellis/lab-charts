@@ -256,8 +256,6 @@ def _req(**overrides: Any) -> MonitorRequest:
         "per_poll_timeout": "10s",
         "per_hr_timeout": "5m",
         "total_timeout": "15m",
-        "poll_interval": 1.0,
-        "recent_transitions_size": 5,
         "concurrency": 2,
     }
     base.update(overrides)
@@ -277,7 +275,6 @@ def test_request_validation_rejects_per_hr_lt_poll_interval() -> None:
         MonitorRequest(
             chart_name=CHART,
             version=VERSION,
-            poll_interval=10.0,
             per_hr_timeout="1s",
             total_timeout="2s",
         )
@@ -918,9 +915,9 @@ def test_jitter_applied_once_before_first_tick() -> None:
         return 0.0
 
     service = _make_service(cluster, rand=rand)
-    service.monitor(_req(concurrency=3, poll_interval=2.0))
+    service.monitor(_req(concurrency=3))
     assert len(rand_calls) == 3
-    assert all(call == (0.0, 2.0) for call in rand_calls)
+    assert all(call == (0.0, 3.0) for call in rand_calls)
 
 
 def test_outcomes_sorted_by_ns_name() -> None:
@@ -992,3 +989,68 @@ def test_fail_fast_disabled_lets_subsequent_watchers_complete() -> None:
     by_name = {(o.ref.namespace, o.ref.name): o for o in result.outcomes}
     assert by_name[("ns", "aaa")].verdict == "failed"
     assert by_name[("ns", "zzz")].verdict == "ready"
+
+
+# ----- fixed service policy ------------------------------------------------
+
+
+def test_polls_sleep_the_fixed_three_second_interval() -> None:
+    ref = _ref()
+    progressing = _status(
+        ref,
+        generation=2,
+        observed_generation=1,
+        conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
+    )
+    converged = _status(
+        ref,
+        generation=2,
+        observed_generation=2,
+        history_chart_version=VERSION,
+        conditions=(_ready(WALL_BASE),),
+    )
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): [progressing, progressing, converged]},
+        workloads={("loki", "loki"): [(_workload(),)]},
+    )
+    slept: list[float] = []
+    rand_calls: list[tuple[float, float]] = []
+
+    def rand(lo: float, hi: float) -> float:
+        rand_calls.append((lo, hi))
+        return 1.25
+
+    result = _make_service(cluster, sleep=slept.append, rand=rand).monitor(_req())
+
+    [o] = result.outcomes
+    assert o.verdict == "ready"
+    # One jitter draw over [0, poll interval], slept once, then fixed polls.
+    assert rand_calls == [(0.0, 3.0)]
+    assert slept[0] == 1.25
+    assert slept[1:]
+    assert all(s == 3.0 for s in slept[1:])
+
+
+def test_recent_transitions_keep_the_last_five() -> None:
+    ref = _ref()
+    gen_lag = _status(
+        ref,
+        generation=2,
+        observed_generation=1,
+        conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
+    )
+    history_lag = _status(
+        ref,
+        generation=2,
+        observed_generation=2,
+        history_chart_version="old",
+        conditions=(_cond("Ready", "Unknown", reason="Progressing"),),
+    )
+    # Alternating phases defeat the adjacent-duplicate dedupe, so every poll
+    # records a transition and the ring must evict.
+    seq = [gen_lag, history_lag] * 6
+    cluster = _FakeCluster(list_result=[ref], statuses={("loki", "loki"): seq})
+    clock = _StepClock(warmup=50, step=400.0)
+    [o] = _make_service(cluster, clock=clock).monitor(_req()).outcomes
+    assert len(o.recent_transitions) == 5

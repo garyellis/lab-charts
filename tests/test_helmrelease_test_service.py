@@ -22,6 +22,7 @@ from chart_manager.integrations.helmrelease import (
 )
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.helmrelease.helm_test import (
     TestRequest,
     TestService,
@@ -257,7 +258,6 @@ def _req(**overrides: Any) -> TestRequest:
         "per_poll_timeout": "10s",
         "per_hr_timeout": "1m",
         "total_timeout": "5m",
-        "subprocess_slack": "5s",
     }
     base.update(overrides)
     return TestRequest(**base)
@@ -293,19 +293,9 @@ def test_request_rejects_total_lt_per_hr() -> None:
         )
 
 
-def test_request_rejects_subprocess_slack_below_5s() -> None:
-    with pytest.raises(ChartManagerError):
-        TestRequest(chart_name=CHART, version=VERSION, subprocess_slack="1s")
-
-
 def test_request_rejects_pod_log_tail_below_one() -> None:
     with pytest.raises(ChartManagerError):
         TestRequest(chart_name=CHART, version=VERSION, pod_log_tail=0)
-
-
-def test_request_rejects_stdout_max_bytes_below_minimum() -> None:
-    with pytest.raises(ChartManagerError):
-        TestRequest(chart_name=CHART, version=VERSION, helm_test_stdout_max_bytes=10)
 
 
 # ----- top-level flow ------------------------------------------------------
@@ -1085,3 +1075,79 @@ def test_a_swallowed_pod_log_failure_reaches_the_log_with_its_stderr(
     assert "pod=loki-test" in rendered
     assert "ns=loki" in rendered
     assert "release=loki" in rendered
+
+
+# ----- fixed service policy ------------------------------------------------
+
+
+def test_subprocess_cap_is_per_hr_plus_thirty_seconds() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+    helm = _FakeHelm(result=_ok_result())
+    _make_service(cluster, helm).test(_req(per_hr_timeout="1m", total_timeout="5m"))
+    [(_args, kwargs)] = helm.calls
+    assert kwargs["subprocess_timeout"] == 90.0
+
+
+def test_subprocess_cap_is_bounded_by_remaining_total_budget() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+    helm = _FakeHelm(result=_ok_result())
+    # total == per_hr: the 30s allowance would overrun the run's budget.
+    _make_service(cluster, helm).test(_req(per_hr_timeout="1m", total_timeout="1m"))
+    [(_args, kwargs)] = helm.calls
+    assert kwargs["subprocess_timeout"] == 60.0
+
+
+def test_diagnostics_snapshot_at_most_five_test_pods() -> None:
+    ref = _ref()
+    pods = [("loki", f"loki-test-{i}", "Failed") for i in range(7)]
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _released_status(ref)},
+        test_pods={("loki", "loki"): pods},
+    )
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+    assert [p.name for p in o.test_pods] == [f"loki-test-{i}" for i in range(5)]
+
+
+def test_each_pod_log_stream_is_truncated_to_16_kib() -> None:
+    ref = _ref()
+    big = "x" * 20_000
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _released_status(ref)},
+        test_pods={
+            ("loki", "loki"): [
+                ("loki", "current", "Failed"),
+                ("loki", "restarted", "Failed"),
+            ]
+        },
+        pod_logs_map={
+            ("loki", "current", False): big,
+            ("loki", "restarted", True): big,
+        },
+    )
+    helm = _FakeHelm(result=_bad_result("Error: bare failure"))
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+    current, restarted = o.test_pods
+    expected = truncate_bytes(big, 16_384)
+    assert current.logs == expected
+    assert restarted.previous_logs == expected
+
+
+def test_helm_stdout_and_stderr_are_each_truncated_to_32_kib() -> None:
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref], statuses={("loki", "loki"): _released_status(ref)}
+    )
+    out, err = "o" * 40_000, "e" * 50_000
+    helm = _FakeHelm(result=_bad_result(err, stdout=out))
+    [o] = _make_service(cluster, helm).test(_req()).outcomes
+    assert o.helm_test_stdout == truncate_bytes(out, 32_768)
+    assert o.helm_test_stderr == truncate_bytes(err, 32_768)

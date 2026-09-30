@@ -53,6 +53,16 @@ _IN_FLIGHT_PHASES = frozenset({"Pending", "Running", "Unknown", ""})
 _STALE_PHASES = frozenset({"Succeeded", "Failed"})
 
 _PHASE_LOG_MAX = 5
+#: Allowance the `helm test` subprocess gets beyond `per_hr_timeout` (helm's
+#: own `--timeout`), so helm's timeout fires before we kill the subprocess;
+#: still capped by the remaining total budget.
+_SUBPROCESS_SLACK_SEC = 30.0
+#: Retained bytes of each current/previous test-pod log stream.
+_POD_LOG_MAX_BYTES = 16_384
+#: Test pods whose logs are snapshotted per HelmRelease on failure.
+_DIAGNOSTICS_POD_CAP = 5
+#: Retained bytes of each captured `helm test` stream, stdout and stderr alike.
+_HELM_OUTPUT_MAX_BYTES = 32_768
 
 _NO_TESTS_PATTERN = re.compile(r"no tests (to run|for chart|found)", re.IGNORECASE)
 _HELM_UNAVAILABLE_PATTERN = re.compile(
@@ -63,7 +73,7 @@ _HELM_UNAVAILABLE_PATTERN = re.compile(
 
 @dataclass(frozen=True)
 class TestRequest:
-    """Inputs and tunables for a `helm test` run over matching HelmReleases."""
+    """Operator inputs for a `helm test` run over matching HelmReleases."""
 
     chart_name: str
     version: str
@@ -72,15 +82,11 @@ class TestRequest:
     per_poll_timeout: str = "10s"
     # per_hr_timeout: per-pod readiness wait passed to helm `--timeout`.
     # Charts with multiple test hooks may exceed this wall-clock; the
-    # subprocess cap (per_hr + subprocess_slack, bounded by total) is the
+    # subprocess cap (per_hr + _SUBPROCESS_SLACK_SEC, bounded by total) is the
     # hard stop.
     per_hr_timeout: str = "5m"
     total_timeout: str = "15m"
-    subprocess_slack: str = "30s"
     pod_log_tail: int = 200
-    pod_log_max_bytes: int = 16_384
-    diagnostics_pod_cap: int = 5
-    helm_test_stdout_max_bytes: int = 32_768
     # concurrency: each helm test creates 1+ test pods. concurrency=4
     # against 4 HRs with multi-pod suites may create 8-16 pods concurrently
     # on the cluster; tune down on small clusters.
@@ -99,19 +105,6 @@ class TestRequest:
             raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
         if self.pod_log_tail < 1:
             raise ChartManagerError(f"pod_log_tail must be >= 1 (got {self.pod_log_tail})")
-        if self.pod_log_max_bytes < 256:
-            raise ChartManagerError(
-                f"pod_log_max_bytes must be >= 256 (got {self.pod_log_max_bytes})"
-            )
-        if self.diagnostics_pod_cap < 1:
-            raise ChartManagerError(
-                f"diagnostics_pod_cap must be >= 1 (got {self.diagnostics_pod_cap})"
-            )
-        if self.helm_test_stdout_max_bytes < 256:
-            raise ChartManagerError(
-                f"helm_test_stdout_max_bytes must be >= 256 "
-                f"(got {self.helm_test_stdout_max_bytes})"
-            )
         per_hr = parse_duration(self.per_hr_timeout)
         if per_hr < 30.0:
             raise ChartManagerError(
@@ -122,11 +115,6 @@ class TestRequest:
             raise ChartManagerError(
                 f"total_timeout ({self.total_timeout}) must be >= per_hr_timeout "
                 f"({self.per_hr_timeout})"
-            )
-        slack = parse_duration(self.subprocess_slack)
-        if slack < 5.0:
-            raise ChartManagerError(
-                f"subprocess_slack ({self.subprocess_slack}) must be >= 5s"
             )
 
 
@@ -187,7 +175,6 @@ class _ParsedRequest:
     per_poll_sec: float
     per_hr_sec: float
     total_sec: float
-    subprocess_slack_sec: float
 
 
 # Internal aggregate for a single watcher; lets us thread state through
@@ -259,7 +246,6 @@ class TestService:
             per_poll_sec=parse_duration(request.per_poll_timeout),
             per_hr_sec=parse_duration(request.per_hr_timeout),
             total_sec=parse_duration(request.total_timeout),
-            subprocess_slack_sec=parse_duration(request.subprocess_slack),
         )
 
         matched = filter_matched_statuses(
@@ -454,7 +440,7 @@ class TestService:
         # --timeout claims another N minutes.
         remaining_total = max(0.0, ctx.total_deadline - self._clock())
         subprocess_cap = min(
-            ctx.parsed.per_hr_sec + ctx.parsed.subprocess_slack_sec, remaining_total
+            ctx.parsed.per_hr_sec + _SUBPROCESS_SLACK_SEC, remaining_total
         )
         if subprocess_cap <= 0:
             return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
@@ -589,12 +575,12 @@ class TestService:
         """Assemble the TestOutcome, composing diagnostics for non-passing verdicts."""
         rc = helm_result.returncode if helm_result is not None else None
         stdout = (
-            truncate_bytes(helm_result.stdout or "", ctx.request.helm_test_stdout_max_bytes)
+            truncate_bytes(helm_result.stdout or "", _HELM_OUTPUT_MAX_BYTES)
             if helm_result is not None
             else None
         )
         stderr = (
-            truncate_bytes(helm_result.stderr or "", ctx.request.helm_test_stdout_max_bytes)
+            truncate_bytes(helm_result.stderr or "", _HELM_OUTPUT_MAX_BYTES)
             if helm_result is not None
             else None
         )
@@ -764,12 +750,12 @@ class TestService:
             parts.append("\n### helm test output")
             if helm_result.stdout:
                 parts.append(
-                    truncate_bytes(helm_result.stdout, ctx.request.helm_test_stdout_max_bytes)
+                    truncate_bytes(helm_result.stdout, _HELM_OUTPUT_MAX_BYTES)
                 )
             if helm_result.stderr:
                 parts.append("\n#### stderr")
                 parts.append(
-                    truncate_bytes(helm_result.stderr, ctx.request.helm_test_stdout_max_bytes)
+                    truncate_bytes(helm_result.stderr, _HELM_OUTPUT_MAX_BYTES)
                 )
 
         return "\n".join(parts), test_pods
@@ -777,7 +763,7 @@ class TestService:
     def _snapshot_test_pods(
         self, ctx: _RunContext
     ) -> tuple[tuple[TestPodSnapshot, ...], str | None]:
-        """Collect logs for up to `diagnostics_pod_cap` test pods; falls back to --previous logs.
+        """Collect logs for up to `_DIAGNOSTICS_POD_CAP` test pods; falls back to --previous logs.
 
         Returns `(snapshots, None)`, or `((), detail)` when the pods could not
         be listed at all -- which the caller must render differently from an
@@ -797,7 +783,7 @@ class TestService:
             )
             return (), detail
         snapshots: list[TestPodSnapshot] = []
-        for pod_ns, pod_name, phase in pods[: ctx.request.diagnostics_pod_cap]:
+        for pod_ns, pod_name, phase in pods[:_DIAGNOSTICS_POD_CAP]:
             log_error: str | None = None
             logs = ""
             try:
@@ -858,10 +844,10 @@ class TestService:
                     logs=(
                         f"<logs unavailable: {log_error}>"
                         if log_error is not None
-                        else truncate_bytes(logs, ctx.request.pod_log_max_bytes)
+                        else truncate_bytes(logs, _POD_LOG_MAX_BYTES)
                     ),
                     previous_logs=(
-                        truncate_bytes(previous, ctx.request.pod_log_max_bytes)
+                        truncate_bytes(previous, _POD_LOG_MAX_BYTES)
                         if previous
                         else None
                     ),

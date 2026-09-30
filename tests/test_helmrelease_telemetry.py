@@ -222,7 +222,6 @@ def _monitor_req(**overrides: Any) -> MonitorRequest:
     base: dict[str, Any] = {
         "chart_name": CHART,
         "version": VERSION,
-        "poll_interval": 1.0,
         "environment": ENV,
     }
     base.update(overrides)
@@ -235,7 +234,6 @@ def _test_req(**overrides: Any) -> TestRequest:
         "version": VERSION,
         "per_hr_timeout": "1m",
         "total_timeout": "5m",
-        "subprocess_slack": "5s",
         "environment": ENV,
     }
     base.update(overrides)
