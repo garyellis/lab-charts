@@ -153,8 +153,8 @@ def crash_row(
 ) -> RowResult:
     """Convert a failure outside any validation phase into a visible row failure.
 
-    error_type="tool" routes to `Outcome.TOOL` (a tool/runtime fault, not a
-    chart-author validation issue). Schema/policy SKIP downstream so the row
+    Dependency-prefetch command failures are environment errors; other crashes
+    are tool/runtime errors. Schema/policy SKIP downstream so the row
     reads consistently with an in-phase render FAIL. `context` names the
     boundary that failed -- a worker crash, a dependency prefetch, an
     unusable helm binding, or a runner that could not be constructed at all.

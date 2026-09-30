@@ -30,6 +30,21 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
 LOCAL_SCHEMA_TEMPLATE = "/cache/schemas/{{.ResourceKind}}.json"
 
 
+@pytest.mark.parametrize("exceptions,expected", [
+    (frozenset(), []),
+    (frozenset({"apiextensions.k8s.io/v1/CustomResourceDefinition"}),
+     ["apiextensions.k8s.io/v1/CustomResourceDefinition"]),
+])
+def test_exact_exceptions_do_not_parse_manifests(tmp_path, monkeypatch, exceptions, expected):
+    from chart_manager.integrations.kubeconform.runner import _uncovered_gvk_skips
+
+    (tmp_path / "resource.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n")
+    def unexpected(*args, **kwargs):
+        pytest.fail("no manifest parsing is needed for exact GVK exceptions")
+    monkeypatch.setattr("chart_manager.integrations.kubeconform.runner.load_yaml_documents", unexpected)
+    assert _uncovered_gvk_skips(tmp_path, [LOCAL_SCHEMA_TEMPLATE], exceptions) == expected
+
+
 
 def _load(name: str) -> str:
     return (FIXTURE_DIR / name).read_text()

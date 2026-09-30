@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
 )
 from chart_manager.services.kubeconform_schemas.inventory import RenderedResource
@@ -30,7 +31,7 @@ def generate_crd_schemas(
             key = (artifact.gvk.group, artifact.gvk.version, artifact.gvk.kind)
             previous = generated.get(key)
             if previous is not None and previous.content != artifact.content:
-                raise KubeconformSchemaIntegrityError(
+                raise KubeconformSchemaConfigurationError(
                     f"conflicting rendered CRDs define {artifact.gvk.key}: "
                     f"{', '.join(providers[key])}; {artifact.source_reference}"
                 )
@@ -160,6 +161,8 @@ def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def _walk_schema(node: dict[str, Any], *, in_fragment: bool = False) -> None:
+    if node.get("x-kubernetes-int-or-string") is True:
+        node["type"] = ["integer", "string"]
     properties = node.get("properties")
     if isinstance(properties, dict):
         for child in properties.values():
@@ -214,6 +217,16 @@ def _walk_schema(node: dict[str, Any], *, in_fragment: bool = False) -> None:
         and not preserve_unknown
     ):
         node["additionalProperties"] = False
+
+    # OpenAPI nullable is not understood by JSON Schema/kubeconform. Keep all
+    # shape constraints on non-null values and explicitly admit null. Kubernetes
+    # still applies enum to null, so keep it outside the nullable alternative.
+    if node.pop("nullable", False) is True:
+        non_null = dict(node)
+        node.clear()
+        if "enum" in non_null:
+            node["enum"] = non_null.pop("enum")
+        node["anyOf"] = [{"type": "null"}, non_null]
 
 
 __all__ = ["generate_crd_schemas"]

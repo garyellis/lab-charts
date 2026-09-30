@@ -15,6 +15,31 @@ from chart_manager.services.kubeconform_schemas.crd import _strict_schema
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("field,valid,invalid", [
+    ({"type": "boolean", "nullable": True}, None, "false"),
+    ({"type": "string", "nullable": True}, None, 7),
+    ({"type": "integer", "nullable": True}, None, "7"),
+    ({"type": "object", "nullable": True, "properties": {"limit": {"type": "integer"}}},
+     None, {"unknown": 3}),
+    ({"type": "object", "nullable": True, "properties": {"limit": {"type": "integer"}}},
+     {"limit": 3}, {"limit": "bad"}),
+    ({"type": "array", "nullable": True, "items": {"type": "integer"}}, None, ["bad"]),
+    ({"type": "array", "items": {"type": "integer", "nullable": True}}, [None, 1], ["bad"]),
+    ({"type": "object", "additionalProperties": {"type": "integer", "nullable": True}},
+     {"key": None}, {"key": "bad"}),
+    ({"type": "string", "nullable": True, "enum": ["A"]}, "A", None),
+    ({"type": "string", "nullable": True, "enum": ["A", None]}, None, "B"),
+    ({"type": "string", "nullable": False}, "A", None),
+    ({"type": "object", "nullable": True, "oneOf": [{"required": ["a"]}]}, None, {}),
+    ({"x-kubernetes-int-or-string": True}, 80, False),
+    ({"x-kubernetes-int-or-string": True}, "http", {}),
+    ({"x-kubernetes-int-or-string": True, "nullable": True}, None, 1.5),
+])
+def test_nullable_preserves_type_and_enum_constraints(tmp_path, field, valid, invalid):
+    _assert_verdicts(tmp_path, {"properties": {"value": field}},
+                     {"value": valid}, {"value": invalid})
+
+
 @pytest.mark.parametrize("constraint,valid,invalid", [
     ({"not": {"properties": {"a": {"enum": ["bad"]}}, "required": ["a"]}},
      {"a": "good", "b": "present"}, {"a": "bad", "b": "present"}),

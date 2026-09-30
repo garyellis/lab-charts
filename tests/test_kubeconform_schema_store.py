@@ -40,7 +40,7 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
         source="kubernetes",
         path=artifact_relative_path(source="kubernetes", gvk=gvk, scope=None),
         sha256=content_digest(content),
-        source_reference="https://example/schema",
+        source_reference=_policy().artifact_url("kubernetes", gvk),
     )
     lock = build_lock(
         workspace="lab",
@@ -73,7 +73,7 @@ def test_republishing_identical_generation_never_writes_destination(
         source="kubernetes",
         path=artifact_relative_path(source="kubernetes", gvk=gvk, scope=None),
         sha256=content_digest(content),
-        source_reference="https://example/configmap",
+        source_reference=_policy().artifact_url("kubernetes", GroupVersionKind(version="v1", kind="ConfigMap")),
     )
     lock = build_lock(workspace="lab", policy=_policy(), schemas=[entry])
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
@@ -100,9 +100,9 @@ def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
     entry = SchemaFile(
         gvk=gvk,
         source="kubernetes",
-        path="kubernetes/configmap_v1.json",
+        path="kubernetes/v1/configmap_v1.json",
         sha256=content_digest(content),
-        source_reference="https://example/schema",
+        source_reference=_policy().artifact_url("kubernetes", gvk),
     )
     lock = build_lock(
         workspace="lab",
@@ -128,9 +128,9 @@ def test_store_rejects_incomplete_generation_before_rename(tmp_path: Path) -> No
     entry = SchemaFile(
         gvk=gvk,
         source="kubernetes",
-        path="kubernetes/configmap_v1.json",
+        path="kubernetes/v1/configmap_v1.json",
         sha256=content_digest(b"{}"),
-        source_reference="https://example/schema",
+        source_reference=_policy().artifact_url("kubernetes", gvk),
     )
     lock = build_lock(
         workspace="lab",
@@ -160,9 +160,9 @@ def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) ->
         SchemaFile(
             gvk=GroupVersionKind(version="v1", kind="ConfigMap"),
             source="kubernetes",
-            path="kubernetes/configmap_v1.json",
+            path="kubernetes/v1/configmap_v1.json",
             sha256=content_digest(content),
-            source_reference="https://example/configmap",
+            source_reference=_policy().artifact_url("kubernetes", GroupVersionKind(version="v1", kind="ConfigMap")),
         ),
     ]
     lock = build_lock(

@@ -50,7 +50,7 @@ def _lock():
                 source="kubernetes",
                 path="kubernetes/apps/deployment_v1.json",
                 sha256=content_digest(content),
-                source_reference="https://example.invalid/schema.json",
+                source_reference=_policy().artifact_url("kubernetes", gvk),
             )
         ],
     )
@@ -124,14 +124,14 @@ def test_build_lock_omits_scope_inventory_and_sorts_schema_entries() -> None:
                 source="kubernetes",
                 path="kubernetes/apps/deployment_v1.json",
                 sha256=content_digest(content),
-                source_reference="d",
+                source_reference=_policy().artifact_url("kubernetes", deployment),
             ),
             SchemaFile(
                 gvk=config_map,
                 source="kubernetes",
-                path="kubernetes/configmap_v1.json",
+                path="kubernetes/v1/configmap_v1.json",
                 sha256=content_digest(content),
-                source_reference="c",
+                source_reference=_policy().artifact_url("kubernetes", config_map),
             ),
         ],
     )

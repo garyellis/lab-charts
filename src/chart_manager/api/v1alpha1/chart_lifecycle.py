@@ -239,6 +239,11 @@ class ManifestValidationSpec(ApiModel):
                     f"got {location!r}"
                 )
             relative_path(location, field="schema location")
+            if "{{.ResourceKind}}" not in location or not location.endswith(".json"):
+                raise ValueError(
+                    "schema location must be a .json file template containing "
+                    "{{.ResourceKind}}; literal files apply to every resource type"
+                )
         return locations
 
     @field_validator("ignore_missing_schemas")

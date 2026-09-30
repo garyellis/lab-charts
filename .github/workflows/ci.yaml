@@ -79,18 +79,23 @@ jobs:
 
       # The unit suite. Integration-marked tests are excluded by the addopts
       # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
-      # covered by the validate and sandbox-test jobs below.
+      # covered by the explicit contract step and runtime jobs below.
       - name: Unit tests
         run: uv run --extra dev pytest -q
 
       # The lifecycle resource is part of the chart artifact contract: later
       # automation must be able to read the exact intent that was packaged.
-      # Keep this small Helm-backed integration in the fast gate so a bad
-      # .helmignore or filename migration cannot silently strip the resource.
-      - name: ChartLifecycle packaging contract
-        run: >-
-          uv run --extra dev pytest -q -m integration
-          tests/integration/test_chart_lifecycle_packaging.py
+      # Keep real Helm/kubeconform proofs in the fast gate: packaging mistakes
+      # and CRD conversion regressions must not rely on local-only integration tests.
+      - name: ChartLifecycle and schema integration contracts
+        run: |
+          # Fail the gate instead of silently skipping the real-tool proofs.
+          helm version --short
+          kubeconform -v
+          uv run --extra dev pytest -q -m integration \
+            tests/integration/test_chart_lifecycle_packaging.py \
+            tests/integration/test_manifest_validation_schema_e2e.py \
+            tests/integration/test_crd_schema_constraints.py
 
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
@@ -344,7 +349,7 @@ jobs:
           CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
         run: |
           needed=false
-          if [[ "$MODE" == all || "$MODE" == list ]]; then
+          if [[ "$MODE" == all || "$MODE" == list || ! "$CHANGED_FILES" =~ [^[:space:]] ]]; then
             needed=true
           else
             # Only known non-runtime paths bypass repository verification.

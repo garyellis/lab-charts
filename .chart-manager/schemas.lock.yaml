@@ -1,4 +1,4 @@
-generation: sha256:487bc240f1824f614f0d6581f631f5b76169085d14defd2902b03ae523712a41
+generation: sha256:342d25befec043fdb957ae1e383ccc466a4197eafde4eb9198cc6f52b98d42d3
 policy:
   catalog:
     repository: datreeio/CRDs-catalog
@@ -64,7 +64,7 @@ schemas:
       kind: AutoscalingRunnerSet
       version: v1alpha1
     path: generated/actions.github.com/autoscalingrunnerset_v1alpha1.json
-    sha256: sha256:ea797d89f0fb63f14d25504e4c80befe85dfaf71282cdb92f0fa351d03383ab6
+    sha256: sha256:4c61bc3c74a9e44ab0b75d72287afd3cd3e996c25d09479a5a6b5bd7a75c2e3e
     source: generated
     sourceReference: rendered CRD actions.github.com/v1alpha1/AutoscalingRunnerSet
   - gvk:
@@ -128,7 +128,7 @@ schemas:
       kind: ClusterIssuer
       version: v1
     path: generated/cert-manager.io/clusterissuer_v1.json
-    sha256: sha256:fa4d7e67a29ceb243fab371a6f52ac5e035e26c2b15aedd0979509446e3a65e7
+    sha256: sha256:012a3719f72da36917a1203039a8ce9e1b9a84b0daf6eb15d2218e7204c9082f
     source: generated
     sourceReference: rendered CRD cert-manager.io/v1/ClusterIssuer
   - gvk:
@@ -136,7 +136,7 @@ schemas:
       kind: Issuer
       version: v1
     path: generated/cert-manager.io/issuer_v1.json
-    sha256: sha256:5f05c6adca34f605a691c6080f71294eae1e2cf941ee2212bd60160b2fc2d811
+    sha256: sha256:e4d44755eb13f938d5fe08573777e7f30ee68190ddfe4e54fd80a8281ad1b7db
     source: generated
     sourceReference: rendered CRD cert-manager.io/v1/Issuer
   - gvk:
@@ -144,7 +144,7 @@ schemas:
       kind: Kafka
       version: v1
     path: generated/kafka.strimzi.io/kafka_v1.json
-    sha256: sha256:8193563a2a415eac63eeff3402a4b326ce6b1c977b05ba97056601c103f0150e
+    sha256: sha256:e3fb09aa10a1f400183c69a145c6c8c5ce04f6d79e6cb5590d61ce90e1ec7fbf
     source: generated
     sourceReference: rendered CRD kafka.strimzi.io/v1/Kafka
   - gvk:
@@ -152,7 +152,7 @@ schemas:
       kind: KafkaNodePool
       version: v1
     path: generated/kafka.strimzi.io/kafkanodepool_v1.json
-    sha256: sha256:e6727d1ae05fa83741d2e8242de477a1c1799c6aaa9a4ee15723bd5ff5cb00f4
+    sha256: sha256:b7428ce3872dbab2f8667857da59627216b73dfd89efa4365a4364c9551a19b3
     source: generated
     sourceReference: rendered CRD kafka.strimzi.io/v1/KafkaNodePool
   - gvk:
@@ -160,7 +160,7 @@ schemas:
       kind: Kiali
       version: v1alpha1
     path: generated/kiali.io/kiali_v1alpha1.json
-    sha256: sha256:4ab86bdec9c96ceccdb834ee49671f0082055d4f4845176bd40022f54c7dde89
+    sha256: sha256:dbc047dadfeb2c9f5a9cef4caa216b76a2d93dfaa408a3de01ca64d0c7005c55
     source: generated
     sourceReference: rendered CRD kiali.io/v1alpha1/Kiali
   - gvk:
@@ -176,7 +176,7 @@ schemas:
       kind: Alertmanager
       version: v1
     path: generated/monitoring.coreos.com/alertmanager_v1.json
-    sha256: sha256:c3554f912f6b4d70d2f5728699a76fea87a7688bce3fdb2d4485d622432bec52
+    sha256: sha256:d12f3529a5d5755d6a92d89415860f84c29a8f85629e12e7a90b90a510e3b0f5
     source: generated
     sourceReference: rendered CRD monitoring.coreos.com/v1/Alertmanager
   - gvk:
@@ -184,7 +184,7 @@ schemas:
       kind: PrometheusRule
       version: v1
     path: generated/monitoring.coreos.com/prometheusrule_v1.json
-    sha256: sha256:a41f7028755721cd645ab604dda7e926ecba6b29018149f96950c4cf16cfd2c7
+    sha256: sha256:75d8f77dd43184596cde9e345bb1e8300a34753afc29c92feeff81a66b0fccca
     source: generated
     sourceReference: rendered CRD monitoring.coreos.com/v1/PrometheusRule
   - gvk:
@@ -192,7 +192,7 @@ schemas:
       kind: ServiceMonitor
       version: v1
     path: generated/monitoring.coreos.com/servicemonitor_v1.json
-    sha256: sha256:8a9848f1f7f6902378e6a364a0e7e9a4c46986be560614ada8d7f8577ea8b59d
+    sha256: sha256:6a0df031e18bc52972c76d85aa929e6e78b03ebd75c3f291085e9666bebaa693
     source: generated
     sourceReference: rendered CRD monitoring.coreos.com/v1/ServiceMonitor
   - gvk:
@@ -200,7 +200,7 @@ schemas:
       kind: ThanosRuler
       version: v1
     path: generated/monitoring.coreos.com/thanosruler_v1.json
-    sha256: sha256:c118741163e309686462be788ef5ab436163e5d7115407c633b5c47c41b05781
+    sha256: sha256:995a3154e68bd48543bdffa18a8c2a567aa084646bb693b90ac24a15a2afc3a1
     source: generated
     sourceReference: rendered CRD monitoring.coreos.com/v1/ThanosRuler
   - gvk:
@@ -216,7 +216,7 @@ schemas:
       kind: DestinationRule
       version: v1
     path: generated/networking.istio.io/destinationrule_v1.json
-    sha256: sha256:f5eb015b9319fe0eef225a8d7ca4cc638f5ca98e04dc348d18b508e892c24ffd
+    sha256: sha256:a660ab423c15f95f029450afe871c2da73ca8e36ee554fd49a1c5956b3a145f1
     source: generated
     sourceReference: rendered CRD networking.istio.io/v1/DestinationRule
   - gvk:
@@ -224,7 +224,7 @@ schemas:
       kind: Gateway
       version: v1
     path: generated/networking.istio.io/gateway_v1.json
-    sha256: sha256:5731de9d160e2e28f3fb59b24c8d3e6116312f131cd732187c90f1f2bcfb227a
+    sha256: sha256:ea6d0c17cb88ebd05ece6d41d45409ad98fece07a3c13fc800503b41c0dda2da
     source: generated
     sourceReference: rendered CRD networking.istio.io/v1/Gateway
   - gvk:
@@ -232,7 +232,7 @@ schemas:
       kind: VirtualService
       version: v1
     path: generated/networking.istio.io/virtualservice_v1.json
-    sha256: sha256:4231a2ba0ea289d5c27b09b10dfa3954e26f18d3e30dec07e2760af9a24e56a4
+    sha256: sha256:2a1092b0fe309ad0182cb5d0593a2f68e1cc2b4b056fceb736c023b9f94c9a20
     source: generated
     sourceReference: rendered CRD networking.istio.io/v1/VirtualService
   - gvk:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
 import pytest
 
@@ -12,8 +13,35 @@ from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaSourceEnvironmentError,
     GitHubKubeconformSchemaSourceIntegrityError,
     KubeconformSchemaArtifactRequest,
+    _GitHubRedirectHandler,
 )
 
+
+@pytest.mark.parametrize("url", [
+    "https://evil.example/schema.json", "http://raw.githubusercontent.com/schema.json",
+    "https://raw.githubusercontent.com.evil.example/x", "file:///tmp/schema.json",
+    "https://user@api.github.com/x", "https://api.github.com:444/x",
+])
+def test_source_rejects_disallowed_hosts_before_io(url: str) -> None:
+    def unexpected(*args, **kwargs):
+        pytest.fail("disallowed URL reached network")
+    with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="must use HTTPS"):
+        GitHubKubeconformSchemaSource(opener=unexpected).fetch(
+            KubeconformSchemaArtifactRequest("test", url)
+        )
+    with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="must use HTTPS"):
+        _GitHubRedirectHandler().redirect_request(
+            Request("https://api.github.com/repos/a/b"), None, 302, "found", {}, url
+        )
+
+
+def test_redirect_to_raw_github_does_not_forward_api_token() -> None:
+    redirected = _GitHubRedirectHandler().redirect_request(
+        Request("https://api.github.com/repos/a/b", headers={"Authorization": "Bearer secret"}),
+        None, 302, "found", {}, "https://raw.githubusercontent.com/a/b/schema.json",
+    )
+    assert redirected is not None
+    assert not redirected.has_header("Authorization")
 
 class _Response:
     def __init__(self, content: bytes, headers: dict[str, str] | None = None) -> None:
@@ -52,11 +80,11 @@ def test_ref_resolution_rejects_invalid_github_payload() -> None:
 
 def test_http_not_found_is_distinct_from_environment_failure() -> None:
     def missing(*_args, **_kwargs):
-        raise HTTPError("https://example", 404, "missing", {}, None)
+        raise HTTPError("https://raw.githubusercontent.com", 404, "missing", {}, None)
 
     with pytest.raises(GitHubKubeconformSchemaNotFoundError):
         GitHubKubeconformSchemaSource(opener=missing).fetch(
-            KubeconformSchemaArtifactRequest("x", "https://example")
+            KubeconformSchemaArtifactRequest("x", "https://raw.githubusercontent.com")
         )
 
     def offline(*_args, **_kwargs):
@@ -67,7 +95,7 @@ def test_http_not_found_is_distinct_from_environment_failure() -> None:
         match="unreachable",
     ):
         GitHubKubeconformSchemaSource(opener=offline).fetch(
-            KubeconformSchemaArtifactRequest("x", "https://example")
+            KubeconformSchemaArtifactRequest("x", "https://raw.githubusercontent.com")
         )
 
 
@@ -78,7 +106,7 @@ def test_download_is_size_and_checksum_bounded() -> None:
     )
 
     with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="exceeds"):
-        client.fetch(KubeconformSchemaArtifactRequest("x", "https://example"))
+        client.fetch(KubeconformSchemaArtifactRequest("x", "https://raw.githubusercontent.com"))
 
     checksum_client = GitHubKubeconformSchemaSource(
         opener=lambda *_args, **_kwargs: _Response(b"{}"),
@@ -90,7 +118,7 @@ def test_download_is_size_and_checksum_bounded() -> None:
         checksum_client.fetch(
             KubeconformSchemaArtifactRequest(
                 "x",
-                "https://example",
+                "https://raw.githubusercontent.com",
                 expected_sha256="sha256:" + "0" * 64,
             )
         )
@@ -108,8 +136,8 @@ def test_download_many_deduplicates_urls() -> None:
 
     batch = GitHubKubeconformSchemaSource(opener=opener).fetch_many(
         [
-            KubeconformSchemaArtifactRequest("a", "https://example/schema"),
-            KubeconformSchemaArtifactRequest("b", "https://example/schema"),
+            KubeconformSchemaArtifactRequest("a", "https://raw.githubusercontent.com/schema"),
+            KubeconformSchemaArtifactRequest("b", "https://raw.githubusercontent.com/schema"),
         ]
     )
 

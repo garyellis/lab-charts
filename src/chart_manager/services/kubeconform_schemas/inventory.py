@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_documents
 from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
 )
 from chart_manager.services.kubeconform_schemas.models import (
@@ -74,17 +76,20 @@ def scan_rendered_directory(
     ):
         try:
             documents = load_yaml_documents(path)
-        except Exception as exc:
-            raise KubeconformSchemaIntegrityError(
-                f"failed to inventory rendered YAML {path}: {exc}"
+        except YamlError as exc:
+            raise KubeconformSchemaConfigurationError(
+                f"{scope.key}: failed to inventory rendered YAML {path}: {exc}"
             ) from exc
         for index, raw in enumerate(documents):
-            for document in _resource_documents(raw, path=path, document_index=index):
+            for document in _resource_documents(
+                raw, path=path, document_index=index, scope=scope
+            ):
                 try:
                     gvk = GroupVersionKind.from_document(document)
                 except (TypeError, ValueError) as exc:
-                    raise KubeconformSchemaIntegrityError(
-                        f"invalid Kubernetes resource in {path} document {index + 1}: {exc}"
+                    raise KubeconformSchemaConfigurationError(
+                        f"{scope.key}: invalid Kubernetes resource in "
+                        f"{path} document {index + 1}: {exc}"
                     ) from exc
                 resources.append(
                     RenderedResource(
@@ -129,18 +134,19 @@ def _resource_documents(
     *,
     path: Path,
     document_index: int,
+    scope: SchemaScope,
 ) -> tuple[dict[str, Any], ...]:
     if raw is None:
         return ()
     if not isinstance(raw, dict):
-        raise KubeconformSchemaIntegrityError(
-            f"rendered YAML {path} document {document_index + 1} must be a mapping"
+        raise KubeconformSchemaConfigurationError(
+            f"{scope.key}: rendered YAML {path} document {document_index + 1} must be a mapping"
         )
     if raw.get("kind") == "List" and isinstance(raw.get("items"), list):
         items = raw["items"]
         if any(not isinstance(item, dict) for item in items):
-            raise KubeconformSchemaIntegrityError(
-                f"Kubernetes List in {path} document {document_index + 1} "
+            raise KubeconformSchemaConfigurationError(
+                f"{scope.key}: Kubernetes List in {path} document {document_index + 1} "
                 "contains a non-mapping item"
             )
         return tuple(items)

@@ -83,11 +83,6 @@ class SchemaScope(_StrictModel):
             raise ValueError(f"{info.field_name} must be a non-empty path-safe value")
         return value
 
-    def covers(self, required: SchemaScope) -> bool:
-        return self.chart == required.chart and (
-            self.environment is None or self.environment == required.environment
-        )
-
     @property
     def key(self) -> str:
         return f"{self.chart}/{self.environment or '*'}"
@@ -110,7 +105,9 @@ class RepositoryPin(_StrictModel):
     @classmethod
     def _repository(cls, value: str) -> str:
         parts = value.split("/")
-        if len(parts) != 2 or any(not part or part in {".", ".."} for part in parts):
+        if len(parts) != 2 or any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", part) for part in parts
+        ):
             raise ValueError("repository must be an owner/name GitHub repository")
         return value
 
@@ -134,6 +131,23 @@ class LockedSchemaPolicy(_StrictModel):
     generate_from_crds: bool = Field(alias="generateFromCRDs")
     kubernetes: RepositoryPin
     catalog: RepositoryPin
+
+    def artifact_url(self, source: str, gvk: GroupVersionKind) -> str:
+        """Derive an immutable upstream identity; never trust a lock entry's URL."""
+        if source == "kubernetes":
+            pin = self.kubernetes
+            group = gvk.group.split(".", 1)[0]
+            suffix = "-".join(part for part in (group, gvk.version) if part).lower()
+            path = (
+                f"v{self.kubernetes_version}-standalone-strict/"
+                f"{gvk.kind.lower()}-{suffix}.json"
+            )
+        elif source == "catalog":
+            pin = self.catalog
+            path = f"{gvk.group}/{gvk.kind.lower()}_{gvk.version}.json"
+        else:
+            raise ValueError(f"not a remote schema source: {source}")
+        return f"https://raw.githubusercontent.com/{pin.repository}/{pin.resolved}/{path}"
 
     @field_validator("kubernetes_version")
     @classmethod
@@ -218,6 +232,21 @@ class SchemaLock(_StrictModel):
     def _canonical_and_complete(self) -> SchemaLock:
         if self.schemas != sort_schema_files(self.schemas):
             raise ValueError("schemas must be sorted and deduplicated")
+        for entry in self.schemas:
+            if entry.source not in {"kubernetes", "catalog"}:
+                continue
+            expected_url = self.policy.artifact_url(entry.source, entry.gvk)
+            expected_path = (
+                f"{entry.source}/{entry.gvk.group or entry.gvk.version}/"
+                f"{entry.gvk.kind.lower()}_{entry.gvk.version}.json"
+            )
+            if entry.source_reference != expected_url or entry.path != expected_path:
+                raise ValueError(
+                    f"locked {entry.gvk.key} URL/path does not match pinned {entry.source} "
+                    f"identity; expected {expected_url} at {expected_path}; "
+                    "restore the lock from a trusted revision, then run "
+                    "`chart-manager schemas sync --refresh`"
+                )
         expected = generation_digest(
             version=self.version,
             workspace=self.workspace,

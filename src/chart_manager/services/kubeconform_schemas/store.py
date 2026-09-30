@@ -14,7 +14,6 @@ from pathlib import Path
 
 from chart_manager.plumbing.schema_locations import expand_schema_location
 from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
-from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
 from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
     SchemaFile,
@@ -240,20 +239,6 @@ class KubeconformSchemaStore:
                 f"failed to publish schema generation: {exc}"
             ) from exc
         return destination
-
-    def publish_transaction(
-        self,
-        stage: Path,
-        lock: SchemaLock,
-        *,
-        lock_path: Path | None,
-    ) -> Path:
-        """Publish generation first, then atomically advance the optional repo lock."""
-        with self.serialized_sync():
-            destination = self.publish_generation(stage, lock)
-            if lock_path is not None:
-                write_schema_lock_atomic(lock_path, lock)
-            return destination
 
     @contextmanager
     def serialized_sync(self) -> Iterator[None]:

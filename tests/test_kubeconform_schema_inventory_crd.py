@@ -7,13 +7,20 @@ import pytest
 
 from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
-    KubeconformSchemaIntegrityError,
+    KubeconformSchemaConfigurationError,
 )
 from chart_manager.services.kubeconform_schemas.inventory import (
     SchemaInventory,
     scan_rendered_directory,
 )
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
+
+
+@pytest.mark.parametrize("document", ["metadata: {}", "- bad", "kind: List\nitems: [bad]"])
+def test_bad_rendered_document_blames_chart_scope(tmp_path: Path, document: str) -> None:
+    (tmp_path / "bad.yaml").write_text(document)
+    with pytest.raises(KubeconformSchemaConfigurationError, match=r"demo/dev:.*bad.yaml"):
+        scan_rendered_directory(tmp_path, scope=SchemaScope(chart="demo", environment="dev"))
 
 
 def _crd(*, nested_type: str = "string") -> str:
@@ -138,7 +145,7 @@ def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
     )
 
     with pytest.raises(
-        KubeconformSchemaIntegrityError,
+        KubeconformSchemaConfigurationError,
         match="conflicting rendered CRDs",
     ):
         generate_crd_schemas(inventory.crds)

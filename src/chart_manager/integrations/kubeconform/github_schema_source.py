@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from chart_manager.plumbing.errors import ChartManagerError
 
@@ -35,6 +35,28 @@ class GitHubKubeconformSchemaSourceIntegrityError(GitHubKubeconformSchemaSourceE
 
 class GitHubKubeconformSchemaNotFoundError(GitHubKubeconformSchemaSourceError):
     """GitHub has no object at the requested immutable location."""
+
+
+def _require_github_url(url: str) -> None:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc not in {"api.github.com", "raw.githubusercontent.com"}
+        or parsed.fragment
+    ):
+        raise GitHubKubeconformSchemaSourceIntegrityError(
+            "schema source URL must use HTTPS on api.github.com or "
+            f"raw.githubusercontent.com: {url}"
+        )
+
+
+class _GitHubRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _require_github_url(newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and urlsplit(newurl).hostname != "api.github.com":
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 @dataclass(frozen=True)
@@ -63,7 +85,7 @@ class GitHubKubeconformSchemaSource:
         timeout: float = 15.0,
         max_workers: int = 8,
         max_bytes: int = _DEFAULT_MAX_BYTES,
-        opener: OpenUrl = urlopen,
+        opener: OpenUrl | None = None,
         github_token: str | None = None,
     ) -> None:
         if timeout <= 0:
@@ -75,7 +97,7 @@ class GitHubKubeconformSchemaSource:
         self.timeout = timeout
         self.max_workers = max_workers
         self.max_bytes = max_bytes
-        self._opener = opener
+        self._opener = opener or build_opener(_GitHubRedirectHandler()).open
         # Renovate maintenance uses its GitHub token for API ref resolution.
         # _read only sends credentials to api.github.com, never artifact hosts.
         self._github_token = (
@@ -168,6 +190,7 @@ class GitHubKubeconformSchemaSource:
         return KubeconformSchemaArtifactBatch(content=content, missing=missing)
 
     def _read(self, url: str, *, max_bytes: int) -> bytes:
+        _require_github_url(url)
         headers = {
             "Accept": "application/vnd.github+json, application/json",
             "User-Agent": "chart-manager-kubeconform-schema-sync",

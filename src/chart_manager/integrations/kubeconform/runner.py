@@ -18,7 +18,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError, YamlError
 from chart_manager.plumbing.preflight import Check, probe_binary
 from chart_manager.plumbing.schema_locations import expand_schema_location, validate_schema_location
 from chart_manager.plumbing.yaml_files import load_yaml_documents
@@ -211,12 +211,38 @@ def _uncovered_gvk_skips(
 ) -> list[str]:
     """Expand authored Kind exceptions to only uncovered concrete GVKs."""
     skips: set[str] = set()
+    # Exact GVK exceptions (including the built-in CRD exception) need no
+    # manifest scan. Only bare Kind exceptions need inventory disambiguation.
+    bare_kinds = frozenset(kind for kind in allowed_kinds if "/" not in kind)
+    checked: set[str] = set()
+
+    def consider(api_version: str, kind: str) -> None:
+        key = f"{api_version}/{kind}"
+        if key in checked:
+            return
+        checked.add(key)
+        group, _, version = api_version.rpartition("/")
+        if not group:
+            version = api_version
+        if not any(
+            Path(expand_schema_location(
+                location, group=group, version=version, kind=kind
+            )).is_file()
+            for location in schema_locations
+        ):
+            skips.add(key)
+
+    for key in allowed_kinds - bare_kinds:
+        exact_api_version, _, exact_kind = key.rpartition("/")
+        consider(exact_api_version, exact_kind)
+    if not bare_kinds:
+        return sorted(skips)
     for path in sorted(manifests_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             continue
         try:
             documents = load_yaml_documents(path)
-        except Exception:
+        except YamlError:
             # Kubeconform owns malformed-manifest diagnostics. Preprocessing
             # must never hide or reclassify those findings.
             continue
@@ -235,21 +261,9 @@ def _uncovered_gvk_skips(
                 kind = document.get("kind")
                 if not isinstance(api_version, str) or not isinstance(kind, str):
                     continue
-                if kind not in allowed_kinds and f"{api_version}/{kind}" not in allowed_kinds:
+                if kind not in bare_kinds:
                     continue
-                group, _, version = api_version.rpartition("/")
-                if not group:
-                    version = api_version
-                covered = False
-                for location in schema_locations:
-                    expanded = expand_schema_location(
-                        location, group=group, version=version, kind=kind
-                    )
-                    if Path(expanded).is_file():
-                        covered = True
-                        break
-                if not covered:
-                    skips.add(f"{api_version}/{kind}")
+                consider(api_version, kind)
     return sorted(skips)
 
 

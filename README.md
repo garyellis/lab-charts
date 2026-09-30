@@ -204,8 +204,8 @@ changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
 The validate job skips repository rendering for changes limited to documentation,
 tests, or Renovate configuration. Other paths (including chart inputs, Python
-code, tool pins, and workflows), and explicit `all`/`list` runs, verify the whole
-repository. It restores the XDG schema store using a versioned cache key and the
+code, tool pins, and workflows), empty/unknown diffs, and explicit `all`/`list`
+runs verify the whole repository. It restores the XDG schema store using a versioned cache key and the
 committed `.chart-manager/schemas.lock.yaml` hash, then runs `mise run schemas`.
 Synchronization always renders the enabled chart/environment rows and compares
 their current requirements and derived schema bytes with the committed compact
@@ -222,6 +222,8 @@ CI then runs render-only validation across the repository and uploads retained
 manifests; this diagnostic fallback never turns a schema-preparation failure green.
 Template rejection is a validation failure, dependency-fetch failure is an
 environment failure, and process crashes remain tool failures.
+The fast CI gate also runs the real Helm/kubeconform packaging and schema
+integration suites; missing tools fail that gate instead of silently skipping tests.
 
 Use `chart-manager schemas sync --refresh` when chart resources, CRDs, or
 chart-local schemas change. It rebuilds the compact lock with the existing
@@ -244,7 +246,27 @@ An optional kind is still validated when its generated or local schema exists,
 or another chart strictly requires its remote schema. Refreshing the same inputs
 therefore cannot change skipping solely because an optional schema exists upstream.
 Local schema templates accept only `{{.Group}}`, `{{.ResourceKind}}`, and
-`{{.ResourceAPIVersion}}`; unsupported variables are configuration errors.
+`{{.ResourceAPIVersion}}`. Authored locations must end in `.json` and contain
+`{{.ResourceKind}}`: literal files are rejected because kubeconform would apply
+them to every resource type, including core resources. Prefer all three variables
+(`schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json`) to keep groups
+and versions distinct.
+
+Generated CRD schemas are repository-wide: each group/version/kind must have
+one identical schema across all charts and environments. Conflicting definitions
+fail with a SPEC error naming their providers. A generated schema takes precedence
+over a chart's local schema for the same resource; local schemas fill gaps, they
+do not override rendered CRDs. Nullable CRD fields admit null while retaining
+authored enum constraints.
+
+Downloaded lock entries must match the URL and store path derived from the
+committed upstream pins. This is checked offline before accepting a warm cache
+or downloading anything. Downloads and redirects are limited to HTTPS on
+`api.github.com` and `raw.githubusercontent.com`.
+
+Unsupported template variables are configuration errors. Rejecting literal
+schema locations is a breaking v1alpha1 validation change; migrate them to
+kind-specific file templates before using this release.
 
 Repositories without workspace schema policy must supply local schema locations
 in each chart's `spec.validation.schemaLocations` to enable schema validation.

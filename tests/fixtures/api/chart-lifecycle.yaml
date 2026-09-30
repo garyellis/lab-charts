@@ -19,7 +19,7 @@ spec:
     namespaceTemplate: "lab-${env}"
     helmVersion: "4.1.3"
     schemaLocations:
-      - schemas/custom
+      - 'schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
     ignoreMissingSchemas:
       - UnpublishedKind
     environments:

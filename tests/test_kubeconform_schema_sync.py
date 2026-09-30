@@ -25,6 +25,7 @@ from chart_manager.services.kubeconform_schemas.models import (
     MaterializedSchema,
     SchemaRequirement,
     SchemaScope,
+    generation_digest,
 )
 from chart_manager.services.kubeconform_schemas.source import (
     KubeconformSchemaArtifactBatch,
@@ -40,6 +41,46 @@ _CATALOG_SHA = "b" * 40
 _DEPLOYMENT_SCHEMA = b'{"type":"object","title":"Deployment"}\n'
 _WIDGET_SCHEMA = b'{"type":"object","title":"Widget"}\n'
 _GENERATED_SCHEMA = b'{"type":"object","title":"Generated"}\n'
+
+
+@pytest.mark.parametrize("source_kind", ["kubernetes", "catalog"])
+@pytest.mark.parametrize("mutation", ["host", "revision", "resource", "path"])
+@pytest.mark.parametrize("warm", [False, True])
+def test_plain_sync_rejects_forged_remote_identity_before_cache_or_network(
+    tmp_path: Path, source_kind: str, mutation: str, warm: bool,
+) -> None:
+    from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
+
+    source = _Sources()
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    service = KubeconformSchemaSyncService(store, source)
+    request = _request(tmp_path, update=True)
+    original = service.sync(request)
+    entry = next(item for item in original.lock.schemas if item.source == source_kind)
+    changes = {
+        "host": {"source_reference": "https://evil.example/anything.json"},
+        "revision": {"source_reference": entry.source_reference.replace(
+            original.lock.policy.kubernetes.resolved if source_kind == "kubernetes"
+            else original.lock.policy.catalog.resolved, "c" * 40)},
+        "resource": {"source_reference": entry.source_reference + "-other.json"},
+        "path": {"path": "kubernetes/v1/configmap_v1.json"},
+    }[mutation]
+    # Deliberately bypass model validation and recompute the self-consistent
+    # digest, just as an author can edit a committed lock by hand.
+    forged = entry.model_copy(update=changes)
+    entries = tuple(forged if item == entry else item for item in original.lock.schemas)
+    lock = original.lock.model_copy(update={"schemas": entries, "generation": generation_digest(
+        version=1, workspace=original.lock.workspace, policy=original.lock.policy, schemas=entries,
+    )})
+    write_schema_lock_atomic(request.lock_path, lock)
+    if warm:
+        shutil.copytree(original.generation_path, store.generation_path(lock))
+    source.ref_calls.clear()
+    source.download_calls.clear()
+    with pytest.raises(KubeconformSchemaLockError, match="does not match pinned"):
+        service.sync(replace(request, update=False))
+    assert source.ref_calls == []
+    assert source.download_calls == []
 
 
 @dataclass(frozen=True)

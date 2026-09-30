@@ -31,7 +31,7 @@ def test_full_authored_shape_uses_camel_case() -> None:
             "releaseName": "demo",
             "namespaceTemplate": "lab-${env}",
             "helmVersion": "4.1.3",
-            "schemaLocations": ["schemas/custom.json"],
+            "schemaLocations": ["schemas/{{.ResourceKind}}.json"],
             "ignoreMissingSchemas": ["UnpublishedKind"],
             "environments": {
                 "dev": {"values": ["values.yaml", "values-dev.yaml"]},
@@ -50,7 +50,7 @@ def test_full_authored_shape_uses_camel_case() -> None:
 
     assert spec.release_name == "demo"
     assert spec.helm_version == "4.1.3"
-    assert spec.schema_locations == ["schemas/custom.json"]
+    assert spec.schema_locations == ["schemas/{{.ResourceKind}}.json"]
     assert spec.ignore_missing_schemas == ["UnpublishedKind"]
     assert spec.unmatched_changes == "all-environments"
     assert spec.triggers["envs/*.yaml"] == MATCH_BY_BASENAME
@@ -78,9 +78,12 @@ def test_validators_reject_unknown_names() -> None:
         "default",
         "https://schemas.example.test/{{.ResourceKind}}.json",
         "/tmp/schema.json",
-        "../schemas/custom.json",
+        "../schemas/{{.ResourceKind}}.json",
         "schemas/../custom.json",
         "schemas\\custom.json",
+        "schemas/custom.json",
+        "schemas/custom",
+        "schemas/{{.ResourceKind}}",
     ],
 )
 def test_schema_locations_are_additive_repository_local_paths(location: str) -> None:

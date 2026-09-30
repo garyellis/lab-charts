@@ -138,7 +138,7 @@ def test_disabled_validators_do_not_resolve_unused_runtime_inputs(
             "validators:\n"
             "  kubeconform: false\n"
             "  policy: false\n"
-            "schemaLocations: [missing/schema.json]\n"
+            'schemaLocations: ["missing/{{.ResourceKind}}.json"]\n'
             "policies:\n"
             "  extra: [missing-policies]\n"
         ),
@@ -171,7 +171,7 @@ def test_extra_policy_must_be_a_directory(tmp_path: Path) -> None:
 def test_missing_local_schema_location_fails_early(tmp_path: Path) -> None:
     target = _target(
         tmp_path,
-        extra="schemaLocations: [schemas/custom.json]\n",
+        extra='schemaLocations: ["schemas/{{.ResourceKind}}.json"]\n',
     )
     (target.path / "values.yaml").write_text("{}\n")
 
@@ -179,9 +179,9 @@ def test_missing_local_schema_location_fails_early(tmp_path: Path) -> None:
         resolve_manifest_validation(target, tmp_path)
 
     message = str(caught.value)
-    assert "local schema location 'schemas/custom.json'" in message
+    assert "local schema location 'schemas/{{.ResourceKind}}.json'" in message
     assert str(target.spec_path) in message
-    assert "does not exist" in message
+    assert "missing template base directory" in message
 
 
 def test_local_schema_template_requires_existing_base_directory(

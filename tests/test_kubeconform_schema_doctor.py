@@ -68,7 +68,10 @@ def _lock(*, version: str = "1.35.3"):
                 source="kubernetes",
                 path="kubernetes/apps/deployment_v1.json",
                 sha256=content_digest(_CONTENT),
-                source_reference="https://example.invalid/deployment.json",
+                source_reference=(
+                    "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/"
+                    + "a" * 40 + f"/v{version}-standalone-strict/deployment-apps-v1.json"
+                ),
             )
         ],
     )

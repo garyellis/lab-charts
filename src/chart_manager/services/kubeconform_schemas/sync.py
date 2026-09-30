@@ -257,7 +257,7 @@ class KubeconformSchemaSyncService:
         kubernetes_requests = [
             KubeconformSchemaArtifactRequest(
                 key=gvk.key,
-                url=_kubernetes_schema_url(self.source, locked_policy, gvk),
+                url=locked_policy.artifact_url("kubernetes", gvk),
             )
             for gvk in unresolved_gvks
         ]
@@ -270,12 +270,12 @@ class KubeconformSchemaSyncService:
             if content is not None:
                 _validate_schema_json(
                     content,
-                    source=_kubernetes_schema_url(self.source, locked_policy, gvk),
+                    source=locked_policy.artifact_url("kubernetes", gvk),
                 )
                 remote_by_gvk[_gvk_key(gvk)] = (
                     "kubernetes",
                     content,
-                    _kubernetes_schema_url(self.source, locked_policy, gvk),
+                    locked_policy.artifact_url("kubernetes", gvk),
                 )
 
         kubernetes_missing = set(kubernetes_batch.missing)
@@ -285,7 +285,7 @@ class KubeconformSchemaSyncService:
         catalog_requests = [
             KubeconformSchemaArtifactRequest(
                 key=gvk.key,
-                url=_catalog_schema_url(self.source, locked_policy, gvk),
+                url=locked_policy.artifact_url("catalog", gvk),
             )
             for gvk in catalog_gvks
         ]
@@ -298,12 +298,12 @@ class KubeconformSchemaSyncService:
             if content is not None:
                 _validate_schema_json(
                     content,
-                    source=_catalog_schema_url(self.source, locked_policy, gvk),
+                    source=locked_policy.artifact_url("catalog", gvk),
                 )
                 remote_by_gvk[_gvk_key(gvk)] = (
                     "catalog",
                     content,
-                    _catalog_schema_url(self.source, locked_policy, gvk),
+                    locked_policy.artifact_url("catalog", gvk),
                 )
 
         missing = [
@@ -635,37 +635,6 @@ def _unique_gvks(requirements: list[SchemaRequirement]) -> tuple[GroupVersionKin
 
 def _gvk_key(gvk: GroupVersionKind) -> tuple[str, str, str]:
     return gvk.group, gvk.version, gvk.kind
-
-
-def _kubernetes_schema_url(
-    source: KubeconformSchemaSource,
-    policy: LockedSchemaPolicy,
-    gvk: GroupVersionKind,
-) -> str:
-    # kubernetes-json-schema filenames use the API group prefix (``rbac``),
-    # not the fully-qualified DNS group (``rbac.authorization.k8s.io``).
-    group = gvk.group.split(".", 1)[0] if gvk.group else ""
-    suffix = "-" + "-".join(part for part in ([group] if group else []) + [gvk.version])
-    filename = f"{gvk.kind.lower()}{suffix.lower()}.json"
-    path = f"v{policy.kubernetes_version}-standalone-strict/{filename}"
-    return source.artifact_url(
-        policy.kubernetes.repository,
-        policy.kubernetes.resolved,
-        path,
-    )
-
-
-def _catalog_schema_url(
-    source: KubeconformSchemaSource,
-    policy: LockedSchemaPolicy,
-    gvk: GroupVersionKind,
-) -> str:
-    path = f"{gvk.group}/{gvk.kind.lower()}_{gvk.version}.json"
-    return source.artifact_url(
-        policy.catalog.repository,
-        policy.catalog.resolved,
-        path,
-    )
 
 
 def _validate_schema_json(content: bytes, *, source: str) -> None:
