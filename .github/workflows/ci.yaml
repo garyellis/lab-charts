@@ -95,7 +95,7 @@ jobs:
           uv run --extra dev pytest -q -m integration \
             tests/integration/test_chart_lifecycle_packaging.py \
             tests/integration/test_manifest_validation_schema_e2e.py \
-            tests/integration/test_crd_schema_constraints.py
+            tests/integration/test_crd_schema_constraints.py \
             tests/integration/test_schema_precedence.py
 
       # Lint the package and the suite. Exemptions (and why each exists) live
