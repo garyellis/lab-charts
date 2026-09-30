@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 
+import chart_manager.services.helmrelease.report as report
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import (
     HelmReleaseClient,
@@ -30,7 +31,6 @@ from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.helmrelease import report
 from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
 from chart_manager.services.helmrelease.matching import filter_matched_statuses
 from chart_manager.services.helmrelease.state import (
