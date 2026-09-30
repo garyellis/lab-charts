@@ -108,10 +108,6 @@ class GlobalOptions:
     quiet: bool
     verbosity: int
     no_color: bool
-    #: Process configuration default for commands that offer an explicit
-    #: online/offline override. Resolved once here so command modules do not
-    #: construct a second Settings object.
-    offline: bool
     #: The invocation-wide `-o`. Read by `cli/output.resolve` via `ctx.obj`
     #: and deliberately NOT seeded into `ctx.default_map`: seeding by
     #: parameter *name* would hand the global value to every parameter that
@@ -196,7 +192,6 @@ def global_options(
         quiet=quiet,
         verbosity=verbose,
         no_color=disable_color,
-        offline=settings.offline,
         output=output,
     )
 

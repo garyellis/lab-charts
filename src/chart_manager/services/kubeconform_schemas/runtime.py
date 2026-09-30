@@ -25,6 +25,8 @@ from chart_manager.services.kubeconform_schemas.store import (
     kubeconform_schema_locations,
 )
 
+UNSUPPORTED_CRD_OBJECT_GVK = "apiextensions.k8s.io/v1/CustomResourceDefinition"
+
 
 @dataclass(frozen=True)
 class KubeconformSchemaRuntime:
@@ -41,9 +43,15 @@ class KubeconformSchemaRuntime:
         )
 
     def ignored_missing_kinds(self, scope: SchemaScope) -> tuple[str, ...]:
-        """Compatibility hook; allow-missing policy is expanded from each row."""
+        """Return the one exact upstream schema gap handled by validation.
+
+        The pinned Kubernetes schema repository exposes CRD component
+        definitions, but no top-level schema for a CRD object. Rendered CRD
+        definitions still generate managed schemas for their custom resources.
+        The runner skips this GVK only when no managed schema file exists.
+        """
         del scope
-        return ()
+        return (UNSUPPORTED_CRD_OBJECT_GVK,)
 
 
 def load_kubeconform_schema_runtime(
@@ -90,19 +98,14 @@ def load_kubeconform_schema_runtime(
         raise KubeconformSchemaStoreError(
             f"schema generation {lock.generation} is corrupt: {details}; "
             f"remove {status.generation_path}, then run "
-            "`chart-manager schemas sync` while online"
-        )
-    if status.uncovered:
-        raise KubeconformSchemaLockError(
-            f"schema lock does not cover its generation inventory: "
-            f"{'; '.join(status.uncovered)}; run `chart-manager schemas sync --refresh`"
+            "`chart-manager schemas sync`"
         )
     if status.missing:
         detail_parts = [f"missing {problem.path}" for problem in status.missing]
         raise KubeconformSchemaSourceEnvironmentError(
             f"schema generation {lock.generation} is not cached: "
             + "; ".join(detail_parts)
-            + "; run `chart-manager schemas sync` while online"
+            + "; run `chart-manager schemas sync`"
         )
     return KubeconformSchemaRuntime(
         lock=lock,
@@ -110,4 +113,8 @@ def load_kubeconform_schema_runtime(
     )
 
 
-__all__ = ["KubeconformSchemaRuntime", "load_kubeconform_schema_runtime"]
+__all__ = [
+    "UNSUPPORTED_CRD_OBJECT_GVK",
+    "KubeconformSchemaRuntime",
+    "load_kubeconform_schema_runtime",
+]

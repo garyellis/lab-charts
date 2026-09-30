@@ -195,8 +195,10 @@ class GitHubKubeconformSchemaSource:
                 ) from exc
             if exc.code in {403, 429} and urlsplit(url).hostname == "api.github.com":
                 raise GitHubKubeconformSchemaSourceEnvironmentError(
-                    "GitHub API rate limited schema pin resolution; set a valid "
-                    "GITHUB_TOKEN or retry later"
+                    _rate_limit_message(
+                        token_configured=bool(self._github_token),
+                        headers=exc.headers,
+                    )
                 ) from exc
             raise GitHubKubeconformSchemaSourceEnvironmentError(
                 f"schema source request failed with HTTP {exc.code}: {url}"
@@ -221,6 +223,24 @@ class GitHubKubeconformSchemaSource:
 
 def _content_digest(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _rate_limit_message(*, token_configured: bool, headers: Any) -> str:
+    message = "GitHub API rate limited schema pin resolution"
+    if token_configured:
+        message += "; the configured token may have exhausted its rate limit"
+    else:
+        message += "; set GITHUB_TOKEN to increase the API rate limit"
+    remaining = headers.get("X-RateLimit-Remaining") if headers is not None else None
+    reset = headers.get("X-RateLimit-Reset") if headers is not None else None
+    details: list[str] = []
+    if remaining is not None:
+        details.append(f"remaining={remaining}")
+    if reset is not None:
+        details.append(f"reset={reset}")
+    if details:
+        message += " (" + ", ".join(details) + ")"
+    return message + "; retry later"
 
 
 __all__ = [

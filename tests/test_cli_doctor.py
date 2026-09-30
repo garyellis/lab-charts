@@ -209,7 +209,7 @@ def test_for_runs_only_the_capabilities_that_command_needs(
             "helm": (_HEALTHY,),
             "kubeconform": (Check.ok("kubeconform", "v0.6.7"),),
             "kyverno": (Check.ok("kyverno", "v1.13.0"),),
-            "schemas": (Check.ok("schema-store", "offline-ready=true"),),
+            "schemas": (Check.ok("schema-store", "ready=true"),),
             "events": (_UNREACHABLE,),
         }
     )

@@ -141,14 +141,50 @@ def test_token_is_sent_only_to_github_api() -> None:
     assert requests[1].get_header("Authorization") is None
 
 
-@pytest.mark.parametrize("status", [403, 429])
-def test_github_api_rate_limit_has_actionable_diagnostic(status: int) -> None:
-    def limited(request, **_kwargs):
-        raise HTTPError(request.full_url, status, "limited", {}, None)
+def test_unset_token_sends_no_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
+    requests = []
 
-    client = GitHubKubeconformSchemaSource(opener=limited)
+    def opener(request, **_kwargs):
+        requests.append(request)
+        return _Response(b'{"sha":"' + b"a" * 40 + b'"}')
+
+    GitHubKubeconformSchemaSource(opener=opener).resolve_ref("owner/repo", "main")
+
+    assert requests[0].get_header("Authorization") is None
+
+
+@pytest.mark.parametrize("status", [403, 429])
+@pytest.mark.parametrize("token", [None, "highly-secret-token"])
+def test_github_api_rate_limit_has_actionable_diagnostic(
+    status: int,
+    token: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
+    def limited(request, **_kwargs):
+        raise HTTPError(
+            request.full_url,
+            status,
+            "limited",
+            {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "12345"},
+            None,
+        )
+
+    client = GitHubKubeconformSchemaSource(opener=limited, github_token=token)
     with pytest.raises(
         GitHubKubeconformSchemaSourceEnvironmentError,
-        match="GITHUB_TOKEN",
-    ):
+    ) as caught:
         client.resolve_ref("owner/repo", "main")
+
+    message = str(caught.value)
+    assert "rate limited" in message
+    assert "remaining=0" in message
+    assert "reset=12345" in message
+    if token is None:
+        assert "set GITHUB_TOKEN" in message
+    else:
+        assert "configured token" in message
+        assert token not in message

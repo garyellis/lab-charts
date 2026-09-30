@@ -23,6 +23,7 @@ import pytest
 
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.services.kubeconform_schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
 from tests.conftest import FakeCommandRunner
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
@@ -122,6 +123,54 @@ def test_allow_missing_kind_is_not_skipped_when_exact_schema_exists(tmp_path: Pa
             str(schemas / "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json")
         ],
         skip_kinds=["Widget"],
+    )
+
+    assert "-skip" not in runner.calls[0]
+
+
+def test_crd_exception_is_exact_and_does_not_skip_same_kind_elsewhere(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "resources.yaml").write_text(
+        "apiVersion: apiextensions.k8s.io/v1\n"
+        "kind: CustomResourceDefinition\nmetadata: {name: widgets.example.io}\n"
+        "---\n"
+        "apiVersion: example.io/v9\n"
+        "kind: CustomResourceDefinition\nmetadata: {name: not-a-crd}\n"
+    )
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
+
+    Kubeconform(runner=runner).validate(
+        tmp_path,
+        schema_locations=[LOCAL_SCHEMA_TEMPLATE],
+        skip_kinds=[UNSUPPORTED_CRD_OBJECT_GVK],
+    )
+
+    call = runner.calls[0]
+    assert call[call.index("-skip") + 1] == UNSUPPORTED_CRD_OBJECT_GVK
+
+
+def test_crd_exception_is_not_used_when_managed_schema_exists(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered"
+    rendered.mkdir()
+    (rendered / "crd.yaml").write_text(
+        "apiVersion: apiextensions.k8s.io/v1\n"
+        "kind: CustomResourceDefinition\nmetadata: {name: widgets.example.io}\n"
+    )
+    schemas = tmp_path / "schemas" / "apiextensions.k8s.io"
+    schemas.mkdir(parents=True)
+    (schemas / "customresourcedefinition_v1.json").write_text("{}")
+    runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
+
+    Kubeconform(runner=runner).validate(
+        rendered,
+        schema_locations=[
+            str(
+                tmp_path
+                / "schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+            )
+        ],
+        skip_kinds=[UNSUPPORTED_CRD_OBJECT_GVK],
     )
 
     assert "-skip" not in runner.calls[0]

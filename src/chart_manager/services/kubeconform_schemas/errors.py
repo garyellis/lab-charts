@@ -21,10 +21,6 @@ class KubeconformSchemaLockError(KubeconformSchemaIntegrityError):
     """The committed schema lock is missing, malformed, or inconsistent."""
 
 
-class KubeconformSchemaMaterializationRequiredError(KubeconformSchemaIntegrityError):
-    """A locked repository-derived schema must be rebuilt from local inputs."""
-
-
 class KubeconformSchemaStoreError(KubeconformSchemaIntegrityError):
     """An immutable store generation is incomplete or corrupt."""
 
@@ -50,7 +46,6 @@ __all__ = [
     "KubeconformSchemaError",
     "KubeconformSchemaIntegrityError",
     "KubeconformSchemaLockError",
-    "KubeconformSchemaMaterializationRequiredError",
     "KubeconformSchemaNotFoundError",
     "KubeconformSchemaSourceEnvironmentError",
     "KubeconformSchemaSourceError",

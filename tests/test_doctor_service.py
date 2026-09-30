@@ -461,7 +461,7 @@ def test_for_narrows_to_the_capabilities_that_command_needs() -> None:
             "helm": _provider(Check.ok("helm", "")),
             "kubeconform": _provider(Check.ok("kubeconform", "")),
             "kyverno": _provider(Check.ok("kyverno", "")),
-            "schemas": _provider(Check.ok("schema-store", "offline-ready=true")),
+            "schemas": _provider(Check.ok("schema-store", "ready=true")),
             "kind": _provider(Check.ok("kind", "")),
             "events": _provider(Check.ok("events-backend", "")),
         }
@@ -482,7 +482,7 @@ def test_schema_sync_requires_helm_and_read_only_schema_preflight() -> None:
     service = DoctorService(
         {
             "helm": _provider(Check.ok("helm", "")),
-            "schemas": _provider(Check.ok("schema-store", "offline-ready=true")),
+            "schemas": _provider(Check.ok("schema-store", "ready=true")),
             "events": _provider(Check.ok("events", "")),
         }
     )
@@ -543,15 +543,15 @@ def test_structured_check_data_is_additive_to_the_wire_shape() -> None:
             "schemas": _provider(
                 Check.ok(
                     "schema-store",
-                    "offline-ready=true",
-                    data={"offlineReady": True, "missing": 0},
+                    "ready=true",
+                    data={"ready": True, "missing": 0},
                 )
             )
         }
     ).run().to_dict()
 
     assert payload["checks"][0]["data"] == {
-        "offlineReady": True,
+        "ready": True,
         "missing": 0,
     }
 

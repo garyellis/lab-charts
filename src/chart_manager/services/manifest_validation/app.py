@@ -215,10 +215,7 @@ class RunnerSpec:
 
 
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
-KubeconformSchemaRuntimeFactory = Callable[
-    [RepositoryWorkspace, bool, int],
-    KubeconformSchemaRuntime,
-]
+KubeconformSchemaRuntimeFactory = Callable[[RepositoryWorkspace], KubeconformSchemaRuntime]
 
 
 # --- the app ---------------------------------------------------------------
@@ -274,9 +271,7 @@ class ManifestValidationService:
         self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
-        self._schema_runtime_factory = schema_runtime_factory or (
-            lambda workspace, _offline, _workers: load_kubeconform_schema_runtime(workspace)
-        )
+        self._schema_runtime_factory = schema_runtime_factory or load_kubeconform_schema_runtime
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -380,11 +375,7 @@ class ManifestValidationService:
                 "configure it before running schema validation"
             )
         if needs_schema_runtime and workspace.authored:
-            schema_runtime = self._schema_runtime_factory(
-                workspace,
-                request.offline,
-                request.workers,
-            )
+            schema_runtime = self._schema_runtime_factory(workspace)
 
         compiled_by_case: dict[tuple[str, str], ResolvedManifestValidation] = {}
         compile_warnings: list[str] = []

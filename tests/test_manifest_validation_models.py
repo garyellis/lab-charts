@@ -8,7 +8,6 @@ from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
-    RunRequest,
     RunResult,
     WorklistRow,
 )
@@ -157,7 +156,3 @@ def test_spec_error_takes_precedence_over_environment_error() -> None:
 def test_empty_run_is_success() -> None:
     result = _run()
     assert result.outcome() is Outcome.SUCCESS
-
-
-def test_run_request_defaults_to_online_validation() -> None:
-    assert RunRequest().offline is False

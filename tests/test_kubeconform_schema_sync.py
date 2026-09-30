@@ -13,6 +13,7 @@ from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaSourceIntegrityError,
 )
 from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
     KubeconformSchemaLockError,
     KubeconformSchemaNotFoundError,
     KubeconformSchemaSourceEnvironmentError,
@@ -28,10 +29,7 @@ from chart_manager.services.kubeconform_schemas.models import (
 from chart_manager.services.kubeconform_schemas.source import (
     KubeconformSchemaArtifactBatch,
 )
-from chart_manager.services.kubeconform_schemas.store import (
-    INVENTORY_MANIFEST_PATH,
-    KubeconformSchemaStore,
-)
+from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
 from chart_manager.services.kubeconform_schemas.sync import (
     KubeconformSchemaSyncRequest,
     KubeconformSchemaSyncService,
@@ -110,7 +108,6 @@ def _request(
     tmp_path: Path,
     *,
     update: bool,
-    offline: bool = False,
 ) -> KubeconformSchemaSyncRequest:
     scope = SchemaScope(chart="demo", environment="ci")
     generated_gvk = GroupVersionKind(group="generated.io", version="v1", kind="Generated")
@@ -137,14 +134,13 @@ def _request(
             MaterializedSchema(
                 gvk=generated_gvk,
                 source="generated",
-                scope=scope,
+                scope=None,
                 content=_GENERATED_SCHEMA,
                 source_reference="rendered/crd.yaml#v1",
             ),
         ),
         lock_path=tmp_path / "repo/.chart-manager/schemas.lock.yaml",
         update=update,
-        offline=offline,
     )
 
 
@@ -237,26 +233,194 @@ def test_pinned_sync_is_cache_first_and_never_rewrites_lock(tmp_path: Path) -> N
     )
     assert cold_store.inspect(cold.lock).ready
     assert cold_sources.ref_calls == []
+    assert cold_sources.download_calls
     assert request.lock_path.read_bytes() == lock_bytes
 
 
-def test_offline_cold_sync_reports_environment_and_does_not_mutate(tmp_path: Path) -> None:
-    warm_store = KubeconformSchemaStore("lab", cache_root=tmp_path / "warm")
+@pytest.mark.parametrize("cache_is_warm", [True, False])
+def test_new_strict_gvk_is_stale_before_cache_or_source_access(
+    tmp_path: Path,
+    cache_is_warm: bool,
+) -> None:
+    initial_store = KubeconformSchemaStore("lab", cache_root=tmp_path / "warm")
     request = _request(tmp_path, update=True)
-    KubeconformSchemaSyncService(warm_store, _Sources()).sync(request)
-    lock_bytes = request.lock_path.read_bytes()
-    cold_store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cold")
+    KubeconformSchemaSyncService(initial_store, _Sources()).sync(request)
+    sources = _Sources()
+    store = initial_store if cache_is_warm else KubeconformSchemaStore(
+        "lab", cache_root=tmp_path / "cold"
+    )
+    new_requirement = SchemaRequirement(
+        gvk=GroupVersionKind(group="new.example.io", version="v1", kind="Gadget"),
+        scope=SchemaScope(chart="consumer", environment="dev"),
+    )
 
-    with pytest.raises(
-        KubeconformSchemaSourceEnvironmentError,
-        match="not available offline",
-    ):
-        KubeconformSchemaSyncService(cold_store, _Sources()).sync(
-            KubeconformSchemaSyncRequest(**{**request.__dict__, "update": False, "offline": True})
+    with pytest.raises(KubeconformSchemaConfigurationError, match="--refresh"):
+        KubeconformSchemaSyncService(store, sources).sync(
+            KubeconformSchemaSyncRequest(
+                **{
+                    **request.__dict__,
+                    "update": False,
+                    "requirements": (*request.requirements, new_requirement),
+                }
+            )
         )
 
-    assert request.lock_path.read_bytes() == lock_bytes
-    assert not any(cold_store.root.glob("[!.]*"))
+    assert sources.ref_calls == []
+    assert sources.download_calls == []
+
+
+@pytest.mark.parametrize("cache_is_warm", [True, False])
+def test_changed_generated_bytes_are_stale_before_cache_or_source_access(
+    tmp_path: Path,
+    cache_is_warm: bool,
+) -> None:
+    initial_store = KubeconformSchemaStore("lab", cache_root=tmp_path / "warm")
+    request = _request(tmp_path, update=True)
+    KubeconformSchemaSyncService(initial_store, _Sources()).sync(request)
+    generated = request.materialized[0]
+    drifted = MaterializedSchema(
+        gvk=generated.gvk,
+        source="generated",
+        scope=None,
+        content=b'{"type":"object","title":"Changed"}\n',
+        source_reference=generated.source_reference,
+    )
+    sources = _Sources()
+    store = initial_store if cache_is_warm else KubeconformSchemaStore(
+        "lab", cache_root=tmp_path / "cold"
+    )
+
+    with pytest.raises(KubeconformSchemaConfigurationError, match="changed generated"):
+        KubeconformSchemaSyncService(store, sources).sync(
+            KubeconformSchemaSyncRequest(
+                **{**request.__dict__, "update": False, "materialized": (drifted,)}
+            )
+        )
+
+    assert sources.download_calls == []
+
+
+def test_generated_schema_taking_precedence_over_remote_requires_refresh(
+    tmp_path: Path,
+) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    request = _request(tmp_path, update=True)
+    KubeconformSchemaSyncService(store, _Sources()).sync(request)
+    widget = request.requirements[1].gvk
+    generated_widget = MaterializedSchema(
+        gvk=widget,
+        source="generated",
+        scope=None,
+        content=b'{"type":"object","title":"Generated Widget"}\n',
+        source_reference="rendered CRD example.io/v1/Widget",
+    )
+
+    with pytest.raises(KubeconformSchemaConfigurationError, match="schema lock is stale"):
+        KubeconformSchemaSyncService(store, _Sources()).sync(
+            KubeconformSchemaSyncRequest(
+                **{
+                    **request.__dict__,
+                    "update": False,
+                    "materialized": (*request.materialized, generated_widget),
+                }
+            )
+        )
+
+
+def test_allow_missing_new_gvk_does_not_change_compact_lock(tmp_path: Path) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    request = _request(tmp_path, update=True)
+    created = KubeconformSchemaSyncService(store, _Sources()).sync(request)
+    allowed = SchemaRequirement(
+        gvk=GroupVersionKind(group="optional.example.io", version="v1", kind="Optional"),
+        scope=SchemaScope(chart="consumer", environment="dev"),
+        allow_missing=True,
+    )
+    sources = _Sources()
+
+    result = KubeconformSchemaSyncService(store, sources).sync(
+        KubeconformSchemaSyncRequest(
+            **{
+                **request.__dict__,
+                "update": False,
+                "requirements": (*request.requirements, allowed),
+            }
+        )
+    )
+
+    assert result.lock == created.lock
+    assert sources.download_calls == []
+
+
+@pytest.mark.parametrize("cache_is_warm", [True, False])
+def test_changed_local_schema_bytes_are_stale_before_cache_or_source_access(
+    tmp_path: Path,
+    cache_is_warm: bool,
+) -> None:
+    scope = SchemaScope(chart="demo", environment="ci")
+    local_gvk = GroupVersionKind(group="local.example.io", version="v1", kind="Local")
+    base = _request(tmp_path, update=True)
+    original = MaterializedSchema(
+        gvk=local_gvk,
+        source="local",
+        scope=scope,
+        content=b'{"type":"object","title":"Local"}\n',
+        source_reference="charts/demo/schemas/local.json",
+    )
+    request = KubeconformSchemaSyncRequest(
+        **{
+            **base.__dict__,
+            "requirements": (
+                *base.requirements,
+                SchemaRequirement(gvk=local_gvk, scope=scope),
+            ),
+            "materialized": (*base.materialized, original),
+        }
+    )
+    warm = KubeconformSchemaStore("lab", cache_root=tmp_path / "warm")
+    KubeconformSchemaSyncService(warm, _Sources()).sync(request)
+    changed = MaterializedSchema(
+        gvk=local_gvk,
+        source="local",
+        scope=scope,
+        content=b'{"type":"object","title":"Changed Local"}\n',
+        source_reference=original.source_reference,
+    )
+    sources = _Sources()
+    store = warm if cache_is_warm else KubeconformSchemaStore(
+        "lab", cache_root=tmp_path / "cold"
+    )
+
+    with pytest.raises(KubeconformSchemaConfigurationError, match="changed local"):
+        KubeconformSchemaSyncService(store, sources).sync(
+            KubeconformSchemaSyncRequest(
+                **{
+                    **request.__dict__,
+                    "update": False,
+                    "materialized": (*base.materialized, changed),
+                }
+            )
+        )
+
+    assert sources.download_calls == []
+
+
+def test_unused_locked_schema_requires_refresh(tmp_path: Path) -> None:
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    request = _request(tmp_path, update=True)
+    KubeconformSchemaSyncService(store, _Sources()).sync(request)
+
+    with pytest.raises(KubeconformSchemaConfigurationError, match="unused locked"):
+        KubeconformSchemaSyncService(store, _Sources()).sync(
+            KubeconformSchemaSyncRequest(
+                **{
+                    **request.__dict__,
+                    "update": False,
+                    "requirements": request.requirements[:-1],
+                    "materialized": (),
+                }
+            )
+        )
 
 
 def test_lock_replace_failure_leaves_old_lock_authoritative(
@@ -282,7 +446,7 @@ def test_lock_replace_failure_leaves_old_lock_authoritative(
     assert len(generations) == 1, "a complete orphan generation is safe for later collection"
 
 
-def test_inventory_refresh_uses_existing_pins_without_resolving_refs(
+def test_derived_refresh_uses_existing_pins_without_resolving_refs(
     tmp_path: Path,
 ) -> None:
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
@@ -306,7 +470,7 @@ def test_inventory_refresh_uses_existing_pins_without_resolving_refs(
     assert result.lock != created.lock
 
 
-def test_scope_only_inventory_change_updates_local_manifest_not_repo_lock(
+def test_new_use_of_repository_schema_does_not_change_lock(
     tmp_path: Path,
 ) -> None:
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
@@ -329,12 +493,24 @@ def test_scope_only_inventory_change_updates_local_manifest_not_repo_lock(
         }
     )
 
-    refreshed = service.refresh(expanded)
+    # A second checkout may construct its own store object while sharing the
+    # same XDG generation. Scope fan-out must not rewrite that generation.
+    shared_store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    before = {
+        path.relative_to(created.generation_path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in created.generation_path.rglob("*")
+        if path.is_file()
+    }
+    refreshed = KubeconformSchemaSyncService(shared_store, _Sources()).sync(expanded)
+    after = {
+        path.relative_to(created.generation_path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in created.generation_path.rglob("*")
+        if path.is_file()
+    }
 
     assert refreshed.lock == created.lock
     assert request.lock_path.read_bytes() == lock_bytes
-    manifest = (refreshed.generation_path / INVENTORY_MANIFEST_PATH).read_text()
-    assert '"chart":"consumer"' in manifest
+    assert after == before
 
 
 def test_materialized_drift_refreshes_lock_without_moving_pins(tmp_path: Path) -> None:

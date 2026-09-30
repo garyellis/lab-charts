@@ -124,7 +124,7 @@ class Kubeconform:
         skips = _uncovered_gvk_skips(
             manifests_dir,
             schema_locations,
-            frozenset({*(skip_kinds or []), "CustomResourceDefinition"}),
+            frozenset(skip_kinds or []),
         )
 
         args: list[str] = [self._bin, "-output", "json", "-summary"]

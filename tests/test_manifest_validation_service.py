@@ -209,7 +209,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
         validation=policy,
         authored=True,
     )
-    calls: list[tuple[RepositoryWorkspace, bool, int]] = []
+    calls: list[RepositoryWorkspace] = []
 
     class Runtime:
         lock = SimpleNamespace(
@@ -225,8 +225,8 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
         def ignored_missing_kinds(self, _scope):  # type: ignore[no-untyped-def]
             return ()
 
-    def runtime_factory(selected: RepositoryWorkspace, offline: bool, workers: int):
-        calls.append((selected, offline, workers))
+    def runtime_factory(selected: RepositoryWorkspace):
+        calls.append(selected)
         return Runtime()
 
     rec = Recorder()
@@ -238,12 +238,11 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
         RunRequest(
             root=tmp_path,
             skip_change_detection=True,
-            offline=True,
             workers=3,
         )
     )
 
-    assert calls == [(workspace, True, 3)]
+    assert calls == [workspace]
     configs = {cfg.row.env: cfg for cfg in rec.configs}
     for environment in ("dev", "prod"):
         invocation = configs[environment].validator_invocations[0]

@@ -15,7 +15,6 @@ from chart_manager.services.kubeconform_schemas.models import (
     LockedSchemaPolicy,
     RepositoryPin,
     SchemaFile,
-    SchemaRequirement,
     SchemaScope,
     build_lock,
     content_digest,
@@ -42,11 +41,9 @@ def _policy() -> LockedSchemaPolicy:
 def _lock():
     content = b'{"type":"object"}\n'
     gvk = GroupVersionKind(group="apps", version="v1", kind="Deployment")
-    scope = SchemaScope(chart="demo", environment="ci")
     return build_lock(
         workspace="lab-charts",
         policy=_policy(),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=[
             SchemaFile(
                 gvk=gvk,
@@ -93,8 +90,27 @@ def test_lock_wraps_malformed_yaml_as_a_typed_failure(tmp_path: Path) -> None:
         load_schema_lock(path)
 
 
+def test_lock_rejects_removed_scope_inventory_format(tmp_path: Path) -> None:
+    path = tmp_path / "schemas.lock.yaml"
+    path.write_text(serialize_schema_lock(_lock()) + "inventory: []\n")
+
+    with pytest.raises(KubeconformSchemaLockError, match="Extra inputs are not permitted"):
+        load_schema_lock(path)
+
+
+def test_generated_schema_entries_must_be_repository_scoped() -> None:
+    with pytest.raises(ValueError, match="repository-shared"):
+        SchemaFile(
+            gvk=GroupVersionKind(group="example.io", version="v1", kind="Widget"),
+            source="generated",
+            scope=SchemaScope(chart="provider", environment="dev"),
+            path="generated/example.io/widget_v1.json",
+            sha256=content_digest(b"{}"),
+            source_reference="rendered CRD example.io/v1/Widget",
+        )
+
+
 def test_build_lock_omits_scope_inventory_and_sorts_schema_entries() -> None:
-    scope = SchemaScope(chart="demo", environment="ci")
     config_map = GroupVersionKind(version="v1", kind="ConfigMap")
     deployment = GroupVersionKind(group="apps", version="v1", kind="Deployment")
     content = b"{}"
@@ -102,10 +118,6 @@ def test_build_lock_omits_scope_inventory_and_sorts_schema_entries() -> None:
     lock = build_lock(
         workspace="lab-charts",
         policy=_policy(),
-        inventory=[
-            SchemaRequirement(gvk=deployment, scope=scope),
-            SchemaRequirement(gvk=config_map, scope=scope),
-        ],
         schemas=[
             SchemaFile(
                 gvk=deployment,
@@ -124,6 +136,5 @@ def test_build_lock_omits_scope_inventory_and_sorts_schema_entries() -> None:
         ],
     )
 
-    assert lock.inventory == ()
     assert "inventory:" not in serialize_schema_lock(lock)
     assert [item.gvk.kind for item in lock.schemas] == ["ConfigMap", "Deployment"]

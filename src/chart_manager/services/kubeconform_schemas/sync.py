@@ -17,7 +17,6 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
     KubeconformSchemaLockError,
-    KubeconformSchemaMaterializationRequiredError,
     KubeconformSchemaNotFoundError,
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaSourceError,
@@ -39,16 +38,15 @@ from chart_manager.services.kubeconform_schemas.models import (
     SchemaScope,
     build_lock,
     content_digest,
-    inventory_manifest_content,
     lock_policy_mismatches,
     sort_requirements,
+    sort_schema_files,
 )
 from chart_manager.services.kubeconform_schemas.source import (
     KubeconformSchemaArtifactRequest,
     KubeconformSchemaSource,
 )
 from chart_manager.services.kubeconform_schemas.store import (
-    INVENTORY_MANIFEST_PATH,
     KubeconformSchemaLocations,
     KubeconformSchemaStore,
     artifact_relative_path,
@@ -64,7 +62,6 @@ class KubeconformSchemaSyncRequest:
     materialized: tuple[MaterializedSchema, ...]
     lock_path: Path
     update: bool = False
-    offline: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,11 +95,13 @@ class KubeconformSchemaSyncService:
         self,
         request: KubeconformSchemaSyncRequest,
     ) -> KubeconformSchemaSyncResult:
-        """Return a ready generation, using a valid cache before any source access.
+        """Verify current derived inputs, then return a ready generation.
 
         With ``update=False`` the committed lock is read-only: even a cold-cache
-        hydration publishes only the lock's immutable generation. Only an explicit
-        update resolves tracking refs and replaces the repository lock.
+        hydration publishes only the lock's immutable generation. Discovery is
+        authoritative and happens before cache inspection, so a warm cache cannot
+        conceal a stale lock. Only an explicit update resolves tracking refs and
+        replaces the repository lock.
         """
         if request.workspace != self.store.workspace:
             raise KubeconformSchemaConfigurationError(
@@ -128,10 +127,6 @@ class KubeconformSchemaSyncService:
         requirements = sort_requirements(list(request.requirements))
         with self.store.serialized_sync():
             if request.update:
-                if request.offline:
-                    raise KubeconformSchemaSourceEnvironmentError(
-                        "schemas sync --update cannot resolve tracking refs offline"
-                    )
                 lock, content = self._build_updated_lock(request, requirements)
                 return self._publish(
                     request,
@@ -140,6 +135,11 @@ class KubeconformSchemaSyncService:
                     replace_lock=True,
                 )
             lock = self._load_existing(request)
+            self._verify_current_derivations(
+                lock,
+                requirements,
+                request.materialized,
+            )
             status = self.store.inspect(lock)
             if status.ready:
                 return KubeconformSchemaSyncResult(
@@ -148,14 +148,12 @@ class KubeconformSchemaSyncService:
                     lock_updated=False,
                     generation_published=False,
                 )
-            if request.offline:
-                raise KubeconformSchemaSourceEnvironmentError(
-                    f"schema generation {lock.generation} is not available offline; "
-                    "run `chart-manager schemas sync` while online"
-                )
+            if status.corrupt:
+                # Corruption is a local tool/store failure. Do not disguise it
+                # as a source problem by downloading before reporting it.
+                self.store.require_ready(lock)
             content = self._hydrate_locked_content(
                 lock,
-                request.requirements,
                 request.materialized,
             )
             return self._publish(
@@ -311,9 +309,10 @@ class KubeconformSchemaSyncService:
         ]
         if missing:
             detail = ", ".join(sorted(f"{item.scope.key}: {item.gvk.key}" for item in missing))
-            raise KubeconformSchemaIntegrityError(
+            raise KubeconformSchemaConfigurationError(
                 "required schemas were not found in generated, local, Kubernetes, "
-                f"or catalog sources: {detail}"
+                f"or catalog sources: {detail}; add an exact local schema or "
+                "spec.validation.ignoreMissingSchemas entry"
             )
 
         files: list[SchemaFile] = []
@@ -354,11 +353,92 @@ class KubeconformSchemaSyncService:
         lock = build_lock(
             workspace=request.workspace,
             policy=locked_policy,
-            inventory=list(requirements),
             schemas=files,
         )
-        content_by_path[INVENTORY_MANIFEST_PATH] = inventory_manifest_content(requirements)
         return lock, content_by_path
+
+    def _verify_current_derivations(
+        self,
+        lock: SchemaLock,
+        requirements: tuple[SchemaRequirement, ...],
+        materialized_values: tuple[MaterializedSchema, ...],
+    ) -> None:
+        """Compare current repository-derived requirements with the compact lock.
+
+        Remote entries can be verified from their locked identities without any
+        source access. Generated and local entries are reconstructed from the
+        current checkout and compared byte-for-byte. Scope fan-out is deliberately
+        absent: another use of an already-covered repository schema is harmless.
+        """
+        materialized = _index_materialized(materialized_values)
+        remote_by_gvk: dict[tuple[str, str, str], list[SchemaFile]] = {}
+        for entry in lock.schemas:
+            if entry.source in {"kubernetes", "catalog"}:
+                remote_by_gvk.setdefault(_gvk_key(entry.gvk), []).append(entry)
+
+        expected: list[SchemaFile] = []
+        problems: list[str] = []
+        for requirement in requirements:
+            artifact = _select_materialized(materialized, requirement)
+            if artifact is not None:
+                _validate_schema_json(artifact.content, source=artifact.source_reference)
+                scope = artifact.scope if artifact.source == "local" else None
+                expected.append(
+                    SchemaFile(
+                        gvk=artifact.gvk,
+                        source=artifact.source,
+                        scope=scope,
+                        path=artifact_relative_path(
+                            source=artifact.source,
+                            gvk=artifact.gvk,
+                            scope=scope,
+                        ),
+                        sha256=artifact.sha256,
+                        source_reference=artifact.source_reference,
+                    )
+                )
+                continue
+
+            remote = remote_by_gvk.get(_gvk_key(requirement.gvk), [])
+            if len(remote) == 1:
+                expected.append(remote[0])
+                continue
+            if len(remote) > 1:
+                problems.append(
+                    f"{requirement.gvk.key} has multiple locked remote sources"
+                )
+                continue
+            if not requirement.allow_missing:
+                problems.append(
+                    f"{requirement.scope.key}: {requirement.gvk.key} is not covered"
+                )
+
+        try:
+            ordered_expected = sort_schema_files(expected)
+        except KubeconformSchemaConfigurationError as exc:
+            problems.append(str(exc))
+            ordered_expected = ()
+        if ordered_expected != lock.schemas:
+            expected_keys = {_schema_identity(entry): entry for entry in ordered_expected}
+            locked_keys = {_schema_identity(entry): entry for entry in lock.schemas}
+            for key in sorted(expected_keys.keys() - locked_keys.keys()):
+                problems.append(f"new {expected_keys[key].source} schema {key}")
+            for key in sorted(locked_keys.keys() - expected_keys.keys()):
+                problems.append(f"unused locked {locked_keys[key].source} schema {key}")
+            for key in sorted(expected_keys.keys() & locked_keys.keys()):
+                expected_entry = expected_keys[key]
+                locked_entry = locked_keys[key]
+                if expected_entry != locked_entry:
+                    problems.append(
+                        f"changed {expected_entry.source} schema {key} "
+                        f"({locked_entry.sha256} -> {expected_entry.sha256})"
+                    )
+        if problems:
+            detail = "; ".join(dict.fromkeys(problems))
+            raise KubeconformSchemaConfigurationError(
+                "schema lock is stale for the current charts; run "
+                f"`chart-manager schemas sync --refresh`: {detail}"
+            )
 
     def _load_existing(
         self,
@@ -385,20 +465,17 @@ class KubeconformSchemaSyncService:
     def _hydrate_locked_content(
         self,
         lock: SchemaLock,
-        requirements: tuple[SchemaRequirement, ...],
         materialized_values: tuple[MaterializedSchema, ...],
     ) -> dict[str, bytes]:
         materialized = _index_materialized(materialized_values)
-        content_by_path: dict[str, bytes] = {
-            INVENTORY_MANIFEST_PATH: inventory_manifest_content(requirements)
-        }
+        content_by_path: dict[str, bytes] = {}
         downloads: list[KubeconformSchemaArtifactRequest] = []
         entries_by_key: dict[str, SchemaFile] = {}
         for entry in lock.schemas:
             if entry.source in {"generated", "local"}:
                 artifact = materialized.get(_schema_file_artifact_key(entry))
                 if artifact is None:
-                    raise KubeconformSchemaMaterializationRequiredError(
+                    raise KubeconformSchemaConfigurationError(
                         f"locked {entry.source} schema is not materialized: "
                         f"{entry.scope.key if entry.scope else 'repository'} {entry.gvk.key}; "
                         "run `chart-manager schemas sync --refresh` to rebuild derived schemas"
@@ -439,7 +516,7 @@ class KubeconformSchemaSyncService:
         destination_existed = self.store.generation_path(lock).exists()
         try:
             entries = {entry.path: entry for entry in lock.schemas}
-            expected_paths = {*entries, INVENTORY_MANIFEST_PATH}
+            expected_paths = set(entries)
             if set(content) != expected_paths:
                 missing = sorted(expected_paths - set(content))
                 extra = sorted(set(content) - expected_paths)
@@ -447,10 +524,7 @@ class KubeconformSchemaSyncService:
                     f"staged schema content differs from lock: missing={missing}, extra={extra}"
                 )
             for path, value in content.items():
-                if path == INVENTORY_MANIFEST_PATH:
-                    self.store.write_stage_inventory(stage, value)
-                else:
-                    self.store.write_stage_file(stage, entries[path], value)
+                self.store.write_stage_file(stage, entries[path], value)
             destination = self.store.publish_generation(stage, lock)
             stage = Path()
             if replace_lock:
@@ -505,6 +579,11 @@ def _schema_file_artifact_key(value: SchemaFile) -> tuple[str, str, str, str, st
         value.gvk.version,
         value.gvk.kind,
     )
+
+
+def _schema_identity(value: SchemaFile) -> str:
+    scope = value.scope.key if value.scope else "repository"
+    return f"{scope} {value.gvk.key}"
 
 
 def _select_materialized(

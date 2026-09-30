@@ -346,8 +346,8 @@ jobs:
           path: ${{ github.workspace }}/.cache/chart-manager/schemas
           key: schema-store-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
 
-      # Ordinary CI is lock-preserving: hydrate exactly the committed
-      # generation, then prove the validation pass needs no network fallback.
+      # Ordinary CI is lock-preserving: discover current chart-derived inputs,
+      # compare them with the committed lock, then hydrate that exact generation.
       # Only the narrowly allowlisted Renovate maintenance path runs --update.
       - name: Synchronize locked schemas
         id: schemas
@@ -369,7 +369,7 @@ jobs:
 
       - name: Validate
         id: validate
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.schemas.outcome == 'success' }}
         # Don't fail-fast the job on a non-zero CLI exit: every post-step
         # (artifact upload, future post-processing) must run to completion
         # so the PR has full diagnostic context. The final "Gate" step below
@@ -411,7 +411,7 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
-          mise run validate -- "${args[@]}" --offline --output all --keep --github-step-summary
+          mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
@@ -419,7 +419,9 @@ jobs:
         # gate fires, so `if: failure()` would never trigger here. `!cancelled()`
         # skips artifact upload during workflow cancellation (no point keeping
         # a half-rendered tree from a killed run).
-        if: ${{ !cancelled() && (steps.schemas.outcome == 'failure' || steps.validate.outcome == 'failure') }}
+        # Schema-sync renders live in a temporary directory and are not part
+        # of this artifact; upload only validation's retained render tree.
+        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
         uses: actions/upload-artifact@v7
         with:
           name: rendered-manifests-${{ github.run_id }}

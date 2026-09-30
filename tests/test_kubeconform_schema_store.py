@@ -10,11 +10,9 @@ from chart_manager.services.kubeconform_schemas.models import (
     LockedSchemaPolicy,
     RepositoryPin,
     SchemaFile,
-    SchemaRequirement,
     SchemaScope,
     build_lock,
     content_digest,
-    inventory_manifest_content,
 )
 from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaStore,
@@ -37,7 +35,6 @@ def _policy() -> LockedSchemaPolicy:
 def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
     content = b'{"type":"object"}\n'
     gvk = GroupVersionKind(group="apps", version="v1", kind="Deployment")
-    scope = SchemaScope(chart="demo", environment="ci")
     entry = SchemaFile(
         gvk=gvk,
         source="kubernetes",
@@ -45,17 +42,14 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
         sha256=content_digest(content),
         source_reference="https://example/schema",
     )
-    inventory = [SchemaRequirement(gvk=gvk, scope=scope)]
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=inventory,
         schemas=[entry],
     )
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
-    store.write_stage_inventory(stage, inventory_manifest_content(inventory))
 
     published = store.publish_generation(stage, lock)
 
@@ -68,10 +62,41 @@ def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
         store.require_ready(lock)
 
 
+def test_republishing_identical_generation_never_writes_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b'{"type":"object"}\n'
+    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
+    entry = SchemaFile(
+        gvk=gvk,
+        source="kubernetes",
+        path=artifact_relative_path(source="kubernetes", gvk=gvk, scope=None),
+        sha256=content_digest(content),
+        source_reference="https://example/configmap",
+    )
+    lock = build_lock(workspace="lab", policy=_policy(), schemas=[entry])
+    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
+    first = store.create_stage()
+    store.write_stage_file(first, entry, content)
+    destination = store.publish_generation(first, lock)
+    before = (destination / entry.path).stat().st_mtime_ns
+
+    second = store.create_stage()
+    store.write_stage_file(second, entry, content)
+
+    def reject_replace(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("published generations must never be rewritten")
+
+    monkeypatch.setattr("os.replace", reject_replace)
+    assert store.publish_generation(second, lock) == destination
+    assert (destination / entry.path).read_bytes() == content
+    assert (destination / entry.path).stat().st_mtime_ns == before
+
+
 def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
     content = b"{}"
     gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-    scope = SchemaScope(chart="demo", environment="ci")
     entry = SchemaFile(
         gvk=gvk,
         source="kubernetes",
@@ -79,17 +104,14 @@ def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
         sha256=content_digest(content),
         source_reference="https://example/schema",
     )
-    inventory = [SchemaRequirement(gvk=gvk, scope=scope)]
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=inventory,
         schemas=[entry],
     )
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
     stage = store.create_stage()
     store.write_stage_file(stage, entry, content)
-    store.write_stage_inventory(stage, inventory_manifest_content(inventory))
     unexpected = stage / "kubernetes/unlocked.json"
     unexpected.write_text("{}")
 
@@ -103,7 +125,6 @@ def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
 
 def test_store_rejects_incomplete_generation_before_rename(tmp_path: Path) -> None:
     gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-    scope = SchemaScope(chart="demo", environment="ci")
     entry = SchemaFile(
         gvk=gvk,
         source="kubernetes",
@@ -114,7 +135,6 @@ def test_store_rejects_incomplete_generation_before_rename(tmp_path: Path) -> No
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=[entry],
     )
     store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
@@ -133,8 +153,7 @@ def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) ->
         SchemaFile(
             gvk=gvk,
             source="generated",
-            scope=scope,
-            path=artifact_relative_path(source="generated", gvk=gvk, scope=scope),
+            path=artifact_relative_path(source="generated", gvk=gvk, scope=None),
             sha256=content_digest(content),
             source_reference="crd.yaml",
         ),
@@ -149,7 +168,6 @@ def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) ->
     lock = build_lock(
         workspace="lab",
         policy=_policy(),
-        inventory=[SchemaRequirement(gvk=gvk, scope=scope)],
         schemas=entries,
     )
 

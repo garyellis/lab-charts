@@ -107,11 +107,10 @@ def scan_rendered_directory(
                 allow_missing=(
                     resource.gvk.kind in allow_missing
                     or resource.gvk.key in allow_missing
-                    # yannh/kubernetes-json-schema publishes CRD component
-                    # definitions but no top-level CustomResourceDefinition
-                    # schema. Keep the exception explicit in the lock so the
-                    # validator skip is derived from verified inventory rather
-                    # than hidden in the kubeconform adapter.
+                    # The pinned Kubernetes source publishes CRD component
+                    # definitions but no top-level schema for this exact GVK.
+                    # Its rendered definition still generates schemas for the
+                    # custom resources it declares.
                     or _is_crd(resource.gvk)
                 ),
             )

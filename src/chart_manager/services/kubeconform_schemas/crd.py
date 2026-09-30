@@ -40,9 +40,9 @@ def generate_crd_schemas(
                 source="generated",
                 scope=None,
                 content=artifact.content,
-                # Provider fan-out is cache-local inventory metadata. Keeping
-                # chart/environment paths here would churn the compact lock
-                # even when the unique generated schema bytes are unchanged.
+                # Generated schemas are repository-scoped. Provider fan-out
+                # must not churn the compact lock when the unique schema bytes
+                # are unchanged.
                 source_reference=f"rendered CRD {artifact.gvk.key}",
             )
     return tuple(

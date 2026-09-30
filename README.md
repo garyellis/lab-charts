@@ -203,11 +203,13 @@ chart, so unrelated charts never gate a PR. `publish` pushes every directly
 changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
 The validate job restores the XDG schema store using the committed
-`.chart-manager/schemas.lock.yaml` hash, runs `mise run schemas` to verify or
-hydrate that generation, then validates with `--offline`. A warm generation
-does not render the repository. On a new machine, repository-derived schemas
-may be rebuilt against the already committed pins. Normal validation is
-read-only and never performs that repository-wide fallback.
+`.chart-manager/schemas.lock.yaml` hash, then runs `mise run schemas`.
+Synchronization always renders the enabled chart/environment rows and compares
+their current requirements and derived schema bytes with the committed compact
+lock before accepting either a warm or cold cache. It hydrates a missing locked
+generation only after that comparison succeeds. Normal chart validation is
+read-only, uses that verified local generation, and never contacts schema
+sources or renders the rest of the repository.
 
 Use `chart-manager schemas sync --refresh` when chart resources, CRDs, or
 chart-local schemas change. It rebuilds the compact lock with the existing
@@ -227,7 +229,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
   `sandbox-logs-<chart>-<profile>-<run_id>` (sandbox-test) from the run's
   Artifacts panel.
 - Validate failure: run `mise run schemas`, then
-  `uv run chart-manager chart validate <name> --env <env> --offline`.
+  `uv run chart-manager chart validate <name> --env <env>`.
 - Sandbox failure: `uv run chart-manager chart test <name> --profile minimal`.
 - If it looks environmental, run `uv run chart-manager doctor --for 'chart test'`
   first — it names the missing binary or unreachable backend.

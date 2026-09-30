@@ -10,9 +10,6 @@ from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.services.kubeconform_schemas.app import (
     RepositoryKubeconformSchemaService,
 )
-from chart_manager.services.kubeconform_schemas.errors import (
-    KubeconformSchemaMaterializationRequiredError,
-)
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,
@@ -98,47 +95,6 @@ class _Sync:
         )
 
 
-class _NoRenderValidation:
-    def run(self, _request):  # type: ignore[no-untyped-def]
-        raise AssertionError("warm schema sync must not render the repository")
-
-
-class _ReadySync:
-    def sync(self, _request):  # type: ignore[no-untyped-def]
-        return SimpleNamespace(
-            lock=SimpleNamespace(
-                generation="sha256:" + "a" * 64,
-                schemas=(),
-            ),
-            generation_path=Path("/cache/generation"),
-            lock_updated=False,
-            generation_published=False,
-        )
-
-
-class _ColdDerivedSync(_Sync):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
-
-    def sync(self, request):  # type: ignore[no-untyped-def]
-        self.calls += 1
-        self.request = request
-        if self.calls == 1:
-            raise KubeconformSchemaMaterializationRequiredError(
-                "locked generated schema is not materialized"
-            )
-        return SimpleNamespace(
-            lock=SimpleNamespace(generation="sha256:" + "a" * 64),
-            generation_path=Path("/cache/generation"),
-            lock_updated=False,
-            generation_published=True,
-        )
-
-    def refresh(self, _request):  # type: ignore[no-untyped-def]
-        raise AssertionError("cold hydration must not rewrite the committed lock")
-
-
 def test_sync_renders_inventory_and_generates_exact_crd_schema(
     tmp_path: Path,
     monkeypatch,
@@ -186,40 +142,12 @@ def test_sync_renders_inventory_and_generates_exact_crd_schema(
     assert sync.request.workspace == "lab-charts"
     assert sync.request.lock_path == tmp_path / SCHEMA_LOCK_FILE
     assert sync.request.update is True
-    assert sync.request.offline is False
     generated = sync.request.materialized[0]
     assert generated.gvk.key == "example.io/v1/Widget"
     assert b'"additionalProperties": false' in generated.content
 
 
-def test_warm_default_sync_does_not_render_repository(tmp_path: Path) -> None:
-    policy = WorkspaceValidation.model_validate(
-        {
-            "kubernetesVersion": "1.35.3",
-            "schemas": {
-                "generateFromCRDs": True,
-                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
-            },
-        }
-    )
-    service = RepositoryKubeconformSchemaService(
-        workspace=RepositoryWorkspace(
-            root=tmp_path,
-            name="lab-charts",
-            validation=policy,
-            authored=True,
-        ),
-        validation=_NoRenderValidation(),  # type: ignore[arg-type]
-        sync=_ReadySync(),  # type: ignore[arg-type]
-    )
-
-    result = service.sync()
-
-    assert result.rows == 0
-    assert result.sync.generation_published is False
-
-
-def test_cold_default_sync_rebuilds_derived_bytes_without_refreshing_lock(
+def test_default_sync_always_discovers_current_repository(
     tmp_path: Path,
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
@@ -238,12 +166,10 @@ def test_cold_default_sync_rebuilds_derived_bytes_without_refreshing_lock(
     monkeypatch.setattr(
         "chart_manager.services.kubeconform_schemas.app.build_catalog",
         lambda *_args, **_kwargs: SimpleNamespace(
-            errors=(),
-            targets=(target,),
-            by_name=lambda: {"demo": target},
+            errors=(), targets=(target,), by_name=lambda: {"demo": target}
         ),
     )
-    sync = _ColdDerivedSync()
+    sync = _Sync()
     service = RepositoryKubeconformSchemaService(
         workspace=RepositoryWorkspace(
             root=tmp_path,
@@ -257,6 +183,6 @@ def test_cold_default_sync_rebuilds_derived_bytes_without_refreshing_lock(
 
     result = service.sync()
 
-    assert sync.calls == 2
+    assert result.rows == 1
     assert sync.request.update is False
-    assert result.sync.lock_updated is False
+    assert sync.request.requirements

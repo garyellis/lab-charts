@@ -280,10 +280,6 @@ class RunRequest:
     tool_timeout: float = 0.0
     dep_update_timeout: float = 300.0
     fail_fast: bool = False
-    # Assert that validation may use only already-cached inputs. The service
-    # that prepares schema inputs owns enforcement; the request merely carries
-    # the caller's resolved CLI/settings choice across the surface boundary.
-    offline: bool = False
     # Internal inventory renders need dependency CRDs; normal validation and
     # its Kyverno phase must keep the historical manifest set unchanged.
     include_crds: bool = False

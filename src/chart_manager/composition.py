@@ -461,8 +461,6 @@ class Container:
     def _prepare_kubeconform_schema_runtime(
         self,
         workspace: RepositoryWorkspace,
-        offline: bool,
-        workers: int,
     ) -> KubeconformSchemaRuntime:
         """Return one verified generation without hidden repository-wide work.
 
@@ -471,7 +469,6 @@ class Container:
         (and potentially downloading Helm dependencies) while the user asked
         to validate one chart.
         """
-        del offline, workers
         return load_kubeconform_schema_runtime(workspace)
 
     def kubeconform_schema_service(

@@ -23,7 +23,6 @@ def _make_service() -> RepositoryKubeconformSchemaService:
 
 
 def sync(
-    ctx: typer.Context,
     update: Annotated[
         bool,
         typer.Option(
@@ -38,13 +37,6 @@ def sync(
             help="Rebuild derived requirements using the commits already pinned in the lock.",
         ),
     ] = False,
-    offline: Annotated[
-        bool | None,
-        typer.Option(
-            "--offline/--online",
-            help="Require the locked schema generation to already be present locally.",
-        ),
-    ] = None,
     workers: Annotated[
         int,
         typer.Option("--workers", min=0, help="Render workers; 0 uses the normal default."),
@@ -53,11 +45,9 @@ def sync(
     """Eagerly render, inventory, verify, and publish all required schemas."""
     if update and refresh:
         raise typer.BadParameter("--update and --refresh are mutually exclusive")
-    configured_offline = bool(getattr(ctx.obj, "offline", False))
     result = _make_service().sync(
         update=update,
         refresh=refresh,
-        offline=configured_offline if offline is None else offline,
         workers=workers,
     )
     action = "published" if result.sync.generation_published else "ready"

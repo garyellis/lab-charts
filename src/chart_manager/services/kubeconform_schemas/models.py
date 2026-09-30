@@ -178,7 +178,7 @@ class SchemaFile(_StrictModel):
     def _scope_matches_source(self) -> SchemaFile:
         if self.source == "local" and self.scope is None:
             raise ValueError("local schema entries require a scope")
-        if self.source in {"kubernetes", "catalog"} and self.scope is not None:
+        if self.source in {"generated", "kubernetes", "catalog"} and self.scope is not None:
             raise ValueError(f"{self.source} schema entries must be repository-shared")
         return self
 
@@ -190,12 +190,9 @@ class SchemaLock(_StrictModel):
     workspace: str
     generation: str
     policy: LockedSchemaPolicy
-    # Read compatibility for the pre-compaction PR lock. New locks omit this
-    # chart/environment fan-out entirely (``exclude=True``).
-    inventory: tuple[SchemaRequirement, ...] = Field(default=(), exclude=True)
     schemas: tuple[SchemaFile, ...]
 
-    @field_validator("inventory", "schemas", mode="before")
+    @field_validator("schemas", mode="before")
     @classmethod
     def _yaml_sequences(cls, value: Any) -> Any:
         # YAML has no tuple representation. Preserve strict validation for the
@@ -219,15 +216,12 @@ class SchemaLock(_StrictModel):
 
     @model_validator(mode="after")
     def _canonical_and_complete(self) -> SchemaLock:
-        if self.inventory != sort_requirements(self.inventory):
-            raise ValueError("legacy inventory must be sorted and deduplicated")
         if self.schemas != sort_schema_files(self.schemas):
             raise ValueError("schemas must be sorted and deduplicated")
         expected = generation_digest(
             version=self.version,
             workspace=self.workspace,
             policy=self.policy,
-            inventory=self.inventory,
             schemas=self.schemas,
         )
         if self.generation != expected:
@@ -253,6 +247,10 @@ class MaterializedSchema:
         if self.source == "local" and self.scope is None:
             raise KubeconformSchemaConfigurationError(
                 "local materialized schemas require a chart scope"
+            )
+        if self.source == "generated" and self.scope is not None:
+            raise KubeconformSchemaConfigurationError(
+                "generated materialized schemas must be repository-shared"
             )
 
     @property
@@ -377,7 +375,6 @@ def generation_digest(
     version: int,
     workspace: str,
     policy: LockedSchemaPolicy,
-    inventory: tuple[SchemaRequirement, ...] = (),
     schemas: tuple[SchemaFile, ...],
 ) -> str:
     payload = {
@@ -389,11 +386,6 @@ def generation_digest(
             for item in schemas
         ],
     }
-    if inventory:
-        payload["inventory"] = [
-            item.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for item in inventory
-        ]
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return content_digest(encoded)
 
@@ -402,19 +394,13 @@ def build_lock(
     *,
     workspace: str,
     policy: LockedSchemaPolicy,
-    inventory: tuple[SchemaRequirement, ...] | list[SchemaRequirement] = (),
     schemas: tuple[SchemaFile, ...] | list[SchemaFile],
 ) -> SchemaLock:
-    # Scope fan-out belongs in cache-local generation metadata, not the
-    # committed lock. Resource inventory changes that reuse the same unique
-    # schemas must not perturb this repository file.
-    del inventory
     ordered_schemas = sort_schema_files(schemas)
     digest = generation_digest(
         version=1,
         workspace=workspace,
         policy=policy,
-        inventory=(),
         schemas=ordered_schemas,
     )
     return SchemaLock(
@@ -424,18 +410,6 @@ def build_lock(
         policy=policy,
         schemas=ordered_schemas,
     )
-
-
-def inventory_manifest_content(
-    inventory: tuple[SchemaRequirement, ...] | list[SchemaRequirement],
-) -> bytes:
-    """Serialize the detailed scope inventory outside the compact repo lock."""
-    ordered = sort_requirements(inventory)
-    payload = [
-        item.model_dump(mode="json", by_alias=True, exclude_none=True)
-        for item in ordered
-    ]
-    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 __all__ = [
@@ -451,7 +425,6 @@ __all__ = [
     "SchemaSourceKind",
     "build_lock",
     "content_digest",
-    "inventory_manifest_content",
     "lock_policy_mismatches",
     "sort_requirements",
     "sort_schema_files",

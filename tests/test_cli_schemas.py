@@ -29,39 +29,25 @@ class _Service:
         )
 
 
-def test_sync_forwards_update_offline_and_workers(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_sync_forwards_update_and_workers(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     service = _Service()
     monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
 
-    result = cli("schemas", "sync", "--update", "--offline", "--workers", "2")
+    result = cli("schemas", "sync", "--update", "--workers", "2")
 
     assert result.exit_code == 0
     assert service.calls == [
-        {"update": True, "refresh": False, "offline": True, "workers": 2}
+        {"update": True, "refresh": False, "workers": 2}
     ]
     assert "schema generation sha256:" in result.stdout
 
 
-def test_sync_inherits_offline_environment(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    service = _Service()
-    monkeypatch.setenv("CHART_MANAGER_OFFLINE", "1")
-    monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
-
-    result = cli("schemas", "sync")
+def test_sync_help_has_no_offline_or_online_mode() -> None:
+    result = cli("schemas", "sync", "--help")
 
     assert result.exit_code == 0
-    assert service.calls[0]["offline"] is True
-
-
-def test_explicit_online_overrides_offline_environment(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    service = _Service()
-    monkeypatch.setenv("CHART_MANAGER_OFFLINE", "1")
-    monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
-
-    result = cli("schemas", "sync", "--online")
-
-    assert result.exit_code == 0
-    assert service.calls[0]["offline"] is False
+    assert "--offline" not in result.output
+    assert "--online" not in result.output
 
 
 def test_refresh_is_distinct_from_upstream_update(monkeypatch) -> None:  # type: ignore[no-untyped-def]
