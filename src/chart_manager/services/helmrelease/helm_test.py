@@ -31,17 +31,15 @@ from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
+from chart_manager.services.helmrelease.fanout import RunResult, run_matched
 from chart_manager.services.helmrelease.matching import filter_matched_statuses
 from chart_manager.services.helmrelease.state import (
     NO_MATCH_REF,
-    PASSING_VERDICTS,
     Reason,
     ReasonLike,
     Stage,
     Transition,
     Verdict,
-    run_verdict,
 )
 from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
@@ -160,25 +158,26 @@ class TestOutcome:
     duration_seconds: float
 
 
-@dataclass(frozen=True)
-class TestResult:
-    """Aggregate result across all tested HelmReleases."""
+#: Aggregate result across all tested HelmReleases. A plain assignment, not a
+#: `type` statement, so `TestResult(...)` stays callable.
+TestResult = RunResult[TestOutcome]
 
-    outcomes: tuple[TestOutcome, ...]
-    total_duration_seconds: float
-    total_timed_out: bool
 
-    @property
-    def ok(self) -> bool:
-        """True only if there were outcomes and every one passed."""
-        return bool(self.outcomes) and all(
-            o.verdict in PASSING_VERDICTS for o in self.outcomes
-        )
-
-    @property
-    def failures(self) -> tuple[TestOutcome, ...]:
-        """Outcomes whose verdict is not a passing one."""
-        return tuple(o for o in self.outcomes if o.verdict not in PASSING_VERDICTS)
+def _no_match_outcome(elapsed: float) -> TestOutcome:
+    """The single synthetic outcome of a run whose selector matched nothing."""
+    return TestOutcome(
+        ref=NO_MATCH_REF,
+        verdict=Verdict.NO_MATCH,
+        reason=Reason.NO_HELMRELEASES_MATCHED,
+        helm_test_returncode=None,
+        helm_test_stdout=None,
+        helm_test_stderr=None,
+        test_pods=(),
+        last_status=None,
+        phase_log=(),
+        diagnostics=None,
+        duration_seconds=elapsed,
+    )
 
 
 @dataclass
@@ -285,40 +284,8 @@ class TestService:
             request.per_poll_timeout,
         )
 
-        if not matched:
-            # `TestResult.ok` is False for a no-match run, but the single
-            # NO_MATCH outcome is easy to read as "nothing to do" -- say which
-            # selector found nothing.
-            _LOG.warning(
-                "helm test matched no HelmReleases: chart=%s version=%s namespace=%s",
-                request.chart_name,
-                request.version,
-                request.namespace or "(all)",
-            )
-            elapsed = self._clock() - start
-            return TestResult(
-                outcomes=(
-                    TestOutcome(
-                        ref=NO_MATCH_REF,
-                        verdict=Verdict.NO_MATCH,
-                        reason=Reason.NO_HELMRELEASES_MATCHED,
-                        helm_test_returncode=None,
-                        helm_test_stdout=None,
-                        helm_test_stderr=None,
-                        test_pods=(),
-                        last_status=None,
-                        phase_log=(),
-                        diagnostics=None,
-                        duration_seconds=elapsed,
-                    ),
-                ),
-                total_duration_seconds=elapsed,
-                total_timed_out=False,
-            )
-
-        # Emitted after the zero-match return: a run with nothing to test
-        # opened no interval, so bracketing it would put a HELM_TEST_RUN on
-        # the timeline that nothing will ever close.
+        # Built unconditionally, but inert until `run_matched` finds a match:
+        # a run with nothing to test opens no HELM_TEST_RUN interval.
         telemetry = PromotionTelemetry(
             writer=self._events,
             chart_name=request.chart_name,
@@ -326,75 +293,29 @@ class TestService:
             environment=request.environment,
             strict=self._strict_events,
         )
-        telemetry.started(Stage.HELM_TEST, matched=len(matched))
-
         total_deadline = start + parsed.total_sec
-        cancel_event = threading.Event()
-        outcomes: list[TestOutcome] = []
-
-        try:
-            run_fanout(
-                matched,
-                concurrency=request.concurrency,
-                clock=self._clock,
-                total_deadline=total_deadline,
-                cancel_event=cancel_event,
-                outcomes=outcomes,
-                work=lambda status: self._test_one(
-                    status, parsed, request, total_deadline, cancel_event
-                ),
-                crash_label="test watcher",
-                # No `cancel_on`: unlike monitor there is no --fail-fast here.
-                # A failing chart's tests say nothing about its peers', and the
-                # operator wants the whole matrix, not the first red cell.
-            )
-        except Exception:
-            _LOG.exception(
-                "helm test run crashed: chart=%s version=%s matched=%d completed=%d",
-                request.chart_name,
-                request.version,
-                len(matched),
-                len(outcomes),
-            )
-            # An infrastructure failure still ends the interval opened above.
-            # Without this the timeline keeps a HELM_TEST_RUN that nothing
-            # ever closes -- the exact defect this wiring exists to remove.
-            #
-            # `Exception`, not `BaseException`: Ctrl-C must kill a long
-            # parallel run immediately, and this handler would put a network
-            # write in front of the exit. An interrupted run genuinely has no
-            # terminal state to report.
-            telemetry.finished(
-                Stage.HELM_TEST,
-                Verdict.FAILED,
-                total=len(matched),
-                failures=len(matched) - len(outcomes),
-            )
-            raise
-
-        elapsed = self._clock() - start
-        result = TestResult(
-            outcomes=sorted_by_ref(outcomes),
-            total_duration_seconds=elapsed,
-            total_timed_out=cancel_event.is_set(),
+        return run_matched(
+            matched,
+            start=start,
+            clock=self._clock,
+            total_deadline=total_deadline,
+            concurrency=request.concurrency,
+            telemetry=telemetry,
+            stage=Stage.HELM_TEST,
+            success=Verdict.PASSED,
+            no_match=_no_match_outcome,
+            work=lambda status, cancel_event: self._test_one(
+                status, parsed, request, total_deadline, cancel_event
+            ),
+            crash_label="test watcher",
+            # No `cancel_on`: unlike monitor there is no --fail-fast here.
+            # A failing chart's tests say nothing about its peers', and the
+            # operator wants the whole matrix, not the first red cell.
+            log_label="helm test",
+            chart_name=request.chart_name,
+            version=request.version,
+            namespace=request.namespace,
         )
-        telemetry.finished(
-            Stage.HELM_TEST,
-            run_verdict((o.verdict for o in result.outcomes), success=Verdict.PASSED),
-            total=len(result.outcomes),
-            failures=len(result.failures),
-        )
-        _LOG.info(
-            "helm test run finished: chart=%s version=%s outcomes=%d failures=%d "
-            "cancelled=%s elapsed=%.1fs",
-            request.chart_name,
-            request.version,
-            len(result.outcomes),
-            len(result.failures),
-            result.total_timed_out,
-            elapsed,
-        )
-        return result
 
     # --- per-HR pipeline ---------------------------------------------------
 

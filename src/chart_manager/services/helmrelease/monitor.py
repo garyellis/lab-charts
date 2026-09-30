@@ -31,18 +31,16 @@ from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
-from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
+from chart_manager.services.helmrelease.fanout import RunResult, run_matched
 from chart_manager.services.helmrelease.matching import filter_matched_statuses
 from chart_manager.services.helmrelease.state import (
     DETAIL_MAX,
     NO_MATCH_REF,
-    PASSING_VERDICTS,
     Reason,
     ReasonLike,
     Stage,
     Transition,
     Verdict,
-    run_verdict,
 )
 from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
@@ -116,25 +114,23 @@ class MonitorOutcome:
     duration_seconds: float
 
 
-@dataclass(frozen=True)
-class MonitorResult:
-    """Aggregate of all watcher outcomes for a monitor run."""
+#: Aggregate of all watcher outcomes for a monitor run. A plain assignment,
+#: not a `type` statement, so `MonitorResult(...)` stays callable.
+MonitorResult = RunResult[MonitorOutcome]
 
-    outcomes: tuple[MonitorOutcome, ...]
-    total_duration_seconds: float
-    total_timed_out: bool
 
-    @property
-    def ok(self) -> bool:
-        """True when every outcome carries a passing verdict."""
-        return bool(self.outcomes) and all(
-            o.verdict in PASSING_VERDICTS for o in self.outcomes
-        )
-
-    @property
-    def failures(self) -> tuple[MonitorOutcome, ...]:
-        """Outcomes whose verdict is not a passing one."""
-        return tuple(o for o in self.outcomes if o.verdict not in PASSING_VERDICTS)
+def _no_match_outcome(elapsed: float) -> MonitorOutcome:
+    """The single synthetic outcome of a run whose selector matched nothing."""
+    return MonitorOutcome(
+        ref=NO_MATCH_REF,
+        verdict=Verdict.NO_MATCH,
+        reason=Reason.NO_HELMRELEASES_MATCHED,
+        last_status=None,
+        last_workloads=(),
+        recent_transitions=(),
+        diagnostics=None,
+        duration_seconds=elapsed,
+    )
 
 
 @dataclass
@@ -232,36 +228,8 @@ class MonitorService:
             request.poll_interval,
         )
 
-        if not matched:
-            # A no-match is the one outcome that looks like success to every
-            # caller reading `ok` and means nothing was watched at all.
-            _LOG.warning(
-                "monitor matched no HelmReleases: chart=%s version=%s namespace=%s",
-                request.chart_name,
-                request.version,
-                request.namespace or "(all)",
-            )
-            elapsed = self._clock() - start
-            return MonitorResult(
-                outcomes=(
-                    MonitorOutcome(
-                        ref=NO_MATCH_REF,
-                        verdict=Verdict.NO_MATCH,
-                        reason=Reason.NO_HELMRELEASES_MATCHED,
-                        last_status=None,
-                        last_workloads=(),
-                        recent_transitions=(),
-                        diagnostics=None,
-                        duration_seconds=elapsed,
-                    ),
-                ),
-                total_duration_seconds=elapsed,
-                total_timed_out=False,
-            )
-
-        # Emitted after the zero-match return: a run with nothing to watch
-        # opened no interval, so bracketing it would put a WAITING_ROLLOUT on
-        # the timeline that nothing will ever close.
+        # Built unconditionally, but inert until `run_matched` finds a match:
+        # a run with nothing to watch opens no WAITING_ROLLOUT interval.
         telemetry = PromotionTelemetry(
             writer=self._events,
             chart_name=request.chart_name,
@@ -269,73 +237,27 @@ class MonitorService:
             environment=request.environment,
             strict=self._strict_events,
         )
-        telemetry.started(Stage.ROLLOUT, matched=len(matched))
-
         total_deadline = start + parse_duration(request.total_timeout)
-        cancel_event = threading.Event()
-        outcomes: list[MonitorOutcome] = []
-
-        try:
-            run_fanout(
-                matched,
-                concurrency=request.concurrency,
-                clock=self._clock,
-                total_deadline=total_deadline,
-                cancel_event=cancel_event,
-                outcomes=outcomes,
-                work=lambda status: self._watch_one(
-                    status, request, per_poll, total_deadline, cancel_event
-                ),
-                crash_label="monitor watcher",
-                cancel_on=_fail_fast_predicate(request),
-            )
-        except Exception:
-            _LOG.exception(
-                "monitor run crashed: chart=%s version=%s matched=%d completed=%d",
-                request.chart_name,
-                request.version,
-                len(matched),
-                len(outcomes),
-            )
-            # An infrastructure failure still ends the interval opened above.
-            # Without this the timeline keeps a WAITING_ROLLOUT that nothing
-            # ever closes -- the exact defect this wiring exists to remove.
-            #
-            # `Exception`, not `BaseException`: Ctrl-C must kill a long
-            # parallel run immediately, and this handler would put a network
-            # write in front of the exit. An interrupted run genuinely has no
-            # terminal state to report.
-            telemetry.finished(
-                Stage.ROLLOUT,
-                Verdict.FAILED,
-                total=len(matched),
-                failures=len(matched) - len(outcomes),
-            )
-            raise
-
-        elapsed = self._clock() - start
-        result = MonitorResult(
-            outcomes=sorted_by_ref(outcomes),
-            total_duration_seconds=elapsed,
-            total_timed_out=cancel_event.is_set(),
+        return run_matched(
+            matched,
+            start=start,
+            clock=self._clock,
+            total_deadline=total_deadline,
+            concurrency=request.concurrency,
+            telemetry=telemetry,
+            stage=Stage.ROLLOUT,
+            success=Verdict.READY,
+            no_match=_no_match_outcome,
+            work=lambda status, cancel_event: self._watch_one(
+                status, request, per_poll, total_deadline, cancel_event
+            ),
+            crash_label="monitor watcher",
+            cancel_on=_fail_fast_predicate(request),
+            log_label="monitor",
+            chart_name=request.chart_name,
+            version=request.version,
+            namespace=request.namespace,
         )
-        telemetry.finished(
-            Stage.ROLLOUT,
-            run_verdict((o.verdict for o in result.outcomes), success=Verdict.READY),
-            total=len(result.outcomes),
-            failures=len(result.failures),
-        )
-        _LOG.info(
-            "monitor run finished: chart=%s version=%s outcomes=%d failures=%d "
-            "cancelled=%s elapsed=%.1fs",
-            request.chart_name,
-            request.version,
-            len(result.outcomes),
-            len(result.failures),
-            result.total_timed_out,
-            elapsed,
-        )
-        return result
 
     def _watch_one(
         self,
