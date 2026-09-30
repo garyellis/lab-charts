@@ -568,6 +568,9 @@ jobs:
 
       - name: Chart test
         id: sandbox
+        env:
+          # Only the Twingate chart's hooks get the admin API key.
+          TWINGATE_API_TOKEN: ${{ matrix.chart == 'twingate-connector' && secrets.TWINGATE_API_TOKEN || '' }}
         run: |
           uv run chart-manager chart test --chart "$CHART" \
             --profile "$PROFILE" \
@@ -632,6 +635,9 @@ jobs:
       - name: Teardown (cleanup hooks, delete kind cluster)
         if: always()
         continue-on-error: true
+        env:
+          # Only the Twingate chart's hooks get the admin API key.
+          TWINGATE_API_TOKEN: ${{ matrix.chart == 'twingate-connector' && secrets.TWINGATE_API_TOKEN || '' }}
         run: |
           uv run chart-manager chart teardown --chart "$CHART" \
             --profile "$PROFILE" \

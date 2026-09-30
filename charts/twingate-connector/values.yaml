@@ -1,0 +1,30 @@
+# Upstream twingate/connector values are nested under the dependency name. The
+# upstream chart itself nests connector settings under a second `connector:` key.
+connector:
+  image:
+    repository: twingate/connector
+    # Upstream renders "repository:tag", so the digest rides in the tag.
+    # Multi-architecture index digest for 1.93.0; bump both together.
+    tag: 1.93.0@sha256:44e0ac9385438966a3b476c381ff23e432cf85fd419b8f839cbd8f00dd4d07e4
+    pullPolicy: IfNotPresent
+
+  connector:
+    # Tenant slug: <network>.twingate.com.
+    network: garyslab
+    # Secret with TWINGATE_ACCESS_TOKEN and TWINGATE_REFRESH_TOKEN, created
+    # outside this chart (README "Tokens"). Tokens never go through values:
+    # they would land in the Helm release Secret and in shell history.
+    existingSecret: twingate-connector-tokens
+    logLevel: error
+
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 200Mi
+    limits:
+      memory: 512Mi
