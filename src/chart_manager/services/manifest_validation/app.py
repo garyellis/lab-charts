@@ -209,6 +209,7 @@ class RunnerSpec:
     tool_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
+    run_log_level: int = logging.INFO
     include_crds: bool = False
     validator_ids: frozenset[str] = frozenset(
         provider.validator_id for provider in VALIDATOR_REGISTRY
@@ -247,9 +248,11 @@ class ManifestValidationService:
         workspace: RepositoryWorkspace | None = None,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
         schema_runtime_factory: KubeconformSchemaRuntimeFactory | None = None,
+        run_log_level: int = logging.INFO,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self.workspace = workspace
+        self._run_log_level = run_log_level
         if workspace is None:
             self._charts_dir = (
                 Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
@@ -281,6 +284,7 @@ class ManifestValidationService:
             command_runner=self._command_runner,
             runner_factory=self._runner_factory,
             validator_providers=self._validator_providers,
+            run_log_level=logging.DEBUG,
         )
         generated = prepare_generated_schemas(workspace, renderer)
         return replace(runtime, generated_schema_locations=generated)
@@ -449,6 +453,7 @@ class ManifestValidationService:
                 request.dep_update_timeout if request.dep_update_timeout > 0 else None
             ),
             verbose=request.verbose,
+            run_log_level=self._run_log_level,
             include_crds=request.include_crds,
             validator_ids=frozenset(
                 invocation.validator_id
@@ -461,7 +466,8 @@ class ManifestValidationService:
         # The run id is `out_dir`'s last path component (see `_resolve_out_dir`)
         # and is the only identifier that ties these lines, the render tree and
         # `summary.json` together.
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate service run started: run_id=%s rows=%d charts=%d workers=%d "
             "fail_fast=%s phases=%s changed_files=%s out_dir=%s",
             out_dir.name,
@@ -511,7 +517,8 @@ class ManifestValidationService:
         finally:
             self._progress.stop()
 
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate service run finished: run_id=%s rows=%d failed=%d "
             "spec_errors=%d elapsed=%.2fs",
             out_dir.name,
@@ -700,4 +707,5 @@ class ManifestValidationService:
             tool_timeout=spec.tool_timeout,
             dep_update_timeout=spec.dep_update_timeout,
             include_crds=spec.include_crds,
+            run_log_level=spec.run_log_level,
         )

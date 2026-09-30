@@ -211,6 +211,7 @@ class ManifestValidationRunner:
         dep_update_timeout: float | None = 300.0,
         tool_timeout: float | None = None,
         include_crds: bool = False,
+        run_log_level: int = logging.INFO,
     ) -> None:
         """Wire integrations, worker count, event callback, and dep/tool timeouts."""
         self.helm_factory = helm_factory
@@ -243,6 +244,7 @@ class ManifestValidationRunner:
         # their executors in the service composition root.
         self.tool_timeout = tool_timeout
         self.include_crds = include_crds
+        self._run_log_level = run_log_level
 
     def run(
         self,
@@ -269,7 +271,8 @@ class ManifestValidationRunner:
         # already been floored at 1 and fail-fast overrides it to serial below,
         # so an operator reading "workers=8" in a log next to a serial timeline
         # would be reading the request rather than the run.
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate run started: rows=%d workers=%d fail_fast=%s phases=%s "
             "tool_timeout=%s dep_update_timeout=%s output_root=%s",
             len(configs),
@@ -366,7 +369,8 @@ class ManifestValidationRunner:
         # Deterministic output order regardless of completion order.
         results.sort(key=lambda r: (r.row.chart, r.row.env))
         failed = sum(1 for result in results if self._row_failed(result))
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate run finished: rows=%d failed=%d not_run=%d elapsed=%.2fs",
             len(results),
             failed,

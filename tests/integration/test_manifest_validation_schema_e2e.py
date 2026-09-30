@@ -7,6 +7,7 @@ tool installation is owned by mise.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -130,7 +131,7 @@ def test_real_missing_schema_reports_remediation(tmp_path: Path) -> None:
     assert "chart-local schema" in result.detail
 
 
-def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_path, monkeypatch):
+def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_path, monkeypatch, caplog):
     from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
     from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
     from chart_manager.services.manifest_validation.app import ManifestValidationService
@@ -168,7 +169,22 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
         assert len(snapshots.calls) == 2
         return result
 
-    assert validate().outcome() is Outcome.SUCCESS
+    with caplog.at_level(logging.DEBUG):
+        assert validate().outcome() is Outcome.SUCCESS
+    run_messages = [
+        record for record in caplog.records
+        if record.name.startswith("chart_manager.services.manifest_validation")
+        and "run " in record.getMessage()
+        and ("started:" in record.getMessage() or "finished:" in record.getMessage())
+    ]
+    # Two discovered charts each have service + runner start/finish messages.
+    assert sum(record.levelno == logging.DEBUG for record in run_messages) == 8
+    # Only the user's outer validation announces itself at INFO.
+    assert sum(record.levelno == logging.INFO for record in run_messages) == 4
+    assert all(
+        "chart-manager-crds-" not in record.getMessage()
+        for record in run_messages if record.levelno == logging.INFO
+    )
     # A newly introduced built-in kind comes from the full pinned snapshot.
     (consumer / "templates/new.yaml").write_text(
         "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata: {name: demo}\n"
