@@ -37,6 +37,7 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,9 +47,16 @@ from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ExternalCommandError,
+    MissingToolError,
+    SpecError,
+)
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
+    KubeconformSchemaRenderError,
 )
 from chart_manager.services.kubeconform_schemas.generated import prepare_generated_schemas
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
@@ -61,6 +69,7 @@ from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
     PHASE_ORDER,
+    ManifestValidationTarget,
     RunOutcome,
     RunRequest,
     RunResult,
@@ -289,6 +298,60 @@ class ManifestValidationService:
         )
         generated = prepare_generated_schemas(workspace, renderer)
         return replace(runtime, generated_schema_locations=generated)
+
+    def prepare_schema_dependencies(self, targets: Sequence[ManifestValidationTarget]) -> None:
+        """Materialize dependencies before deciding which charts provide CRDs.
+
+        This deliberately avoids resolving environment values or rendering any
+        chart: unrelated malformed values cannot break provider discovery.
+        """
+        pending = [
+            target
+            for target in targets
+            if target.chart.metadata.dependencies and not chart_deps.deps_are_fresh(target.path)
+        ]
+        if not pending:
+            return
+        _LOG.info("Preparing chart dependencies for CRD discovery: %d charts", len(pending))
+        helms: dict[tuple[str | None, str | None], Helm] = {}
+        for target in pending:
+            key = (target.spec.helm_version, target.spec.helm_binary)
+            if key not in helms:
+                try:
+                    helms[key] = Helm(
+                        runner=self._command_runner,
+                        version=key[0],
+                        binary=key[1],
+                        verbose=False,
+                        deps_are_fresh=chart_deps.deps_are_fresh,
+                        chart_has_dependencies=chart_deps.chart_has_dependencies,
+                    )
+                except ChartManagerError as exc:
+                    raise KubeconformSchemaRenderError(
+                        f"CRD provider Helm binding unavailable for {target.name}: {exc}",
+                        outcome=Outcome.TOOL,
+                    ) from exc
+
+        def prepare(target: ManifestValidationTarget) -> None:
+            try:
+                helms[
+                    (target.spec.helm_version, target.spec.helm_binary)
+                ].dependency_update_if_stale(target.path, timeout=300.0)
+            except ChartManagerError as exc:
+                outcome = Outcome.TOOL
+                if isinstance(exc, SpecError):
+                    outcome = Outcome.SPEC
+                elif isinstance(exc, ExternalCommandError) and not isinstance(
+                    exc, MissingToolError
+                ):
+                    outcome = Outcome.ENVIRONMENT
+                raise KubeconformSchemaRenderError(
+                    f"cannot prepare CRD discovery dependencies for {target.name}: {exc}",
+                    outcome=outcome,
+                ) from exc
+
+        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+            list(pool.map(prepare, pending))
 
     # --- spec-driven run ---------------------------------------------------
 

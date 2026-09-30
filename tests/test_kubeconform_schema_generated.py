@@ -61,28 +61,36 @@ class Renderer:
         self.error_type = None
         self.fail = False
 
+    def prepare_schema_dependencies(self, targets):
+        pass
+
     def run(self, request):
         assert request.phases == frozenset({"render"})
         assert request.include_crds
         self.calls.extend(request.charts)
-        name = request.charts[0]
-        output = request.out / name / "dev"
-        output.mkdir(parents=True)
-        for path in (request.root / "charts" / name / "templates").glob("*.yaml"):
-            (output / path.name).write_bytes(path.read_bytes())
-        row = RowResult(
-            row=WorklistRow(chart=name, env="dev", release=name, namespace="default"),
-            phases={
-                "render": PhaseResult(
-                    phase="render",
-                    status="FAIL" if self.fail else "PASS",
-                    detail="specific failure" if self.fail else None,
-                    error_type=self.error_type,
+        rows = []
+        for name in request.charts:
+            output = request.out / name / "dev"
+            output.mkdir(parents=True)
+            for path in (request.root / "charts" / name / "templates").glob("*.yaml"):
+                (output / path.name).write_bytes(path.read_bytes())
+            rows.append(
+                RowResult(
+                    row=WorklistRow(chart=name, env="dev", release=name, namespace="default"),
+                    phases={
+                        "render": PhaseResult(
+                            phase="render",
+                            status="FAIL" if self.fail else "PASS",
+                            detail="specific failure" if self.fail else None,
+                            error_type=self.error_type,
+                        )
+                    },
                 )
-            },
-        )
+            )
         return RunOutcome(
-            result=RunResult(rows=(row,), rendered_root=request.out), out_dir=request.out, keep=True
+            result=RunResult(rows=tuple(rows), rendered_root=request.out),
+            out_dir=request.out,
+            keep=True,
         )
 
 
@@ -126,10 +134,10 @@ def test_only_changed_chart_is_rendered_and_new_chart_is_discovered(env):
     chart(env.root, "provider", _crd())
     app = chart(env.root, "app", "apiVersion: v1\nkind: ConfigMap\n")
     first = env.prepare()
-    assert env.renderer.calls == ["app", "provider"]
+    assert env.renderer.calls == ["provider"]
     (app / "templates/new.yaml").write_text("apiVersion: apps/v1\nkind: Deployment\n")
     assert env.prepare() == first
-    assert env.renderer.calls == ["app", "provider", "app"]
+    assert env.renderer.calls == ["provider"]
     chart(env.root, "new-provider", _crd())
     env.prepare()
     assert env.renderer.calls[-1] == "new-provider"
@@ -226,3 +234,215 @@ def test_shared_tool_bytes_are_read_once_per_preparation(env, monkeypatch):
     env.prepare()
     assert list(observed.values()) == [2, 2]
     assert env.renderer.calls == ["first", "second"]
+
+
+def test_uncached_providers_render_in_one_batch(env, monkeypatch):
+    chart(env.root, "first", _crd())
+    chart(env.root, "second", _crd())
+    original = env.renderer.run
+    batches = []
+
+    def render(request):
+        batches.append(request.charts)
+        return original(request)
+
+    monkeypatch.setattr(env.renderer, "run", render)
+    env.prepare()
+    assert batches == [("first", "second")]
+
+
+def test_unrelated_nonprovider_values_and_lifecycle_errors_are_not_loaded(env):
+    chart(env.root, "provider", _crd())
+    unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
+    (unrelated / "values.yaml").write_text("[broken YAML")
+    (unrelated / "chart-lifecycle.yaml").write_text("[broken YAML")
+    assert schema_at(env.prepare()).is_file()
+    assert env.renderer.calls == ["provider"]
+
+
+def test_dependencies_hydrate_before_provider_scan_and_cache_on_first_run(env, monkeypatch):
+    provider = chart(env.root, "provider", _crd())
+    unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
+    dependency = {"name": "dep", "version": "1.0.0", "repository": "https://example.test"}
+    for directory in (provider, unrelated):
+        (directory / "Chart.yaml").write_text(
+            dump_yaml(
+                {
+                    "apiVersion": "v2",
+                    "name": directory.name,
+                    "version": "0.1.0",
+                    "dependencies": [dependency],
+                }
+            )
+        )
+    (unrelated / "values.yaml").write_text("[broken YAML")
+    fresh = set()
+    monkeypatch.setattr(generated, "deps_are_fresh", lambda path: path in fresh)
+
+    def hydrate(targets):
+        for target in targets:
+            (target.path / "charts").mkdir(exist_ok=True)
+            (target.path / "charts/dep.txt").write_text("dependency bytes")
+            fresh.add(target.path)
+
+    monkeypatch.setattr(env.renderer, "prepare_schema_dependencies", hydrate)
+    first = env.prepare()
+    assert env.renderer.calls == ["provider"]
+    assert list((env.root / "cache/v3/derived/charts").glob("*.json"))
+    assert env.prepare() == first
+    assert env.renderer.calls == ["provider"]
+
+
+@pytest.mark.parametrize(
+    "name,data",
+    [
+        (
+            "templates/resource.tpl",
+            b'apiVersion: {{ print "apiextensions" ".k8s.io/v1" }}\nkind: {{ print "CustomResource" "Definition" }}',
+        ),
+        (
+            "templates/resources.yaml",
+            b'kind: ConfigMap\n---\n{{ tpl (.Files.Get "provider.txt") . }}',
+        ),
+        ("templates/resources.yaml", b'{{ include "provider" . }}'),
+        ("templates/resources.yaml", b"kind: {{ .Values.kind }}"),
+        ("values.yaml", b"kind: CustomResourceDefinition"),
+        ("crds/something.yaml", b"apiVersion: example/v1\nkind: Something"),
+    ],
+)
+def test_provider_detection_keeps_dynamic_templates_and_crd_sources(name, data):
+    assert generated._possible_crd_bytes(name, data)
+
+
+def test_nested_archives_are_scanned_without_extracting(env):
+    import io
+    import tarfile
+
+    def package(name, content):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w:gz") as archive:
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        return data.getvalue()
+
+    nested = package("dep/crds/widget.yaml", _crd().encode())
+    outer = package("wrapper/charts/dep.tgz", nested)
+    provider = chart(env.root, "provider", "apiVersion: v1\nkind: ConfigMap\n")
+    (provider / "charts").mkdir()
+    (provider / "charts/dep.tgz").write_bytes(outer)
+    assert generated._possible_crd_provider(provider)
+    assert not (env.root / "dep").exists()
+
+
+def test_active_cache_manifest_drops_removed_provider_entries(env):
+    provider = chart(env.root, "provider", _crd())
+    env.prepare()
+    manifest = env.root / "cache/v3/derived/current-charts.json"
+    active = json.loads(manifest.read_text())
+    assert len(active) == 1
+    assert (manifest.parent / "charts" / active[0]).is_file()
+    (provider / "templates/resources.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n")
+    assert env.prepare() == ()
+    assert json.loads(manifest.read_text()) == []
+
+
+@pytest.mark.parametrize(
+    "expansion",
+    [
+        b'{{ if true }}{{ tpl (.Files.Get "provider.txt") . }}{{ end }}',
+        b'{{ tpl\n(.Files.Get "provider.txt") . }}',
+        b"{{ $resource }}",
+        b'{{ block "provider" . }}{{ end }}',
+    ],
+)
+def test_mixed_templates_keep_chained_multiline_and_variable_output(expansion):
+    assert generated._possible_crd_bytes(
+        "templates/resources.yaml", b"kind: ConfigMap\n---\n" + expansion
+    )
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        ("network", Outcome.ENVIRONMENT),
+        ("missing-tool", Outcome.TOOL),
+        ("spec", Outcome.SPEC),
+    ],
+)
+def test_dependency_preparation_retains_failure_classification(env, monkeypatch, failure, expected):
+    from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, SpecError
+    from chart_manager.services.manifest_validation import app
+    from chart_manager.services.manifest_validation.catalog import build_catalog
+
+    provider = chart(env.root, "provider", _crd())
+    (provider / "Chart.yaml").write_text(
+        dump_yaml(
+            {
+                "apiVersion": "v2",
+                "name": "provider",
+                "version": "0.1.0",
+                "dependencies": [
+                    {"name": "dep", "version": "1.0.0", "repository": "https://example.test"}
+                ],
+            }
+        )
+    )
+    errors = {
+        "network": ExternalCommandError("offline"),
+        "missing-tool": MissingToolError("helm"),
+        "spec": SpecError("bad chart"),
+    }
+
+    class FakeHelm:
+        def __init__(self, **kwargs):
+            pass
+
+        def dependency_update_if_stale(self, path, *, timeout):
+            assert path == provider
+            raise errors[failure]
+
+    monkeypatch.setattr(app, "Helm", FakeHelm)
+    service = app.ManifestValidationService(workspace=workspace(env.root))
+    with pytest.raises(KubeconformSchemaRenderError) as caught:
+        service.prepare_schema_dependencies(build_catalog(env.root).targets)
+    assert caught.value.outcome is expected
+
+
+def test_helm_notes_do_not_make_plain_charts_potential_providers():
+    assert not generated._possible_crd_bytes(
+        "dep/templates/NOTES.txt", b'{{ include "chart.name" . }} is installed'
+    )
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        b'{{ include "app.labels" . | nindent 4 }}',
+        b'{{- include "app.labels" . | indent 4 -}}',
+    ],
+)
+def test_indented_helpers_inside_static_resources_are_not_providers(helper):
+    assert not generated._possible_crd_bytes(
+        "templates/configmap.yaml", b"kind: ConfigMap\nmetadata:\n  labels:\n" + helper
+    )
+
+
+def test_indented_whole_document_is_still_a_potential_provider():
+    assert generated._possible_crd_bytes(
+        "templates/resources.yaml",
+        b'kind: ConfigMap\n---\n{{ include "provider" . | nindent 2 }}',
+    )
+
+
+def test_unindented_helpers_still_make_static_resources_potential_providers():
+    assert generated._possible_crd_bytes(
+        "templates/configmap.yaml", b'kind: ConfigMap\n{{ include "provider" . }}'
+    )
+
+
+def test_control_before_document_separator_keeps_indented_dynamic_provider():
+    assert generated._possible_crd_bytes(
+        "templates/resources.yaml",
+        b"kind: ConfigMap\n{{ if true }}---\n{{ tpl .Values.resource . | nindent 4 }}\n{{ end }}",
+    )

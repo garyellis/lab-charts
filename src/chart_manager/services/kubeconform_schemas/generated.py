@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import io
 import json
 import logging
 import os
+import re
 import shutil
+import tarfile
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from chart_manager.domain.chart_deps import deps_are_fresh
+from chart_manager.domain.charts import ChartRepository, load_chart_metadata
 from chart_manager.domain.workspace import RepositoryWorkspace
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
@@ -86,6 +91,112 @@ class _Fingerprints:
         except OSError:
             return None
         return digest.hexdigest()
+
+
+def _authored_fingerprint(path: Path) -> str | None:
+    """Check nondependency inputs across Helm's dependency preparation.
+
+    Helm may materialize charts/ and create/update Chart.lock during render.
+    Those bytes enter the final full fingerprint; every other input must stay
+    unchanged before we can associate the rendered schemas with that hash.
+    """
+    digest = hashlib.sha256()
+    try:
+        for item in sorted(path.rglob("*")):
+            relative = item.relative_to(path)
+            if relative.parts[0] == "charts" or relative == Path("Chart.lock"):
+                continue
+            if item.is_symlink():
+                return None
+            if item.is_file():
+                digest.update(relative.as_posix().encode() + b"\0")
+                digest.update(hashlib.sha256(item.read_bytes()).digest())
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _possible_crd_bytes(name: str, data: bytes, *, depth: int = 0) -> bool:
+    """Conservative discovery, including packaged and nested dependencies.
+
+    Never extract archives. Unreadable/oversize inputs and templates without a
+    statically declared resource kind remain potential providers and render.
+    """
+    if name.endswith(".tgz"):
+        if depth >= 8 or len(data) > 64 * 1024 * 1024:
+            return True
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                total = 0
+                for index, member in enumerate(archive):
+                    total += member.size
+                    if index >= 4096 or total > 128 * 1024 * 1024:
+                        return True
+                    if member.issym() or member.islnk():
+                        return True
+                    if not member.isfile():
+                        continue
+                    stream = archive.extractfile(member)
+                    if stream is None or _possible_crd_bytes(
+                        member.name, stream.read(), depth=depth + 1
+                    ):
+                        return True
+        except (OSError, EOFError, tarfile.TarError):
+            return True
+        return False
+    if b"CustomResourceDefinition" in data or b"apiextensions.k8s.io" in data:
+        return True
+    parts = Path(name).parts
+    if "crds" in parts and data.strip():
+        return True
+    if (
+        "templates" in parts
+        and not Path(name).name.startswith("_")
+        and Path(name).name != "NOTES.txt"
+    ):
+        controls = re.compile(rb"^(?:if|else|end|range|with|define)\b|^/\*|^\$[\w, $]+\s*(?::=|=)")
+        indented = re.compile(rb"\|\s*n?indent\s+[1-9][0-9]*\s*-?\s*$")
+        # Inspect literal documents independently: an indented whole resource
+        # after --- is still a provider, whereas a positively indented helper
+        # within a static resource cannot inject another YAML document.
+        # Controls can precede a separator on the same source line. Split
+        # any literal separator conservatively, including quoted/commented
+        # occurrences, rather than assume only raw line-start --- matters.
+        for document in data.split(b"---"):
+            kinds = re.findall(rb"(?m)^kind:\s*([^\r\n]*)", document)
+            if any(b"{{" in kind for kind in kinds):
+                return True
+            previous_end = 0
+            for match in re.finditer(rb"{{-?\s*(.*?)}}", document, re.DOTALL):
+                prefix = document[previous_end : match.start()].rsplit(b"\n", 1)[-1]
+                previous_end = match.end()
+                if controls.match(match[1]):
+                    continue
+                if not kinds:
+                    return True
+                if not prefix.strip() and not indented.search(match[1]):
+                    return True
+    return False
+
+
+def _possible_crd_provider(path: Path) -> bool:
+    try:
+        metadata = load_chart_metadata(path / "Chart.yaml")
+        if metadata.dependencies and (
+            not deps_are_fresh(path)
+            or any((dep.repository or "").startswith("file:") for dep in metadata.dependencies)
+        ):
+            return True
+        for item in path.rglob("*"):
+            if item.is_symlink():
+                return True
+            if item.is_file() and _possible_crd_bytes(
+                item.relative_to(path).as_posix(), item.read_bytes()
+            ):
+                return True
+    except (OSError, SpecError):
+        return True
+    return False
 
 
 def _load_cached(path: Path) -> tuple[MaterializedSchema, ...] | None:
@@ -172,63 +283,91 @@ def _prepare_generated_schemas(
     """
     if workspace.validation is None or not workspace.validation.schemas.generate_from_crds:
         return ()
-    catalog = build_catalog(workspace.root, charts_dir=workspace.charts_dir)
+    repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
+    providers = [
+        name
+        for name in repository.list_names()
+        if _possible_crd_provider(repository.charts_dir / name)
+    ]
+    catalog = build_catalog(workspace.root, chart_names=providers, charts_dir=workspace.charts_dir)
     if catalog.errors:
         raise KubeconformSchemaConfigurationError(
             "cannot discover CRD providers: " + "; ".join(catalog.errors)
         )
+    validation.prepare_schema_dependencies(catalog.targets)
+    targets = [target for target in catalog.targets if _possible_crd_provider(target.path)]
     root = (cache_root or default_schema_cache_root()) / "v3" / "derived"
     by_gvk: dict[str, tuple[str, MaterializedSchema]] = {}
     fingerprints = _Fingerprints()
     prepared = []
-    for target in catalog.targets:
+    for target in targets:
         fingerprint = fingerprints.chart(target)
         cache = root / "charts" / f"{fingerprint}.json" if fingerprint else None
         schemas = _load_cached(cache) if cache is not None else None
         prepared.append((target, fingerprint, cache, schemas))
     cached = sum(schemas is not None for _, _, _, schemas in prepared)
     _LOG.info(
-        "Preparing CRD schemas: %d charts cached, %d to render",
-        cached, len(prepared) - cached,
+        "Preparing CRD schemas: %d providers cached, %d to render",
+        cached,
+        len(prepared) - cached,
     )
-    for target, fingerprint, cache, schemas in prepared:
-        if schemas is None:
-            with tempfile.TemporaryDirectory(prefix="chart-manager-crds-") as temporary:
-                output = Path(temporary)
-                outcome = validation.run(
-                    RunRequest(
-                        root=workspace.root,
-                        charts=(target.name,),
-                        phases=frozenset({"render"}),
-                        out=output,
-                        keep=True,
-                        include_crds=True,
-                    )
+    uncached = [target for target, _, _, schemas in prepared if schemas is None]
+    rendered: dict[str, tuple[MaterializedSchema, ...]] = {}
+    if uncached:
+        authored = {target.name: _authored_fingerprint(target.path) for target in uncached}
+        with tempfile.TemporaryDirectory(prefix="chart-manager-crds-") as temporary:
+            output = Path(temporary)
+            outcome = validation.run(
+                RunRequest(
+                    root=workspace.root,
+                    charts=tuple(target.name for target in uncached),
+                    phases=frozenset({"render"}),
+                    out=output,
+                    keep=True,
+                    include_crds=True,
                 )
-                failures = [
-                    f"{row.row.chart}/{row.row.env}: {row.phases['render'].detail}"
-                    for row in outcome.result.rows
-                    if row.phases["render"].status != "PASS"
-                ]
-                if failures or outcome.result.spec_errors:
-                    raise KubeconformSchemaRenderError(
-                        "CRD provider render failed:\n"
-                        + "\n".join((*failures, *outcome.result.spec_errors)),
-                        outcome=outcome.result.outcome(),
-                    )
+            )
+            failures = [
+                f"{row.row.chart}/{row.row.env}: {row.phases['render'].detail}"
+                for row in outcome.result.rows
+                if row.phases["render"].status != "PASS"
+            ]
+            if failures or outcome.result.spec_errors:
+                raise KubeconformSchemaRenderError(
+                    "CRD provider render failed:\n"
+                    + "\n".join((*failures, *outcome.result.spec_errors)),
+                    outcome=outcome.result.outcome(),
+                )
+            for target in uncached:
                 crds = [
                     crd
                     for row in outcome.result.rows
+                    if row.row.chart == target.name
                     for crd in scan_rendered_directory(
                         output / row.row.chart / row.row.env,
                         scope=SchemaScope(chart=row.row.chart, environment=row.row.env),
                     ).crds
                 ]
-                schemas = generate_crd_schemas(crds)
-            # Don't publish under an input hash if files changed during rendering.
-            if cache is not None and fingerprint == fingerprints.chart(target):
-                _write_cached(cache, schemas)
-        for schema in schemas:
+                rendered[target.name] = generate_crd_schemas(crds)
+        for target, fingerprint, _cache, schemas in prepared:
+            if schemas is not None:
+                continue
+            schemas = rendered[target.name]
+            after = fingerprints.chart(target)
+            stable = (
+                fingerprint == after
+                if fingerprint
+                else (
+                    authored[target.name] is not None
+                    and authored[target.name] == _authored_fingerprint(target.path)
+                )
+            )
+            # A cold render hydrates dependencies; publish against those final
+            # bytes on this very run, provided authored inputs stayed stable.
+            if after is not None and stable:
+                _write_cached(root / "charts" / f"{after}.json", schemas)
+    for target, _, _, schemas in prepared:
+        for schema in schemas if schemas is not None else rendered[target.name]:
             previous = by_gvk.get(schema.gvk.key)
             if previous and previous[1].content != schema.content:
                 raise KubeconformSchemaConfigurationError(
@@ -236,6 +375,19 @@ def _prepare_generated_schemas(
                     f"{previous[0]}; {target.name}"
                 )
             by_gvk[schema.gvk.key] = (target.name, schema)
+    active = []
+    for target, _, _, _ in prepared:
+        fingerprint = fingerprints.chart(target)
+        if fingerprint and (root / "charts" / f"{fingerprint}.json").is_file():
+            active.append(f"{fingerprint}.json")
+    manifest = root / "current-charts.json"
+    fd, temporary = tempfile.mkstemp(prefix=".staging-", dir=root)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(sorted(set(active)), stream)
+        os.replace(temporary, manifest)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     if not by_gvk:
         return ()
     files = {

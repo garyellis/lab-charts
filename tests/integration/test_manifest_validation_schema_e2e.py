@@ -154,6 +154,8 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
         "consumer",
         "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\nspec: {name: hello}\n",
     )
+    unrelated = chart(tmp_path, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
+    (unrelated / "values.yaml").write_text("[broken YAML")
     service = ManifestValidationService(workspace=workspace(tmp_path))
 
     def validate():
@@ -187,7 +189,7 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
     )
     assert any(
         record.levelno == logging.INFO
-        and record.getMessage() == "Preparing CRD schemas: 0 charts cached, 2 to render"
+        and record.getMessage() == "Preparing CRD schemas: 0 providers cached, 1 to render"
         for record in caplog.records
     )
     # A newly introduced built-in kind comes from the full pinned snapshot.
