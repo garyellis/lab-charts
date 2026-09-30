@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 
+import chart_manager.services.helmrelease.report as report
 from chart_manager.integrations.helmrelease import (
     HelmReleaseClient,
     HelmReleaseRef,
@@ -29,7 +30,6 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.helmrelease import report
 from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
 from chart_manager.services.helmrelease.fanout import run_fanout, sorted_by_ref
 from chart_manager.services.helmrelease.matching import filter_matched_statuses
