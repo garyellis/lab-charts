@@ -207,3 +207,22 @@ def test_symlinked_chart_inputs_disable_cache(env):
     env.prepare()
     env.prepare()
     assert len(env.renderer.calls) == 2
+
+
+def test_shared_tool_bytes_are_read_once_per_preparation(env, monkeypatch):
+    chart(env.root, "first", _crd())
+    chart(env.root, "second", _crd())
+    read_bytes = Path.read_bytes
+    observed = {env.binary: 0, Path(generated.__file__).resolve(): 0}
+
+    def read(path):
+        if path in observed:
+            observed[path] += 1
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    env.prepare()
+    assert list(observed.values()) == [1, 1]
+    env.prepare()
+    assert list(observed.values()) == [2, 2]
+    assert env.renderer.calls == ["first", "second"]

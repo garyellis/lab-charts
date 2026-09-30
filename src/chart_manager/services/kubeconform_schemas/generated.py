@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -34,43 +35,57 @@ if TYPE_CHECKING:
     from chart_manager.services.manifest_validation.app import ManifestValidationService
 
 
-def _fingerprint(target: ManifestValidationTarget) -> str | None:
-    """Hash actual chart bytes, including untracked templates and vendored dependencies.
+_LOG = logging.getLogger(__name__)
 
-    Local file dependencies can change outside this tree; render those charts
-    each time. Missing/stale dependency artifacts also force a render. Include
-    the converter and render implementation and Helm executable so tool changes
-    cannot reuse an earlier interpretation of the chart.
-    """
-    dependencies = target.chart.metadata.dependencies
-    if dependencies and (
-        not deps_are_fresh(target.path)
-        or any((dependency.repository or "").startswith("file:") for dependency in dependencies)
-    ):
-        return None
-    if target.spec.helm_version:
-        # A version selector may be resolved through mise at execution time.
-        return None
-    binary = shutil.which(target.spec.helm_binary or "helm")
-    if binary is None:
-        return None
-    digest = hashlib.sha256(b"derived-crd-cache-v1")
-    roots = [target.path, Path(__file__).resolve().parents[2]]
-    try:
-        for root in roots:
-            for path in sorted(root.rglob("*")):
+
+class _Fingerprints:
+    """Share tool hashes within one preparation; recheck chart bytes each time."""
+
+    def __init__(self) -> None:
+        self.binaries: dict[tuple[str, int, int, int], bytes] = {}
+        self.implementation: bytes | None = None
+        root = Path(__file__).resolve().parents[2]
+        digest = hashlib.sha256()
+        try:
+            for path in sorted(root.rglob("*.py")):
+                if path.is_symlink():
+                    return
+                digest.update(str(path.relative_to(root)).encode() + b"\0")
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
+            self.implementation = digest.digest()
+        except OSError:
+            pass
+
+    def chart(self, target: ManifestValidationTarget) -> str | None:
+        dependencies = target.chart.metadata.dependencies
+        if self.implementation is None or target.spec.helm_version:
+            return None
+        if dependencies and (
+            not deps_are_fresh(target.path)
+            or any((dependency.repository or "").startswith("file:") for dependency in dependencies)
+        ):
+            return None
+        binary = shutil.which(target.spec.helm_binary or "helm")
+        if binary is None:
+            return None
+        digest = hashlib.sha256(b"derived-crd-cache-v2")
+        digest.update(self.implementation)
+        try:
+            stat = Path(binary).stat()
+            key = (binary, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            if key not in self.binaries:
+                self.binaries[key] = hashlib.sha256(Path(binary).read_bytes()).digest()
+            digest.update(self.binaries[key])
+            for path in sorted(target.path.rglob("*")):
                 if path.is_symlink():
                     return None
                 if not path.is_file() or "__pycache__" in path.parts:
                     continue
-                if root != target.path and path.suffix != ".py":
-                    continue
-                digest.update(str(path.relative_to(root)).encode() + b"\0")
+                digest.update(str(path.relative_to(target.path)).encode() + b"\0")
                 digest.update(hashlib.sha256(path.read_bytes()).digest())
-        digest.update(Path(binary).read_bytes())
-    except OSError:
-        return None
-    return digest.hexdigest()
+        except OSError:
+            return None
+        return digest.hexdigest()
 
 
 def _load_cached(path: Path) -> tuple[MaterializedSchema, ...] | None:
@@ -164,10 +179,19 @@ def _prepare_generated_schemas(
         )
     root = (cache_root or default_schema_cache_root()) / "v3" / "derived"
     by_gvk: dict[str, tuple[str, MaterializedSchema]] = {}
+    fingerprints = _Fingerprints()
+    prepared = []
     for target in catalog.targets:
-        fingerprint = _fingerprint(target)
+        fingerprint = fingerprints.chart(target)
         cache = root / "charts" / f"{fingerprint}.json" if fingerprint else None
         schemas = _load_cached(cache) if cache is not None else None
+        prepared.append((target, fingerprint, cache, schemas))
+    cached = sum(schemas is not None for _, _, _, schemas in prepared)
+    _LOG.info(
+        "Preparing CRD schemas: %d charts cached, %d to render",
+        cached, len(prepared) - cached,
+    )
+    for target, fingerprint, cache, schemas in prepared:
         if schemas is None:
             with tempfile.TemporaryDirectory(prefix="chart-manager-crds-") as temporary:
                 output = Path(temporary)
@@ -202,7 +226,7 @@ def _prepare_generated_schemas(
                 ]
                 schemas = generate_crd_schemas(crds)
             # Don't publish under an input hash if files changed during rendering.
-            if cache is not None and fingerprint == _fingerprint(target):
+            if cache is not None and fingerprint == fingerprints.chart(target):
                 _write_cached(cache, schemas)
         for schema in schemas:
             previous = by_gvk.get(schema.gvk.key)

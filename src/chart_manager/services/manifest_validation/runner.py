@@ -211,7 +211,7 @@ class ManifestValidationRunner:
         dep_update_timeout: float | None = 300.0,
         tool_timeout: float | None = None,
         include_crds: bool = False,
-        run_log_level: int = logging.INFO,
+        run_log_level: int = logging.DEBUG,
     ) -> None:
         """Wire integrations, worker count, event callback, and dep/tool timeouts."""
         self.helm_factory = helm_factory

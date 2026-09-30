@@ -171,19 +171,24 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
 
     with caplog.at_level(logging.DEBUG):
         assert validate().outcome() is Outcome.SUCCESS
-    run_messages = [
+    messages = [
         record for record in caplog.records
         if record.name.startswith("chart_manager.services.manifest_validation")
-        and "run " in record.getMessage()
-        and ("started:" in record.getMessage() or "finished:" in record.getMessage())
     ]
-    # Two discovered charts each have service + runner start/finish messages.
-    assert sum(record.levelno == logging.DEBUG for record in run_messages) == 8
-    # Only the user's outer validation announces itself at INFO.
-    assert sum(record.levelno == logging.INFO for record in run_messages) == 4
-    assert all(
-        "chart-manager-crds-" not in record.getMessage()
-        for record in run_messages if record.levelno == logging.INFO
+    visible = [record.getMessage() for record in messages if record.levelno == logging.INFO]
+    assert len(visible) == 3
+    assert visible[0] == "Checking cached upstream schemas"
+    assert visible[1].startswith("Validating 1 rows across 1 charts")
+    assert visible[2].startswith("Validation finished: rows=1 failed=0")
+    assert "preparation=" in visible[2]
+    assert any(
+        record.levelno == logging.DEBUG and "validate run started" in record.getMessage()
+        for record in messages
+    )
+    assert any(
+        record.levelno == logging.INFO
+        and record.getMessage() == "Preparing CRD schemas: 0 charts cached, 2 to render"
+        for record in caplog.records
     )
     # A newly introduced built-in kind comes from the full pinned snapshot.
     (consumer / "templates/new.yaml").write_text(

@@ -231,11 +231,13 @@ Generated CRD schemas are automatic, disposable build outputs in a separate
 cache. With `generateFromCRDs` enabled, an empty cache renders all enabled charts
 once to discover CRD providers. Later validations render only changed charts for
 schema discovery, keyed by chart files (including untracked templates and
-vendored dependencies), converter code, and the Helm executable. Charts with
+vendored dependencies), chart-manager Python code, and the Helm executable. Charts with
 local file dependencies or an explicit Helm version selector are conservatively
 rendered each time. Broken providers still fail preparation. Changed or removed
 CRDs take effect on the next validate, without editing the upstream lock. CI
-restores this derived cache separately across commits.
+restores this derived cache separately across commits. INFO logs report upstream
+verification, CRD cache hits and renders, and validation totals. The final timing
+separates preparation from execution; detailed runner logs are DEBUG-only.
 
 Each generated group/version/kind must have one identical schema across all
 charts and environments. Conflicting definitions fail with a SPEC error naming

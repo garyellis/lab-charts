@@ -209,7 +209,7 @@ class RunnerSpec:
     tool_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
-    run_log_level: int = logging.INFO
+    run_log_level: int = logging.DEBUG
     include_crds: bool = False
     validator_ids: frozenset[str] = frozenset(
         provider.validator_id for provider in VALIDATOR_REGISTRY
@@ -276,6 +276,7 @@ class ManifestValidationService:
         self._schema_runtime_factory = schema_runtime_factory or self._prepare_schema_runtime
 
     def _prepare_schema_runtime(self, workspace: RepositoryWorkspace) -> KubeconformSchemaRuntime:
+        _LOG.log(self._run_log_level, "Checking cached upstream schemas")
         runtime = load_kubeconform_schema_runtime(workspace)
         # The nested service runs render-only with a quiet progress sink, so it
         # cannot recurse into schema preparation or disturb the outer display.
@@ -298,6 +299,7 @@ class ManifestValidationService:
         cannot be read. A failed `git diff` is NOT fatal: it downgrades to
         a warning and falls back to validating everything.
         """
+        run_started = time.monotonic()
         repo_root = request.root.resolve()
         workspace = self.workspace
         if workspace is None:
@@ -453,7 +455,7 @@ class ManifestValidationService:
                 request.dep_update_timeout if request.dep_update_timeout > 0 else None
             ),
             verbose=request.verbose,
-            run_log_level=self._run_log_level,
+            run_log_level=logging.DEBUG,
             include_crds=request.include_crds,
             validator_ids=frozenset(
                 invocation.validator_id
@@ -463,21 +465,12 @@ class ManifestValidationService:
             ),
         )
 
-        # The run id is `out_dir`'s last path component (see `_resolve_out_dir`)
-        # and is the only identifier that ties these lines, the render tree and
-        # `summary.json` together.
         _LOG.log(
             self._run_log_level,
-            "validate service run started: run_id=%s rows=%d charts=%d workers=%d "
-            "fail_fast=%s phases=%s changed_files=%s out_dir=%s",
-            out_dir.name,
+            "Validating %d rows across %d charts (workers=%d)",
             len(configs),
             len({chart for chart, _environment in compiled_by_case}),
             workers,
-            request.fail_fast,
-            ",".join(sorted(request.phases)),
-            "all" if changed is None else len(changed),
-            out_dir,
         )
         started = time.monotonic()
         self._progress.start([cfg.row for cfg in configs])
@@ -517,19 +510,20 @@ class ManifestValidationService:
         finally:
             self._progress.stop()
 
+        finished = time.monotonic()
+        failed = sum(
+            any(phase.status == "FAIL" for phase in row.phases.values()) for row in executed
+        )
         _LOG.log(
             self._run_log_level,
-            "validate service run finished: run_id=%s rows=%d failed=%d "
-            "spec_errors=%d elapsed=%.2fs",
-            out_dir.name,
+            "Validation finished: rows=%d failed=%d spec_errors=%d "
+            "total=%.2fs preparation=%.2fs execution=%.2fs",
             len(executed),
-            sum(
-                1
-                for row_result in executed
-                if any(phase.status == "FAIL" for phase in row_result.phases.values())
-            ),
+            failed,
             len(build.spec_errors) + len(explicit_spec_errors),
-            time.monotonic() - started,
+            finished - run_started,
+            started - run_started,
+            finished - started,
         )
         return RunOutcome(
             result=RunResult(
