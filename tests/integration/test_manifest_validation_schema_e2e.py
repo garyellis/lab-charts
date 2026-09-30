@@ -143,7 +143,7 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
     _skip_if_missing("helm", "kubeconform", "git")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     lock, _, snapshots = schema_store(tmp_path)
-    store = KubeconformSchemaStore("lab", snapshots=snapshots)
+    store = KubeconformSchemaStore(snapshots=snapshots)
     store.sync(lock)
     lock_path = tmp_path / ".chart-manager/schemas.lock.yaml"
     write_schema_lock_atomic(lock_path, lock)

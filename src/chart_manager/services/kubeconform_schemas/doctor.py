@@ -68,7 +68,6 @@ class KubeconformSchemaDoctor:
 
         try:
             store = KubeconformSchemaStore(
-                self.workspace.name,
                 cache_root=self.cache_root,
             )
             status = store.inspect(lock)

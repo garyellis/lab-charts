@@ -38,12 +38,9 @@ def generate_crd_schemas(
             providers.setdefault(key, []).append(artifact.source_reference)
             generated[key] = MaterializedSchema(
                 gvk=artifact.gvk,
-                source="generated",
-                scope=None,
                 content=artifact.content,
-                # Generated schemas are repository-scoped. Provider fan-out
-                # must not churn the compact lock when the unique schema bytes
-                # are unchanged.
+                # Identical schemas are shared across providers. Keep their
+                # aggregate reference independent of provider ordering.
                 source_reference=f"rendered CRD {artifact.gvk.key}",
             )
     return tuple(
@@ -141,8 +138,6 @@ def _schemas_for_crd(resource: RenderedResource) -> tuple[MaterializedSchema, ..
         artifacts.append(
             MaterializedSchema(
                 gvk=GroupVersionKind(group=group, version=version, kind=kind),
-                source="generated",
-                scope=None,
                 content=content,
                 source_reference=(
                     f"{resource.scope.key}:{resource.path.as_posix()}"

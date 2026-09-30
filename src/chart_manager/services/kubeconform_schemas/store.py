@@ -21,7 +21,7 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaStoreError,
 )
-from chart_manager.services.kubeconform_schemas.models import RepositoryPin, SchemaLock, SchemaScope
+from chart_manager.services.kubeconform_schemas.models import RepositoryPin, SchemaLock
 
 
 @dataclass(frozen=True)
@@ -62,12 +62,10 @@ class KubeconformSchemaStore:
 
     def __init__(
         self,
-        workspace: str,
         *,
         cache_root: Path | None = None,
         snapshots: RepositorySnapshot | None = None,
     ) -> None:
-        self.workspace = workspace
         self.cache_root = (cache_root or default_schema_cache_root()).resolve()
         self.root = self.cache_root / "v3"
         self.snapshots = snapshots or RepositorySnapshot()
@@ -81,9 +79,8 @@ class KubeconformSchemaStore:
             (lock.policy.catalog, None),
         )
 
-    def generation_path(self, lock: SchemaLock) -> Path:
+    def generation_path(self) -> Path:
         # A policy selects two independently reusable repository checkouts.
-        del lock
         return self.root / "repositories"
 
     def inspect(self, lock: SchemaLock) -> StoreStatus:
@@ -100,7 +97,7 @@ class KubeconformSchemaStore:
                 corrupt.append(StoreProblem(str(path), problem))
             else:
                 present += 1
-        return StoreStatus(self.generation_path(lock), 2, present, tuple(missing), tuple(corrupt))
+        return StoreStatus(self.generation_path(), 2, present, tuple(missing), tuple(corrupt))
 
     def sync(self, lock: SchemaLock) -> bool:
         """Hydrate missing repositories without consulting any chart inputs."""
@@ -176,10 +173,9 @@ class KubeconformSchemaStore:
 
 
 def kubeconform_schema_locations(
-    lock: SchemaLock, generation_path: Path, *, scope: SchemaScope
+    lock: SchemaLock, generation_path: Path
 ) -> KubeconformSchemaLocations:
-    del scope
     # generation_path is <cache>/v3/repositories.
     return KubeconformSchemaStore(
-        lock.workspace, cache_root=generation_path.parent.parent
+        cache_root=generation_path.parent.parent
     ).locations(lock)

@@ -59,7 +59,6 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaRenderError,
 )
 from chart_manager.services.kubeconform_schemas.generated import prepare_generated_schemas
-from chart_manager.services.kubeconform_schemas.models import SchemaScope
 from chart_manager.services.kubeconform_schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
@@ -470,16 +469,12 @@ class ManifestValidationService:
             if case not in compiled_by_case:
                 runtime_inputs = KubeconformRuntimeInputs()
                 if schema_runtime is not None:
-                    locations = schema_runtime.locations(
-                        SchemaScope(chart=row.chart, environment=row.env)
-                    )
+                    locations = schema_runtime.locations()
                     runtime_inputs = KubeconformRuntimeInputs(
                         kubernetes_version=schema_runtime.lock.policy.kubernetes_version,
                         generated_schema_locations=locations.generated_schema_locations,
                         fallback_schema_locations=locations.fallback_schema_locations,
-                        ignore_missing_schemas=schema_runtime.ignored_missing_kinds(
-                            SchemaScope(chart=row.chart, environment=row.env)
-                        ),
+                        ignore_missing_schemas=schema_runtime.ignored_missing_kinds(),
                     )
                 compiled = resolve_manifest_validation(
                     target,

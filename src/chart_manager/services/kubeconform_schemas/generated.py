@@ -208,8 +208,6 @@ def _load_cached(path: Path) -> tuple[MaterializedSchema, ...] | None:
         return tuple(
             MaterializedSchema(
                 gvk=GroupVersionKind.model_validate(item["gvk"]),
-                source="generated",
-                scope=None,
                 content=item["content"].encode(),
                 source_reference=item["source"],
             )
@@ -346,7 +344,7 @@ def _prepare_generated_schemas(
                     for crd in scan_rendered_directory(
                         output / row.row.chart / row.row.env,
                         scope=SchemaScope(chart=row.row.chart, environment=row.row.env),
-                    ).crds
+                    )
                 ]
                 rendered[target.name] = generate_crd_schemas(crds)
         for target, fingerprint, _cache, schemas in prepared:

@@ -11,11 +11,11 @@ class KubeconformSchemaError(ChartManagerError):
 
 
 class KubeconformSchemaConfigurationError(KubeconformSchemaError):
-    """The authored schema policy or requested inventory is inconsistent."""
+    """The authored schema policy or rendered CRD inputs are inconsistent."""
 
 
 class KubeconformSchemaRenderError(KubeconformSchemaError):
-    """Inventory rendering failed; preserve the validation runner's classification."""
+    """CRD provider rendering failed; preserve the validation runner's classification."""
 
     def __init__(self, message: str, *, outcome: Outcome) -> None:
         super().__init__(message)
@@ -42,23 +42,13 @@ class KubeconformSchemaSourceEnvironmentError(KubeconformSchemaSourceError):
     """A schema source could not be reached from the caller's environment."""
 
 
-class KubeconformSchemaSourceIntegrityError(KubeconformSchemaSourceError):
-    """A schema source responded with malformed or unexpected content."""
-
-
-class KubeconformSchemaNotFoundError(KubeconformSchemaSourceError):
-    """A requested immutable schema artifact does not exist."""
-
-
 __all__ = [
     "KubeconformSchemaConfigurationError",
     "KubeconformSchemaError",
     "KubeconformSchemaIntegrityError",
     "KubeconformSchemaLockError",
-    "KubeconformSchemaNotFoundError",
     "KubeconformSchemaRenderError",
     "KubeconformSchemaSourceEnvironmentError",
     "KubeconformSchemaSourceError",
-    "KubeconformSchemaSourceIntegrityError",
     "KubeconformSchemaStoreError",
 ]

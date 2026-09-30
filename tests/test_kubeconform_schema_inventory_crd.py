@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml_mapping
 from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
 from chart_manager.services.kubeconform_schemas.inventory import (
-    SchemaInventory,
     scan_rendered_directory,
 )
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
@@ -63,36 +63,31 @@ spec:
 """
 
 
-def test_inventory_deduplicates_gvks_and_expands_kubernetes_lists(tmp_path: Path) -> None:
+def test_inventory_expands_kubernetes_lists_and_collects_only_crds(tmp_path: Path) -> None:
+    crd = parse_yaml_mapping(_crd())
     (tmp_path / "all.yaml").write_text(
-        """apiVersion: v1
-kind: List
-items:
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata: {name: one}
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata: {name: two}
----
-apiVersion: example.io/v1
-kind: Widget
-metadata: {name: sample}
-"""
+        dump_yaml(
+            {
+                "apiVersion": "v1",
+                "kind": "List",
+                "items": [
+                    {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "one"}},
+                    crd,
+                    crd,
+                ],
+            }
+        )
+        + "---\napiVersion: example.io/v1\nkind: Widget\nmetadata: {name: sample}\n"
     )
     scope = SchemaScope(chart="demo", environment="ci")
 
-    inventory = scan_rendered_directory(
-        tmp_path,
-        scope=scope,
-        allow_missing=frozenset({"example.io/v1/Widget"}),
-    )
+    crds = scan_rendered_directory(tmp_path, scope=scope)
 
-    assert len(inventory.resources) == 3
-    assert [(item.gvk.kind, item.allow_missing) for item in inventory.requirements] == [
-        ("ConfigMap", False),
-        ("Widget", True),
-    ]
+    assert len(crds) == 2
+    assert all(item.scope == scope and item.document == crd for item in crds)
+    assert all(item.path == Path("all.yaml") and item.document_index == 0 for item in crds)
+    # Duplicate definitions collapse during generation, not before conflicts can be checked.
+    assert len(generate_crd_schemas(crds)) == 1
 
 
 def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
@@ -100,12 +95,12 @@ def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
 ) -> None:
     path = tmp_path / "crd.yaml"
     path.write_text(_crd())
-    inventory = scan_rendered_directory(
+    crds = scan_rendered_directory(
         tmp_path,
         scope=SchemaScope(chart="operator", environment="ci"),
     )
 
-    generated = generate_crd_schemas(inventory.crds)
+    generated = generate_crd_schemas(crds)
 
     assert len(generated) == 1
     assert generated[0].gvk.key == "example.io/v1/Widget"
@@ -122,16 +117,16 @@ def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
 
 
 def test_inventory_reads_json_manifests(tmp_path: Path) -> None:
-    (tmp_path / "configmap.json").write_text(
-        '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"demo"}}'
-    )
+    (tmp_path / "crd.json").write_text(json.dumps(parse_yaml_mapping(_crd())))
 
-    inventory = scan_rendered_directory(
+    crds = scan_rendered_directory(
         tmp_path,
         scope=SchemaScope(chart="demo", environment="ci"),
     )
 
-    assert [item.gvk.key for item in inventory.requirements] == ["v1/ConfigMap"]
+    assert len(crds) == 1
+    assert crds[0].path == Path("crd.json")
+    assert generate_crd_schemas(crds)[0].gvk.key == "example.io/v1/Widget"
 
 
 def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
@@ -139,7 +134,7 @@ def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
 ) -> None:
     (tmp_path / "one.yaml").write_text(_crd(nested_type="string"))
     (tmp_path / "two.yaml").write_text(_crd(nested_type="integer"))
-    inventory = scan_rendered_directory(
+    crds = scan_rendered_directory(
         tmp_path,
         scope=SchemaScope(chart="operator", environment="ci"),
     )
@@ -147,8 +142,10 @@ def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
     with pytest.raises(
         KubeconformSchemaConfigurationError,
         match="conflicting rendered CRDs",
-    ):
-        generate_crd_schemas(inventory.crds)
+    ) as caught:
+        generate_crd_schemas(crds)
+    assert "operator/ci:one.yaml#document=1;version=v1" in str(caught.value)
+    assert "operator/ci:two.yaml#document=1;version=v1" in str(caught.value)
 
 
 def test_identical_crds_are_shared_across_chart_scopes(tmp_path: Path) -> None:
@@ -158,15 +155,14 @@ def test_identical_crds_are_shared_across_chart_scopes(tmp_path: Path) -> None:
     second.mkdir()
     (first / "crd.yaml").write_text(_crd())
     (second / "crd.yaml").write_text(_crd())
-    inventory = SchemaInventory.merge(
-        scan_rendered_directory(first, scope=SchemaScope(chart="operator", environment="ci")),
-        scan_rendered_directory(second, scope=SchemaScope(chart="consumer", environment="dev")),
+    crds = (
+        *scan_rendered_directory(first, scope=SchemaScope(chart="operator", environment="ci")),
+        *scan_rendered_directory(second, scope=SchemaScope(chart="consumer", environment="dev")),
     )
 
-    generated = generate_crd_schemas(inventory.crds)
+    generated = generate_crd_schemas(crds)
 
     assert len(generated) == 1
-    assert generated[0].scope is None
     assert generated[0].source_reference == "rendered CRD example.io/v1/Widget"
 
 
@@ -179,11 +175,9 @@ def test_strimzi_style_combinator_fragments_are_not_closed(tmp_path: Path) -> No
         "              properties:\n                name:",
     )
     (tmp_path / "crd.yaml").write_text(text)
-    inventory = scan_rendered_directory(
-        tmp_path, scope=SchemaScope(chart="strimzi", environment="ci")
-    )
+    crds = scan_rendered_directory(tmp_path, scope=SchemaScope(chart="strimzi", environment="ci"))
 
-    schema = json.loads(generate_crd_schemas(inventory.crds)[0].content)
+    schema = json.loads(generate_crd_schemas(crds)[0].content)
     branches = schema["properties"]["spec"]["oneOf"]
 
     assert "additionalProperties" not in branches[0]

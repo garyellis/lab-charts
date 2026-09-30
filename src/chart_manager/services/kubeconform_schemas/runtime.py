@@ -16,7 +16,6 @@ from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
 from chart_manager.services.kubeconform_schemas.models import (
     AuthoredSchemaPolicy,
     SchemaLock,
-    SchemaScope,
     lock_policy_mismatches,
 )
 from chart_manager.services.kubeconform_schemas.store import (
@@ -36,17 +35,16 @@ class KubeconformSchemaRuntime:
     generation_path: Path
     generated_schema_locations: tuple[str, ...] = ()
 
-    def locations(self, scope: SchemaScope) -> KubeconformSchemaLocations:
+    def locations(self) -> KubeconformSchemaLocations:
         locations = kubeconform_schema_locations(
             self.lock,
             self.generation_path,
-            scope=scope,
         )
         return KubeconformSchemaLocations(
             self.generated_schema_locations, locations.fallback_schema_locations
         )
 
-    def ignored_missing_kinds(self, scope: SchemaScope) -> tuple[str, ...]:
+    def ignored_missing_kinds(self) -> tuple[str, ...]:
         """Return the one exact upstream schema gap handled by validation.
 
         The pinned Kubernetes schema repository exposes CRD component
@@ -54,7 +52,6 @@ class KubeconformSchemaRuntime:
         definitions still generate managed schemas for their custom resources.
         The runner skips this GVK only when no managed schema file exists.
         """
-        del scope
         return (UNSUPPORTED_CRD_OBJECT_GVK,)
 
 
@@ -96,7 +93,7 @@ def load_kubeconform_schema_runtime(
             "`chart-manager schemas sync --update`: " + "; ".join(mismatches)
         )
 
-    status = KubeconformSchemaStore(workspace_name, cache_root=cache_root).inspect(lock)
+    status = KubeconformSchemaStore(cache_root=cache_root).inspect(lock)
     if status.corrupt:
         details = "; ".join(f"{problem.path}: {problem.detail}" for problem in status.corrupt)
         raise KubeconformSchemaStoreError(

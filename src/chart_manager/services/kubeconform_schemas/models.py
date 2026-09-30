@@ -1,4 +1,4 @@
-"""Stable value objects shared by schema inventory, locking, and synchronization."""
+"""Stable value objects shared by CRD generation, locking, and synchronization."""
 
 from __future__ import annotations
 
@@ -85,14 +85,6 @@ class SchemaScope(_StrictModel):
         return f"{self.chart}/{self.environment or '*'}"
 
 
-class SchemaRequirement(_StrictModel):
-    """One GVK required by one rendered chart/environment."""
-
-    gvk: GroupVersionKind
-    scope: SchemaScope
-    allow_missing: bool = Field(default=False, alias="allowMissing")
-
-
 class RepositoryPin(_StrictModel):
     repository: str
     track: str
@@ -166,8 +158,6 @@ class MaterializedSchema:
     """Schema bytes produced locally before an immutable generation exists."""
 
     gvk: GroupVersionKind
-    source: Literal["generated", "local"]
-    scope: SchemaScope | None
     content: bytes
     source_reference: str
 
@@ -176,18 +166,6 @@ class MaterializedSchema:
             raise KubeconformSchemaConfigurationError(
                 "materialized schema content must not be empty"
             )
-        if self.source == "local" and self.scope is None:
-            raise KubeconformSchemaConfigurationError(
-                "local materialized schemas require a chart scope"
-            )
-        if self.source == "generated" and self.scope is not None:
-            raise KubeconformSchemaConfigurationError(
-                "generated materialized schemas must be repository-shared"
-            )
-
-    @property
-    def sha256(self) -> str:
-        return content_digest(self.content)
 
 
 @dataclass(frozen=True)
@@ -238,38 +216,6 @@ def content_digest(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
-def requirement_sort_key(value: SchemaRequirement) -> tuple[str, str, str, str, str, bool]:
-    return (
-        value.gvk.group,
-        value.gvk.version,
-        value.gvk.kind,
-        value.scope.chart,
-        value.scope.environment or "",
-        value.allow_missing,
-    )
-
-
-def sort_requirements(
-    values: tuple[SchemaRequirement, ...] | list[SchemaRequirement],
-) -> tuple[SchemaRequirement, ...]:
-    keyed: dict[tuple[str, str, str, str, str], SchemaRequirement] = {}
-    for value in values:
-        key = (
-            value.gvk.group,
-            value.gvk.version,
-            value.gvk.kind,
-            value.scope.chart,
-            value.scope.environment or "",
-        )
-        previous = keyed.get(key)
-        if previous is not None and previous.allow_missing != value.allow_missing:
-            raise KubeconformSchemaConfigurationError(
-                f"conflicting missing-schema policy for {value.gvk.key} in {value.scope.key}"
-            )
-        keyed[key] = value
-    return tuple(sorted(keyed.values(), key=requirement_sort_key))
-
-
 def generation_digest(*, workspace: str, policy: LockedSchemaPolicy) -> str:
     payload = {
         "version": 2,
@@ -294,10 +240,8 @@ __all__ = [
     "MaterializedSchema",
     "RepositoryPin",
     "SchemaLock",
-    "SchemaRequirement",
     "SchemaScope",
     "build_lock",
     "content_digest",
     "lock_policy_mismatches",
-    "sort_requirements",
 ]

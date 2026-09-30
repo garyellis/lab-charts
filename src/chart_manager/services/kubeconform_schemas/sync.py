@@ -94,5 +94,5 @@ class KubeconformSchemaSyncService:
         if request.update:
             write_schema_lock_atomic(request.lock_path, lock)
         return KubeconformSchemaSyncResult(
-            lock, self.store.generation_path(lock), request.update, published
+            lock, self.store.generation_path(), request.update, published
         )

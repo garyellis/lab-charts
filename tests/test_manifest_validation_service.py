@@ -216,13 +216,13 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
             policy=SimpleNamespace(kubernetes_version="1.35.3")
         )
 
-        def locations(self, scope):  # type: ignore[no-untyped-def]
+        def locations(self):  # type: ignore[no-untyped-def]
             return KubeconformSchemaLocations(
-                generated_schema_locations=(f"/cache/{scope.environment}/generated",),
+                generated_schema_locations=("/cache/shared/generated",),
                 fallback_schema_locations=("/cache/shared/fallback",),
             )
 
-        def ignored_missing_kinds(self, _scope):  # type: ignore[no-untyped-def]
+        def ignored_missing_kinds(self):  # type: ignore[no-untyped-def]
             return ()
 
     def runtime_factory(selected: RepositoryWorkspace):
@@ -249,7 +249,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
         assert isinstance(invocation.config, KubeconformConfig)
         assert invocation.config.kubernetes_version == "1.35.3"
         assert invocation.config.schema_locations == (
-            f"/cache/{environment}/generated",
+            "/cache/shared/generated",
             "/cache/shared/fallback",
         )
 

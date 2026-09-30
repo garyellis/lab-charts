@@ -54,6 +54,6 @@ def build_repository_kubeconform_schema_service(
     return RepositoryKubeconformSchemaService(
         workspace=workspace,
         sync=KubeconformSchemaSyncService(
-            KubeconformSchemaStore(workspace.name or "", cache_root=cache_root), source
+            KubeconformSchemaStore(cache_root=cache_root), source
         ),
     )

@@ -107,5 +107,5 @@ def schema_store(tmp_path: Path):
     snapshots = LocalSnapshots(
         {lock.policy.kubernetes.repository: kubernetes, lock.policy.catalog.repository: catalog}
     )
-    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache", snapshots=snapshots)
+    store = KubeconformSchemaStore(cache_root=tmp_path / "cache", snapshots=snapshots)
     return lock, store, snapshots

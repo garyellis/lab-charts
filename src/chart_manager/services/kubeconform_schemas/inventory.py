@@ -1,4 +1,4 @@
-"""Inventory Kubernetes GVKs and CRDs from explicitly scoped rendered trees."""
+"""Collect CRDs with provenance from explicitly scoped rendered trees."""
 
 from __future__ import annotations
 
@@ -14,57 +14,30 @@ from chart_manager.services.kubeconform_schemas.errors import (
 )
 from chart_manager.services.kubeconform_schemas.models import (
     GroupVersionKind,
-    SchemaRequirement,
     SchemaScope,
-    sort_requirements,
 )
 
 # JSON is a YAML subset and Helm may preserve JSON-formatted CRDs in the
-# rendered tree. Inventory every manifest format accepted by kubeconform so
-# the lock cannot omit resources that validation will later see.
+# rendered tree. Inspect every manifest format accepted by kubeconform so
+# CRD discovery sees the same documents as validation.
 _MANIFEST_SUFFIXES = frozenset({".json", ".yaml", ".yml"})
 
 
 @dataclass(frozen=True)
 class RenderedResource:
-    gvk: GroupVersionKind
+    """One rendered CRD document and its chart/environment provenance."""
     scope: SchemaScope
     document: dict[str, Any]
     path: Path
     document_index: int
 
 
-@dataclass(frozen=True)
-class SchemaInventory:
-    requirements: tuple[SchemaRequirement, ...]
-    crds: tuple[RenderedResource, ...]
-    resources: tuple[RenderedResource, ...]
-
-    @classmethod
-    def merge(cls, *inventories: SchemaInventory) -> SchemaInventory:
-        resources = tuple(
-            sorted(
-                (resource for inventory in inventories for resource in inventory.resources),
-                key=_resource_sort_key,
-            )
-        )
-        crds = tuple(resource for resource in resources if _is_crd(resource.gvk))
-        return cls(
-            requirements=sort_requirements(
-                [requirement for inventory in inventories for requirement in inventory.requirements]
-            ),
-            crds=crds,
-            resources=resources,
-        )
-
-
 def scan_rendered_directory(
     directory: Path,
     *,
     scope: SchemaScope,
-    allow_missing: frozenset[str] = frozenset(),
-) -> SchemaInventory:
-    """Read all YAML documents under one rendered chart/environment directory."""
+) -> tuple[RenderedResource, ...]:
+    """Collect CRDs from all documents under one rendered chart/environment directory."""
     root = directory.resolve()
     if not root.is_dir():
         raise KubeconformSchemaIntegrityError(f"rendered directory does not exist: {root}")
@@ -89,42 +62,19 @@ def scan_rendered_directory(
                         f"{scope.key}: invalid Kubernetes resource in "
                         f"{path} document {index + 1}: {exc}"
                     ) from exc
+                if not _is_crd(gvk):
+                    continue
                 resources.append(
                     RenderedResource(
-                        gvk=gvk,
                         scope=scope,
                         document=document,
-                        # Provenance is committed into the lock through generated
-                        # CRD schemas, so it must not depend on the machine's
+                        # Keep provider diagnostics independent of the machine's
                         # absolute render directory.
                         path=path.relative_to(root),
                         document_index=index,
                     )
                 )
-    ordered = tuple(sorted(resources, key=_resource_sort_key))
-    requirements = sort_requirements(
-        [
-            SchemaRequirement(
-                gvk=resource.gvk,
-                scope=scope,
-                allow_missing=(
-                    resource.gvk.kind in allow_missing
-                    or resource.gvk.key in allow_missing
-                    # The pinned Kubernetes source publishes CRD component
-                    # definitions but no top-level schema for this exact GVK.
-                    # Its rendered definition still generates schemas for the
-                    # custom resources it declares.
-                    or _is_crd(resource.gvk)
-                ),
-            )
-            for resource in ordered
-        ]
-    )
-    return SchemaInventory(
-        requirements=requirements,
-        crds=tuple(resource for resource in ordered if _is_crd(resource.gvk)),
-        resources=ordered,
-    )
+    return tuple(resources)
 
 
 def _resource_documents(
@@ -159,20 +109,7 @@ def _is_crd(gvk: GroupVersionKind) -> bool:
     )
 
 
-def _resource_sort_key(value: RenderedResource) -> tuple[str, str, str, str, str, str, int]:
-    return (
-        value.scope.chart,
-        value.scope.environment or "",
-        value.gvk.group,
-        value.gvk.version,
-        value.gvk.kind,
-        value.path.as_posix(),
-        value.document_index,
-    )
-
-
 __all__ = [
     "RenderedResource",
-    "SchemaInventory",
     "scan_rendered_directory",
 ]
