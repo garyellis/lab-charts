@@ -222,6 +222,8 @@ snapshots are ready without writing to the cache. Use
 `chart-manager schemas sync --update` to resolve moving upstream refs and write
 the lock after successful hydration. The lock contains policy and two commit
 pins, with no per-resource inventory. `--refresh` has been removed.
+Read-only YAML parsing uses ruamel’s C extension, installed through the package
+dependencies, while preserving the safe YAML 1.2 loader and round-trip editing.
 Validation can still update Helm dependencies and retain rendered files with
 `--keep`; schema resolution itself has no online fallback.
 
