@@ -1,218 +1,59 @@
-"""Read-only schema policy, lock, and store diagnostics."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from chart_manager.domain.workspace import SCHEMA_LOCK_FILE
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
-from chart_manager.services.kubeconform_schemas.models import (
-    GroupVersionKind,
-    LockedSchemaPolicy,
-    RepositoryPin,
-    SchemaFile,
-    build_lock,
-    content_digest,
-)
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
 
-_CONTENT = b'{"type":"object"}\n'
+from .schema_fixtures import schema_store, workspace
 
 
-def _workspace(root: Path, *, version: str = "1.35.3") -> RepositoryWorkspace:
-    validation = WorkspaceValidation.model_validate(
-        {
-            "kubernetesVersion": version,
-            "schemas": {
-                "generateFromCRDs": True,
-                "catalog": {
-                    "repository": "datreeio/CRDs-catalog",
-                    "track": "main",
-                },
-            },
-        }
-    )
-    return RepositoryWorkspace(
-        root=root,
-        name="lab-charts",
-        validation=validation,
-        authored=True,
-    )
-
-
-def _lock(*, version: str = "1.35.3"):
-    gvk = GroupVersionKind(group="apps", version="v1", kind="Deployment")
-    return build_lock(
-        workspace="lab-charts",
-        policy=LockedSchemaPolicy(
-            kubernetes_version=version,
-            generate_from_crds=True,
-            kubernetes=RepositoryPin(
-                repository="yannh/kubernetes-json-schema",
-                track="master",
-                resolved="a" * 40,
-            ),
-            catalog=RepositoryPin(
-                repository="datreeio/CRDs-catalog",
-                track="main",
-                resolved="b" * 40,
-            ),
-        ),
-        schemas=[
-            SchemaFile(
-                gvk=gvk,
-                source="kubernetes",
-                path="kubernetes/apps/deployment_v1.json",
-                sha256=content_digest(_CONTENT),
-                source_reference=(
-                    "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/"
-                    + "a" * 40 + f"/v{version}-standalone-strict/deployment-apps-v1.json"
-                ),
-            )
-        ],
-    )
-
-
-def _write_lock(root: Path, lock) -> Path:
-    path = root / SCHEMA_LOCK_FILE
-    write_schema_lock_atomic(path, lock)
-    return path
-
-
-def _by_name(doctor: KubeconformSchemaDoctor):
-    return {check.name: check for check in doctor.preflight()}
-
-
-def test_ready_generation_reports_policy_lock_and_store_readiness(
-    tmp_path: Path,
-) -> None:
-    workspace = _workspace(tmp_path)
-    lock = _lock()
-    lock_path = _write_lock(tmp_path, lock)
-    cache_root = tmp_path / "cache"
-    generation = KubeconformSchemaStore(
-        "lab-charts",
-        cache_root=cache_root,
-    ).generation_path(lock)
-    schema = generation / "kubernetes/apps/deployment_v1.json"
-    schema.parent.mkdir(parents=True)
-    schema.write_bytes(_CONTENT)
-    before_lock = lock_path.read_bytes()
-    before_schema = schema.read_bytes()
-
-    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))
-
-    assert checks["schema-policy"].status is CheckStatus.OK
-    assert checks["schema-policy"].data == {
-        "configured": True,
-        "workspace": "lab-charts",
-        "kubernetesVersion": "1.35.3",
-        "generateFromCRDs": True,
-        "kubernetes": {
-            "repository": "yannh/kubernetes-json-schema",
-            "track": "master",
-        },
-        "catalog": {
-            "repository": "datreeio/CRDs-catalog",
-            "track": "main",
-        },
+def checks(root, cache):
+    return {
+        c.name: c for c in KubeconformSchemaDoctor(workspace(root), cache_root=cache).preflight()
     }
-    assert checks["schema-lock"].status is CheckStatus.OK
-    assert checks["schema-lock"].data["matchesPolicy"] is True
-    store = checks["schema-store"]
-    assert store.status is CheckStatus.OK
-    assert store.data["path"] == str(generation)
-    assert store.data["generation"] == lock.generation
-    assert store.data["expected"] == 1
-    assert store.data["present"] == 1
-    assert store.data["missing"] == 0
-    assert store.data["corrupt"] == 0
-    assert store.data["ready"] is True
-    assert store.data["sourceCoverage"]["kubernetes"] == {"files": 1}
-    assert lock_path.read_bytes() == before_lock
-    assert schema.read_bytes() == before_schema
 
 
-def test_missing_generation_is_environmental(
-    tmp_path: Path,
-) -> None:
-    workspace = _workspace(tmp_path)
-    lock = _lock()
-    _write_lock(tmp_path, lock)
-    cache_root = tmp_path / "cache"
-
-    check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
-
-    assert check.status is CheckStatus.FAILED
-    assert check.outcome is Outcome.ENVIRONMENT
-    assert check.remediation == "run chart-manager schemas sync"
-    assert check.data["missing"] == 1
-    assert check.data["ready"] is False
-    assert not cache_root.exists(), "doctor must not create the missing store"
+def test_doctor_reports_ready_snapshots_without_charts_or_writes(tmp_path):
+    lock, store, _ = schema_store(tmp_path)
+    path = tmp_path / SCHEMA_LOCK_FILE
+    write_schema_lock_atomic(path, lock)
+    store.sync(lock)
+    before = path.read_bytes()
+    result = checks(tmp_path, store.cache_root)
+    assert all(c.status is CheckStatus.OK for c in result.values())
+    assert result["schema-store"].data["present"] == 2
+    assert result["schema-store"].data["ready"]
+    assert "automatically" in result["schema-store"].data["generatedSchemas"]
+    assert before == path.read_bytes()
+    assert not (tmp_path / "charts").exists()
 
 
-def test_corrupt_generation_is_a_tool_failure_with_repair_command(
-    tmp_path: Path,
-) -> None:
-    workspace = _workspace(tmp_path)
-    lock = _lock()
-    _write_lock(tmp_path, lock)
-    cache_root = tmp_path / "cache"
-    generation = KubeconformSchemaStore(
-        "lab-charts",
-        cache_root=cache_root,
-    ).generation_path(lock)
-    schema = generation / "kubernetes/apps/deployment_v1.json"
-    schema.parent.mkdir(parents=True)
-    schema.write_bytes(b"{}")
-
-    check = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))["schema-store"]
-
-    assert check.status is CheckStatus.FAILED
-    assert check.outcome is Outcome.TOOL
-    assert check.data["corrupt"] == 1
-    assert check.data["ready"] is False
-    assert check.remediation == f"remove {generation}, then run chart-manager schemas sync"
-    assert schema.read_bytes() == b"{}", "doctor must not repair corrupt content"
+def test_missing_snapshots_are_environmental_and_doctor_does_not_create_cache(tmp_path):
+    lock, store, _ = schema_store(tmp_path)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    result = checks(tmp_path, store.cache_root)["schema-store"]
+    assert result.outcome is Outcome.ENVIRONMENT
+    assert result.data["missing"] == 2
+    assert result.remediation == "run chart-manager schemas sync"
+    assert not store.root.exists()
 
 
-def test_lock_policy_mismatch_stops_before_store_and_prescribes_update(
-    tmp_path: Path,
-) -> None:
-    workspace = _workspace(tmp_path, version="1.35.3")
-    _write_lock(tmp_path, _lock(version="1.34.0"))
-    cache_root = tmp_path / "cache"
-
-    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=cache_root))
-
-    lock = checks["schema-lock"]
-    assert lock.status is CheckStatus.FAILED
-    assert lock.outcome is Outcome.SPEC
-    assert lock.remediation == "run chart-manager schemas sync --update"
-    assert lock.data["matchesPolicy"] is False
-    assert "kubernetesVersion" in lock.data["mismatches"][0]
-    store = checks["schema-store"]
-    assert store.status is CheckStatus.FAILED
-    assert store.data["generation"] == lock.data["generation"]
-    assert store.data["ready"] is False
-    assert not cache_root.exists()
+def test_corrupt_snapshot_reports_exact_path_without_repair(tmp_path):
+    lock, store, _ = schema_store(tmp_path)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    store.sync(lock)
+    root = store.repository_path(lock.policy.catalog)
+    (root / "example.io/widget_v1.json").write_text("{}")
+    result = checks(tmp_path, store.cache_root)["schema-store"]
+    assert result.outcome is Outcome.TOOL
+    assert str(root) in result.remediation
+    assert (root / "example.io/widget_v1.json").read_text() == "{}"
 
 
-def test_malformed_lock_is_reported_without_mutation(tmp_path: Path) -> None:
-    workspace = _workspace(tmp_path)
-    lock_path = tmp_path / SCHEMA_LOCK_FILE
-    lock_path.parent.mkdir(parents=True)
-    lock_path.write_text("not: [valid\n", encoding="utf-8")
-    before = lock_path.read_bytes()
-
-    checks = _by_name(KubeconformSchemaDoctor(workspace, cache_root=tmp_path / "cache"))
-
-    assert checks["schema-lock"].status is CheckStatus.FAILED
-    assert checks["schema-lock"].outcome is Outcome.SPEC
-    assert checks["schema-lock"].remediation == ("run chart-manager schemas sync --update")
-    assert checks["schema-store"].status is CheckStatus.SKIPPED
-    assert lock_path.read_bytes() == before
+def test_bad_lock_fails_before_store_inspection(tmp_path):
+    path = tmp_path / SCHEMA_LOCK_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text("broken: [\n")
+    result = checks(tmp_path, tmp_path / "cache")
+    assert result["schema-lock"].outcome is Outcome.SPEC
+    assert result["schema-store"].status is CheckStatus.SKIPPED

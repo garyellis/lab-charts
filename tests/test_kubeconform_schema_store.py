@@ -1,188 +1,133 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 
+from chart_manager.plumbing.schema_locations import expand_schema_location
 from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
-from chart_manager.services.kubeconform_schemas.models import (
-    GroupVersionKind,
-    LockedSchemaPolicy,
-    RepositoryPin,
-    SchemaFile,
-    SchemaScope,
-    build_lock,
-    content_digest,
-)
-from chart_manager.services.kubeconform_schemas.store import (
-    KubeconformSchemaStore,
-    artifact_relative_path,
-    kubeconform_schema_locations,
-)
+
+from .schema_fixtures import git, schema_store
 
 
-def _policy() -> LockedSchemaPolicy:
-    return LockedSchemaPolicy(
-        kubernetes_version="1.35.3",
-        generate_from_crds=True,
-        kubernetes=RepositoryPin(
-            repository="yannh/kubernetes-json-schema", track="master", resolved="a" * 40
-        ),
-        catalog=RepositoryPin(repository="datreeio/CRDs-catalog", track="main", resolved="b" * 40),
-    )
-
-
-def test_store_publishes_verified_immutable_generation(tmp_path: Path) -> None:
-    content = b'{"type":"object"}\n'
-    gvk = GroupVersionKind(group="apps", version="v1", kind="Deployment")
-    entry = SchemaFile(
-        gvk=gvk,
-        source="kubernetes",
-        path=artifact_relative_path(source="kubernetes", gvk=gvk, scope=None),
-        sha256=content_digest(content),
-        source_reference=_policy().artifact_url("kubernetes", gvk),
-    )
-    lock = build_lock(
-        workspace="lab",
-        policy=_policy(),
-        schemas=[entry],
-    )
-    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
-    stage = store.create_stage()
-    store.write_stage_file(stage, entry, content)
-
-    published = store.publish_generation(stage, lock)
-
-    assert published == store.generation_path(lock)
+def test_sync_caches_complete_selected_version_and_catalog_once(tmp_path):
+    lock, store, snapshots = schema_store(tmp_path)
+    assert store.sync(lock)
+    assert len(snapshots.calls) == 2
     assert store.inspect(lock).ready
-    assert not stage.exists()
-
-    (published / entry.path).write_text("{}")
-    with pytest.raises(KubeconformSchemaStoreError, match="checksum"):
-        store.require_ready(lock)
-
-
-def test_republishing_identical_generation_never_writes_destination(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    content = b'{"type":"object"}\n'
-    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-    entry = SchemaFile(
-        gvk=gvk,
-        source="kubernetes",
-        path=artifact_relative_path(source="kubernetes", gvk=gvk, scope=None),
-        sha256=content_digest(content),
-        source_reference=_policy().artifact_url("kubernetes", GroupVersionKind(version="v1", kind="ConfigMap")),
+    before = snapshots.calls.copy()
+    assert not store.sync(lock)
+    assert snapshots.calls == before
+    kubernetes = store.repository_path(lock.policy.kubernetes, "v1.35.3-standalone-strict")
+    assert not (kubernetes / "v1.34.0-standalone-strict").exists()
+    # A kind never inventoried by any chart is already available.
+    location = store.locations(lock).fallback_schema_locations[0]
+    path = expand_schema_location(
+        location, group="policy", version="v1", kind="PodDisruptionBudget"
     )
-    lock = build_lock(workspace="lab", policy=_policy(), schemas=[entry])
-    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
-    first = store.create_stage()
-    store.write_stage_file(first, entry, content)
-    destination = store.publish_generation(first, lock)
-    before = (destination / entry.path).stat().st_mtime_ns
-
-    second = store.create_stage()
-    store.write_stage_file(second, entry, content)
-
-    def reject_replace(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("published generations must never be rewritten")
-
-    monkeypatch.setattr("os.replace", reject_replace)
-    assert store.publish_generation(second, lock) == destination
-    assert (destination / entry.path).read_bytes() == content
-    assert (destination / entry.path).stat().st_mtime_ns == before
+    assert Path(path).is_file()
+    catalog = store.locations(lock).fallback_schema_locations[1]
+    assert Path(
+        expand_schema_location(catalog, group="example.io", version="v1", kind="Widget")
+    ).is_file()
 
 
-def test_store_rejects_files_not_declared_by_the_lock(tmp_path: Path) -> None:
-    content = b"{}"
-    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-    entry = SchemaFile(
-        gvk=gvk,
-        source="kubernetes",
-        path="kubernetes/v1/configmap_v1.json",
-        sha256=content_digest(content),
-        source_reference=_policy().artifact_url("kubernetes", gvk),
+@pytest.mark.parametrize(
+    "damage", ["modify", "delete", "extra", "symlink", "staged", "assume-unchanged"]
+)
+def test_inspection_verifies_schema_bytes_against_pinned_tree(tmp_path, damage):
+    lock, store, _ = schema_store(tmp_path)
+    store.sync(lock)
+    root = store.repository_path(lock.policy.kubernetes, "v1.35.3-standalone-strict")
+    path = root / "v1.35.3-standalone-strict/configmap-v1.json"
+    if damage == "extra":
+        (path.parent / "unlocked-v1.json").write_text("{}")
+    elif damage == "delete":
+        path.unlink()
+    elif damage == "symlink":
+        external = tmp_path / "outside.json"
+        external.write_text(path.read_text())
+        path.unlink()
+        path.symlink_to(external)
+    else:
+        path.write_text("{}")
+        if damage == "staged":
+            git(root, "add", ".")
+        if damage == "assume-unchanged":
+            git(root, "update-index", "--assume-unchanged", str(path.relative_to(root)))
+    status = store.inspect(lock)
+    assert not status.ready
+    assert len(status.corrupt) == 1
+    with pytest.raises(KubeconformSchemaStoreError, match="remove this snapshot"):
+        store.sync(lock)
+
+
+def test_failed_checkout_is_not_published_and_can_retry(tmp_path, monkeypatch):
+    lock, store, snapshots = schema_store(tmp_path)
+    original = snapshots.checkout
+
+    def failed(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(snapshots, "checkout", failed)
+    with pytest.raises(KubeconformSchemaStoreError, match="disk full"):
+        store.sync(lock)
+    assert not store.inspect(lock).ready
+    assert not list(store.root.rglob(".staging-*"))
+    monkeypatch.setattr(snapshots, "checkout", original)
+    assert store.sync(lock)
+    assert store.inspect(lock).ready
+
+
+def test_empty_store_inspection_does_not_create_directories(tmp_path):
+    lock, store, _ = schema_store(tmp_path)
+    status = store.inspect(lock)
+    assert len(status.missing) == 2
+    assert not store.root.exists()
+
+
+def test_partial_sparse_checkout_materializes_all_selected_blobs_for_offline_use(tmp_path):
+    from chart_manager.integrations.kubeconform.repository_snapshot import RepositorySnapshot
+    from chart_manager.plumbing.commands import SubprocessRunner
+
+    lock, _, sources = schema_store(tmp_path)
+    upstream = sources.repositories[lock.policy.kubernetes.repository]
+    git(upstream, "config", "uploadpack.allowFilter", "true")
+    calls = []
+
+    class LocalTransport:
+        def run(self, args, **kwargs):
+            args = list(args)
+            calls.append((args.copy(), kwargs.get("env", {})))
+            if "remote" in args and "add" in args:
+                args[-1] = upstream.as_uri()
+            return SubprocessRunner().run(args, **kwargs)
+
+    snapshots = RepositorySnapshot(LocalTransport())
+    destination = tmp_path / "snapshot"
+    snapshots.checkout(
+        lock.policy.kubernetes.repository,
+        lock.policy.kubernetes.resolved,
+        destination,
+        directory="v1.35.3-standalone-strict",
     )
-    lock = build_lock(
-        workspace="lab",
-        policy=_policy(),
-        schemas=[entry],
-    )
-    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
-    stage = store.create_stage()
-    store.write_stage_file(stage, entry, content)
-    unexpected = stage / "kubernetes/unlocked.json"
-    unexpected.write_text("{}")
-
-    with pytest.raises(
-        KubeconformSchemaStoreError,
-        match="not declared by the lock",
-    ):
-        store.publish_generation(stage, lock)
-    assert not store.generation_path(lock).exists()
-
-
-def test_store_rejects_incomplete_generation_before_rename(tmp_path: Path) -> None:
-    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-    entry = SchemaFile(
-        gvk=gvk,
-        source="kubernetes",
-        path="kubernetes/v1/configmap_v1.json",
-        sha256=content_digest(b"{}"),
-        source_reference=_policy().artifact_url("kubernetes", gvk),
-    )
-    lock = build_lock(
-        workspace="lab",
-        policy=_policy(),
-        schemas=[entry],
-    )
-    store = KubeconformSchemaStore("lab", cache_root=tmp_path / "cache")
-    stage = store.create_stage()
-
-    with pytest.raises(KubeconformSchemaStoreError, match="missing"):
-        store.publish_generation(stage, lock)
-    assert not store.generation_path(lock).exists()
-
-
-def test_kubeconform_locations_split_generated_from_fallbacks(tmp_path: Path) -> None:
-    content = b"{}"
-    gvk = GroupVersionKind(group="example.io", version="v1", kind="Widget")
-    scope = SchemaScope(chart="demo", environment="ci")
-    entries = [
-        SchemaFile(
-            gvk=gvk,
-            source="generated",
-            path=artifact_relative_path(source="generated", gvk=gvk, scope=None),
-            sha256=content_digest(content),
-            source_reference="crd.yaml",
-        ),
-        SchemaFile(
-            gvk=GroupVersionKind(version="v1", kind="ConfigMap"),
-            source="kubernetes",
-            path="kubernetes/v1/configmap_v1.json",
-            sha256=content_digest(content),
-            source_reference=_policy().artifact_url("kubernetes", GroupVersionKind(version="v1", kind="ConfigMap")),
-        ),
-    ]
-    lock = build_lock(
-        workspace="lab",
-        policy=_policy(),
-        schemas=entries,
-    )
-
-    locations = kubeconform_schema_locations(lock, tmp_path / "generation", scope=scope)
-
-    assert len(locations.generated_schema_locations) == 1
-    assert "/generated/{{.Group}}/" in locations.generated_schema_locations[0]
-    assert len(locations.fallback_schema_locations) == 1
-    assert "/kubernetes/" in locations.fallback_schema_locations[0]
-
-
-def test_core_schema_path_matches_kubeconform_group_expansion() -> None:
-    gvk = GroupVersionKind(version="v1", kind="ConfigMap")
-
+    assert any("--filter=blob:none" in args for args, _ in calls)
+    assert not (destination / "v1.34.0-standalone-strict").exists()
+    # Make the only origin unreachable; checking and reading schemas still works.
+    git(destination, "remote", "set-url", "origin", (tmp_path / "absent").as_uri())
+    calls.clear()
     assert (
-        artifact_relative_path(source="kubernetes", gvk=gvk, scope=None)
-        == "kubernetes/v1/configmap_v1.json"
+        snapshots.inspect(
+            destination, lock.policy.kubernetes.resolved, directory="v1.35.3-standalone-strict"
+        )
+        is None
     )
+    assert all(env["GIT_NO_LAZY_FETCH"] == "1" for _, env in calls)
+    assert (
+        destination / "v1.35.3-standalone-strict/poddisruptionbudget-policy-v1.json"
+    ).read_text()
+
+
+def test_unwritable_cache_reports_a_store_error(tmp_path):
+    lock, store, _ = schema_store(tmp_path)
+    store.cache_root.write_text("not a directory")
+    with pytest.raises(KubeconformSchemaStoreError, match="cannot write schema cache"):
+        store.sync(lock)

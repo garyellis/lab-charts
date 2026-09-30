@@ -37,7 +37,7 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -50,6 +50,7 @@ from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
+from chart_manager.services.kubeconform_schemas.generated import prepare_generated_schemas
 from chart_manager.services.kubeconform_schemas.models import SchemaScope
 from chart_manager.services.kubeconform_schemas.runtime import (
     KubeconformSchemaRuntime,
@@ -251,9 +252,7 @@ class ManifestValidationService:
         self.workspace = workspace
         if workspace is None:
             self._charts_dir = (
-                Path(".")
-                if Path(charts_dir) == Path(".")
-                else validate_charts_dir(charts_dir)
+                Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
             )
             self._policies_dir = policies_dir
             self._render_dir = render_dir
@@ -271,7 +270,20 @@ class ManifestValidationService:
         self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
-        self._schema_runtime_factory = schema_runtime_factory or load_kubeconform_schema_runtime
+        self._schema_runtime_factory = schema_runtime_factory or self._prepare_schema_runtime
+
+    def _prepare_schema_runtime(self, workspace: RepositoryWorkspace) -> KubeconformSchemaRuntime:
+        runtime = load_kubeconform_schema_runtime(workspace)
+        # The nested service runs render-only with a quiet progress sink, so it
+        # cannot recurse into schema preparation or disturb the outer display.
+        renderer = ManifestValidationService(
+            workspace=workspace,
+            command_runner=self._command_runner,
+            runner_factory=self._runner_factory,
+            validator_providers=self._validator_providers,
+        )
+        generated = prepare_generated_schemas(workspace, renderer)
+        return replace(runtime, generated_schema_locations=generated)
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -303,9 +315,7 @@ class ManifestValidationService:
             root=repo_root,
             changed_files=changed,
             skip_change_detection=request.skip_change_detection,
-            selected_charts=(
-                request.charts if request.charts and changed is None else ()
-            ),
+            selected_charts=(request.charts if request.charts and changed is None else ()),
             workspace=workspace,
         )
 
@@ -466,11 +476,15 @@ class ManifestValidationService:
         started = time.monotonic()
         self._progress.start([cfg.row for cfg in configs])
         try:
-            executed = self._runner_factory(spec).run(
-                configs,
-                enabled_phases=request.phases,
-                fail_fast=request.fail_fast,
-            ).rows
+            executed = (
+                self._runner_factory(spec)
+                .run(
+                    configs,
+                    enabled_phases=request.phases,
+                    fail_fast=request.fail_fast,
+                )
+                .rows
+            )
         except Exception as exc:
             # The runner could not be built, or died before it could turn
             # anything into a row. Every other failure boundary -- an unusable

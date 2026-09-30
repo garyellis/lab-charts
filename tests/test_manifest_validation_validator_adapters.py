@@ -151,7 +151,7 @@ def test_schema_status_error_is_a_tool_failure(tmp_path: Path) -> None:
     assert result.status == "FAIL"
     assert result.error_type == "tool"
     assert "Widget/example" in (result.detail or "")
-    assert "schemas sync --refresh" in (result.detail or "")
+    assert "chart-local schema" in (result.detail or "")
     assert "schemaLocations" in (result.detail or "")
 
 

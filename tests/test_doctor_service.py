@@ -478,10 +478,10 @@ def test_for_narrows_to_the_capabilities_that_command_needs() -> None:
     assert report.selector == "chart validate"
 
 
-def test_schema_sync_requires_helm_and_read_only_schema_preflight() -> None:
+def test_schema_sync_requires_git_and_read_only_schema_preflight() -> None:
     service = DoctorService(
         {
-            "helm": _provider(Check.ok("helm", "")),
+            "git": _provider(Check.ok("git", "")),
             "schemas": _provider(Check.ok("schema-store", "ready=true")),
             "events": _provider(Check.ok("events", "")),
         }
@@ -489,7 +489,7 @@ def test_schema_sync_requires_helm_and_read_only_schema_preflight() -> None:
 
     report = service.run(for_command="schemas sync")
 
-    assert [check.name for check in report.checks] == ["helm", "schema-store"]
+    assert [check.name for check in report.checks] == ["git", "schema-store"]
 
 
 def test_a_capability_with_no_requirements_runs_nothing() -> None:

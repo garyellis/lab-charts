@@ -375,12 +375,20 @@ jobs:
         if: steps.validation_scope.outputs.needed == 'true'
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v2
-          key: schema-store-v2-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/repositories
+          key: schema-repos-v3-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
 
-      # Ordinary CI is lock-preserving: discover current chart-derived inputs,
-      # compare them with the committed lock, then hydrate that exact generation.
-      # Only the narrowly allowlisted Renovate maintenance path runs --update.
+      - name: Restore derived CRD schemas
+        if: steps.validation_scope.outputs.needed == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived
+          key: schema-derived-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            schema-derived-v1-${{ runner.os }}-
+
+      # Upstream sync never renders charts or changes the committed pins.
+      # Derived CRD schemas are prepared automatically by validate.
       - name: Synchronize locked schemas
         id: schemas
         if: steps.validation_scope.outputs.needed == 'true'

@@ -121,9 +121,65 @@ def test_real_missing_schema_reports_remediation(tmp_path: Path) -> None:
         "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
     )
     result = KubeconformValidator(Kubeconform()).validate(
-        manifests, KubeconformConfig(None, (str(tmp_path / "missing.json"),)),
+        manifests,
+        KubeconformConfig(None, (str(tmp_path / "missing.json"),)),
     )
     assert result.status == "FAIL"
     assert result.error_type == "tool"
     assert "could not find schema" in result.detail
-    assert "schemas sync --refresh" in result.detail
+    assert "chart-local schema" in result.detail
+
+
+def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_path, monkeypatch):
+    from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
+    from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+    from chart_manager.services.manifest_validation.app import ManifestValidationService
+    from chart_manager.services.manifest_validation.models import RunRequest
+    from tests.schema_fixtures import schema_store, workspace
+    from tests.test_kubeconform_schema_generated import chart
+    from tests.test_kubeconform_schema_inventory_crd import _crd
+
+    _skip_if_missing("helm", "kubeconform", "git")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    lock, _, snapshots = schema_store(tmp_path)
+    store = KubeconformSchemaStore("lab", snapshots=snapshots)
+    store.sync(lock)
+    lock_path = tmp_path / ".chart-manager/schemas.lock.yaml"
+    write_schema_lock_atomic(lock_path, lock)
+    before = lock_path.read_bytes()
+    provider = chart(tmp_path, "provider", _crd())
+    consumer = chart(
+        tmp_path,
+        "consumer",
+        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\nspec: {name: hello}\n",
+    )
+    service = ManifestValidationService(workspace=workspace(tmp_path))
+
+    def validate():
+        result = service.run(
+            RunRequest(
+                root=tmp_path,
+                charts=("consumer",),
+                phases=frozenset({"render", "schema"}),
+            )
+        ).result
+        assert not result.spec_errors, result.spec_errors
+        assert lock_path.read_bytes() == before
+        assert len(snapshots.calls) == 2
+        return result
+
+    assert validate().outcome() is Outcome.SUCCESS
+    # A newly introduced built-in kind comes from the full pinned snapshot.
+    (consumer / "templates/new.yaml").write_text(
+        "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata: {name: demo}\n"
+    )
+    assert validate().outcome() is Outcome.SUCCESS
+    # Current generated CRDs override the permissive catalog schema immediately.
+    (provider / "templates/resources.yaml").write_text(_crd(nested_type="integer"))
+    result = validate()
+    assert result.outcome() is Outcome.FAILED
+    assert "want integer" in result.rows[0].phases["schema"].detail
+    (consumer / "templates/resources.yaml").write_text(
+        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\nspec: {name: 12}\n"
+    )
+    assert validate().outcome() is Outcome.SUCCESS

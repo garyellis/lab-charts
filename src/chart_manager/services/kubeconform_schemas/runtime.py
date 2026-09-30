@@ -34,12 +34,16 @@ class KubeconformSchemaRuntime:
 
     lock: SchemaLock
     generation_path: Path
+    generated_schema_locations: tuple[str, ...] = ()
 
     def locations(self, scope: SchemaScope) -> KubeconformSchemaLocations:
-        return kubeconform_schema_locations(
+        locations = kubeconform_schema_locations(
             self.lock,
             self.generation_path,
             scope=scope,
+        )
+        return KubeconformSchemaLocations(
+            self.generated_schema_locations, locations.fallback_schema_locations
         )
 
     def ignored_missing_kinds(self, scope: SchemaScope) -> tuple[str, ...]:
@@ -97,7 +101,7 @@ def load_kubeconform_schema_runtime(
         details = "; ".join(f"{problem.path}: {problem.detail}" for problem in status.corrupt)
         raise KubeconformSchemaStoreError(
             f"schema generation {lock.generation} is corrupt: {details}; "
-            f"remove {status.generation_path}, then run "
+            "remove the affected snapshot above, then run "
             "`chart-manager schemas sync`"
         )
     if status.missing:

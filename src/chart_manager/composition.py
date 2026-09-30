@@ -101,10 +101,6 @@ from chart_manager.services.kubeconform_schemas.app import (
     build_repository_kubeconform_schema_service,
 )
 from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.services.kubeconform_schemas.runtime import (
-    KubeconformSchemaRuntime,
-    load_kubeconform_schema_runtime,
-)
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.manifest_validation.app import ManifestValidationService
 from chart_manager.services.manifest_validation.paths import RenderOutputService
@@ -455,21 +451,7 @@ class Container:
             on_warn=on_warn,
             command_runner=self.command_runner(),
             workspace=workspace,
-            schema_runtime_factory=self._prepare_kubeconform_schema_runtime,
         )
-
-    def _prepare_kubeconform_schema_runtime(
-        self,
-        workspace: RepositoryWorkspace,
-    ) -> KubeconformSchemaRuntime:
-        """Return one verified generation without hidden repository-wide work.
-
-        Validation is deliberately read-only. A cold cache fails once with the
-        explicit ``schemas sync`` remediation instead of rendering every chart
-        (and potentially downloading Helm dependencies) while the user asked
-        to validate one chart.
-        """
-        return load_kubeconform_schema_runtime(workspace)
 
     def kubeconform_schema_service(
         self,
@@ -480,7 +462,6 @@ class Container:
         timeout = self._settings.command_timeout
         return build_repository_kubeconform_schema_service(
             workspace=workspace,
-            validation=self.validate_app(root=workspace.root),
             source=GitHubKubeconformSchemaSource(
                 timeout=timeout if timeout is not None and timeout > 0 else 15.0,
             ),

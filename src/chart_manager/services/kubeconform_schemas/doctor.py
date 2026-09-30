@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,6 @@ from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
 from chart_manager.services.kubeconform_schemas.models import (
     AuthoredSchemaPolicy,
     SchemaLock,
-    SchemaSourceKind,
     lock_policy_mismatches,
 )
 from chart_manager.services.kubeconform_schemas.store import (
@@ -27,12 +25,6 @@ from chart_manager.services.kubeconform_schemas.store import (
 
 _UPDATE = "run chart-manager schemas sync --update"
 _HYDRATE = "run chart-manager schemas sync"
-_SOURCES: tuple[SchemaSourceKind, ...] = (
-    "generated",
-    "local",
-    "kubernetes",
-    "catalog",
-)
 
 
 class KubeconformSchemaDoctor:
@@ -166,7 +158,7 @@ class KubeconformSchemaDoctor:
             "generation": lock.generation,
             "matchesPolicy": not mismatches,
             "mismatches": list(mismatches),
-            "schemas": len(lock.schemas),
+            "repositories": 2,
         }
         if mismatches:
             return (
@@ -182,8 +174,7 @@ class KubeconformSchemaDoctor:
         return (
             Check.ok(
                 "schema-lock",
-                f"{path}; generation={lock.generation}; policy matches; "
-                f"schemas={len(lock.schemas)}",
+                f"{path}; generation={lock.generation}; policy matches; repositories=2",
                 data=data,
             ),
             lock,
@@ -196,7 +187,6 @@ def _store_check(
     *,
     policy_matches: bool,
 ) -> Check:
-    source_coverage = _source_coverage(lock)
     data: dict[str, Any] = {
         "path": str(status.generation_path),
         "generation": lock.generation,
@@ -204,18 +194,15 @@ def _store_check(
         "present": status.present,
         "missing": len(status.missing),
         "corrupt": len(status.corrupt),
-        "sourceCoverage": source_coverage,
         "ready": status.ready and policy_matches,
-        "currentChartInputsChecked": False,
+        "generatedSchemas": "automatically prepared during validate",
     }
-    sources = ", ".join(f"{source}={source_coverage[source]['files']}" for source in _SOURCES)
     detail = (
         f"{status.generation_path}; generation={lock.generation}; "
         f"expected={status.expected} present={status.present} "
         f"missing={len(status.missing)} corrupt={len(status.corrupt)}; "
-        f"sources: {sources}; "
         f"ready={str(status.ready and policy_matches).lower()}; "
-        "current-chart-inputs-checked=false (run schemas sync)"
+        "generated CRD schemas are prepared automatically during validate"
     )
     if status.ready:
         return Check.ok("schema-store", detail, data=data)
@@ -223,7 +210,9 @@ def _store_check(
         return Check.failed(
             "schema-store",
             detail,
-            remediation=f"remove {status.generation_path}, then {_HYDRATE}",
+            remediation="remove affected snapshot(s): "
+            + "; ".join(p.path for p in status.corrupt)
+            + f", then {_HYDRATE}",
             outcome=Outcome.TOOL,
             data=data,
         )
@@ -259,18 +248,6 @@ def _policy_mismatches(
     lock: SchemaLock,
 ) -> tuple[str, ...]:
     return lock_policy_mismatches(policy, lock, workspace=workspace)
-
-
-def _source_coverage(
-    lock: SchemaLock,
-) -> dict[str, dict[str, int]]:
-    files = Counter(entry.source for entry in lock.schemas)
-    return {
-        source: {
-            "files": files[source],
-        }
-        for source in _SOURCES
-    }
 
 
 __all__ = ["KubeconformSchemaDoctor"]

@@ -1,7 +1,3 @@
-"""CLI contract for the eager schema synchronization surface."""
-
-from __future__ import annotations
-
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,65 +6,28 @@ from chart_manager.cli import schemas as schemas_cli
 from .conftest import cli
 
 
-class _Service:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
+def test_sync_forwards_only_explicit_pin_update(monkeypatch):
+    calls = []
 
-    def sync(self, **kwargs):  # type: ignore[no-untyped-def]
-        self.calls.append(kwargs)
+    def sync(**kwargs):
+        calls.append(kwargs)
         return SimpleNamespace(
-            rows=3,
-            required=12,
-            generated=4,
-            local=1,
-            sync=SimpleNamespace(
-                generation_published=True,
-                lock=SimpleNamespace(generation="sha256:" + "a" * 64),
-                generation_path=Path("/cache/lab-charts/aaa"),
-            ),
+            generation_published=True,
+            lock=SimpleNamespace(generation="sha256:" + "a" * 64),
+            generation_path=Path("/cache/repos"),
         )
 
-
-def test_sync_forwards_update_and_workers(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    service = _Service()
-    monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
-
-    result = cli("schemas", "sync", "--update", "--workers", "2")
-
+    monkeypatch.setattr(schemas_cli, "_make_service", lambda: SimpleNamespace(sync=sync))
+    assert cli("schemas", "sync").exit_code == 0
+    result = cli("schemas", "sync", "--update")
     assert result.exit_code == 0
-    assert service.calls == [
-        {"update": True, "refresh": False, "workers": 2}
-    ]
-    assert "schema generation sha256:" in result.stdout
+    assert calls == [{"update": False}, {"update": True}]
+    assert "schema generation" in result.stdout
 
 
-def test_sync_help_has_no_offline_or_online_mode() -> None:
+def test_sync_help_has_no_inventory_refresh_or_render_workers():
     result = cli("schemas", "sync", "--help")
-
     assert result.exit_code == 0
-    assert "--offline" not in result.output
-    assert "--online" not in result.output
-
-
-def test_refresh_is_distinct_from_upstream_update(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    service = _Service()
-    monkeypatch.setattr(schemas_cli, "_make_service", lambda: service)
-
-    result = cli("schemas", "sync", "--refresh")
-
-    assert result.exit_code == 0
-    assert service.calls[0]["refresh"] is True
-    assert service.calls[0]["update"] is False
-
-
-def test_refresh_and_update_are_mutually_exclusive() -> None:
-    result = cli("schemas", "sync", "--refresh", "--update")
-
-    assert result.exit_code == 2
-
-
-def test_schemas_help_lists_sync() -> None:
-    result = cli("schemas", "--help")
-
-    assert result.exit_code == 0
-    assert "sync" in result.stdout
+    for option in ("--refresh", "--workers", "--offline"):
+        assert option not in result.output
+    assert "--update" in result.output

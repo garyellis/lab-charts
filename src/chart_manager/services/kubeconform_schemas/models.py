@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -15,8 +14,6 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
 
-SchemaSourceKind = Literal["generated", "local", "kubernetes", "catalog"]
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -132,23 +129,6 @@ class LockedSchemaPolicy(_StrictModel):
     kubernetes: RepositoryPin
     catalog: RepositoryPin
 
-    def artifact_url(self, source: str, gvk: GroupVersionKind) -> str:
-        """Derive an immutable upstream identity; never trust a lock entry's URL."""
-        if source == "kubernetes":
-            pin = self.kubernetes
-            group = gvk.group.split(".", 1)[0]
-            suffix = "-".join(part for part in (group, gvk.version) if part).lower()
-            path = (
-                f"v{self.kubernetes_version}-standalone-strict/"
-                f"{gvk.kind.lower()}-{suffix}.json"
-            )
-        elif source == "catalog":
-            pin = self.catalog
-            path = f"{gvk.group}/{gvk.kind.lower()}_{gvk.version}.json"
-        else:
-            raise ValueError(f"not a remote schema source: {source}")
-        return f"https://raw.githubusercontent.com/{pin.repository}/{pin.resolved}/{path}"
-
     @field_validator("kubernetes_version")
     @classmethod
     def _version(cls, value: str) -> str:
@@ -158,101 +138,24 @@ class LockedSchemaPolicy(_StrictModel):
         return normalized
 
 
-class SchemaFile(_StrictModel):
-    """One immutable schema object in a store generation."""
-
-    gvk: GroupVersionKind
-    source: SchemaSourceKind
-    path: str
-    sha256: str
-    scope: SchemaScope | None = None
-    source_reference: str = Field(alias="sourceReference")
-
-    @field_validator("path")
-    @classmethod
-    def _relative_path(cls, value: str) -> str:
-        path = PurePosixPath(value)
-        if (
-            not value
-            or value.startswith("/")
-            or "\\" in value
-            or any(part in {"", ".", ".."} for part in path.parts)
-        ):
-            raise ValueError("path must be a safe relative POSIX path")
-        return path.as_posix()
-
-    @field_validator("sha256")
-    @classmethod
-    def _digest(cls, value: str) -> str:
-        if not _SHA256_RE.fullmatch(value):
-            raise ValueError("sha256 must be sha256:<64 lowercase hex characters>")
-        return value
-
-    @model_validator(mode="after")
-    def _scope_matches_source(self) -> SchemaFile:
-        if self.source == "local" and self.scope is None:
-            raise ValueError("local schema entries require a scope")
-        if self.source in {"generated", "kubernetes", "catalog"} and self.scope is not None:
-            raise ValueError(f"{self.source} schema entries must be repository-shared")
-        return self
-
-
 class SchemaLock(_StrictModel):
-    """The committed, generated contract for one complete schema generation."""
+    """Only upstream policy and repository pins belong in the committed lock."""
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     workspace: str
     generation: str
     policy: LockedSchemaPolicy
-    schemas: tuple[SchemaFile, ...]
-
-    @field_validator("schemas", mode="before")
-    @classmethod
-    def _yaml_sequences(cls, value: Any) -> Any:
-        # YAML has no tuple representation. Preserve strict validation for the
-        # contained models while accepting the sequence emitted by our stable
-        # serializer on a subsequent load.
-        return tuple(value) if isinstance(value, list) else value
 
     @field_validator("workspace")
     @classmethod
     def _workspace(cls, value: str) -> str:
-        if not value or value != value.strip() or any(c in value for c in "/\\"):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
             raise ValueError("workspace must be a non-empty path-safe name")
         return value
 
-    @field_validator("generation")
-    @classmethod
-    def _generation(cls, value: str) -> str:
-        if not _SHA256_RE.fullmatch(value):
-            raise ValueError("generation must be a sha256 digest")
-        return value
-
     @model_validator(mode="after")
-    def _canonical_and_complete(self) -> SchemaLock:
-        if self.schemas != sort_schema_files(self.schemas):
-            raise ValueError("schemas must be sorted and deduplicated")
-        for entry in self.schemas:
-            if entry.source not in {"kubernetes", "catalog"}:
-                continue
-            expected_url = self.policy.artifact_url(entry.source, entry.gvk)
-            expected_path = (
-                f"{entry.source}/{entry.gvk.group or entry.gvk.version}/"
-                f"{entry.gvk.kind.lower()}_{entry.gvk.version}.json"
-            )
-            if entry.source_reference != expected_url or entry.path != expected_path:
-                raise ValueError(
-                    f"locked {entry.gvk.key} URL/path does not match pinned {entry.source} "
-                    f"identity; expected {expected_url} at {expected_path}; "
-                    "restore the lock from a trusted revision, then run "
-                    "`chart-manager schemas sync --refresh`"
-                )
-        expected = generation_digest(
-            version=self.version,
-            workspace=self.workspace,
-            policy=self.policy,
-            schemas=self.schemas,
-        )
+    def _check_generation(self) -> SchemaLock:
+        expected = generation_digest(workspace=self.workspace, policy=self.policy)
         if self.generation != expected:
             raise ValueError(f"generation digest mismatch: expected {expected}")
         return self
@@ -346,18 +249,6 @@ def requirement_sort_key(value: SchemaRequirement) -> tuple[str, str, str, str, 
     )
 
 
-def schema_file_sort_key(value: SchemaFile) -> tuple[str, str, str, str, str, str, str]:
-    return (
-        value.gvk.group,
-        value.gvk.version,
-        value.gvk.kind,
-        value.scope.chart if value.scope else "",
-        value.scope.environment or "" if value.scope else "",
-        value.source,
-        value.path,
-    )
-
-
 def sort_requirements(
     values: tuple[SchemaRequirement, ...] | list[SchemaRequirement],
 ) -> tuple[SchemaRequirement, ...]:
@@ -379,65 +270,20 @@ def sort_requirements(
     return tuple(sorted(keyed.values(), key=requirement_sort_key))
 
 
-def sort_schema_files(values: tuple[SchemaFile, ...] | list[SchemaFile]) -> tuple[SchemaFile, ...]:
-    keyed: dict[tuple[str, str, str, str, str, str], SchemaFile] = {}
-    for value in values:
-        key = (
-            value.gvk.group,
-            value.gvk.version,
-            value.gvk.kind,
-            value.scope.chart if value.scope else "",
-            value.scope.environment or "" if value.scope else "",
-            value.source,
-        )
-        previous = keyed.get(key)
-        if previous is not None and previous != value:
-            raise KubeconformSchemaConfigurationError(
-                f"conflicting {value.source} schemas for {value.gvk.key}"
-            )
-        keyed[key] = value
-    return tuple(sorted(keyed.values(), key=schema_file_sort_key))
-
-
-def generation_digest(
-    *,
-    version: int,
-    workspace: str,
-    policy: LockedSchemaPolicy,
-    schemas: tuple[SchemaFile, ...],
-) -> str:
+def generation_digest(*, workspace: str, policy: LockedSchemaPolicy) -> str:
     payload = {
-        "version": version,
+        "version": 2,
         "workspace": workspace,
         "policy": policy.model_dump(mode="json", by_alias=True),
-        "schemas": [
-            item.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for item in schemas
-        ],
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return content_digest(encoded)
+    return content_digest(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
 
-def build_lock(
-    *,
-    workspace: str,
-    policy: LockedSchemaPolicy,
-    schemas: tuple[SchemaFile, ...] | list[SchemaFile],
-) -> SchemaLock:
-    ordered_schemas = sort_schema_files(schemas)
-    digest = generation_digest(
-        version=1,
-        workspace=workspace,
-        policy=policy,
-        schemas=ordered_schemas,
-    )
+def build_lock(*, workspace: str, policy: LockedSchemaPolicy) -> SchemaLock:
     return SchemaLock(
-        version=1,
         workspace=workspace,
-        generation=digest,
         policy=policy,
-        schemas=ordered_schemas,
+        generation=generation_digest(workspace=workspace, policy=policy),
     )
 
 
@@ -447,14 +293,11 @@ __all__ = [
     "LockedSchemaPolicy",
     "MaterializedSchema",
     "RepositoryPin",
-    "SchemaFile",
     "SchemaLock",
     "SchemaRequirement",
     "SchemaScope",
-    "SchemaSourceKind",
     "build_lock",
     "content_digest",
     "lock_policy_mismatches",
     "sort_requirements",
-    "sort_schema_files",
 ]

@@ -187,8 +187,9 @@ class KubeconformValidator:
         if any(_is_schema_readiness_error(item) for item in report.errors()):
             detail += (
                 "\nSchema unavailable: run `chart-manager schemas sync` to verify and hydrate "
-                "the lock; if chart schema inputs changed, run "
-                "`chart-manager schemas sync --refresh`. For unmanaged repositories, check "
+                "upstream snapshots; if the kind is absent from those pins, "
+                "check the current CRD providers or add a chart-local schema. "
+                "For unmanaged repositories, check "
                 "spec.validation.schemaLocations in the chart's chart-lifecycle.yaml."
             )
         return PhaseResult(

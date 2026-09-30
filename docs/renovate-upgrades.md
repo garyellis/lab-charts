@@ -104,18 +104,17 @@ updates run exactly:
 chart-manager schemas sync --update
 ```
 
-before Renovate commits. The callback resolves tracking refs, rebuilds the
-complete inventory, and replaces the lock transactionally. Its file filter is
+before Renovate commits. The callback resolves tracking refs, caches the pinned
+upstream repositories, and replaces the lock transactionally without rendering charts. Its file filter is
 limited to the workspace policy and schema lock. Self-hosted policy permits
 only the exact command above; shell execution remains disabled, arguments and
 command chaining do not match the allowlist, and ordinary CI never uses
 `--update`.
 
-For chart-derived changes, run `mise run schemas -- --refresh`; this preserves
-the committed upstream pins. To advance upstream inputs, run
-`mise run schemas -- --update`, review both the workspace policy and
-`.chart-manager/schemas.lock.yaml`, then run `mise run schemas` followed by
-`mise run validate -- --all`.
+For chart or CRD changes, run `mise run validate -- --all`; generated schemas
+refresh automatically and the upstream lock stays unchanged. To advance upstream
+inputs, run `mise run schemas -- --update`, review the workspace policy and
+`.chart-manager/schemas.lock.yaml`, then run `mise run validate -- --all`.
 
 ## Troubleshooting
 

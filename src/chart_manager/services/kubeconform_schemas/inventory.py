@@ -81,9 +81,7 @@ def scan_rendered_directory(
                 f"{scope.key}: failed to inventory rendered YAML {path}: {exc}"
             ) from exc
         for index, raw in enumerate(documents):
-            for document in _resource_documents(
-                raw, path=path, document_index=index, scope=scope
-            ):
+            for document in _resource_documents(raw, path=path, document_index=index, scope=scope):
                 try:
                     gvk = GroupVersionKind.from_document(document)
                 except (TypeError, ValueError) as exc:

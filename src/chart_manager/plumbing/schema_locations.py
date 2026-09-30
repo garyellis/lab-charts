@@ -6,7 +6,7 @@ import re
 
 from chart_manager.plumbing.errors import SpecError
 
-_VARIABLES = frozenset({"Group", "ResourceKind", "ResourceAPIVersion"})
+_VARIABLES = frozenset({"Group", "ResourceKind", "ResourceAPIVersion", "KindSuffix"})
 
 
 def validate_schema_location(template: str) -> None:
@@ -30,6 +30,8 @@ def expand_schema_location(template: str, *, group: str, version: str, kind: str
         "Group": group or version,
         "ResourceKind": kind.lower(),
         "ResourceAPIVersion": version,
+        "KindSuffix": "-"
+        + "-".join(part for part in (group.split(".")[0], version) if part).lower(),
     }
     for name, value in values.items():
         template = template.replace("{{." + name + "}}", value)

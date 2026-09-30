@@ -6,8 +6,6 @@ from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaSourceEnvironmentError,
     GitHubKubeconformSchemaSourceError,
     GitHubKubeconformSchemaSourceIntegrityError,
-    KubeconformSchemaArtifactBatch,
-    KubeconformSchemaArtifactRequest,
 )
 from chart_manager.integrations.kubeconform.runner import (
     Kubeconform,
@@ -24,8 +22,6 @@ __all__ = [
     "GitHubKubeconformSchemaSourceIntegrityError",
     "Kubeconform",
     "KubeconformReport",
-    "KubeconformSchemaArtifactBatch",
-    "KubeconformSchemaArtifactRequest",
     "ResourceResult",
     "ResourceStatus",
 ]
