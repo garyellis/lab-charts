@@ -300,17 +300,12 @@
             "default": null,
             "title": "Helmversion"
           },
-          "kubernetesVersion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Kubernetesversion"
+          "ignoreMissingSchemas": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Ignoremissingschemas",
+            "type": "array"
           },
           "namespaceTemplate": {
             "anyOf": [
@@ -465,6 +460,17 @@
             "format": "path",
             "title": "Renderdir",
             "type": "string"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorkspaceValidation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -529,6 +535,64 @@
           "name"
         ],
         "title": "WorkspaceMetadata",
+        "type": "object"
+      },
+      "WorkspaceSchemaCatalog": {
+        "additionalProperties": false,
+        "description": "One remote CRD schema catalog followed by the repository.",
+        "properties": {
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "track": {
+            "title": "Track",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "track"
+        ],
+        "title": "WorkspaceSchemaCatalog",
+        "type": "object"
+      },
+      "WorkspaceSchemas": {
+        "additionalProperties": false,
+        "description": "Repository-wide sources used to build the managed schema store.",
+        "properties": {
+          "catalog": {
+            "$ref": "#/$defs/WorkspaceSchemaCatalog"
+          },
+          "generateFromCRDs": {
+            "title": "Generatefromcrds",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generateFromCRDs",
+          "catalog"
+        ],
+        "title": "WorkspaceSchemas",
+        "type": "object"
+      },
+      "WorkspaceValidation": {
+        "additionalProperties": false,
+        "description": "Repository-wide defaults for deterministic manifest validation.",
+        "properties": {
+          "kubernetesVersion": {
+            "title": "Kubernetesversion",
+            "type": "string"
+          },
+          "schemas": {
+            "$ref": "#/$defs/WorkspaceSchemas"
+          }
+        },
+        "required": [
+          "kubernetesVersion",
+          "schemas"
+        ],
+        "title": "WorkspaceValidation",
         "type": "object"
       }
     },

@@ -153,8 +153,8 @@ def crash_row(
 ) -> RowResult:
     """Convert a failure outside any validation phase into a visible row failure.
 
-    error_type="tool" routes to `Outcome.TOOL` (a tool/runtime fault, not a
-    chart-author validation issue). Schema/policy SKIP downstream so the row
+    Dependency-prefetch command failures are environment errors; other crashes
+    are tool/runtime errors. Schema/policy SKIP downstream so the row
     reads consistently with an in-phase render FAIL. `context` names the
     boundary that failed -- a worker crash, a dependency prefetch, an
     unusable helm binding, or a runner that could not be constructed at all.
@@ -165,7 +165,11 @@ def crash_row(
         phase="render",
         status="FAIL",
         detail=f"{context}: {detail}",
-        error_type="tool",
+        error_type=(
+            "environment"
+            if context == "dependency prefetch failed" and isinstance(exc, ExternalCommandError)
+            else "tool"
+        ),
     )
     return RowResult(
         row=cfg.row,
@@ -206,6 +210,8 @@ class ManifestValidationRunner:
         on_event: EventCallback | None = None,
         dep_update_timeout: float | None = 300.0,
         tool_timeout: float | None = None,
+        include_crds: bool = False,
+        run_log_level: int = logging.DEBUG,
     ) -> None:
         """Wire integrations, worker count, event callback, and dep/tool timeouts."""
         self.helm_factory = helm_factory
@@ -237,6 +243,8 @@ class ManifestValidationRunner:
         # Validator providers receive the same timeout while constructing
         # their executors in the service composition root.
         self.tool_timeout = tool_timeout
+        self.include_crds = include_crds
+        self._run_log_level = run_log_level
 
     def run(
         self,
@@ -263,7 +271,8 @@ class ManifestValidationRunner:
         # already been floored at 1 and fail-fast overrides it to serial below,
         # so an operator reading "workers=8" in a log next to a serial timeline
         # would be reading the request rather than the run.
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate run started: rows=%d workers=%d fail_fast=%s phases=%s "
             "tool_timeout=%s dep_update_timeout=%s output_root=%s",
             len(configs),
@@ -360,7 +369,8 @@ class ManifestValidationRunner:
         # Deterministic output order regardless of completion order.
         results.sort(key=lambda r: (r.row.chart, r.row.env))
         failed = sum(1 for result in results if self._row_failed(result))
-        _LOG.info(
+        _LOG.log(
+            self._run_log_level,
             "validate run finished: rows=%d failed=%d not_run=%d elapsed=%.2fs",
             len(results),
             failed,
@@ -500,8 +510,7 @@ class ManifestValidationRunner:
             thread_name_prefix="validate-deps-",
         ) as pool:
             futures = {
-                pool.submit(_update, binding, path): (binding, path)
-                for binding, path in distinct
+                pool.submit(_update, binding, path): (binding, path) for binding, path in distinct
             }
             for future in as_completed(futures):
                 try:
@@ -636,6 +645,7 @@ class ManifestValidationRunner:
                 namespace=cfg.row.namespace,
                 output_dir=out_dir,
                 values=cfg.values,
+                include_crds=self.include_crds,
             )
         except ExternalCommandError as exc:
             # Logged as well as returned: the PhaseResult reaches the summary
@@ -649,14 +659,14 @@ class ManifestValidationRunner:
                 cfg.row.namespace,
                 exc,
             )
-            # error_type="tool" promotes the row to `Outcome.TOOL` — the
-            # underlying issue is a helm crash, not a chart-author problem.
+            # A normal Helm rejection is a chart failure; process crashes,
+            # timeouts and missing executables remain tool failures.
             return PhaseResult(
                 phase="render",
                 status="FAIL",
                 detail=str(exc),
                 artifacts=(),
-                error_type="tool",
+                error_type=None if exc.returncode is not None and exc.returncode > 0 else "tool",
             )
 
         return PhaseResult(
@@ -675,14 +685,10 @@ class ManifestValidationRunner:
     ) -> tuple[PhaseResult, dict[str, PhaseResult]]:
         """Run enabled validators in one stable gate and aggregate their result."""
         invocations = cfg.invocations_for(category)
-        phase: PhaseName = (
-            "schema" if category is ValidatorCategory.SCHEMA else "policy"
-        )
+        phase: PhaseName = "schema" if category is ValidatorCategory.SCHEMA else "policy"
         if category.value not in active:
             result = PhaseResult(phase=phase, status="NOT_RUN")
-            return result, {
-                invocation.validator_id: result for invocation in invocations
-            }
+            return result, {invocation.validator_id: result for invocation in invocations}
 
         enabled = tuple(invocation for invocation in invocations if invocation.enabled)
         disabled_result = PhaseResult(
@@ -748,23 +754,20 @@ class ManifestValidationRunner:
     ) -> PhaseResult:
         """Fold concrete validator outcomes into the stable category phase."""
         selected = tuple(
-            (invocation.validator_id, results[invocation.validator_id])
-            for invocation in enabled
+            (invocation.validator_id, results[invocation.validator_id]) for invocation in enabled
         )
         if len(selected) == 1:
             return selected[0][1]
 
         statuses = {result.status for _, result in selected}
         status: PhaseStatus = (
-            "FAIL"
-            if "FAIL" in statuses
-            else "PASS"
-            if "PASS" in statuses
-            else "SKIP"
+            "FAIL" if "FAIL" in statuses else "PASS" if "PASS" in statuses else "SKIP"
         )
         error_type: ErrorType | None = (
             "spec"
             if any(result.error_type == "spec" for _, result in selected)
+            else "environment"
+            if any(result.error_type == "environment" for _, result in selected)
             else "tool"
             if any(result.error_type == "tool" for _, result in selected)
             else None
@@ -774,11 +777,7 @@ class ManifestValidationRunner:
             for validator_id, result in selected
             if result.detail
         ]
-        artifacts = tuple(
-            artifact
-            for _, result in selected
-            for artifact in result.artifacts
-        )
+        artifacts = tuple(artifact for _, result in selected for artifact in result.artifacts)
         return PhaseResult(
             phase=category.value,
             status=status,

@@ -21,12 +21,12 @@ plugin discovery.
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.schema_locations import validate_schema_location
 from chart_manager.services.manifest_validation.models import PhaseResult
 from chart_manager.services.manifest_validation.paths import has_manifests, require_within
 from chart_manager.services.manifest_validation.validators import (
@@ -68,9 +68,7 @@ def resolve_policy_paths(
     policies_dir: Path = Path("policies"),
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Resolve discovered and authored chart-relative policy directories."""
-    policies = list(
-        discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir)
-    )
+    policies = list(discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir))
     warnings: list[str] = []
     for extra in extras:
         selected = (chart_path / extra).resolve()
@@ -97,10 +95,9 @@ def resolve_schema_locations(
     repo_root: Path,
     spec_path: Path,
 ) -> tuple[str, ...]:
-    """Keep kubeconform keywords/URLs and validate local schema templates."""
+    """Resolve chart additions as repository-local schema templates."""
     return tuple(
-        _resolve_schema_location(location, repo_root, spec_path=spec_path)
-        for location in locations
+        _resolve_schema_location(location, repo_root, spec_path=spec_path) for location in locations
     )
 
 
@@ -110,13 +107,9 @@ def _resolve_schema_location(
     *,
     spec_path: Path,
 ) -> str:
-    if location == "default":
-        return location
-    parsed = urlsplit(location)
-    if parsed.scheme:
-        return location
     if not location.strip():
         raise SpecError(f"{spec_path}: schema location must not be empty")
+    validate_schema_location(location)
 
     resolved = (repo_root / location).resolve()
     label = f"{spec_path}: local schema location {location!r}"
@@ -132,9 +125,7 @@ def _resolve_schema_location(
 
     static_prefix = location[:template_start]
     prefix_path = Path(static_prefix)
-    anchor_relative = (
-        prefix_path if static_prefix.endswith(("/", "\\")) else prefix_path.parent
-    )
+    anchor_relative = prefix_path if static_prefix.endswith(("/", "\\")) else prefix_path.parent
     anchor = (repo_root / anchor_relative).resolve()
     require_within(anchor, repo_root, label=label)
     if not anchor.exists():
@@ -152,7 +143,8 @@ class KubeconformValidator:
 
     Empty rendered_dir -> SKIP. Tool crash -> FAIL with error_type="tool"
     (`Outcome.TOOL`), because the underlying issue is kubeconform breaking,
-    not a chart-author problem. Schema violations -> FAIL with a
+    not a chart-author problem. Invalid or unparseable resources are chart
+    failures; schema loading errors are tool failures. Both retain a
     human-scannable one-line-per-finding detail block.
     """
 
@@ -175,8 +167,11 @@ class KubeconformValidator:
             report = self.integration.validate(
                 rendered_dir,
                 kubernetes_version=config.kubernetes_version,
-                schema_locations=list(config.schema_locations) or None,
+                schema_locations=list(config.schema_locations),
+                skip_kinds=list(config.ignore_missing_schemas),
             )
+        except SpecError as exc:
+            return PhaseResult(phase="schema", status="FAIL", detail=str(exc), error_type="spec")
         except ExternalCommandError as exc:
             return PhaseResult(
                 phase="schema",
@@ -188,10 +183,22 @@ class KubeconformValidator:
         if not report.has_failures():
             return PhaseResult(phase="schema", status="PASS")
 
+        detail = _format_schema_findings(report.invalid())
+        readiness_error = any(_is_schema_readiness_error(item) for item in report.errors())
+        if readiness_error:
+            detail += (
+                "\nSchema unavailable or unreadable: check schema JSON and "
+                "spec.validation.schemaLocations in the chart's chart-lifecycle.yaml. "
+                "Run `chart-manager schemas sync` for missing upstream snapshots; "
+                "if the kind is absent from those pins, check the current CRD providers "
+                "or add a chart-local schema. Generated schemas are checked and rebuilt "
+                "as needed on the next validate run."
+            )
         return PhaseResult(
             phase="schema",
             status="FAIL",
-            detail=_format_schema_findings(report.invalid()),
+            detail=detail,
+            error_type="tool" if readiness_error else None,
         )
 
 
@@ -218,16 +225,12 @@ class KyvernoValidator:
         if not isinstance(config, KyvernoConfig):
             raise TypeError("kyverno received incompatible compiled config")
         if not config.policy_paths:
-            return PhaseResult(
-                phase="policy", status="SKIP", detail="no policies discovered"
-            )
+            return PhaseResult(phase="policy", status="SKIP", detail="no policies discovered")
         if not rendered_dir.exists() or not has_manifests(rendered_dir):
             return PhaseResult(phase="policy", status="SKIP", detail="no manifests")
 
         try:
-            report = self.integration.apply(
-                rendered_dir, policy_paths=list(config.policy_paths)
-            )
+            report = self.integration.apply(rendered_dir, policy_paths=list(config.policy_paths))
         except ExternalCommandError as exc:
             return PhaseResult(
                 phase="policy",
@@ -267,6 +270,24 @@ def _format_schema_findings(resources: tuple[ResourceResult, ...]) -> str:
     return "\n".join(lines)
 
 
+def _is_schema_readiness_error(result: ResourceResult) -> bool:
+    """Keep resource parsing failures distinct from schema/tool errors.
+
+    Kubeconform 0.8 forwards loader errors verbatim (including ``unexpected
+    EOF`` for truncated schema JSON), so schema-message allowlists miss real
+    failures. Its resource parsing/rejection errors have explicit prefixes.
+    Unknown errors remain tool failures rather than blaming the chart.
+    """
+    message = (result.msg or "").lower()
+    return result.status == "error" and not message.startswith(
+        (
+            "error unmarshalling resource:",
+            "error while parsing:",
+            "prohibited resource kind ",
+        )
+    )
+
+
 def _format_policy_findings(findings: tuple[PolicyResult, ...]) -> str:
     """Render kyverno findings as one `policy/rule: kind/name: msg` line each."""
     lines: list[str] = []
@@ -289,9 +310,10 @@ class KubeconformProvider:
     order: int = 100
 
     def compile(self, context: ValidatorCompileContext) -> ValidatorInvocation:
-        """Resolve authored schema locations into a kubeconform config."""
+        """Add chart-local schema locations to prepared repository inputs."""
         spec = context.spec
-        locations = (
+        managed_version = context.kubeconform.kubernetes_version
+        authored_locations = (
             resolve_schema_locations(
                 spec.schema_locations,
                 repo_root=context.repo_root,
@@ -300,14 +322,31 @@ class KubeconformProvider:
             if spec.validators.kubeconform
             else ()
         )
+        locations = tuple(
+            dict.fromkeys(
+                (
+                    *context.kubeconform.generated_schema_locations,
+                    *authored_locations,
+                    *context.kubeconform.fallback_schema_locations,
+                )
+            )
+        )
         return ValidatorInvocation(
             validator_id=self.validator_id,
             category=self.category,
             order=self.order,
             enabled=spec.validators.kubeconform,
             config=KubeconformConfig(
-                kubernetes_version=spec.kubernetes_version,
+                kubernetes_version=managed_version,
                 schema_locations=locations,
+                ignore_missing_schemas=tuple(
+                    dict.fromkeys(
+                        (
+                            *context.kubeconform.ignore_missing_schemas,
+                            *spec.ignore_missing_schemas,
+                        )
+                    )
+                ),
             ),
         )
 
@@ -318,9 +357,7 @@ class KubeconformProvider:
         timeout: float | None,
     ) -> ManifestValidator:
         """Build the kubeconform executor without probing its binary."""
-        return KubeconformValidator(
-            Kubeconform(runner=command_runner, timeout=timeout)
-        )
+        return KubeconformValidator(Kubeconform(runner=command_runner, timeout=timeout))
 
 
 class KyvernoProvider:

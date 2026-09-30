@@ -1,0 +1,14 @@
+generation: sha256:d5364a337655484dfc0f0475e3ffc2f35d6dcac8477b18ef1fff74df1a4d1821
+policy:
+  catalog:
+    repository: datreeio/CRDs-catalog
+    resolved: ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
+    track: main
+  generateFromCRDs: true
+  kubernetes:
+    repository: yannh/kubernetes-json-schema
+    resolved: a6f9a32d2ccb64b6e4f5b41419b9c2e8ee0cce18
+    track: master
+  kubernetesVersion: 1.35.3
+version: 2
+workspace: lab-charts

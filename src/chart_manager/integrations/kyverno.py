@@ -3,7 +3,7 @@
 Runs `kyverno apply` over a directory of rendered manifests, parses the
 JSON ClusterReport output, and surfaces a frozen report. Parse types live
 here (not in services/manifest_validation/models) — same convention as
-`integrations/kubeconform.py:KubeconformReport`. Pipeline consumers go
+`integrations/kubeconform/runner.py:KubeconformReport`. Pipeline consumers go
 through `phases.policy()`, which collapses the report into a PhaseResult.
 
 Verified against kyverno CLI v1.18.1. The `apply --policy-report

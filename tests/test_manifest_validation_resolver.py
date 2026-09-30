@@ -16,6 +16,7 @@ from chart_manager.services.manifest_validation.resolver import (
 )
 from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
+    KubeconformRuntimeInputs,
     KyvernoConfig,
 )
 
@@ -137,7 +138,7 @@ def test_disabled_validators_do_not_resolve_unused_runtime_inputs(
             "validators:\n"
             "  kubeconform: false\n"
             "  policy: false\n"
-            "schemaLocations: [missing/schema.json]\n"
+            'schemaLocations: ["missing/{{.ResourceKind}}.json"]\n'
             "policies:\n"
             "  extra: [missing-policies]\n"
         ),
@@ -170,7 +171,7 @@ def test_extra_policy_must_be_a_directory(tmp_path: Path) -> None:
 def test_missing_local_schema_location_fails_early(tmp_path: Path) -> None:
     target = _target(
         tmp_path,
-        extra="schemaLocations: [schemas/custom.json]\n",
+        extra='schemaLocations: ["schemas/{{.ResourceKind}}.json"]\n',
     )
     (target.path / "values.yaml").write_text("{}\n")
 
@@ -178,9 +179,9 @@ def test_missing_local_schema_location_fails_early(tmp_path: Path) -> None:
         resolve_manifest_validation(target, tmp_path)
 
     message = str(caught.value)
-    assert "local schema location 'schemas/custom.json'" in message
+    assert "local schema location 'schemas/{{.ResourceKind}}.json'" in message
     assert str(target.spec_path) in message
-    assert "does not exist" in message
+    assert "missing template base directory" in message
 
 
 def test_local_schema_template_requires_existing_base_directory(
@@ -196,18 +197,13 @@ def test_local_schema_template_requires_existing_base_directory(
         resolve_manifest_validation(target, tmp_path)
 
 
-def test_schema_locations_preserve_keywords_and_urls_and_absolutize_local(
+def test_schema_locations_absolutize_local_templates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = _target(
         tmp_path,
-        extra=(
-            "schemaLocations:\n"
-            "  - default\n"
-            "  - https://schemas.example.test/{{.ResourceKind}}.json\n"
-            '  - "schemas/{{.ResourceKind}}.json"\n'
-        ),
+        extra=('schemaLocations:\n  - "schemas/{{.ResourceKind}}.json"\n'),
     )
     (target.path / "values.yaml").write_text("{}\n")
     (tmp_path / "schemas").mkdir()
@@ -218,10 +214,42 @@ def test_schema_locations_preserve_keywords_and_urls_and_absolutize_local(
     compiled = resolve_manifest_validation(target, tmp_path)
 
     assert _kubeconform_config(compiled).schema_locations == (
-        "default",
-        "https://schemas.example.test/{{.ResourceKind}}.json",
         str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
     )
+
+
+def test_managed_runtime_preserves_generated_local_upstream_precedence(
+    tmp_path: Path,
+) -> None:
+    target = _target(
+        tmp_path,
+        extra=(
+            'schemaLocations: ["schemas/{{.ResourceKind}}.json"]\n'
+            "ignoreMissingSchemas: [UnpublishedKind]\n"
+        ),
+    )
+    (target.path / "values.yaml").write_text("{}\n")
+    (tmp_path / "schemas").mkdir()
+    runtime = KubeconformRuntimeInputs(
+        kubernetes_version="1.35.3",
+        generated_schema_locations=("/cache/generated/{{.ResourceKind}}.json",),
+        fallback_schema_locations=(
+            "/cache/kubernetes/{{.ResourceKind}}.json",
+            "/cache/catalog/{{.ResourceKind}}.json",
+        ),
+    )
+
+    compiled = resolve_manifest_validation(target, tmp_path, kubeconform=runtime)
+    config = _kubeconform_config(compiled)
+
+    assert config.kubernetes_version == "1.35.3"
+    assert config.schema_locations == (
+        "/cache/generated/{{.ResourceKind}}.json",
+        str(tmp_path / "schemas/{{.ResourceKind}}.json"),
+        "/cache/kubernetes/{{.ResourceKind}}.json",
+        "/cache/catalog/{{.ResourceKind}}.json",
+    )
+    assert config.ignore_missing_schemas == ("UnpublishedKind",)
 
 
 def test_local_schema_location_must_resolve_beneath_repository(

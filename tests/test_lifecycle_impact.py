@@ -24,7 +24,7 @@ def _service(root: Path) -> LifecycleImpactService:
             validation_fanout=(
                 "src/chart_manager/services/manifest_validation/**",
                 "src/chart_manager/integrations/helm.py",
-                "src/chart_manager/integrations/kubeconform.py",
+                "src/chart_manager/integrations/kubeconform/**",
                 "src/chart_manager/integrations/kyverno.py",
             ),
             cluster_test_fanout=(

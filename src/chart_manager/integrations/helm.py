@@ -459,6 +459,7 @@ class Helm:
         api_versions: list[str] | None = None,
         kube_version: str | None = None,
         skip_tests: bool = True,
+        include_crds: bool = False,
     ) -> Path:
         """Render the chart into `output_dir` via `helm template`; return that dir.
 
@@ -492,6 +493,8 @@ class Helm:
             base_args.extend(["--kube-version", kube_version])
         if skip_tests:
             base_args.append("--skip-tests")
+        if include_crds:
+            base_args.append("--include-crds")
 
         # Deliberately NOT passing --skip-schema-validation: at template time
         # we want subchart schema errors to surface as render failures rather

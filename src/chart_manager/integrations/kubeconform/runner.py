@@ -6,6 +6,7 @@ services/manifest_validation/models) because they're integration-local: the rest
 the pipeline consumes them via the schema phase, which collapses the
 report into a PhaseResult.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,10 +15,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError, SpecError, YamlError
 from chart_manager.plumbing.preflight import Check, probe_binary
+from chart_manager.plumbing.schema_locations import expand_schema_location, validate_schema_location
+from chart_manager.plumbing.yaml_files import load_yaml_documents
 
 _log = logging.getLogger(__name__)
 
@@ -46,6 +50,10 @@ class KubeconformReport:
         """Resources with status invalid or error."""
         return tuple(r for r in self.resources if r.status in ("invalid", "error"))
 
+    def errors(self) -> tuple[ResourceResult, ...]:
+        """Tool/schema-resolution errors, distinct from invalid resources."""
+        return tuple(r for r in self.resources if r.status == "error")
+
     def has_failures(self) -> bool:
         """True if any resource failed validation."""
         return bool(self.invalid())
@@ -53,14 +61,6 @@ class KubeconformReport:
 
 class Kubeconform:
     """Run `kubeconform` over rendered manifests and parse its JSON report."""
-
-    # datreeio CRDs catalog — covers most common in-tree CRDs. Charts that
-    # vendor uncatalogued CRDs (cert-manager, istio-base) are addressed via
-    # the CRD-skip default rather than a per-chart schema location.
-    SCHEMA_LOCATION_CRDS = (
-        "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/"
-        "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-    )
 
     def __init__(
         self,
@@ -100,28 +100,41 @@ class Kubeconform:
         manifests_dir: Path,
         *,
         kubernetes_version: str | None = None,
-        schema_locations: list[str] | None = None,
+        schema_locations: list[str],
         skip_kinds: list[str] | None = None,
         strict: bool = True,
         extra_args: list[str] | None = None,
     ) -> KubeconformReport:
         """Validate all manifests under `manifests_dir`; return the parsed report.
 
-        Defaults: default schemas + datreeio CRD catalog, CRDs skipped,
-        strict mode on. Never raises on validation failures (check=False) —
-        those land in the report; unparseable output raises.
+        Schema inputs must be explicit local paths supplied by the managed
+        store and chart-local additions. No remote/default fallback and no
+        resource kind are skipped implicitly. Validation failures land in the
+        report (``check=False``); invalid configuration or output raises.
         """
-        locations = (
-            schema_locations
-            if schema_locations is not None
-            else ["default", self.SCHEMA_LOCATION_CRDS]
+        if not schema_locations:
+            raise SpecError(
+                "schema validation has no schema locations; configure spec.validation in "
+                ".chart-manager/workspace.yaml and run `chart-manager schemas sync --update`, "
+                "or supply spec.validation.schemaLocations in the chart's chart-lifecycle.yaml"
+            )
+        for location in schema_locations:
+            validate_schema_location(location)
+            parsed = urlsplit(location)
+            if not location.strip() or location == "default" or parsed.scheme or parsed.netloc:
+                raise ExternalCommandError(
+                    f"kubeconform schema locations must be local paths, got {location!r}"
+                )
+        skips = _uncovered_gvk_skips(
+            manifests_dir,
+            schema_locations,
+            frozenset(skip_kinds or []),
         )
-        skips = skip_kinds if skip_kinds is not None else ["CustomResourceDefinition"]
 
         args: list[str] = [self._bin, "-output", "json", "-summary"]
         if strict:
             args.append("-strict")
-        for loc in locations:
+        for loc in schema_locations:
             args.extend(["-schema-location", loc])
         if skips:
             args.extend(["-skip", ",".join(skips)])
@@ -147,7 +160,7 @@ def _parse(
     except json.JSONDecodeError as exc:
         # rc==0 with non-JSON would be a runtime contract violation; rc!=0 with
         # non-JSON is the typical tool crash. Treat both as ExternalCommandError
-        # — the caller (phases.schema) tags it error_type="tool" -> exit 2.
+        # — the caller tags it error_type="tool" -> TOOL (exit 4).
         command = " ".join(args)
         detail = (stderr or stdout).strip()
         raise ExternalCommandError(
@@ -189,3 +202,74 @@ def _normalize_status(raw: str) -> ResourceStatus:
         _log.warning("kubeconform returned unknown status %r; bucketing as 'error'", raw)
         return "error"
     return normalized
+
+
+def _uncovered_gvk_skips(
+    manifests_dir: Path,
+    schema_locations: list[str],
+    allowed_kinds: frozenset[str],
+) -> list[str]:
+    """Expand authored Kind exceptions to only uncovered concrete GVKs."""
+    skips: set[str] = set()
+    # Exact GVK exceptions (including the built-in CRD exception) need no
+    # manifest scan. Only bare Kind exceptions need inventory disambiguation.
+    bare_kinds = frozenset(kind for kind in allowed_kinds if "/" not in kind)
+    checked: set[str] = set()
+
+    def consider(api_version: str, kind: str) -> None:
+        key = f"{api_version}/{kind}"
+        if key in checked:
+            return
+        checked.add(key)
+        group, _, version = api_version.rpartition("/")
+        if not group:
+            version = api_version
+        if not any(
+            Path(expand_schema_location(
+                location, group=group, version=version, kind=kind
+            )).is_file()
+            for location in schema_locations
+        ):
+            skips.add(key)
+
+    for key in allowed_kinds - bare_kinds:
+        exact_api_version, _, exact_kind = key.rpartition("/")
+        consider(exact_api_version, exact_kind)
+    if not bare_kinds:
+        return sorted(skips)
+    for path in sorted(manifests_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+            continue
+        try:
+            documents = load_yaml_documents(path)
+        except YamlError:
+            # Kubeconform owns malformed-manifest diagnostics. Preprocessing
+            # must never hide or reclassify those findings.
+            continue
+        for raw in documents:
+            candidates = (
+                raw.get("items", ())
+                if isinstance(raw, dict) and raw.get("kind") == "List"
+                else (raw,)
+            )
+            if not isinstance(candidates, (list, tuple)):
+                continue
+            for document in candidates:
+                if not isinstance(document, dict):
+                    continue
+                api_version = document.get("apiVersion")
+                kind = document.get("kind")
+                if not isinstance(api_version, str) or not isinstance(kind, str):
+                    continue
+                if kind not in bare_kinds:
+                    continue
+                consider(api_version, kind)
+    return sorted(skips)
+
+
+__all__ = [
+    "Kubeconform",
+    "KubeconformReport",
+    "ResourceResult",
+    "ResourceStatus",
+]

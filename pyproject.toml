@@ -16,7 +16,7 @@ dependencies = [
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
   "rich>=13.9",
-  "ruamel-yaml>=0.18",
+  "ruamel-yaml[oldlibyaml]>=0.19.1",
   "typer>=0.15",
 ]
 

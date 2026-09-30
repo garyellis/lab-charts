@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaLocations
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,
@@ -186,6 +190,70 @@ def test_run_passes_resolved_workers_to_the_runner(
     assert rec.runs[0][0].max_workers == 4
 
 
+def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
+    tmp_path: Path,
+) -> None:
+    _chart(tmp_path, "alpha")
+    policy = WorkspaceValidation.model_validate(
+        {
+            "kubernetesVersion": "1.35.3",
+            "schemas": {
+                "generateFromCRDs": True,
+                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+            },
+        }
+    )
+    workspace = RepositoryWorkspace(
+        root=tmp_path,
+        name="demo",
+        validation=policy,
+        authored=True,
+    )
+    calls: list[RepositoryWorkspace] = []
+
+    class Runtime:
+        lock = SimpleNamespace(
+            policy=SimpleNamespace(kubernetes_version="1.35.3")
+        )
+
+        def locations(self):  # type: ignore[no-untyped-def]
+            return KubeconformSchemaLocations(
+                generated_schema_locations=("/cache/shared/generated",),
+                fallback_schema_locations=("/cache/shared/fallback",),
+            )
+
+        def ignored_missing_kinds(self):  # type: ignore[no-untyped-def]
+            return ()
+
+    def runtime_factory(selected: RepositoryWorkspace):
+        calls.append(selected)
+        return Runtime()
+
+    rec = Recorder()
+    _app(
+        rec,
+        workspace=workspace,
+        schema_runtime_factory=runtime_factory,
+    ).run(
+        RunRequest(
+            root=tmp_path,
+            skip_change_detection=True,
+            workers=3,
+        )
+    )
+
+    assert calls == [workspace]
+    configs = {cfg.row.env: cfg for cfg in rec.configs}
+    for environment in ("dev", "prod"):
+        invocation = configs[environment].validator_invocations[0]
+        assert isinstance(invocation.config, KubeconformConfig)
+        assert invocation.config.kubernetes_version == "1.35.3"
+        assert invocation.config.schema_locations == (
+            "/cache/shared/generated",
+            "/cache/shared/fallback",
+        )
+
+
 def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     rec = Recorder()
@@ -314,8 +382,7 @@ def test_chart_and_env_filters_narrow_the_worklist(tmp_path: Path) -> None:
 
 def test_row_config_resolves_values_policies_and_spec_settings(tmp_path: Path) -> None:
     extra = """
-kubernetesVersion: "1.31.2"
-schemaLocations: ["default"]
+schemaLocations: ["schemas/{{.ResourceKind}}.json"]
 policies:
   extra: [extra-policies]
 """
@@ -323,6 +390,7 @@ policies:
     (tmp_path / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "extra-policies").mkdir()
+    (tmp_path / "schemas").mkdir()
     rec = Recorder()
 
     _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("prod",)))
@@ -337,8 +405,10 @@ policies:
     kyverno = cfg.validator_invocations[1].config
     assert isinstance(kubeconform, KubeconformConfig)
     assert isinstance(kyverno, KyvernoConfig)
-    assert kubeconform.kubernetes_version == "1.31.2"
-    assert kubeconform.schema_locations == ("default",)
+    assert kubeconform.kubernetes_version is None
+    assert kubeconform.schema_locations == (
+        str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
+    )
     assert kyverno.policy_paths == (
         tmp_path / "policies",
         tmp_path / "charts" / "alpha" / "policies",

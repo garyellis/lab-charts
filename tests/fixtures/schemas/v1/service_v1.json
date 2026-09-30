@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "v1"},
+    "kind": {"const": "Service"},
+    "metadata": {"type": "object", "additionalProperties": true},
+    "spec": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

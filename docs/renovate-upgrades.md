@@ -93,6 +93,29 @@ Renovate runtime; restrict the token to the target repository; validate the
 callback data path; never execute callback text from dependency metadata.
 PR creation stays idempotent if the callback is retried.
 
+## Schema input updates
+
+The repository configuration also treats the Kubernetes version in
+`.chart-manager/workspace.yaml` and the tracked repository refs in
+`.chart-manager/schemas.lock.yaml` as one `schema inputs` update group. Those
+updates run exactly:
+
+```bash
+chart-manager schemas sync --update
+```
+
+before Renovate commits. The callback resolves tracking refs, caches the pinned
+upstream repositories, and replaces the lock transactionally without rendering charts. Its file filter is
+limited to the workspace policy and schema lock. Self-hosted policy permits
+only the exact command above; shell execution remains disabled, arguments and
+command chaining do not match the allowlist, and ordinary CI never uses
+`--update`.
+
+For chart or CRD changes, run `mise run validate -- --all`; generated schemas
+refresh automatically and the upstream lock stays unchanged. To advance upstream
+inputs, run `mise run schemas -- --update`, review the workspace policy and
+`.chart-manager/schemas.lock.yaml`, then run `mise run validate -- --all`.
+
 ## Troubleshooting
 
 Preflight diagnostics do not modify the checkout. Common failures:

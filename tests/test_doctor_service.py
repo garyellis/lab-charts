@@ -461,6 +461,7 @@ def test_for_narrows_to_the_capabilities_that_command_needs() -> None:
             "helm": _provider(Check.ok("helm", "")),
             "kubeconform": _provider(Check.ok("kubeconform", "")),
             "kyverno": _provider(Check.ok("kyverno", "")),
+            "schemas": _provider(Check.ok("schema-store", "ready=true")),
             "kind": _provider(Check.ok("kind", "")),
             "events": _provider(Check.ok("events-backend", "")),
         }
@@ -468,8 +469,27 @@ def test_for_narrows_to_the_capabilities_that_command_needs() -> None:
 
     report = service.run(for_command="chart validate")
 
-    assert {check.name for check in report.checks} == {"helm", "kubeconform", "kyverno"}
+    assert {check.name for check in report.checks} == {
+        "helm",
+        "kubeconform",
+        "kyverno",
+        "schema-store",
+    }
     assert report.selector == "chart validate"
+
+
+def test_schema_sync_requires_git_and_read_only_schema_preflight() -> None:
+    service = DoctorService(
+        {
+            "git": _provider(Check.ok("git", "")),
+            "schemas": _provider(Check.ok("schema-store", "ready=true")),
+            "events": _provider(Check.ok("events", "")),
+        }
+    )
+
+    report = service.run(for_command="schemas sync")
+
+    assert [check.name for check in report.checks] == ["git", "schema-store"]
 
 
 def test_a_capability_with_no_requirements_runs_nothing() -> None:
@@ -514,6 +534,25 @@ def test_the_json_document_has_a_stable_shape() -> None:
             },
             {"name": "fine", "status": "ok", "detail": "1.0", "remediation": None},
         ],
+    }
+
+
+def test_structured_check_data_is_additive_to_the_wire_shape() -> None:
+    payload = DoctorService(
+        {
+            "schemas": _provider(
+                Check.ok(
+                    "schema-store",
+                    "ready=true",
+                    data={"ready": True, "missing": 0},
+                )
+            )
+        }
+    ).run().to_dict()
+
+    assert payload["checks"][0]["data"] == {
+        "ready": True,
+        "missing": 0,
     }
 
 

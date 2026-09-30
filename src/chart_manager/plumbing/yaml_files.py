@@ -19,6 +19,15 @@ YamlDocumentEditor = Callable[[list[Any]], None]
 def _safe_yaml() -> YAML:
     """Return the YAML 1.2 safe loader used for read-only documents."""
     yaml = YAML(typ="safe")
+    # Kubernetes OpenAPI schemas legitimately use the scalar ``=`` in enum
+    # lists. ruamel resolves that token to YAML's standard ``value`` tag but
+    # its safe constructor does not register a handler for the tag, causing
+    # rendered Prometheus CRDs to fail inventory. Preserve the scalar value;
+    # no application-specific object construction is involved.
+    yaml.constructor.add_constructor(
+        "tag:yaml.org,2002:value",
+        lambda constructor, node: constructor.construct_scalar(node),
+    )
     yaml.default_flow_style = False
     yaml.width = 4096
     yaml.indent(mapping=2, sequence=4, offset=2)

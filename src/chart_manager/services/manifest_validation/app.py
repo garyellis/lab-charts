@@ -37,7 +37,8 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,12 +47,28 @@ from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ExternalCommandError,
+    MissingToolError,
+    SpecError,
+)
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaRenderError,
+)
+from chart_manager.services.kubeconform_schemas.generated import prepare_generated_schemas
+from chart_manager.services.kubeconform_schemas.runtime import (
+    KubeconformSchemaRuntime,
+    load_kubeconform_schema_runtime,
+)
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
     PHASE_ORDER,
+    ManifestValidationTarget,
     RunOutcome,
     RunRequest,
     RunResult,
@@ -77,6 +94,7 @@ from chart_manager.services.manifest_validation.validator_adapters import (
     VALIDATOR_REGISTRY,
 )
 from chart_manager.services.manifest_validation.validators import (
+    KubeconformRuntimeInputs,
     ValidatorProvider,
     validate_registry,
 )
@@ -199,12 +217,15 @@ class RunnerSpec:
     tool_timeout: float | None = None
     dep_update_timeout: float | None = 300.0
     verbose: bool = True
+    run_log_level: int = logging.DEBUG
+    include_crds: bool = False
     validator_ids: frozenset[str] = frozenset(
         provider.validator_id for provider in VALIDATOR_REGISTRY
     )
 
 
 RunnerFactory = Callable[[RunnerSpec], ManifestValidationRunner]
+KubeconformSchemaRuntimeFactory = Callable[[RepositoryWorkspace], KubeconformSchemaRuntime]
 
 
 # --- the app ---------------------------------------------------------------
@@ -234,14 +255,15 @@ class ManifestValidationService:
         validation_fanout: tuple[str, ...] = (),
         workspace: RepositoryWorkspace | None = None,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
+        schema_runtime_factory: KubeconformSchemaRuntimeFactory | None = None,
+        run_log_level: int = logging.INFO,
     ) -> None:
         """Wire the progress sink, warning channel, and construction hooks."""
         self.workspace = workspace
+        self._run_log_level = run_log_level
         if workspace is None:
             self._charts_dir = (
-                Path(".")
-                if Path(charts_dir) == Path(".")
-                else validate_charts_dir(charts_dir)
+                Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
             )
             self._policies_dir = policies_dir
             self._render_dir = render_dir
@@ -259,6 +281,76 @@ class ManifestValidationService:
         self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
+        self._schema_runtime_factory = schema_runtime_factory or self._prepare_schema_runtime
+
+    def _prepare_schema_runtime(self, workspace: RepositoryWorkspace) -> KubeconformSchemaRuntime:
+        _LOG.log(self._run_log_level, "Checking cached upstream schemas")
+        runtime = load_kubeconform_schema_runtime(workspace)
+        # The nested service runs render-only with a quiet progress sink, so it
+        # cannot recurse into schema preparation or disturb the outer display.
+        renderer = ManifestValidationService(
+            workspace=workspace,
+            command_runner=self._command_runner,
+            runner_factory=self._runner_factory,
+            validator_providers=self._validator_providers,
+            run_log_level=logging.DEBUG,
+        )
+        generated = prepare_generated_schemas(workspace, renderer)
+        return replace(runtime, generated_schema_locations=generated)
+
+    def prepare_schema_dependencies(self, targets: Sequence[ManifestValidationTarget]) -> None:
+        """Materialize dependencies before deciding which charts provide CRDs.
+
+        This deliberately avoids resolving environment values or rendering any
+        chart: unrelated malformed values cannot break provider discovery.
+        """
+        pending = [
+            target
+            for target in targets
+            if target.chart.metadata.dependencies and not chart_deps.deps_are_fresh(target.path)
+        ]
+        if not pending:
+            return
+        _LOG.info("Preparing chart dependencies for CRD discovery: %d charts", len(pending))
+        helms: dict[tuple[str | None, str | None], Helm] = {}
+        for target in pending:
+            key = (target.spec.helm_version, target.spec.helm_binary)
+            if key not in helms:
+                try:
+                    helms[key] = Helm(
+                        runner=self._command_runner,
+                        version=key[0],
+                        binary=key[1],
+                        verbose=False,
+                        deps_are_fresh=chart_deps.deps_are_fresh,
+                        chart_has_dependencies=chart_deps.chart_has_dependencies,
+                    )
+                except ChartManagerError as exc:
+                    raise KubeconformSchemaRenderError(
+                        f"CRD provider Helm binding unavailable for {target.name}: {exc}",
+                        outcome=Outcome.TOOL,
+                    ) from exc
+
+        def prepare(target: ManifestValidationTarget) -> None:
+            try:
+                helms[
+                    (target.spec.helm_version, target.spec.helm_binary)
+                ].dependency_update_if_stale(target.path, timeout=300.0)
+            except ChartManagerError as exc:
+                outcome = Outcome.TOOL
+                if isinstance(exc, SpecError):
+                    outcome = Outcome.SPEC
+                elif isinstance(exc, ExternalCommandError) and not isinstance(
+                    exc, MissingToolError
+                ):
+                    outcome = Outcome.ENVIRONMENT
+                raise KubeconformSchemaRenderError(
+                    f"cannot prepare CRD discovery dependencies for {target.name}: {exc}",
+                    outcome=outcome,
+                ) from exc
+
+        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+            list(pool.map(prepare, pending))
 
     # --- spec-driven run ---------------------------------------------------
 
@@ -269,6 +361,7 @@ class ManifestValidationService:
         cannot be read. A failed `git diff` is NOT fatal: it downgrades to
         a warning and falls back to validating everything.
         """
+        run_started = time.monotonic()
         repo_root = request.root.resolve()
         workspace = self.workspace
         if workspace is None:
@@ -290,9 +383,7 @@ class ManifestValidationService:
             root=repo_root,
             changed_files=changed,
             skip_change_detection=request.skip_change_detection,
-            selected_charts=(
-                request.charts if request.charts and changed is None else ()
-            ),
+            selected_charts=(request.charts if request.charts and changed is None else ()),
             workspace=workspace,
         )
 
@@ -349,7 +440,22 @@ class ManifestValidationService:
 
         out_dir, keep = self._resolve_out_dir(repo_root, request.out, request.keep)
 
-        compiled_by_chart: dict[str, ResolvedManifestValidation] = {}
+        # Load and verify the immutable generation once for the whole run.
+        # Every row then receives only local templates from this snapshot;
+        # no validator process can resolve or download a schema on its own.
+        schema_runtime: KubeconformSchemaRuntime | None = None
+        needs_schema_runtime = "schema" in request.phases and any(
+            build.targets[row.chart].spec.validators.kubeconform for row in rows
+        )
+        if needs_schema_runtime and workspace.authored and workspace.validation is None:
+            raise KubeconformSchemaConfigurationError(
+                f"{workspace.marker} has no spec.validation schema policy; "
+                "configure it before running schema validation"
+            )
+        if needs_schema_runtime and workspace.authored:
+            schema_runtime = self._schema_runtime_factory(workspace)
+
+        compiled_by_case: dict[tuple[str, str], ResolvedManifestValidation] = {}
         compile_warnings: list[str] = []
         configs: list[RowConfig] = []
         for row in rows:
@@ -359,18 +465,29 @@ class ManifestValidationService:
             # invariant broke, and a silent `continue` would drop the row
             # from the run without it appearing anywhere in the result.
             target = build.targets[row.chart]
-            if row.chart not in compiled_by_chart:
+            case = (row.chart, row.env)
+            if case not in compiled_by_case:
+                runtime_inputs = KubeconformRuntimeInputs()
+                if schema_runtime is not None:
+                    locations = schema_runtime.locations()
+                    runtime_inputs = KubeconformRuntimeInputs(
+                        kubernetes_version=schema_runtime.lock.policy.kubernetes_version,
+                        generated_schema_locations=locations.generated_schema_locations,
+                        fallback_schema_locations=locations.fallback_schema_locations,
+                        ignore_missing_schemas=schema_runtime.ignored_missing_kinds(),
+                    )
                 compiled = resolve_manifest_validation(
                     target,
                     repo_root,
                     providers=self._validator_providers,
                     policies_dir=self._policies_dir,
+                    kubeconform=runtime_inputs,
                 )
-                compiled_by_chart[row.chart] = compiled
+                compiled_by_case[case] = compiled
                 compile_warnings.extend(compiled.warnings)
                 for warning in compiled.warnings:
                     self._on_warn(warning)
-            configs.append(row_config_for(compiled_by_chart[row.chart], row))
+            configs.append(row_config_for(compiled_by_case[case], row))
 
         workers = resolve_workers(request.workers)
         # Streamed subprocess output from >1 worker interleaves into
@@ -396,6 +513,8 @@ class ManifestValidationService:
                 request.dep_update_timeout if request.dep_update_timeout > 0 else None
             ),
             verbose=request.verbose,
+            run_log_level=logging.DEBUG,
+            include_crds=request.include_crds,
             validator_ids=frozenset(
                 invocation.validator_id
                 for cfg in configs
@@ -404,29 +523,25 @@ class ManifestValidationService:
             ),
         )
 
-        # The run id is `out_dir`'s last path component (see `_resolve_out_dir`)
-        # and is the only identifier that ties these lines, the render tree and
-        # `summary.json` together.
-        _LOG.info(
-            "validate service run started: run_id=%s rows=%d charts=%d workers=%d "
-            "fail_fast=%s phases=%s changed_files=%s out_dir=%s",
-            out_dir.name,
+        _LOG.log(
+            self._run_log_level,
+            "Validating %d rows across %d charts (workers=%d)",
             len(configs),
-            len(compiled_by_chart),
+            len({chart for chart, _environment in compiled_by_case}),
             workers,
-            request.fail_fast,
-            ",".join(sorted(request.phases)),
-            "all" if changed is None else len(changed),
-            out_dir,
         )
         started = time.monotonic()
         self._progress.start([cfg.row for cfg in configs])
         try:
-            executed = self._runner_factory(spec).run(
-                configs,
-                enabled_phases=request.phases,
-                fail_fast=request.fail_fast,
-            ).rows
+            executed = (
+                self._runner_factory(spec)
+                .run(
+                    configs,
+                    enabled_phases=request.phases,
+                    fail_fast=request.fail_fast,
+                )
+                .rows
+            )
         except Exception as exc:
             # The runner could not be built, or died before it could turn
             # anything into a row. Every other failure boundary -- an unusable
@@ -453,18 +568,20 @@ class ManifestValidationService:
         finally:
             self._progress.stop()
 
-        _LOG.info(
-            "validate service run finished: run_id=%s rows=%d failed=%d "
-            "spec_errors=%d elapsed=%.2fs",
-            out_dir.name,
+        finished = time.monotonic()
+        failed = sum(
+            any(phase.status == "FAIL" for phase in row.phases.values()) for row in executed
+        )
+        _LOG.log(
+            self._run_log_level,
+            "Validation finished: rows=%d failed=%d spec_errors=%d "
+            "total=%.2fs preparation=%.2fs execution=%.2fs",
             len(executed),
-            sum(
-                1
-                for row_result in executed
-                if any(phase.status == "FAIL" for phase in row_result.phases.values())
-            ),
+            failed,
             len(build.spec_errors) + len(explicit_spec_errors),
-            time.monotonic() - started,
+            finished - run_started,
+            started - run_started,
+            finished - started,
         )
         return RunOutcome(
             result=RunResult(
@@ -641,4 +758,6 @@ class ManifestValidationService:
             on_event=spec.on_event,
             tool_timeout=spec.tool_timeout,
             dep_update_timeout=spec.dep_update_timeout,
+            include_crds=spec.include_crds,
+            run_log_level=spec.run_log_level,
         )

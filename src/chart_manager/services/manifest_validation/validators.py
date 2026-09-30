@@ -8,7 +8,7 @@ built-in validator is a reviewed code change, never dynamic plugin discovery.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -33,6 +33,16 @@ class ValidatorCategory(StrEnum):
 
 
 @dataclass(frozen=True)
+class KubeconformRuntimeInputs:
+    """Repository/store inputs prepared once before per-chart compilation."""
+
+    kubernetes_version: str | None = None
+    generated_schema_locations: tuple[str, ...] = ()
+    fallback_schema_locations: tuple[str, ...] = ()
+    ignore_missing_schemas: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ValidatorCompileContext:
     """Resolved chart inputs available to every provider compiler."""
 
@@ -41,6 +51,9 @@ class ValidatorCompileContext:
     chart_path: Path
     spec_path: Path
     policies_dir: Path = Path("policies")
+    kubeconform: KubeconformRuntimeInputs = field(
+        default_factory=KubeconformRuntimeInputs
+    )
 
 
 def validate_registry(
@@ -68,6 +81,7 @@ class KubeconformConfig:
 
     kubernetes_version: str | None
     schema_locations: tuple[str, ...]
+    ignore_missing_schemas: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

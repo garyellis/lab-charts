@@ -301,6 +301,14 @@ def test_validate_help_lists_output_option() -> None:
     assert "--output" in result.output
 
 
+def test_validate_help_has_no_offline_or_online_flags() -> None:
+    result = cli("chart", "validate", "--help")
+
+    assert result.exit_code == 0
+    assert "--offline" not in result.output
+    assert "--online" not in result.output
+
+
 def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> None:
     from chart_manager.services.manifest_validation.models import (
         PhaseResult,

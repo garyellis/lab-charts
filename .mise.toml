@@ -73,6 +73,10 @@ run = "uv run chart-manager sandbox delete \"$@\""
 description = "Run the spec-driven repository validator. Usage: mise run validate -- --chart grafana --env dev"
 run = "uv run chart-manager chart validate \"$@\""
 
+[tasks.schemas]
+description = "Cache pinned upstream schema repositories. Use --update only to advance upstream pins."
+run = "uv run chart-manager schemas sync \"$@\""
+
 [tasks."validate:clean"]
 description = "Remove .chart-manager/rendered/ tree."
 run = "uv run chart-manager chart cache clean"

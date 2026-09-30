@@ -624,7 +624,6 @@ def test_compiler_resolves_chart_relative_paths_independently_of_cwd(
         _DEFAULT_SPEC.format(name="alpha")
         + """
 schemaLocations:
-  - default
   - schemas/{{.Group}}/{{.ResourceKind}}.json
 policies:
   extra: [extra-policies]
@@ -651,7 +650,6 @@ policies:
     assert config.values == [(chart_dir / "values.yaml").resolve()]
     assert kyverno.policy_paths == ((chart_dir / "extra-policies").resolve(),)
     assert kubeconform.schema_locations == (
-        "default",
         str((tmp_path / "schemas" / "{{.Group}}" / "{{.ResourceKind}}.json").resolve()),
     )
 

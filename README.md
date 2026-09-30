@@ -36,6 +36,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. `--for '<command>'` narrows to one command. |
 | `uv run chart-manager chart validate <name> --env <env>` | Render one chart for one environment, then run its validators. `--all` validates every environment; with no chart named, the worklist comes from `git diff` against `origin/main`. |
 | `mise run validate -- --all` | Validate every chart and environment in the repo. |
+| `mise run schemas` | Verify or cache pinned upstream schema repositories. Chart changes only need validate; use `--update` to move upstream pins. |
 | `uv run chart-manager chart test <name> --profile minimal` | Install the chart on a local kind cluster and run its Helm test hooks. |
 | `uv run chart-manager chart test <name> --skip-requires` | On an existing cluster, verify bootstrap and required releases without upgrading them, then reinstall and test only the selected target. On a new cluster, install prerequisites but Helm-test only the selected target. |
 | `uv run chart-manager local up --chart <name>` | Create or start the local cluster, run bootstrap releases, converge the chart. `--stack <name>` converges a `LocalStack` instead. |
@@ -59,7 +60,8 @@ Four authored kinds share the `chartmanager.io/v1alpha1` API under
 
 - `ChartWorkspace` (`.chart-manager/workspace.yaml`) — the checkout-owned
   chart, local-cluster, render, and policy locations, plus repository-wide
-  validation and cluster-test fanout.
+  validation and cluster-test fanout. Its validation policy pins the one
+  Kubernetes release used by every chart in a validation run.
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
   `ChartLifecycle` profile, a raw local chart, a pinned OCI chart, or an exact
@@ -200,6 +202,102 @@ heuristic in workflow YAML. `sandbox-test` runs one kind job per changed
 chart, so unrelated charts never gate a PR. `publish` pushes every directly
 changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
 
+The validate job skips repository rendering for changes limited to documentation,
+tests, or Renovate configuration. Other paths (including chart inputs, Python
+code, tool pins, and workflows), empty/unknown diffs, and explicit `all`/`list`
+runs verify the whole repository. CI restores the upstream schema repositories
+using the committed `.chart-manager/schemas.lock.yaml` hash and runs
+`mise run schemas`. Synchronization checks or downloads two pinned Git snapshots:
+the complete selected Kubernetes version directory and the complete CRD catalog.
+It never renders charts. Git uses a shallow, blob-filtered fetch and sparse
+checkout for Kubernetes; all selected files are materialized during sync.
+Validation checks their bytes against the pinned Git tree offline before using
+local file paths. Missing snapshots require sync; corruption requires removing
+the named snapshot and syncing again.
+
+Ordinary chart work only needs `chart-manager chart validate`: adding a chart,
+resource, or catalog-backed kind does not change the lock or require another
+sync. `chart-manager doctor --for 'chart validate'` checks whether the pinned
+snapshots are ready without writing to the cache. Use
+`chart-manager schemas sync --update` to resolve moving upstream refs and write
+the lock after successful hydration. The lock contains policy and two commit
+pins, with no per-resource inventory. `--refresh` has been removed.
+Read-only YAML parsing uses ruamel’s C extension, installed through the package
+dependencies, while preserving the safe YAML 1.2 loader and round-trip editing.
+Validation can still update Helm dependencies and retain rendered files with
+`--keep`; schema resolution itself has no online fallback.
+
+Generated CRD schemas are automatic, disposable build outputs in a separate
+cache. With `generateFromCRDs` enabled, dependencies are materialized before
+provider discovery, without parsing environment values or rendering charts.
+Discovery scans chart sources and packaged dependencies for CRDs; dynamic
+resource templates are conservatively treated as potential providers. Plain
+nonprovider charts are skipped. Uncached providers render together in one batch,
+and their schemas are cached immediately, including on a fresh checkout. Later
+validations reuse results keyed by chart files (including untracked templates
+and vendored dependencies), chart-manager Python code, and the Helm executable.
+Potential providers with local file dependencies or an explicit Helm version
+selector are conservatively rendered each time. Broken potential providers and
+unavailable dependencies still fail preparation. Changed or removed
+CRDs take effect on the next validate, without editing the upstream lock. CI
+restores per-chart derived results separately, keyed by chart, implementation,
+and tool inputs instead of the commit SHA. Before saving, CI drops entries that
+were not used by the current preparation and excludes merged schema generations.
+It also caches materialized Helm dependencies, restoring only files absent from
+the checkout when that chart's metadata and lock still match. Tracked vendored
+archives are never replaced. Upstream snapshots are saved immediately after a
+successful sync, so a later chart failure does not discard those downloads.
+INFO logs report upstream verification, CRD cache hits and renders, and
+validation totals. The final timing
+separates preparation from execution; detailed runner logs are DEBUG-only.
+
+Each generated group/version/kind must have one identical schema across all
+charts and environments. Conflicting definitions fail with a SPEC error naming
+their providers. Generated schemas take precedence over chart-local schemas,
+which take precedence over upstream snapshots. Nullable CRD fields admit null
+while retaining authored enum constraints.
+
+Schema preparation failures include their actual diagnostics in the CI summary.
+If upstream synchronization fails, CI runs render-only validation and uploads
+retained manifests; this diagnostic fallback never turns the failure green.
+Template rejection is a validation failure, dependency-fetch failure is an
+environment failure, and process crashes remain tool failures.
+The fast CI gate also runs the real Helm/kubeconform packaging and schema
+integration suites; missing tools fail that gate instead of silently skipping tests.
+
+The cache lives under `$XDG_CACHE_HOME/chart-manager/schemas/v3/`
+(default `~/.cache/chart-manager/schemas/v3/`), with separate `repositories/` and
+`derived/` directories. Previous cache formats are left untouched and never
+reused. Run `mise run schemas` once to populate the new upstream cache.
+Automatic pruning of old snapshots and interrupted staging directories is
+intentionally deferred to a future maintenance command.
+
+`ignoreMissingSchemas` skips a kind only when no generated, chart-local, or
+pinned upstream schema exists. The complete catalog is available even for kinds
+not previously used in this workspace, so optional resources with catalog
+schemas are now validated regardless of other charts' requirements.
+Local schema templates accept `{{.Group}}`, `{{.ResourceKind}}`,
+`{{.ResourceAPIVersion}}`, and `{{.KindSuffix}}`. Authored locations must end in
+`.json` and contain `{{.ResourceKind}}`: literal files are rejected because
+kubeconform would apply them to every resource type, including core resources.
+Prefer `schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json` to keep
+groups and versions distinct.
+
+Unsupported template variables are configuration errors. Rejecting literal
+schema locations is a breaking v1alpha1 validation change; migrate them to
+kind-specific file templates before using this release.
+
+Repositories without workspace schema policy must supply local schema locations
+in each chart's `spec.validation.schemaLocations` to enable schema validation.
+Alternatively, configure `.chart-manager/workspace.yaml` and initialize the lock
+with `chart-manager schemas sync --update`. No implicit online schema fallback exists.
+
+Breaking v1alpha1 change: chart-local `spec.validation.kubernetesVersion` has been
+removed and is rejected. Move it to `spec.validation.kubernetesVersion` in
+`.chart-manager/workspace.yaml`; all managed charts use that shared version.
+Renovate follows `kubernetes/kubernetes` GitHub releases, whose publication
+timestamps support the 14-day delay before updating the schema policy.
+
 Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 `HARBOR_PROJECT` (default `charts`) in the runner environment, plus
 `HARBOR_PASSWORD` as a GitHub secret.
@@ -209,7 +307,8 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 - Download `rendered-manifests-<run_id>` (validate) or
   `sandbox-logs-<chart>-<profile>-<run_id>` (sandbox-test) from the run's
   Artifacts panel.
-- Validate failure: `uv run chart-manager chart validate <name> --env <env>`.
+- Validate failure: run `mise run schemas`, then
+  `uv run chart-manager chart validate <name> --env <env>`.
 - Sandbox failure: `uv run chart-manager chart test <name> --profile minimal`.
 - If it looks environmental, run `uv run chart-manager doctor --for 'chart test'`
   first — it names the missing binary or unreachable backend.

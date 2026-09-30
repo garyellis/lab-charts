@@ -34,6 +34,7 @@ from chart_manager.cli import local as local_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli import plan as plan_cli
 from chart_manager.cli import publish as publish_cli
+from chart_manager.cli import schemas as schemas_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
@@ -46,6 +47,14 @@ from chart_manager.plumbing.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaError,
+    KubeconformSchemaLockError,
+    KubeconformSchemaRenderError,
+    KubeconformSchemaSourceEnvironmentError,
+    KubeconformSchemaSourceError,
+)
 from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
 
 # --- the command tree ------------------------------------------------------
@@ -77,6 +86,10 @@ grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling."
 grafana_dashboard_app = typer.Typer(
     no_args_is_help=True,
     help="Export and lint Grafana dashboard JSON.",
+)
+schemas_app = typer.Typer(
+    no_args_is_help=True,
+    help="Synchronize and inspect the locked Kubernetes schema store.",
 )
 
 
@@ -125,7 +138,9 @@ def global_options(
     ] = 0,
     no_color: Annotated[
         bool,
-        typer.Option("--no-color", help="Disable color. The NO_COLOR environment variable does the same."),
+        typer.Option(
+            "--no-color", help="Disable color. The NO_COLOR environment variable does the same."
+        ),
     ] = False,
     output: output_mod.GlobalOutputOption = output_mod.AUTO,
 ) -> None:
@@ -220,6 +235,7 @@ upgrade_cli.register_finalize(app)
 app.command("version")(version_command)
 # Root-level: `plan` is asked about the repository, not about one chart.
 plan_cli.register(app)
+schemas_cli.register(schemas_app)
 
 validate_cli.register_validate(chart_app)
 validate_cli.register_cache(chart_cache_app)
@@ -238,6 +254,7 @@ app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(helmrelease_app, name="helmrelease")
+app.add_typer(schemas_app, name="schemas")
 
 
 # --- errors become exit codes ----------------------------------------------
@@ -258,6 +275,11 @@ app.add_typer(helmrelease_app, name="helmrelease")
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
+    (KubeconformSchemaSourceEnvironmentError, Outcome.ENVIRONMENT),
+    (KubeconformSchemaSourceError, Outcome.TOOL),
+    (KubeconformSchemaConfigurationError, Outcome.SPEC),
+    (KubeconformSchemaLockError, Outcome.SPEC),
+    (KubeconformSchemaError, Outcome.TOOL),
     (SpecError, Outcome.SPEC),
     (ChartManagerError, Outcome.FAILED),
 )
@@ -265,6 +287,8 @@ _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
 
 def _outcome_for(exc: ChartManagerError) -> Outcome:
     """Classify a domain error against `_ERROR_OUTCOMES`."""
+    if isinstance(exc, KubeconformSchemaRenderError):
+        return exc.outcome
     for error_type, outcome in _ERROR_OUTCOMES:
         if isinstance(exc, error_type):
             return outcome

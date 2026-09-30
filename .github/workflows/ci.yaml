@@ -79,23 +79,29 @@ jobs:
 
       # The unit suite. Integration-marked tests are excluded by the addopts
       # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
-      # covered by the validate and sandbox-test jobs below.
+      # covered by the explicit contract step and runtime jobs below.
       - name: Unit tests
         run: uv run --extra dev pytest -q
 
       # The lifecycle resource is part of the chart artifact contract: later
       # automation must be able to read the exact intent that was packaged.
-      # Keep this small Helm-backed integration in the fast gate so a bad
-      # .helmignore or filename migration cannot silently strip the resource.
-      - name: ChartLifecycle packaging contract
-        run: >-
-          uv run --extra dev pytest -q -m integration
-          tests/integration/test_chart_lifecycle_packaging.py
+      # Keep real Helm/kubeconform proofs in the fast gate: packaging mistakes
+      # and CRD conversion regressions must not rely on local-only integration tests.
+      - name: ChartLifecycle and schema integration contracts
+        run: |
+          # Fail the gate instead of silently skipping the real-tool proofs.
+          helm version --short
+          kubeconform -v
+          uv run --extra dev pytest -q -m integration \
+            tests/integration/test_chart_lifecycle_packaging.py \
+            tests/integration/test_manifest_validation_schema_e2e.py \
+            tests/integration/test_crd_schema_constraints.py \
+            tests/integration/test_schema_precedence.py
 
       # Lint the package and the suite. Exemptions (and why each exists) live
       # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
       - name: Lint
-        run: uv run --extra dev ruff check src/ tests/
+        run: uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py
 
       # Mypy is intentionally scoped to production code. The package baseline
       # is clean; test annotations stay lightweight by design.
@@ -326,16 +332,118 @@ jobs:
   validate:
     needs: prep
     runs-on: ubuntu-latest
+    env:
+      # Both schema sync and validation resolve the same XDG store. Keeping it
+      # under the checked-out workspace makes the cached scope explicit and
+      # avoids mixing it with unrelated tool caches under the runner account's
+      # home directory.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
+      - name: Decide validation scope
+        id: validation_scope
+        env:
+          MODE: ${{ needs.prep.outputs.mode }}
+          CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
+        run: |
+          needed=false
+          if [[ "$MODE" == all || "$MODE" == list || ! "$CHANGED_FILES" =~ [^[:space:]] ]]; then
+            needed=true
+          else
+            # Only known non-runtime paths bypass repository verification.
+            # Unknown paths stay conservative: local schemas and values can
+            # live outside charts/. Python, tool pins and workflows must check.
+            while IFS= read -r path; do
+              case "$path" in
+                ''|docs/*|*.md|tests/*|renovate.json|renovate-global.json) ;;
+                *) needed=true; break ;;
+              esac
+            done <<< "$CHANGED_FILES"
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+          if [[ "$needed" == false ]]; then
+            echo "Chart validation skipped: only documentation, tests or Renovate configuration changed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Install mise + tools
+        if: steps.validation_scope.outputs.needed == 'true'
         uses: jdx/mise-action@v4
+
+      - name: Restore locked schema generation
+        id: schema_cache
+        if: steps.validation_scope.outputs.needed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/repositories
+          key: schema-repos-v3-${{ runner.os }}-${{ hashFiles('.chart-manager/schemas.lock.yaml') }}
+
+      - name: Restore Helm dependencies
+        id: dependency_cache
+        if: steps.validation_scope.outputs.needed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/helm-dependencies
+          key: helm-dependencies-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.mise.toml', '.github/scripts/validation_cache.py') }}-${{ hashFiles('charts/**/Chart.yaml', 'charts/**/Chart.lock') }}
+          restore-keys: |
+            helm-dependencies-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.mise.toml', '.github/scripts/validation_cache.py') }}-
+
+      # Restore only per-chart results. The merged schema tree is cheap to
+      # rebuild; retaining it would accumulate every previous generation.
+      - name: Restore derived CRD schemas
+        id: derived_cache
+        if: steps.validation_scope.outputs.needed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived/charts
+          key: schema-derived-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('charts/**', 'src/chart_manager/**/*.py', '.chart-manager/**', '.mise.toml', 'pyproject.toml', 'uv.lock', '.github/scripts/validation_cache.py') }}
+          restore-keys: |
+            schema-derived-v2-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Materialize cached Helm dependencies
+        if: steps.validation_scope.outputs.needed == 'true'
+        run: python .github/scripts/validation_cache.py restore-dependencies
+
+      # Upstream sync never renders charts or changes the committed pins.
+      # Derived CRD schemas are prepared automatically by validate.
+      - name: Synchronize locked schemas
+        id: schemas
+        if: steps.validation_scope.outputs.needed == 'true'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          set -o pipefail
+          mise run schemas 2>&1 | tee schemas-output.txt
+          status=${PIPESTATUS[0]}
+          if (( status != 0 )); then
+            {
+              echo "## Schema preparation failed"
+              echo
+              echo "Run \`mise run schemas\` locally and address the error below. A render-only diagnostic run follows; schema validation remains blocked."
+              echo
+              echo '````text'
+              tail -c 60000 schemas-output.txt
+              echo
+              echo '````'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      # Persist completed downloads even if a later chart validation fails.
+      - name: Save locked schema generation
+        if: steps.schemas.outcome == 'success' && steps.schema_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/repositories
+          key: ${{ steps.schema_cache.outputs.cache-primary-key }}
 
       - name: Validate
         id: validate
+        if: ${{ !cancelled() && steps.validation_scope.outputs.needed == 'true' }}
         # Don't fail-fast the job on a non-zero CLI exit: every post-step
         # (artifact upload, future post-processing) must run to completion
         # so the PR has full diagnostic context. The final "Gate" step below
@@ -346,6 +454,7 @@ jobs:
           MODE: ${{ needs.prep.outputs.mode }}
           CHANGED_FILES: ${{ needs.prep.outputs.changed_files }}
           CHART_LIST: ${{ needs.prep.outputs.chart_list_newline }}
+          SCHEMAS_OUTCOME: ${{ steps.schemas.outcome }}
         run: |
           set -euo pipefail
           # `mise run validate` is the literal local command — CI parity by
@@ -377,7 +486,30 @@ jobs:
               args=(--changed-files "$tmp")
               ;;
           esac
+          if [[ "$SCHEMAS_OUTCOME" != success ]]; then
+            args=(--all --phase render)
+          fi
           mise run validate -- "${args[@]}" --output all --keep --github-step-summary
+
+      - name: Prepare validation caches for save
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success'
+        run: |
+          python .github/scripts/validation_cache.py stage-dependencies
+          python .github/scripts/validation_cache.py prune-derived
+
+      - name: Save Helm dependencies
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success' && steps.dependency_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/helm-dependencies
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
+      - name: Save derived CRD schemas
+        if: steps.validate.outcome == 'success' && steps.schemas.outcome == 'success' && steps.derived_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.cache/chart-manager/schemas/v3/derived/charts
+          key: ${{ steps.derived_cache.outputs.cache-primary-key }}
 
       - name: Upload rendered manifests on failure
         # Use steps.validate.outcome, not `failure()`: with continue-on-error
@@ -385,7 +517,9 @@ jobs:
         # gate fires, so `if: failure()` would never trigger here. `!cancelled()`
         # skips artifact upload during workflow cancellation (no point keeping
         # a half-rendered tree from a killed run).
-        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        # CRD-discovery renders live in a temporary directory and are not part
+        # of this artifact; upload only validation's retained render tree.
+        if: ${{ !cancelled() && (steps.validate.outcome == 'failure' || steps.schemas.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: rendered-manifests-${{ github.run_id }}
@@ -400,9 +534,9 @@ jobs:
         # (skipped), the condition is false, and the job's overall status
         # reflects the earlier failure via normal GHA semantics. On cancel
         # we don't want to overwrite the cancel verdict with a "failed" row.
-        if: ${{ !cancelled() && steps.validate.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.schemas.outcome == 'failure' || steps.validate.outcome == 'failure') }}
         run: |
-          echo "validate found failures — failing job to block merge."
+          echo "schema preparation or validation found failures — failing job to block merge."
           exit 1
 
   sandbox-test:

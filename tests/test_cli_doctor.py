@@ -209,6 +209,7 @@ def test_for_runs_only_the_capabilities_that_command_needs(
             "helm": (_HEALTHY,),
             "kubeconform": (Check.ok("kubeconform", "v0.6.7"),),
             "kyverno": (Check.ok("kyverno", "v1.13.0"),),
+            "schemas": (Check.ok("schema-store", "ready=true"),),
             "events": (_UNREACHABLE,),
         }
     )
@@ -218,7 +219,12 @@ def test_for_runs_only_the_capabilities_that_command_needs(
 
     payload = json.loads(result.stdout)
     assert payload["for"] == "chart validate"
-    assert [check["name"] for check in payload["checks"]] == ["helm", "kubeconform", "kyverno"]
+    assert [check["name"] for check in payload["checks"]] == [
+        "helm",
+        "kubeconform",
+        "kyverno",
+        "schema-store",
+    ]
     assert result.exit_code == EXIT_SUCCESS, "the unreachable backend was out of scope"
 
 
