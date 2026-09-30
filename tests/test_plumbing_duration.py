@@ -21,6 +21,14 @@ def test_parse_duration_rejects_malformed_input(raw: str) -> None:
         parse_duration(raw)
 
 
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "0", "0s", "-5m"])
+def test_parse_duration_rejects_non_positive_or_non_finite(raw: str) -> None:
+    # Each of these is a valid float to Python, so only the explicit
+    # positive-and-finite rule stops it reaching a deadline computation.
+    with pytest.raises(ChartManagerError, match=f"invalid duration: {raw!r}"):
+        parse_duration(raw)
+
+
 @pytest.mark.parametrize("value", [0.001, 1, 30.0, 3600.0])
 def test_require_positive_seconds_accepts_positive_finite(value: float) -> None:
     require_positive_seconds("budget", value)

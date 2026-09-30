@@ -2654,7 +2654,8 @@ promo_correlation_id = flux-repo PR</div>
 <span class="s">"90"</span>  → 90.0   <span class="r">bare number = seconds (int or float)</span>
 <span class="s">"1.5h"</span> → 5400.0 <span class="r">float multipliers work</span>
 
-<span class="s">""</span> · <span class="s">"5d"</span> · <span class="s">"abc"</span> <span class="r">→ ChartManagerError: invalid duration: …</span></div>
+<span class="s">""</span> · <span class="s">"5d"</span> · <span class="s">"abc"</span> <span class="r">→ ChartManagerError: invalid duration: …</span>
+<span class="s">"nan"</span> · <span class="s">"inf"</span> · <span class="s">"0"</span> · <span class="s">"-5m"</span> <span class="r">→ same: must be positive and finite (require_positive_seconds)</span></div>
             <p style="font-size:12px;color:var(--muted);margin-top:6px">Units table: <span class="ref" data-tip="plumbing/duration.py:6 — _DURATION_UNITS = {s: 1, m: 60, h: 3600}">s · m · h only</span>. No days, no compound (<code>1h30m</code>) — <code>&quot;5d&quot;</code> fails on <code>float(&quot;5d&quot;)</code> since <code>d</code> isn't a unit.</p>
           </div>
           <div class="block"><h4>Who calls it</h4>

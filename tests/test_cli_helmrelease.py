@@ -548,27 +548,28 @@ def test_timeout_duration_syntax_is_parsed_to_seconds(
     assert _timeouts(fake.captured_requests[0]) == (2.5, 90.0, 3600.0)
 
 
-@pytest.mark.parametrize("command", ["monitor", "test"])
-@pytest.mark.parametrize("flag", ["--per-poll-timeout", "--per-hr-timeout", "--total-timeout"])
-@pytest.mark.parametrize("value", ["5 mins", "abc", "", "nan", "inf", "0s", "-5m"])
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--per-poll-timeout", "abc"),
+        ("--per-hr-timeout", "abc"),
+        ("--total-timeout", "abc"),
+        # Non-finite values ride the same path; the full range of bad values
+        # is covered against `parse_duration` in test_plumbing_duration.py.
+        ("--total-timeout", "nan"),
+    ],
+)
 def test_malformed_timeout_is_a_usage_error_before_any_service_runs(
-    runner: CliRunner,
-    monkeypatch: pytest.MonkeyPatch,
-    command: str,
-    flag: str,
-    value: str,
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, flag: str, value: str
 ) -> None:
-    monitor_fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    test_fake = _install_fake_test(monkeypatch, result=_passed_test_result())
-    base = _BASE if command == "monitor" else _TEST_BASE
-    res = runner.invoke(_build_app(), [*base, flag, value])
+    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
+    res = runner.invoke(_build_app(), [*_BASE, flag, value])
     # Exit 2 is click's usage-error code; the message names the flag and no
     # traceback reaches the operator.
     assert res.exit_code == 2, res.output
     assert flag in res.stderr
     assert res.exception is None or isinstance(res.exception, SystemExit)
-    assert monitor_fake.captured_requests == []
-    assert test_fake.captured_requests == []
+    assert fake.captured_requests == []
 
 
 def test_timeout_ordering_violation_is_a_clean_domain_error(

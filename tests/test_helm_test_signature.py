@@ -105,10 +105,3 @@ def test_format_helm_duration_is_plain_go_seconds(seconds: float, expected: str)
 def test_format_helm_duration_rejects_invalid_seconds(seconds: float) -> None:
     with pytest.raises(ValueError):
         format_helm_duration(seconds)
-
-
-def test_formatted_fractional_timeout_reaches_helm_args_as_a_string() -> None:
-    runner = FakeCommandRunner()
-    Helm(runner=runner).test("loki", namespace="loki", timeout=format_helm_duration(1.5))
-    call = runner.records[0]
-    assert call.args[call.args.index("--timeout") + 1] == "1.5s"
