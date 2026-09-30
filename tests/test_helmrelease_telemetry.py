@@ -421,6 +421,52 @@ def test_helm_test_emits_nothing_without_an_environment() -> None:
     assert events.events == []
 
 
+def test_helm_test_emits_nothing_when_nothing_matched() -> None:
+    # Counterpart of the monitor case: no HELM_TEST_RUN was opened, so a
+    # terminal phase here would close an interval that never started.
+    ref = _ref()
+    cluster = _FakeCluster(
+        list_result=[ref],
+        statuses={("loki", "loki"): _status(ref)},
+    )
+    events = _RecordingEvents()
+    result = _tester(cluster, _FakeHelm(), events).test(_test_req(version="9.9.9"))
+
+    assert [o.verdict for o in result.outcomes] == [Verdict.NO_MATCH]
+    assert events.events == []
+
+
+@dataclass
+class _ExplodingHelm:
+    """helm double whose `helm test` fails as infrastructure, not as a verdict."""
+
+    exc: BaseException
+
+    def test(self, *args: Any, **kwargs: Any) -> CommandResult:
+        raise self.exc
+
+
+def test_helm_test_closes_the_interval_when_a_worker_raises() -> None:
+    # Counterpart of the monitor case: an infrastructure failure propagates
+    # instead of producing outcomes, and must still close HELM_TEST_RUN.
+    events = _RecordingEvents()
+    helm = _ExplodingHelm(ChartManagerError("helm exploded"))
+    with pytest.raises(ChartManagerError):
+        _tester(_one_ready_hr(), helm, events).test(_test_req())  # type: ignore[arg-type]
+
+    assert events.phases == [
+        PromotionPhase.HELM_TEST_RUN,
+        PromotionPhase.HELM_TEST_FAILED,
+    ]
+    # The release that never reported is counted as a failure, not as zero.
+    assert events.events[1]["detail"] == {
+        "stage": "helm-test",
+        "verdict": "failed",
+        "total": 1,
+        "failures": 1,
+    }
+
+
 # ----- failure policy ------------------------------------------------------
 
 
