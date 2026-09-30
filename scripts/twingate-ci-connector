@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Cluster-test hook that gives a test cluster its own Twingate connector and
+# publishes in-cluster addresses through it as Twingate Resources.
+#
+#   preInstall: [scripts/twingate-ci-connector, create, ADDRESS...]
+#   cleanup:    [scripts/twingate-ci-connector, delete]
+#
+# ADDRESS is a DNS name the connector resolves, typically a Service's
+# <svc>.<namespace>.svc.cluster.local. Each becomes a Resource named
+# "<connector name> <address>" on the connector's remote network, all ports,
+# granted to TWINGATE_GROUP.
+#
+# create: connectorCreate on the CI remote network (reused if it already
+#   exists), connectorGenerateTokens, then writes the tokens to a Secret in the
+#   release namespace for the chart to consume. Re-runs on every re-test, so it
+#   is idempotent: a Secret already stamped with the connector's id is left
+#   alone. Otherwise new tokens are minted and a running connector restarted,
+#   since pods read the Secret only at start. Resources are synced to ADDRESS:
+#   missing ones are created, ones no longer listed are deleted.
+# delete: deletes the connector's Resources, the Secret, and connectorDelete. Twingate has no revoke-token
+#   mutation; deleting the connector invalidates its tokens. Succeeds when
+#   nothing is left, and when the cluster is already gone.
+#
+# Environment:
+#   TWINGATE_API_KEY (or TWINGATE_API_TOKEN)  API key, read-write scope
+#   TWINGATE_NETWORK         tenant, <network>.twingate.com (default garyslab);
+#                            must match connector.connector.network
+#   TWINGATE_REMOTE_NETWORK  remote network for the connector (default garyslab-ci)
+#   TWINGATE_CONNECTOR_NAME  default ci-<user>-<cluster>-<namespace>
+#   TWINGATE_GROUP           group granted the Resources (default Everyone)
+#   TWINGATE_SECRET_NAME     default twingate-connector-tokens;
+#                            must match connector.connector.existingSecret
+#   CHART_MANAGER_*          hook context from chart-manager
+#
+# Tokens are never printed; they go from the API response straight to kubectl,
+# and the API key never appears in a process argument list.
+
+usage() { echo "usage: $0 create [ADDRESS...] | delete" >&2; exit 2; }
+[[ $# -ge 1 ]] || usage
+action=$1
+shift
+addresses=("$@")
+[[ $action == create || $# -eq 0 ]] || usage
+
+api_key=${TWINGATE_API_KEY:-${TWINGATE_API_TOKEN:-}}
+[[ -n $api_key ]] || { echo "TWINGATE_API_KEY is not set" >&2; exit 1; }
+network=${TWINGATE_NETWORK:-garyslab}
+remote_network=${TWINGATE_REMOTE_NETWORK:-garyslab-ci}
+group=${TWINGATE_GROUP:-Everyone}
+namespace=${CHART_MANAGER_NAMESPACE:?}
+context=${CHART_MANAGER_KUBE_CONTEXT:?}
+secret=${TWINGATE_SECRET_NAME:-twingate-connector-tokens}
+# The user keeps two developers' default "chart-manager" clusters from
+# sharing (and deleting) one connector; CI cluster names carry the run id.
+default_name=$(printf 'ci-%s-%s-%s' "${USER:-user}" "${CHART_MANAGER_CLUSTER_NAME:?}" "$namespace" \
+  | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | cut -c1-63 | sed 's/-*$//')
+connector_name=${TWINGATE_CONNECTOR_NAME:-$default_name}
+id_annotation=twingate.com/connector-id
+
+# graphql QUERY VARIABLES_JSON -> data on stdout; exits non-zero on GraphQL
+# errors. -L follows the redirect to the tenant's regional API host. The key
+# header is read from a file descriptor (printf is a builtin), not argv.
+graphql() {
+  local response
+  response=$(jq -n --arg query "$1" --argjson variables "$2" \
+      '{query: $query, variables: $variables}' \
+    | curl -sSfL --retry 3 --max-time 30 "https://${network}.twingate.com/api/graphql/" \
+        -H @<(printf 'X-API-KEY: %s\n' "$api_key") \
+        -H 'Content-Type: application/json' --data-binary @-)
+  if jq -e '.errors' <<<"$response" >/dev/null; then
+    jq -c '.errors' <<<"$response" >&2
+    return 1
+  fi
+  jq '.data' <<<"$response"
+}
+
+# mutation_ok DATA FIELD: fail with the payload's error when ok is false.
+mutation_ok() {
+  jq -e --arg f "$2" '.[$f].ok' <<<"$1" >/dev/null || {
+    echo "$2 failed: $(jq -r --arg f "$2" '.[$f].error' <<<"$1")" >&2
+    return 1
+  }
+}
+
+connector_id() {
+  graphql 'query($name: String!) {
+      connectors(filter: {name: {eq: $name}}) { edges { node { id } } } }' \
+    "$(jq -n --arg name "$connector_name" '{name: $name}')" \
+    | jq -r '.connectors.edges[0].node.id // empty'
+}
+
+# resources: "<id> <address>" per Resource this connector owns, by name prefix.
+resources() {
+  graphql 'query($prefix: String!) {
+      resources(filter: {name: {startsWith: $prefix}}) {
+        edges { node { id address { value } } } } }' \
+    "$(jq -n --arg prefix "${connector_name} " '{prefix: $prefix}')" \
+    | jq -r '.resources.edges[].node | "\(.id) \(.address.value)"'
+}
+
+delete_resource() {
+  local data
+  data=$(graphql 'mutation($id: ID!) { resourceDelete(id: $id) { ok error } }' \
+    "$(jq -n --arg id "$1" '{id: $id}')")
+  mutation_ok "$data" resourceDelete
+  echo "deleted resource ${connector_name} $2"
+}
+
+# sync_resources REMOTE_NETWORK_ID: make this connector's Resources match
+# ADDRESS. Twingate routes a Resource through any connector on its remote
+# network, so each cluster's connector gets its own Resources.
+sync_resources() {
+  local rn_id=$1 existing group_id address id data
+  existing=$(resources)
+  while read -r id address; do
+    [[ -n $id ]] || continue
+    [[ " ${addresses[*]:-} " == *" ${address} "* ]] || delete_resource "$id" "$address"
+  done <<<"$existing"
+
+  ((${#addresses[@]})) || return 0
+  group_id=$(graphql 'query($name: String!) {
+      groups(filter: {name: {eq: $name}}) { edges { node { id } } } }' \
+      "$(jq -n --arg name "$group" '{name: $name}')" \
+    | jq -r '.groups.edges[0].node.id // empty')
+  [[ -n $group_id ]] || { echo "group ${group} not found" >&2; exit 1; }
+  for address in "${addresses[@]}"; do
+    if grep -q " ${address}$" <<<"$existing"; then
+      echo "resource ${connector_name} ${address} exists"
+      continue
+    fi
+    data=$(graphql 'mutation($name: String!, $address: String!, $rn: ID!, $group: ID!) {
+        resourceCreate(name: $name, address: $address, remoteNetworkId: $rn,
+                       groupIds: [$group]) { ok error entity { id } } }' \
+      "$(jq -n --arg name "${connector_name} ${address}" --arg address "$address" \
+          --arg rn "$rn_id" --arg group "$group_id" \
+          '{name: $name, address: $address, rn: $rn, group: $group}')")
+    mutation_ok "$data" resourceCreate
+    echo "created resource ${connector_name} ${address} for group ${group}"
+  done
+}
+
+remote_network_id() {
+  local rn_id
+  rn_id=$(graphql 'query($name: String!) { remoteNetwork(name: $name) { id } }' \
+      "$(jq -n --arg name "$remote_network" '{name: $name}')" \
+    | jq -r '.remoteNetwork.id // empty')
+  [[ -n $rn_id ]] || { echo "remote network ${remote_network} not found" >&2; exit 1; }
+  echo "$rn_id"
+}
+
+create() {
+  local id data stamped rn_id
+  rn_id=$(remote_network_id)
+  sync_resources "$rn_id"
+  id=$(connector_id)
+  stamped=$(kubectl --context "$context" -n "$namespace" get secret "$secret" \
+    -o jsonpath="{.metadata.annotations.${id_annotation//./\\.}}" 2>/dev/null || true)
+  if [[ -n $id && $stamped == "$id" ]]; then
+    echo "connector ${connector_name} (${id}) and its secret ${namespace}/${secret} exist"
+    return
+  fi
+
+  if [[ -z $id ]]; then
+    data=$(graphql 'mutation($name: String!, $rn: ID!) {
+        connectorCreate(name: $name, remoteNetworkId: $rn,
+                        hasStatusNotificationsEnabled: false) {
+          ok error entity { id } } }' \
+      "$(jq -n --arg name "$connector_name" --arg rn "$rn_id" '{name: $name, rn: $rn}')")
+    mutation_ok "$data" connectorCreate
+    id=$(jq -r '.connectorCreate.entity.id' <<<"$data")
+    echo "created connector ${connector_name} (${id}) on ${remote_network}"
+  fi
+
+  # New tokens invalidate any the connector had, so the Secret is always
+  # current and a pod still holding the old pair must restart (below).
+  data=$(graphql 'mutation($id: ID!) {
+      connectorGenerateTokens(connectorId: $id) {
+        ok error connectorTokens { accessToken refreshToken } } }' \
+    "$(jq -n --arg id "$id" '{id: $id}')")
+  mutation_ok "$data" connectorGenerateTokens
+  # Tokens only: the chart sets TWINGATE_URL, and the connector refuses to
+  # start when TWINGATE_NETWORK is set too.
+  # Server-side apply: client-side apply would copy the tokens in plaintext
+  # into the last-applied-configuration annotation.
+  jq --arg name "$secret" --arg ns "$namespace" --arg ann "$id_annotation" --arg id "$id" '{
+      apiVersion: "v1", kind: "Secret", type: "Opaque",
+      metadata: {name: $name, namespace: $ns, annotations: {($ann): $id}},
+      stringData: {
+        TWINGATE_ACCESS_TOKEN: .connectorGenerateTokens.connectorTokens.accessToken,
+        TWINGATE_REFRESH_TOKEN: .connectorGenerateTokens.connectorTokens.refreshToken
+      }}' <<<"$data" \
+    | kubectl --context "$context" apply --server-side --force-conflicts \
+        --field-manager=twingate-ci-connector -f - >/dev/null
+  echo "wrote tokens for ${connector_name} to secret ${namespace}/${secret}"
+
+  # No-op on first install; on a re-test the running pod has the old tokens.
+  if kubectl --context "$context" -n "$namespace" get deployment \
+      -l "app.kubernetes.io/instance=${CHART_MANAGER_RELEASE:?}" -o name 2>/dev/null | grep -q .; then
+    kubectl --context "$context" -n "$namespace" rollout restart deployment \
+      -l "app.kubernetes.io/instance=${CHART_MANAGER_RELEASE}"
+  fi
+}
+
+delete() {
+  local rid address
+  while read -r rid address; do
+    [[ -n $rid ]] || continue
+    delete_resource "$rid" "$address"
+  done <<<"$(resources)"
+
+  # The cluster may already be gone; the connector must still be released.
+  kubectl --context "$context" -n "$namespace" delete secret "$secret" \
+    --ignore-not-found --wait=false >/dev/null 2>&1 \
+    || echo "could not delete secret ${namespace}/${secret}; continuing" >&2
+
+  local id data
+  id=$(connector_id)
+  if [[ -z $id ]]; then
+    echo "connector ${connector_name} not found; nothing to delete"
+    return
+  fi
+  data=$(graphql 'mutation($id: ID!) { connectorDelete(id: $id) { ok error } }' \
+    "$(jq -n --arg id "$id" '{id: $id}')")
+  mutation_ok "$data" connectorDelete
+  echo "deleted connector ${connector_name} (${id}); its tokens are revoked"
+}
+
+case $action in
+  create) create ;;
+  delete) delete ;;
+  *) usage ;;
+esac

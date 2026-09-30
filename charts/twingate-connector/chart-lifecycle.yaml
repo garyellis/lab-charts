@@ -1,0 +1,51 @@
+apiVersion: chartmanager.io/v1alpha1
+kind: ChartLifecycle
+metadata:
+  name: twingate-connector
+spec:
+  enabled: true
+  validation:
+    enabled: true
+    releaseName: twingate-connector
+    namespaceTemplate: "lab-${env}"
+    environments:
+      ci:
+        namespace: twingate
+        values:
+          - values.yaml
+          - values-ci.yaml
+    triggers:
+      "Chart.yaml":           [ci]
+      "Chart.lock":           [ci]
+      "values.yaml":          [ci]
+      "values-ci.yaml":       [ci]
+      "chart-lifecycle.yaml": [ci]
+    unmatchedChanges: warn
+
+  clusterTest:
+    enabled: true
+    profiles:
+      # The connector only turns Ready after it authenticates to the Twingate
+      # control plane, so there is no truthful offline install. The hooks need
+      # TWINGATE_API_KEY (read-write) on the host running chart-manager.
+      minimal:
+        description: >-
+          Mint a connector for this cluster on the garyslab-ci remote network,
+          install it with the minted tokens, and wait until its readiness probe
+          (connectorctl health) reports it connected. Teardown deletes the
+          connector, which revokes its tokens.
+        namespace: twingate
+        requires: []
+        values:
+          - values.yaml
+          - values-ci.yaml
+        # Readiness already proves the connection; no Helm test adds to it.
+        helmTest: false
+        timeout: 10m
+        hooks:
+          # Addresses after `create` become Twingate Resources on this
+          # connector (README "Cluster test"); none are published yet.
+          preInstall: [scripts/twingate-ci-connector, create]
+          cleanup: [scripts/twingate-ci-connector, delete]
+
+    dependentTests: []

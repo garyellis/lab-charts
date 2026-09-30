@@ -1,0 +1,6 @@
+# CI overlay for kind. The Secret comes from the minimal profile's preInstall
+# hook; the connector it names is scoped to the test cluster.
+connector:
+  connector:
+    # Verbose enough to show the control-plane handshake in failure logs.
+    logLevel: info
