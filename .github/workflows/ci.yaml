@@ -754,7 +754,7 @@ jobs:
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             short_sha="${SOURCE_SHA:0:8}"
             publish_args+=(
-              --version-suffix "pr.${PR_NUMBER}.g${short_sha}"
+              --version-suffix "pr.${PR_NUMBER}.${GITHUB_RUN_NUMBER}.g${short_sha}"
               --kind preview
               --build-correlation-id "${GITHUB_REPOSITORY}#${PR_NUMBER}"
               --pr-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"

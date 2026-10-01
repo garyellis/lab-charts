@@ -200,7 +200,8 @@ prep ──┬── validate ────────────────�
 matrices from `chart-manager plan -o github` — there is no second fanout
 heuristic in workflow YAML. `sandbox-test` runs one kind job per changed
 chart, so unrelated charts never gate a PR. `publish` pushes every directly
-changed chart with version `<Chart.yaml version>-pr.<pr>.g<sha>`.
+changed chart with version `<Chart.yaml version>-pr.<pr>.<run>.g<sha>`, where
+`<run>` is the workflow run number, so later builds of a PR sort higher.
 
 The validate job skips repository rendering for changes limited to documentation,
 tests, or Renovate configuration. Other paths (including chart inputs, Python
