@@ -794,7 +794,7 @@ _API_FORBIDDEN_IMPORTS = {
     "yaml": "turning bytes into dicts is the loader's job, in services/",
 }
 
-#: The only non-stdlib, non-Pydantic imports `api/` may make. Both are pure
+#: The only non-stdlib, non-Pydantic imports `api/` may make. All are pure
 #: `str`/`Path` rules that import nothing but the standard library, touch no
 #: filesystem, and raise `ValueError` -- so importing them cannot drag a layer
 #: in behind them, and cannot make an authored field raise `SpecError`.
@@ -805,6 +805,7 @@ _API_ALLOWED_HELPERS = frozenset(
     {
         "chart_manager.plumbing.names",
         "chart_manager.plumbing.paths",
+        "chart_manager.plumbing.semver",
     }
 )
 
@@ -991,7 +992,7 @@ def test_api_validators_raise_only_value_errors() -> None:
 
     The narrower question -- can `api/` even *import*
     `chart_manager.plumbing.errors`? -- is already answered by
-    `test_api_imports_only_stdlib_pydantic_and_pure_helpers`, which allows two
+    `test_api_imports_only_stdlib_pydantic_and_pure_helpers`, which allows three
     plumbing modules and that is not one of them. This check is about the
     raise itself, so it still fires if the exception arrives some other way.
     """

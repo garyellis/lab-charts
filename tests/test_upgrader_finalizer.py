@@ -156,6 +156,14 @@ def test_refuses_divergent_wrapper_version(tmp_path: Path) -> None:
         UpgradeFinalizer(Baseline(baseline)).finalize(_request(tmp_path, chart, (update,)))
 
 
+@pytest.mark.parametrize("version", ["1.02.3", "1.2.03"])
+def test_refuses_a_wrapper_version_with_leading_zeros(tmp_path: Path, version: str) -> None:
+    chart = _write_chart(tmp_path, version=version)
+    baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
+    with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
+        UpgradeFinalizer(Baseline(baseline)).finalize(_request(tmp_path, chart, ()))
+
+
 def test_loads_explicit_renovate_temp_data_outside_repository(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

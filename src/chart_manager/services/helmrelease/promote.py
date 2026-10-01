@@ -7,11 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from packaging.version import InvalidVersion, Version
-
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.semver import parse_semver
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.writer import EventWriter
 
@@ -338,7 +337,7 @@ class PromoteService:
 
 
 def _is_downgrade(current: str | None, target: str) -> bool:
-    """True if `current` is a higher semver than `target`.
+    """True if `current` has higher SemVer precedence than `target`.
 
     Non-comparable strings are never treated as downgrades.
     """
@@ -348,8 +347,8 @@ def _is_downgrade(current: str | None, target: str) -> bool:
     if current is None:
         return False
     try:
-        return Version(current) > Version(target)
-    except InvalidVersion:
+        return parse_semver(current).precedence > parse_semver(target).precedence
+    except ValueError:
         return False
 
 

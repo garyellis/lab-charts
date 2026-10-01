@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import YamlError
+from chart_manager.plumbing.semver import SemVer, parse_bare_version
 from chart_manager.plumbing.yaml_files import (
     edit_yaml_documents,
     load_yaml_file,
@@ -31,7 +32,6 @@ from chart_manager.settings import DEFAULT_CHARTS_DIR
 #: whatever reached stderr.
 _LOG = logging.getLogger(__name__)
 
-_SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _HEADING = re.compile(r"^##\s")
 
 
@@ -63,10 +63,11 @@ class GitBaselineReader:
         return result.stdout
 
 
-def _semver(value: object, *, source: str) -> tuple[int, int, int]:
-    if not isinstance(value, str) or (match := _SEMVER.fullmatch(value)) is None:
-        raise UpgradeError(f"{source} must be a strict x.y.z version, got {value!r}")
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+def _semver(value: object, *, source: str) -> SemVer:
+    try:
+        return parse_bare_version(value)
+    except ValueError as exc:
+        raise UpgradeError(f"{source} must be a strict x.y.z version, got {value!r}") from exc
 
 
 def _updates_from_data(data: Mapping[str, Any] | None) -> tuple[UpdateMetadata, ...]:
@@ -181,37 +182,37 @@ class UpgradeFinalizer:
             if current_version != baseline_version:
                 raise UpgradeError(
                     "wrapper version diverged from baseline without a qualifying "
-                    f"image or Helm dependency update: {'.'.join(map(str, current_version))}"
+                    f"image or Helm dependency update: {current_version}"
                 )
             _LOG.info(
                 "upgrade finalize finished: chart=%s version=%s bump=none changed=False "
                 "(no qualifying update)",
                 chart_path.name,
-                ".".join(map(str, current_version)),
+                current_version,
             )
             return FinalizeResult(
                 chart=chart_path.name,
-                previous_version=".".join(map(str, baseline_version)),
-                version=".".join(map(str, current_version)),
+                previous_version=str(baseline_version),
+                version=str(current_version),
                 bump=None,
                 changed=False,
                 updates=updates,
             )
         major = any(_is_major(update) for update in qualifying)
-        target_tuple = (
-            (baseline_version[0] + 1, 0, 0)
+        target_version = (
+            SemVer(baseline_version.major + 1, 0, 0)
             if major
-            else (baseline_version[0], baseline_version[1], baseline_version[2] + 1)
+            else SemVer(baseline_version.major, baseline_version.minor, baseline_version.patch + 1)
         )
-        baseline_value = ".".join(map(str, baseline_version))
-        target = ".".join(map(str, target_tuple))
-        if current_version not in {baseline_version, target_tuple}:
+        baseline_value = str(baseline_version)
+        target = str(target_version)
+        if current_version not in {baseline_version, target_version}:
             raise UpgradeError(
                 f"wrapper version diverged from baseline {baseline_value} and target {target}: "
-                f"{'.'.join(map(str, current_version))}"
+                f"{current_version}"
             )
         heading = request.target_heading or f"## {target}"
-        chart_changed = current_version != target_tuple
+        chart_changed = current_version != target_version
         chart_file = safe_output_path(chart_path, "Chart.yaml")
         changelog_file = safe_output_path(chart_path, "changelog.md")
         old_changelog = (

@@ -6,13 +6,14 @@ import hashlib
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.semver import SemVer, parse_semver
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase
 from chart_manager.services.events.writer import EventWriter
@@ -22,12 +23,9 @@ from chart_manager.settings import DEFAULT_CHARTS_DIR
 #: artifacts actually reached the registry?" for a batch that half-succeeded.
 _LOG = logging.getLogger(__name__)
 
-_SEMVER = re.compile(
-    r"^(?P<core>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
-)
-_SUFFIX_IDENTIFIER = r"[0-9A-Za-z](?:[0-9A-Za-z-]*[0-9A-Za-z])?"
+# Stricter than SemVer: no identifier may start or end with a hyphen. The
+# lookahead rejects numeric identifiers with leading zeros, as SemVer does.
+_SUFFIX_IDENTIFIER = r"(?!0[0-9]+(?:\.|$))[0-9A-Za-z](?:[0-9A-Za-z-]*[0-9A-Za-z])?"
 _SUFFIX = re.compile(rf"^{_SUFFIX_IDENTIFIER}(?:\.{_SUFFIX_IDENTIFIER})*$")
 
 
@@ -368,33 +366,23 @@ def target_reference(repository: str, chart: str, version: str) -> str:
 
 def validate_semver(version: str, *, label: str = "version") -> str:
     """Validate strict SemVer 2.0, including numeric identifier rules."""
-    match = _SEMVER.fullmatch(version)
-    if match is None or _has_leading_zero_numeric(match.group("pre")):
-        raise SpecError(f"invalid SemVer {label}: {version!r}")
+    _parse(version, label=label)
     return version
 
 
 def with_version_suffix(base: str, suffix: str) -> str:
     """Append prerelease identifiers while preserving existing metadata."""
-    match = _SEMVER.fullmatch(base)
-    if match is None or _has_leading_zero_numeric(match.group("pre")):
-        raise SpecError(f"invalid SemVer chart version: {base!r}")
-    if not suffix or _SUFFIX.fullmatch(suffix) is None or _has_leading_zero_numeric(suffix):
+    version = _parse(base, label="chart version")
+    if _SUFFIX.fullmatch(suffix) is None:
         raise SpecError(f"invalid SemVer prerelease suffix: {suffix!r}")
-    core = f"{match.group('core')}.{match.group('minor')}.{match.group('patch')}"
-    prerelease = ".".join(part for part in (match.group("pre"), suffix) if part)
-    build = f"+{match.group('build')}" if match.group("build") else ""
-    return f"{core}-{prerelease}{build}"
+    return str(replace(version, prerelease=version.prerelease + tuple(suffix.split("."))))
 
 
-def _has_leading_zero_numeric(value: str | None) -> bool:
-    return bool(
-        value
-        and any(
-            part.isdigit() and len(part) > 1 and part.startswith("0")
-            for part in value.split(".")
-        )
-    )
+def _parse(version: str, *, label: str) -> SemVer:
+    try:
+        return parse_semver(version)
+    except ValueError as exc:
+        raise SpecError(f"invalid SemVer {label}: {version!r}") from exc
 
 
 __all__ = [

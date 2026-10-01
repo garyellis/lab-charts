@@ -12,6 +12,7 @@ from pydantic import Field, field_validator, model_validator
 from chart_manager.api.v1alpha1.common import StrictApiModel
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path
+from chart_manager.plumbing.semver import parse_semver
 
 __all__ = [
     "BootstrapLifecycleRelease",
@@ -29,11 +30,6 @@ __all__ = [
     "WorkloadsReady",
 ]
 
-_EXACT_SEMVER = re.compile(
-    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
-    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HELM_DURATION = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$")
 _HELM_DURATION_NUMBER = re.compile(r"(\d+(?:\.\d+)?)(?:ns|us|µs|ms|s|m|h)")
@@ -62,6 +58,14 @@ def _paths(value: object, *, field: str) -> list[Path]:
     if not isinstance(value, list):
         raise ValueError(f"{field} must be a list of repository-relative paths")
     return [relative_path(item, field=f"{field}[]") for item in value]
+
+
+def _exact_semver(value: str) -> str:
+    try:
+        parse_semver(value)
+    except ValueError as exc:
+        raise ValueError("release.version must be an exact SemVer version") from exc
+    return value
 
 
 class LifecycleRelease(StrictApiModel):
@@ -147,9 +151,7 @@ class OciChartRelease(_RawHelmRelease):
     @field_validator("version")
     @classmethod
     def _exact_version(cls, value: str | None) -> str | None:
-        if value is not None and not _EXACT_SEMVER.fullmatch(value):
-            raise ValueError("release.version must be an exact SemVer version")
-        return value
+        return None if value is None else _exact_semver(value)
 
     @field_validator("digest")
     @classmethod
@@ -200,9 +202,7 @@ class RepoChartRelease(_RawHelmRelease):
     @field_validator("version")
     @classmethod
     def _exact_version(cls, value: str) -> str:
-        if not _EXACT_SEMVER.fullmatch(value):
-            raise ValueError("release.version must be an exact SemVer version")
-        return value
+        return _exact_semver(value)
 
 
 class WorkloadsReady(StrictApiModel):

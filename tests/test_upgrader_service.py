@@ -47,6 +47,16 @@ def test_plan_has_deterministic_branch_group_and_scoped_overlay(tmp_path: Path) 
     assert '"updateType":"{{updateType}}"' in callback["dataFileTemplate"]
 
 
+@pytest.mark.parametrize("version", ["01.2.3", "1.02.3", "1.2.03", "1.2.3-rc.1"])
+def test_plan_rejects_a_wrapper_version_that_is_not_strict_x_y_z(
+    tmp_path: Path, version: str
+) -> None:
+    chart = _chart(tmp_path)
+    (chart / "Chart.yaml").write_text(f"name: my-chart\nversion: {version}\n", encoding="utf-8")
+    with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
+        build_upgrade_plan(tmp_path, chart)
+
+
 def test_service_uses_injected_adapter_and_factory(tmp_path: Path) -> None:
     chart = _chart(tmp_path)
     calls: list[object] = []
