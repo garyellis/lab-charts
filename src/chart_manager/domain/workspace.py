@@ -33,7 +33,8 @@ class RepositoryWorkspace:
                 {**self.spec.model_dump(by_alias=True), "chartsDir": path}
             )
         except ValidationError as exc:
-            raise SpecError(f"invalid chart directory {path}: {exc.errors()[0]['msg']}") from exc
+            message = str(exc.errors()[0]["msg"]).removeprefix("Value error, ")
+            raise SpecError(f"invalid chart directory {path}: {message}") from exc
         _check_layout(self.root, spec)
         return RepositoryWorkspace(root=self.root, name=self.name, spec=spec)
 
@@ -44,7 +45,7 @@ class RepositoryWorkspace:
     @property
     def charts_root(self) -> Path:
         """Absolute directory containing managed chart directories."""
-        return self.root if self.spec.charts_dir == Path(".") else self.root / self.spec.charts_dir
+        return self.root / self.spec.charts_dir
 
     @property
     def local_cluster_path(self) -> Path:
@@ -64,13 +65,12 @@ class RepositoryWorkspace:
 
     def repo_chart_path(self, name: str, *children: str) -> Path:
         """Repository-relative path beneath one managed chart."""
-        base = Path(name) if self.spec.charts_dir == Path(".") else self.spec.charts_dir / name
-        return base / Path(*children)
+        return self.spec.charts_dir / name / Path(*children)
 
     def chart_name_from_repo_path(self, path: PurePath | str) -> str | None:
         """Return the managed chart name owning a repository-relative path."""
         parts = PurePath(path).parts
-        prefix = () if self.spec.charts_dir == Path(".") else self.spec.charts_dir.parts
+        prefix = self.spec.charts_dir.parts
         if len(parts) <= len(prefix) or parts[: len(prefix)] != prefix:
             return None
         return parts[len(prefix)]

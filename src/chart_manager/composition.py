@@ -244,9 +244,9 @@ class Container:
         runner = self.command_runner()
         try:
             workspace: RepositoryWorkspace | None = self.workspace(root)
-            skip_reason = ""
+            schemas = KubeconformSchemaDoctor(workspace)
         except WorkspaceNotFoundError as exc:
-            workspace, skip_reason = None, str(exc)
+            workspace, schemas = None, KubeconformSchemaDoctor(None, skip_reason=str(exc))
         probe_root = workspace.root if workspace else (root or self._settings.root).resolve()
         providers: dict[str, CheckProvider] = {
             "helm": self.helm().preflight,
@@ -257,7 +257,7 @@ class Container:
             "git": Git(probe_root, runner).preflight,
             "github": Github(probe_root, runner).preflight,
             "renovate": Renovate(runner).preflight,
-            "schemas": KubeconformSchemaDoctor(workspace, skip_reason=skip_reason).preflight,
+            "schemas": schemas.preflight,
             "events": preflight_event_store,
         }
         return DoctorService(providers)

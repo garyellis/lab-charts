@@ -548,8 +548,10 @@ def test_with_charts_dir_rejects_paths_the_spec_would_reject(
     with pytest.raises(SpecError) as raised:
         workspace.with_charts_dir(path)
 
-    assert str(raised.value).startswith(f"invalid chart directory {path}: ")
-    assert "\n" not in str(raised.value)
+    assert str(raised.value) == (
+        f"invalid chart directory {path}: spec.chartsDir must be a repository-relative path "
+        "without empty, '.' or '..' segments"
+    )
 
 
 def test_with_charts_dir_rejects_a_path_escaping_through_a_symlink(tmp_path: Path) -> None:

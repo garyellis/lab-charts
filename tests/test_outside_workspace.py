@@ -60,6 +60,17 @@ def test_a_repository_command_fails_here() -> None:
     assert isinstance(result.exception, WorkspaceNotFoundError)
 
 
+def test_an_explicit_root_without_a_workspace_exits_5(
+    outside: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(outside))
+
+    result = cli("chart", "list")
+
+    assert isinstance(result.exception, WorkspaceNotFoundError)
+    assert exit_code_for(main._outcome_for(result.exception)) == 5
+
+
 def test_version() -> None:
     result = cli("version")
 
