@@ -27,6 +27,15 @@ monkeypatch one command group's wiring without reaching into every other
 group's. That is an import alias, not a second copy: there is one function
 body, and the alias exists purely so the patch stays scoped.
 
+One `Container` per invocation. The root callback calls
+`start_invocation()`, after `--config` is applied, and every `container()`
+call for the rest of that invocation returns the same object, so its
+workspace memo means `workspace.yaml` is parsed once however many commands,
+helpers and factories ask for it. Module state rather than `ctx.obj`
+because most callers are helpers with no Click context in hand, and Typer
+offers no public way to fetch the current one. Each invocation replaces it;
+`reset_invocation()` is the test hook that clears it between tests.
+
 The other seam is `container(settings=...)`. `Container` has taken a
 `Settings` since it was written, but every CLI call site built one bare, so
 the parameter was unreachable from the only surface that exists -- and the
@@ -45,9 +54,29 @@ from chart_manager.composition import Container, Settings
 from chart_manager.domain.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
+#: The current invocation's composition root; see the module docstring.
+_invocation: Container | None = None
+
+
+def start_invocation() -> Container:
+    """Build and install the composition root for a new CLI invocation.
+
+    Called once, by the root callback in `cli/main.py`, after `--config` has
+    been applied so the container's `Settings` read that file.
+    """
+    global _invocation
+    _invocation = Container()
+    return _invocation
+
+
+def reset_invocation() -> None:
+    """Forget the current invocation's container (test isolation hook)."""
+    global _invocation
+    _invocation = None
+
 
 def container(settings: Settings | None = None) -> Container:
-    """Build the composition root for one CLI invocation.
+    """Return the composition root for the current CLI invocation.
 
     Every service on this surface is built through it: constructing them
     inline is what let `Settings.kube_context` be configured and then
@@ -59,8 +88,15 @@ def container(settings: Settings | None = None) -> Container:
     command does. Passing one is the injection point: a test, or a second
     surface that has already resolved its own configuration, gets every
     service built against it in one call rather than per construction site.
+    An injected `Settings` always gets a fresh container: it is a different
+    configuration from the invocation's. So does a call outside any
+    invocation, such as a test driving a helper directly.
     """
-    return Container(settings)
+    if settings is not None:
+        return Container(settings)
+    if _invocation is None:
+        return Container()
+    return _invocation
 
 
 def exit_if_failed(ok: bool) -> None:
@@ -111,4 +147,11 @@ def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
     )
 
 
-__all__ = ["container", "exit_if_failed", "repository_root", "resolve_chart"]
+__all__ = [
+    "container",
+    "exit_if_failed",
+    "repository_root",
+    "reset_invocation",
+    "resolve_chart",
+    "start_invocation",
+]

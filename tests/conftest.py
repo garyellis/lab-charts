@@ -27,6 +27,7 @@ import typer
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager.cli._container import reset_invocation
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
@@ -100,6 +101,21 @@ def hermetic_logging() -> Iterator[None]:
     finally:
         root.handlers = handlers
         root.setLevel(level)
+
+
+@pytest.fixture(autouse=True)
+def fresh_cli_invocation() -> Iterator[None]:
+    """Drop the CLI's per-invocation `Container` when a test ends.
+
+    `cli/_container.py` keeps the current invocation's container in module
+    state. Each `cli()` call replaces it, but a test that drives a helper
+    directly after another test's invocation must not inherit that one's
+    settings or workspace memo.
+    """
+    try:
+        yield
+    finally:
+        reset_invocation()
 
 
 def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
