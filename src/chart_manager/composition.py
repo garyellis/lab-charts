@@ -53,7 +53,6 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -490,7 +489,7 @@ class Container:
         """
         workspace = self.workspace(root)
         if charts_dir is not None:
-            workspace = replace(workspace, charts_dir=charts_dir)
+            workspace = workspace.with_charts_dir(charts_dir)
         kind = self.kind()
         return EphemeralTestClusterService(
             workspace=workspace,
@@ -527,7 +526,7 @@ class Container:
         """Build the validate pipeline entry point (render -> schema -> policy)."""
         workspace = self.workspace(root)
         if charts_dir is not None:
-            workspace = replace(workspace, charts_dir=charts_dir)
+            workspace = workspace.with_charts_dir(charts_dir)
         return ManifestValidationService(
             progress=progress,
             on_warn=on_warn,

@@ -203,7 +203,7 @@ def test_validate_code_path_fanout(tmp_path: Path) -> None:
         changed_files=["src/chart_manager/services/manifest_validation/runner.py"],
         workspace=workspace_for(
             tmp_path,
-            validation_fanout=("src/chart_manager/services/manifest_validation/**",),
+            fanout={"validation": ["src/chart_manager/services/manifest_validation/**"]},
         ),
     )
 
