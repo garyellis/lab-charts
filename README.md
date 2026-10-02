@@ -356,11 +356,20 @@ segment, and `**` matches zero or more segments.
 Repository-bound commands find the nearest ancestor containing the fixed
 workspace marker, so they behave the same from the checkout root or a nested
 chart directory. `CHART_MANAGER_ROOT` (or `root:` in the operator config)
-remains the machine-specific override. There is no CLI `--root` option.
-Repositories without a workspace retain the legacy `charts/`,
-`.chart-manager/local-cluster.yaml`, `.chart-manager/rendered`, and `policies/`
-defaults. If a workspace exists, legacy `charts_dir` or `local_config`
-settings are rejected rather than silently shadowing repository policy.
+remains the machine-specific override; it must point at the directory that
+holds the marker, since an explicit root is never walked up. There is no CLI
+`--root` option. The workspace is required: with no marker, a
+repository-bound command exits `5` and says to run from a chart repository
+checkout or set `CHART_MANAGER_ROOT`. `version`, `doctor`, `event`,
+`helmrelease`, `grafana dashboard export`, and `grafana dashboard lint --path`
+work anywhere; outside a workspace `doctor` skips the schema checks.
+
+Layout lives only in the workspace. The former `CHART_MANAGER_CHARTS_DIR` and
+`CHART_MANAGER_LOCAL_CONFIG` variables are an error (set `spec.chartsDir` and
+`spec.localCluster` instead), and so is any key `Settings` does not know in
+`.chart-manager/config.yaml`, such as `charts_dir`. That config file is read
+relative to the working directory, not the discovered workspace, so from a
+nested directory pass `--config` explicitly.
 
 Logs go to stderr; stdout stays safe for JSON. `CHART_MANAGER_LOG_LEVEL`
 (default `INFO`) and `CHART_MANAGER_LOG_FORMAT=json` control detail and
