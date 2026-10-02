@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import ValidationError, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -67,6 +67,11 @@ _REMOVED_ENV_VARS: dict[str, str] = {
     "CHART_MANAGER_CHARTS_DIR": "spec.chartsDir",
     "CHART_MANAGER_LOCAL_CONFIG": "spec.localCluster",
 }
+
+
+def _environ_has(name: str) -> bool:
+    """Whether `name` is set, ignoring case as pydantic-settings' env source does."""
+    return any(key.upper() == name for key in os.environ)
 
 
 class Settings(BaseSettings):
@@ -135,7 +140,7 @@ class Settings(BaseSettings):
         removed = [
             f"{name} was removed; set {field} in .chart-manager/workspace.yaml instead"
             for name, field in _REMOVED_ENV_VARS.items()
-            if name in os.environ
+            if _environ_has(name)
         ]
         if removed:
             raise SpecError("; ".join(removed))
@@ -151,6 +156,49 @@ class Settings(BaseSettings):
     def _normalize_log_format(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
 
+    def describe_root(self) -> str | None:
+        """Name where an explicit `root` came from, for an error message.
+
+        `None` when `root` was not set at all. Settings keeps only the merged
+        value, so the source is recovered the way the sources were applied:
+        the environment beats the config file, and anything else was passed
+        to the constructor.
+        """
+        if "root" not in self.model_fields_set:
+            return None
+        path = self.root.resolve()
+        if _environ_has("CHART_MANAGER_ROOT"):
+            return f"CHART_MANAGER_ROOT={path}"
+        document = load_yaml_file(config_file()) if config_file().is_file() else None
+        if isinstance(document, dict) and "root" in document:
+            return f"root={path} in {config_file()}"
+        return f"Settings.root={path}"
+
+
+def load_settings() -> Settings:
+    """Build `Settings`, turning a validation failure into a `SpecError`.
+
+    The one place process configuration is constructed for the CLI. A
+    pydantic `ValidationError` is a traceback to the operator and carries no
+    exit code, while a bad `config.yaml` key or `CHART_MANAGER_*` value is
+    invalid authored configuration -- exit 3, one line per problem, naming
+    the file and the key.
+    """
+    try:
+        return Settings()
+    except ValidationError as exc:
+        problems = []
+        for error in exc.errors():
+            key = ".".join(str(part) for part in error["loc"]) or "<settings>"
+            if error["type"] == "extra_forbidden":
+                # Unknown environment variables are ignored, so an unknown
+                # key can only have come from the config file.
+                problems.append(f"unknown key {key!r} in {config_file()}")
+            else:
+                source = f"CHART_MANAGER_{key.upper()} or {config_file()}"
+                problems.append(f"{key}: {error['msg']} (from {source})")
+        raise SpecError("invalid settings: " + "; ".join(problems)) from None
+
 
 __all__ = [
     "DEFAULT_CONFIG_FILE",
@@ -159,5 +207,6 @@ __all__ = [
     "LogLevel",
     "Settings",
     "config_file",
+    "load_settings",
     "set_config_file",
 ]

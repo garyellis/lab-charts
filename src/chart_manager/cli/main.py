@@ -39,7 +39,6 @@ from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
-from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
@@ -57,7 +56,7 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaSourceError,
 )
-from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
+from chart_manager.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
 
 # --- the command tree ------------------------------------------------------
 
@@ -333,7 +332,7 @@ def main() -> None:
         # Bootstrap logging before argv is parsed, so `--config` is not known
         # yet. The invocation's own Settings come from its Container, built
         # by the root callback.
-        settings = Settings()
+        settings = load_settings()
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
     except ChartManagerError as exc:

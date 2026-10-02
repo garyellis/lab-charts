@@ -173,13 +173,14 @@ def resolve_repository_root(
     An explicit root is taken as given -- no walk-up -- so pointing
     `CHART_MANAGER_ROOT` at a subdirectory is an error rather than a silent
     switch to whichever ancestor happens to hold a marker. `configured_by`
-    names where an explicit root came from (`CHART_MANAGER_ROOT`), so the
-    error can say which knob to fix; `None` means a caller passed the path.
+    describes where an explicit root came from, path included
+    (`CHART_MANAGER_ROOT=/srv/charts`), so the error names the setting to
+    fix; `None` means a caller passed the path and the path alone is named.
     """
     if configured is not None:
         resolved = configured.resolve()
         if not (resolved / WORKSPACE_FILE).is_file():
-            source = f"{configured_by}={resolved}" if configured_by else str(resolved)
+            source = configured_by or str(resolved)
             raise WorkspaceNotFoundError(f"{source} has no {WORKSPACE_FILE.as_posix()}")
         return resolved
     origin = (start or Path.cwd()).resolve()

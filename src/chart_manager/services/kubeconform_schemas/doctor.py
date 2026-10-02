@@ -10,6 +10,7 @@ from chart_manager.domain.workspace import (
     WORKSPACE_FILE,
     RepositoryWorkspace,
 )
+from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.services.kubeconform_schemas.errors import (
@@ -38,9 +39,11 @@ class KubeconformSchemaDoctor:
         self,
         workspace: RepositoryWorkspace | None,
         *,
+        workspace_error: ChartManagerError | None = None,
         cache_root: Path | None = None,
     ) -> None:
         self.workspace = workspace
+        self.workspace_error = workspace_error
         self.cache_root = cache_root
 
     def preflight(self) -> tuple[Check, ...]:
@@ -49,7 +52,27 @@ class KubeconformSchemaDoctor:
         `workspace=None` is `doctor` run outside a chart repository: the
         schema policy lives in workspace.yaml, so there is nothing to check
         and nothing wrong -- every check is skipped, naming how to get one.
+        `workspace_error` is the workspace that could not be loaded -- an
+        explicit root with no marker, or an invalid workspace.yaml. That *is*
+        wrong, so schema-policy fails with it and the rest are skipped.
         """
+        if self.workspace_error is not None:
+            missing = isinstance(self.workspace_error, WorkspaceNotFoundError)
+            return (
+                Check.failed(
+                    "schema-policy",
+                    str(self.workspace_error),
+                    remediation=(
+                        "point CHART_MANAGER_ROOT or config `root:` at a chart repository checkout"
+                        if missing
+                        else f"fix {WORKSPACE_FILE.as_posix()}"
+                    ),
+                    outcome=Outcome.ENVIRONMENT if missing else Outcome.SPEC,
+                    data={"configured": False},
+                ),
+                Check.skipped("schema-lock", "workspace is unavailable"),
+                Check.skipped("schema-store", "workspace is unavailable"),
+            )
         if self.workspace is None:
             return tuple(
                 Check.skipped(

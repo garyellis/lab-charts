@@ -24,7 +24,7 @@ from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.paths import RenderOutputService
-from chart_manager.settings import Settings
+from chart_manager.settings import Settings, load_settings
 
 from .conftest import cli, workspace_for
 
@@ -113,6 +113,33 @@ def test_environment_root_without_marker_names_the_variable(
     )
 
 
+def test_config_file_root_without_marker_names_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root from `root:` in config.yaml must not be blamed on the environment."""
+    target = tmp_path / "not-a-checkout"
+    target.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(f"root: {target}\n", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "_config_file", config)
+
+    with pytest.raises(WorkspaceNotFoundError) as excinfo:
+        Container(Settings()).workspace()
+    assert str(excinfo.value) == (
+        f"root={target.resolve()} in {config} has no .chart-manager/workspace.yaml"
+    )
+
+
+def test_environment_root_is_recognized_whatever_its_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pydantic-settings reads env names case-insensitively; so does the message."""
+    monkeypatch.setenv("chart_manager_root", str(tmp_path))
+
+    with pytest.raises(WorkspaceNotFoundError, match=r"^CHART_MANAGER_ROOT="):
+        Container(Settings()).workspace()
+
+
 def test_explicit_root_never_walks_up(tmp_path: Path) -> None:
     """An explicit root that is a subdirectory of a workspace is still wrong."""
     _write_workspace(tmp_path)
@@ -120,7 +147,9 @@ def test_explicit_root_never_walks_up(tmp_path: Path) -> None:
     nested.mkdir()
 
     with pytest.raises(WorkspaceNotFoundError, match=r"has no \.chart-manager/workspace\.yaml"):
-        resolve_repository_root(configured=nested, configured_by="CHART_MANAGER_ROOT")
+        resolve_repository_root(
+            configured=nested, configured_by=f"CHART_MANAGER_ROOT={nested.resolve()}"
+        )
     with pytest.raises(WorkspaceNotFoundError) as excinfo:
         Container(Settings()).workspace(nested)
     # A root passed as an argument is not attributed to the environment.
@@ -132,6 +161,13 @@ def test_find_workspace_absorbs_only_a_missing_marker(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert Container(Settings()).find_workspace() is None
+    # An explicit root names a checkout; not finding one there is an error.
+    with pytest.raises(WorkspaceNotFoundError):
+        Container(Settings()).find_workspace(tmp_path)
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(tmp_path))
+    with pytest.raises(WorkspaceNotFoundError, match=r"^CHART_MANAGER_ROOT="):
+        Container(Settings()).find_workspace()
+    monkeypatch.delenv("CHART_MANAGER_ROOT")
 
     _write_workspace(tmp_path, "apiVersion: chartmanager.io/v1alpha1\nkind: ChartWorkspace\n")
     with pytest.raises(SpecError, match="invalid ChartWorkspace"):
@@ -196,6 +232,15 @@ def test_removed_layout_environment_variables_are_errors(
     )
 
 
+def test_removed_layout_environment_variables_are_matched_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("chart_manager_charts_dir", "anything")
+
+    with pytest.raises(SpecError, match="CHART_MANAGER_CHARTS_DIR was removed"):
+        Settings()
+
+
 def test_removed_layout_environment_variable_exits_with_the_spec_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -217,8 +262,66 @@ def test_layout_keys_in_config_file_are_rejected(
     config.write_text(f"{key}: charts\n", encoding="utf-8")
     monkeypatch.setattr(settings_module, "_config_file", config)
 
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        Settings()
+    with pytest.raises(SpecError) as excinfo:
+        load_settings()
+    assert str(excinfo.value) == f"invalid settings: unknown key '{key}' in {config}"
+
+
+def _exit_through_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *argv: str
+) -> tuple[object, str]:
+    """Run the real entry point; return its exit code and stderr."""
+    monkeypatch.setattr("sys.argv", ["chart-manager", *argv])
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            main.main()
+    finally:
+        reset_invocation()
+        settings_module.set_config_file(settings_module.DEFAULT_CONFIG_FILE)
+    return excinfo.value.code, capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "body,key",
+    [("charts_dir: charts\n", "charts_dir"), ("kube_contxt: kind-lab\n", "kube_contxt")],
+)
+def test_an_unknown_config_key_exits_with_the_spec_code_and_no_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    key: str,
+) -> None:
+    """Both construction sites: the bootstrap in `main()` and the root callback."""
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "custom.yaml"
+    config.write_text(body, encoding="utf-8")
+    (tmp_path / ".chart-manager").mkdir()
+    (tmp_path / ".chart-manager" / "config.yaml").write_text(body, encoding="utf-8")
+
+    # The default config file is read by the bootstrap Settings in `main()`.
+    code, err = _exit_through_main(monkeypatch, capsys, "version")
+    assert code == 3
+    assert f"unknown key '{key}' in .chart-manager/config.yaml" in err
+    assert "Traceback" not in err
+
+    # `--config` is only applied in the root callback, by `start_invocation()`.
+    (tmp_path / ".chart-manager" / "config.yaml").unlink()
+    code, err = _exit_through_main(monkeypatch, capsys, "--config", str(config), "version")
+    assert code == 3
+    assert f"unknown key '{key}' in {config}" in err
+    assert "Traceback" not in err
+
+
+def test_an_invalid_config_value_names_the_key_and_both_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text("log_level: chatty\n", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "_config_file", config)
+
+    with pytest.raises(SpecError, match=r"^invalid settings: log_level: .*CHART_MANAGER_LOG_LEVEL"):
+        load_settings()
 
 
 def test_other_chart_manager_environment_variables_still_work(
