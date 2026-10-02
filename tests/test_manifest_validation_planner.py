@@ -23,7 +23,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
-from tests.conftest import CHARTS_DIR, workspace_for
+from tests.conftest import CHARTS_DIR, POLICIES_DIR, workspace_for
 
 
 def _chart(
@@ -640,7 +640,9 @@ policies:
     monkeypatch.chdir(elsewhere)
 
     build = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
-    compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
+    compiled = resolve_manifest_validation(
+        build.targets["alpha"], tmp_path, policies_dir=POLICIES_DIR
+    )
     dev = next(row for row in build.rows if row.env == "dev")
     config = row_config_for(compiled, dev)
     kubeconform = config.validator_invocations[0].config
@@ -672,7 +674,9 @@ policies:
     repository_policy.mkdir()
 
     build = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
-    compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
+    compiled = resolve_manifest_validation(
+        build.targets["alpha"], tmp_path, policies_dir=POLICIES_DIR
+    )
 
     assert len(compiled.warnings) == 1
     assert "policy directory does not exist" in compiled.warnings[0]

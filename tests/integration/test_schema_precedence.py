@@ -19,6 +19,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformRuntimeInputs,
     ValidatorCompileContext,
 )
+from tests.conftest import POLICIES_DIR
 
 pytestmark = [
     pytest.mark.integration,
@@ -53,6 +54,7 @@ def test_managed_schema_precedence_with_real_kubeconform(tmp_path: Path) -> None
             repo_root=tmp_path,
             chart_path=tmp_path / "charts/demo",
             spec_path=tmp_path / "charts/demo/chart-lifecycle.yaml",
+            policies_dir=POLICIES_DIR,
             kubeconform=KubeconformRuntimeInputs(
                 kubernetes_version="1.35.3",
                 generated_schema_locations=(str(tmp_path / "generated/{{.ResourceKind}}.json"),),

@@ -7,13 +7,16 @@ from pathlib import Path
 from chart_manager.services.manifest_validation.validator_adapters import (
     discover_policy_paths,
 )
+from tests.conftest import POLICIES_DIR
 
 
 def test_discover_policies_returns_both_dirs_when_present(tmp_path: Path) -> None:
     (tmp_path / "policies").mkdir()
     (tmp_path / "charts" / "alpha" / "policies").mkdir(parents=True)
 
-    result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
+    result = discover_policy_paths(
+        tmp_path, tmp_path / "charts" / "alpha", policies_dir=POLICIES_DIR
+    )
 
     assert result == (tmp_path / "policies", tmp_path / "charts" / "alpha" / "policies")
 
@@ -23,7 +26,9 @@ def test_discover_policies_only_repo_dir_present(tmp_path: Path) -> None:
     # chart dir exists but no policies/ subdir
     (tmp_path / "charts" / "alpha").mkdir(parents=True)
 
-    result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
+    result = discover_policy_paths(
+        tmp_path, tmp_path / "charts" / "alpha", policies_dir=POLICIES_DIR
+    )
 
     assert result == (tmp_path / "policies",)
 
@@ -31,13 +36,17 @@ def test_discover_policies_only_repo_dir_present(tmp_path: Path) -> None:
 def test_discover_policies_only_chart_dir_present(tmp_path: Path) -> None:
     (tmp_path / "charts" / "alpha" / "policies").mkdir(parents=True)
 
-    result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
+    result = discover_policy_paths(
+        tmp_path, tmp_path / "charts" / "alpha", policies_dir=POLICIES_DIR
+    )
 
     assert result == (tmp_path / "charts" / "alpha" / "policies",)
 
 
 def test_discover_policies_neither_present(tmp_path: Path) -> None:
-    result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
+    result = discover_policy_paths(
+        tmp_path, tmp_path / "charts" / "alpha", policies_dir=POLICIES_DIR
+    )
     assert result == ()
 
 
@@ -46,6 +55,8 @@ def test_discover_policies_ignores_files_named_policies(tmp_path: Path) -> None:
     # be returned as a discovered directory.
     (tmp_path / "policies").write_text("not a dir")
 
-    result = discover_policy_paths(tmp_path, tmp_path / "charts" / "alpha")
+    result = discover_policy_paths(
+        tmp_path, tmp_path / "charts" / "alpha", policies_dir=POLICIES_DIR
+    )
 
     assert result == ()

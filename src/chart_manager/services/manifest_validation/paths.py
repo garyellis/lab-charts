@@ -7,8 +7,8 @@ Two things that name the same tree, so they live together:
     (`validate_path_segment`, `require_within`) every authored identifier and
     authored path has to survive before it becomes a directory;
   * the repository-level root those run directories accumulate under --
-    `RENDER_OUTPUT_DIR` and `RenderOutputService`, which is what
-    `chart cache clean` describes and removes.
+    the workspace's ``spec.renderDir``, owned here by `RenderOutputService`,
+    which is what `chart cache clean` describes and removes.
 
 They used to be two modules, which let the layout be written twice: the
 writer composed it in `ManifestValidationService._resolve_out_dir` and the
@@ -30,12 +30,6 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from chart_manager.plumbing.errors import SpecError
-
-#: Repo-relative root the per-run render directories accumulate under. The
-#: single source of truth: `ManifestValidationService._resolve_out_dir`
-#: composes run directories below it, and `chart cache clean` removes the
-#: whole tree.
-RENDER_OUTPUT_DIR = Path(".chart-manager") / "rendered"
 
 
 def validate_path_segment(value: str, *, label: str) -> str:
@@ -159,7 +153,7 @@ class RenderOutputService:
     shown cannot disagree with what the removal then does.
     """
 
-    def __init__(self, root: Path, *, render_dir: Path = RENDER_OUTPUT_DIR) -> None:
+    def __init__(self, root: Path, *, render_dir: Path) -> None:
         """Resolve the output location for `root`; touches no disk."""
         self._repository_root = root.resolve()
         self._render_dir = render_dir

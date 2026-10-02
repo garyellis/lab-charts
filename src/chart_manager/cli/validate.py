@@ -104,7 +104,7 @@ _PARAM_HINTS = {
 OutOption = Annotated[
     Path | None,
     typer.Option(
-        "--out", help="Render output dir. Defaults to <root>/.chart-manager/rendered/<run-id>/."
+        "--out", help="Render output dir. Defaults to <root>/<spec.renderDir>/<run-id>/."
     ),
 ]
 KeepOption = Annotated[
@@ -664,7 +664,7 @@ def clean(
     ] = False,
     output: CleanOutputOption = None,
 ) -> None:
-    """Remove the entire .chart-manager/rendered/ tree.
+    """Remove the workspace's entire render tree (`spec.renderDir`).
 
     `--dry-run` reports the cache -- where it is, whether it exists, how
     many validate runs it holds -- and removes nothing.
