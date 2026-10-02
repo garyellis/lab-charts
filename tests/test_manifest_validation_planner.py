@@ -309,7 +309,9 @@ def test_wrapper_chart_remote_same_name_dependency_respects_triggers(tmp_path: P
         dependencies=[{"name": "alpha", "repository": "https://charts.example.com"}],
     )
 
-    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=["charts/alpha/values-prod.yaml"])
+    result = build_worklist(
+        workspace=workspace_for(tmp_path), changed_files=["charts/alpha/values-prod.yaml"]
+    )
 
     assert {(r.chart, r.env) for r in result.rows} == {("alpha", "prod")}
 
@@ -742,7 +744,9 @@ def test_rendering_default_triggers_select_all_environments(
     # Rendering inputs render or validate differently under each env's values.
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"])
+    result = build_worklist(
+        workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"]
+    )
 
     assert {(row.chart, row.env) for row in result.rows} == {
         ("alpha", "ci"),
@@ -765,7 +769,9 @@ def test_ci_only_default_triggers_select_ci_without_unmatched_warning(
 ) -> None:
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"])
+    result = build_worklist(
+        workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"]
+    )
 
     assert {(row.chart, row.env) for row in result.rows} == {("alpha", "ci")}
     assert result.unmatched_changes == ()
@@ -775,7 +781,9 @@ def test_ci_only_default_triggers_select_ci_without_unmatched_warning(
 def test_readme_is_not_covered_by_default_triggers(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=["charts/alpha/README.md"])
+    result = build_worklist(
+        workspace=workspace_for(tmp_path), changed_files=["charts/alpha/README.md"]
+    )
 
     assert result.rows == ()
     assert result.unmatched_changes == (Path("charts/alpha/README.md"),)

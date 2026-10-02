@@ -263,7 +263,9 @@ def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, workers=8, verbose=True))
+    _app(tmp_path, rec).run(
+        RunRequest(root=tmp_path, skip_change_detection=True, workers=8, verbose=True)
+    )
 
     spec = rec.runs[0][0]
     assert spec.max_workers == 1
@@ -291,7 +293,9 @@ def test_skip_change_detection_never_consults_git(tmp_path: Path) -> None:
     git = FakeGit(files=["charts/alpha/values.yaml"])
     rec = Recorder()
 
-    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    outcome = _app(tmp_path, rec, git=git).run(
+        RunRequest(root=tmp_path, skip_change_detection=True)
+    )
 
     assert git.calls == []
     assert {r.row.env for r in outcome.result.rows} == {"dev", "prod"}
@@ -448,7 +452,9 @@ def test_mixed_helm_bindings_reach_one_runner_carrying_their_binding(
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
+    outcome = _app(tmp_path, rec).run(
+        RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",))
+    )
 
     assert len(rec.runs) == 1
     assert {cfg.row.chart: cfg.helm_binding for cfg in rec.runs[0][1]} == {
@@ -534,7 +540,9 @@ def test_unknown_explicit_chart_filter_is_an_input_error(tmp_path: Path) -> None
     rec = Recorder()
 
     with pytest.raises(ValidateInputError) as exc:
-        _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, charts=("ghost",)))
+        _app(tmp_path, rec).run(
+            RunRequest(root=tmp_path, skip_change_detection=True, charts=("ghost",))
+        )
 
     assert exc.value.hint == "charts"
     assert rec.runs == []
@@ -666,7 +674,9 @@ def test_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
     rec = Recorder()
     target = tmp_path / "named"
 
-    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, out=target))
+    outcome = _app(tmp_path, rec).run(
+        RunRequest(root=tmp_path, skip_change_detection=True, out=target)
+    )
 
     assert outcome.out_dir == target.resolve()
     assert outcome.keep is True
@@ -675,7 +685,9 @@ def test_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
 def _outcome_for_cleanup(tmp_path: Path, rec: Recorder, **kwargs):
     """Run a passing worklist so cleanup has a real out dir to consider."""
     _chart(tmp_path, "alpha")
-    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, **kwargs))
+    outcome = _app(tmp_path, rec).run(
+        RunRequest(root=tmp_path, skip_change_detection=True, **kwargs)
+    )
     outcome.out_dir.mkdir(parents=True, exist_ok=True)
     return outcome
 

@@ -34,7 +34,8 @@ workspace memo means `workspace.yaml` is parsed once however many commands,
 helpers and factories ask for it. Module state rather than `ctx.obj`
 because most callers are helpers with no Click context in hand, and Typer
 offers no public way to fetch the current one. Each invocation replaces it;
-`reset_invocation()` is the test hook that clears it between tests.
+`reset_invocation()` is the test hook that clears it between tests. It is
+not thread- or reentrancy-safe: one process runs one invocation at a time.
 
 The other seam is `container(settings=...)`. `Container` has taken a
 `Settings` since it was written, but every CLI call site built one bare, so

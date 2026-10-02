@@ -116,7 +116,8 @@ spec:
 """,
     )
 
-    releases = LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster().spec.bootstrap.releases
+    loader = LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG)
+    releases = loader.load_cluster().spec.bootstrap.releases
 
     assert [type(release) for release in releases] == [
         BootstrapLifecycleRelease,

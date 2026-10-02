@@ -375,6 +375,64 @@ def test_integrations_do_not_import_services() -> None:
     )
 
 
+def _settings_imports(source: str, label: str, package: str = "") -> list[int]:
+    """Lines in `source` that import `chart_manager.settings`, in any spelling.
+
+    `_imports_in` records `from chart_manager import settings` as plain
+    `chart_manager`, so this also checks the imported names.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            parts = package.split(".") if package else []
+            base = ".".join(parts[: len(parts) - node.level + 1]) if node.level else ""
+            module = ".".join(part for part in (base, node.module) if part)
+            names = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        if any(
+            name == "chart_manager.settings" or name.startswith("chart_manager.settings.")
+            for name in names
+        ):
+            lines.append(node.lineno)
+    return lines
+
+
+def _settings_importers(directory: Path) -> list[str]:
+    """Every `chart_manager.settings` import under `directory`, as `file:line`."""
+    offenders: list[str] = []
+    for path in sorted(directory.rglob("*.py")):
+        label = str(path.relative_to(_SRC))
+        offenders.extend(
+            f"{label}:{lineno}"
+            for lineno in _settings_imports(
+                path.read_text(encoding="utf-8"), label, _package_of(path)
+            )
+        )
+    return offenders
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from chart_manager.settings import Settings",
+        "from chart_manager import settings",
+        "import chart_manager.settings",
+        "from ... import settings",
+        "def f():\n    from chart_manager.settings import Settings",
+    ],
+)
+def test_the_settings_import_rule_fires_on_each_spelling(source: str) -> None:
+    assert _settings_imports(source, "probe.py", "chart_manager.integrations.sub")
+
+
+def test_the_settings_import_rule_stays_quiet_on_lookalikes() -> None:
+    source = "from chart_manager import settings_like\nimport chart_manager.settingsx"
+    assert not _settings_imports(source, "probe.py", "chart_manager.integrations")
+
+
 def test_settings_and_domain_do_not_import_each_other() -> None:
     """Process configuration and repository layout meet only in the composition root.
 
@@ -394,9 +452,7 @@ def test_settings_and_domain_do_not_import_each_other() -> None:
         )
         if module == "chart_manager.domain" or module.startswith("chart_manager.domain.")
     ]
-    downward = _imports_matching(_DOMAIN, ("chart_manager.settings",)) + _imports_matching(
-        _INTEGRATIONS, ("chart_manager.settings",)
-    )
+    downward = _settings_importers(_DOMAIN) + _settings_importers(_INTEGRATIONS)
 
     assert not upward, "settings.py must not import domain/:\n  " + "\n  ".join(upward)
     assert not downward, (

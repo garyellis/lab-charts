@@ -111,6 +111,7 @@ class CiService:
 
         This is deliberately a lexical projection: publishing must not inherit
         lifecycle capability, dependency fanout, Renovate, or Git policy.
+        Paths must be relative to the workspace root, not the git top level.
         """
         try:
             paths = changed_files.read_text(encoding="utf-8").splitlines()

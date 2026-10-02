@@ -376,13 +376,18 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
         tokens.append(token)
         index += 1
     env = {"CHART_MANAGER_ROOT": root_override} if root_override is not None else None
-    return CliRunner().invoke(
-        _root_app(),
-        resolve_argv(tokens),
-        input=input,
-        catch_exceptions=catch_exceptions,
-        env=env,
-    )
+    try:
+        return CliRunner().invoke(
+            _root_app(),
+            resolve_argv(tokens),
+            input=input,
+            catch_exceptions=catch_exceptions,
+            env=env,
+        )
+    finally:
+        # The invocation's Container outlives `invoke`; drop it so a helper
+        # the test calls next builds its own instead of reusing this one's.
+        reset_invocation()
 
 
 # --- the command-runner seam -------------------------------------------------

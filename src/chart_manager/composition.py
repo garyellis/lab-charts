@@ -146,7 +146,12 @@ class Container:
         return self._settings
 
     def workspace(self, root: Path | None = None) -> RepositoryWorkspace:
-        """Resolve the single repository layout/policy used by every capability."""
+        """Resolve the single repository layout/policy used by every capability.
+
+        The memo -- including the `None` key used for cwd discovery -- is what
+        guarantees workspace.yaml is parsed once per container, and so once per
+        CLI invocation.
+        """
         key = root.resolve() if root is not None else None
         if key not in self._workspaces:
             compiled = self._load_workspace(root)

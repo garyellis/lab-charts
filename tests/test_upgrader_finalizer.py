@@ -54,7 +54,9 @@ def test_major_image_update_changes_only_the_quoted_wrapper_version(tmp_path: Pa
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("api", "2.9.0", "3.0.0", datasource="docker")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, (update,)))
+    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _request(tmp_path, chart, (update,))
+    )
     written = (chart / "Chart.yaml").read_text(encoding="utf-8")
     assert result.version == "2.0.0"
     assert result.bump == "major"
@@ -134,7 +136,9 @@ def test_package_file_is_captured_without_changing_deduplication(tmp_path: Path)
 def test_dependency_diff_is_reliable_fallback_and_major(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path, dependency="3.0.0")
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("3.0.0", "2.4.0")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, ()))
+    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _request(tmp_path, chart, ())
+    )
     assert result.version == "2.0.0"
     assert result.updates[0].dependency == "upstream"
 
@@ -143,7 +147,9 @@ def test_no_qualifying_change_does_not_bump(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("python", "1.0.0", "2.0.0", manager="pep621", datasource="pypi")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, (update,)))
+    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _request(tmp_path, chart, (update,))
+    )
     assert result.bump is None
     assert not result.changed
     assert not (chart / "changelog.md").exists()
@@ -154,7 +160,9 @@ def test_refuses_divergent_wrapper_version(tmp_path: Path) -> None:
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("9.9.9", "1.2.3")
     update = UpdateMetadata("api", "2.0.0", "2.1.0", datasource="docker")
     with pytest.raises(UpgradeError, match="diverged"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, (update,)))
+        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+            _request(tmp_path, chart, (update,))
+        )
 
 
 @pytest.mark.parametrize("version", ["1.02.3", "1.2.03"])
@@ -162,7 +170,9 @@ def test_refuses_a_wrapper_version_with_leading_zeros(tmp_path: Path, version: s
     chart = _write_chart(tmp_path, version=version)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, ()))
+        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+            _request(tmp_path, chart, ())
+        )
 
 
 def test_loads_explicit_renovate_temp_data_outside_repository(tmp_path: Path) -> None:
@@ -189,4 +199,6 @@ def test_rejects_incomplete_qualifying_update_metadata(tmp_path: Path) -> None:
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("", "1.0.0", "2.0.0", datasource="docker")
     with pytest.raises(UpgradeError, match="require dependency"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(_request(tmp_path, chart, (update,)))
+        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+            _request(tmp_path, chart, (update,))
+        )

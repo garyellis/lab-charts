@@ -37,7 +37,8 @@ def test_install_plan_orders_requirements_before_target(
     make_chart("prometheus-operator")
     make_chart("alloy", profiles={"minimal": _requires("prometheus-operator")})
 
-    plan = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "minimal"
     )
 
@@ -57,7 +58,8 @@ def test_install_plan_expands_nested_profiles(chart_root: Path, make_chart: Make
         },
     )
 
-    plan = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "grafana", "with-deps"
     )
 
@@ -87,7 +89,8 @@ def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
         profiles={"ui-e2e": _requires("prometheus-operator", "grafana:with-deps")},
     )
 
-    plan = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "ui-e2e"
     )
 
@@ -112,7 +115,8 @@ def test_a_shared_dependency_is_planned_once_before_both_dependents(
     make_chart("right", profiles={"minimal": _requires("base")})
     make_chart("app", profiles={"minimal": _requires("left", "right")})
 
-    plan = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "app", "minimal"
     )
 
@@ -126,7 +130,8 @@ def test_the_same_chart_under_two_profiles_is_not_deduped(
     make_chart("base", profiles={"minimal": {}, "full": {}})
     make_chart("app", profiles={"minimal": _requires("base:minimal", "base:full")})
 
-    plan = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "app", "minimal"
     )
 
@@ -188,7 +193,8 @@ def test_dependent_tests_rejects_a_disabled_cluster_test_section(
 
 def test_the_repo_dependency_graph_resolves() -> None:
     """Smoke test over the real charts/ tree: structure, not inventory."""
-    plan = DependencyResolver(ClusterTestCatalog(REPO_ROOT, charts_dir=CHARTS_DIR).get).install_plan(
+    catalog = ClusterTestCatalog(REPO_ROOT, charts_dir=CHARTS_DIR)
+    plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "ui-e2e"
     )
 
