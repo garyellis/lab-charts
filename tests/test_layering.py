@@ -1353,9 +1353,45 @@ _WORKSPACE_CONSTRUCTORS = frozenset(
 _WORKSPACE_SPEC_READERS = frozenset({"src/chart_manager/domain/workspace.py"})
 
 
-def _workspace_constructions(source: str, label: str) -> list[str]:
-    """`RepositoryWorkspace(...)` calls in `source`, outside the allowed scopes.
+def _workspace_replace(call: ast.Call) -> bool:
+    """Whether `call` is a `replace(<workspace>, ...)` copy of a workspace.
 
+    `replace`, `dataclasses.replace` and `copy.replace` all build a new
+    frozen dataclass without running anything but `__init__` -- which is how
+    `chartsDir` was once re-pointed with no validation and no escape check.
+    The first argument is judged by `_is_workspace_name`, the same receiver
+    heuristic as the `.spec` rule, so `str.replace` and a `replace` of some
+    other dataclass stay quiet.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        is_replace = func.id == "replace"
+    elif isinstance(func, ast.Attribute):
+        is_replace = (
+            func.attr == "replace"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in {"dataclasses", "copy"}
+        )
+    else:
+        is_replace = False
+    if not is_replace or not call.args:
+        return False
+    first = call.args[0]
+    identifier = (
+        first.id
+        if isinstance(first, ast.Name)
+        else first.attr
+        if isinstance(first, ast.Attribute)
+        else None
+    )
+    return identifier is not None and _is_workspace_name(identifier)
+
+
+def _workspace_constructions(source: str, label: str) -> list[str]:
+    """Workspace constructions in `source`, outside the allowed scopes.
+
+    Two shapes build a `RepositoryWorkspace`: calling the class, and copying
+    one with `replace(workspace, ...)` (bare, `dataclasses.` or `copy.`).
     Each call is attributed to its innermost enclosing function, so the
     allowance is for one function, not for the whole module it lives in.
     """
@@ -1375,10 +1411,11 @@ def _workspace_constructions(source: str, label: str) -> list[str]:
                     if isinstance(func, ast.Attribute)
                     else None
                 )
-                if name == "RepositoryWorkspace" and (
-                    f"{label}::{scope}" not in _WORKSPACE_CONSTRUCTORS
-                ):
+                allowed = f"{label}::{scope}" in _WORKSPACE_CONSTRUCTORS
+                if name == "RepositoryWorkspace" and not allowed:
                     offenders.append(f"  {label}:{child.lineno}: RepositoryWorkspace(...)")
+                elif _workspace_replace(child) and not allowed:
+                    offenders.append(f"  {label}:{child.lineno}: {ast.unparse(child.func)}(...)")
             visit(child, inner)
 
     visit(ast.parse(source, filename=label), "<module>")
@@ -1437,8 +1474,10 @@ def test_repository_workspace_is_constructed_only_where_it_is_checked() -> None:
 
     Those are the places that validate the spec (and, outside tests, check it
     against the filesystem). `dataclasses.replace(workspace, charts_dir=...)`
-    once re-pointed the chart directory with neither check; any new way to
-    build one would reopen that hole.
+    once re-pointed the chart directory with neither check, so the rule flags
+    both a direct `RepositoryWorkspace(...)` call and a `replace(...)` /
+    `dataclasses.replace(...)` / `copy.replace(...)` whose first argument is
+    named like a workspace; any new way to build one would reopen that hole.
     """
     offenders: list[str] = []
     for path, label in _python_sources():
@@ -1477,6 +1516,9 @@ def test_layout_is_read_through_workspace_properties_not_its_spec() -> None:
 _WORKSPACE_LEAKS = {
     "a-bare-construction": "ws = RepositoryWorkspace(root=root, name='x', spec=spec)",
     "reached-through-the-module": "ws = workspace.RepositoryWorkspace(root, 'x', spec)",
+    "via-replace": "w = replace(workspace, spec=s)",
+    "via-dataclasses-replace": "w = dataclasses.replace(self.workspace, spec=s)",
+    "via-copy-replace": "w = copy.replace(ws, name='other')",
     "inside-an-unlisted-method": (
         "def build(self):\n"
         "    return RepositoryWorkspace(root=self.root, name=self.name, spec=spec)\n"
@@ -1506,6 +1548,17 @@ def test_the_workspace_construction_rule_fires_on_each_synthetic_leak() -> None:
         if not _workspace_constructions(source, "src/chart_manager/composition.py")
     ]
     assert not missed, f"the workspace construction rule silently allows: {missed}"
+    quiet = {
+        "str-replace": "name = workspace_name.replace('-', '_')",
+        "a-method-on-a-workspace-attribute": "s = workspace.name.replace('-', '_')",
+        "replace-of-another-dataclass": "row = replace(row, status='PASS')",
+    }
+    noisy = {
+        name: found
+        for name, source in quiet.items()
+        if (found := _workspace_constructions(source, "src/chart_manager/composition.py"))
+    }
+    assert not noisy, f"the workspace construction rule flags non-constructions: {noisy}"
     allowed = "def with_charts_dir(self, path):\n    return RepositoryWorkspace(1, 2, 3)\n"
     assert not _workspace_constructions(allowed, "src/chart_manager/domain/workspace.py")
     # The allowance is per function: the same module elsewhere is still caught.
