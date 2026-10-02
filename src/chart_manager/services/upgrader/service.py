@@ -79,7 +79,7 @@ class UpgradeService:
         # configured events backend, and the ad-hoc callers (tests, a bare
         # UpgradeService) should not need one to work.
         self._telemetry = telemetry
-        self._charts_dir = workspace.charts_dir
+        self._charts_dir = workspace.spec.charts_dir
 
     def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
         plan = build_upgrade_plan(

@@ -155,12 +155,9 @@ class EphemeralTestClusterService:
 
         See ``DevelopmentClusterService.__init__``: defaulting these silently
         discarded the composition root's cluster configuration.
-
-        ``workspace.charts_dir`` may differ from the repository's managed
-        chart root: ``chart test <dir>`` points it at the target's parent.
         """
         self.root = workspace.root
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
@@ -175,7 +172,7 @@ class EphemeralTestClusterService:
         self.kubectl = kubectl
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(
-            self.root, local_config=workspace.local_cluster
+            self.root, local_config=workspace.spec.local_cluster
         )
         self._client_factory = client_factory
         self._command_runner = command_runner or SubprocessRunner()

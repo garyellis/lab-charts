@@ -199,9 +199,6 @@ def grafana_dashboard_lint(
     # bypass actually broke was the configuration seam, and reading
     # `container().settings` closes exactly that: a caller that injected a
     # Settings discovers dashboards under the chart directory it named.
-    #
-    # Only discovery needs the workspace. `--path` names the files outright,
-    # so it lints them from anywhere, chart repository or not.
     targets = (
         expand_targets(path)
         if path

@@ -2,11 +2,8 @@
 
 `.chart-manager/workspace.yaml` is required, but only by repository-bound
 commands. `version`, `event *`, `helmrelease *`, `grafana dashboard export`
-and `grafana dashboard lint --path` never load it, and `doctor` loads it only
-to report on it, or running them from `$HOME` -- the usual place to run
-`doctor` -- would fail with `WorkspaceNotFoundError` instead of doing their
-job. `doctor` is held to "runs and reports every check", not "passes": outside
-a git checkout its git-repository check rightly fails.
+and `grafana dashboard lint --path` never load it, and `doctor` skips its
+schema checks without one.
 
 Every test runs from a `tmp_path` with no marker in it or above it, and
 asserts on the command's own outcome, not just the absence of one error.
@@ -23,9 +20,11 @@ import pytest
 
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import grafana as grafana_cli
+from chart_manager.cli import main
 from chart_manager.composition import Container
 from chart_manager.domain.workspace import discover_workspace_root
-from chart_manager.plumbing.errors import WorkspaceNotFoundError
+from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
+from chart_manager.plumbing.exit_codes import exit_code_for
 
 from .conftest import FakeCommandRunner, cli
 
@@ -124,13 +123,10 @@ def test_doctor_runs_and_reports_with_schema_checks_skipped(
     assert _git_probe_cwd(runner) == outside.resolve()
 
 
-def test_doctor_fails_an_explicit_root_without_a_workspace(
+def test_doctor_skips_schema_checks_for_an_explicit_root_without_a_workspace(
     outside: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Naming a root that is not a checkout is a failure, not a skip.
-
-    And git is asked about the directory the operator named, not cwd.
-    """
+    """The skip reason names the root; git is asked about that root, not cwd."""
     named = outside / "named"
     named.mkdir()
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(named))
@@ -138,34 +134,26 @@ def test_doctor_fails_an_explicit_root_without_a_workspace(
     result, checks, runner = _doctor(monkeypatch)
 
     assert result.exit_code == 5
-    policy = checks["schema-policy"]
-    assert policy["status"] == "failed"
-    assert policy["detail"] == (
-        f"CHART_MANAGER_ROOT={named.resolve()} has no .chart-manager/workspace.yaml"
-    )
-    assert checks["schema-lock"]["status"] == "skipped"
-    assert checks["schema-store"]["status"] == "skipped"
+    for name in ("schema-policy", "schema-lock", "schema-store"):
+        assert checks[name]["status"] == "skipped"
+        assert checks[name]["detail"] == (
+            f"{named.resolve()} has no .chart-manager/workspace.yaml"
+        )
     assert _git_probe_cwd(runner) == named.resolve()
-    assert str(named.resolve()) in checks["git-repository"]["detail"]
 
 
-def test_doctor_reports_an_invalid_workspace_instead_of_aborting(
+def test_doctor_fails_on_an_invalid_workspace(
     outside: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A broken workspace.yaml fails schema-policy (exit 3); nothing else is lost."""
+    """A broken workspace.yaml is a spec error (exit 3), not a skip."""
     marker = outside / ".chart-manager" / "workspace.yaml"
     marker.parent.mkdir()
     marker.write_text("apiVersion: chartmanager.io/v1alpha1\nkind: ChartWorkspace\n")
 
-    result, checks, runner = _doctor(monkeypatch)
+    result = cli("doctor", "-o", "json")
 
-    assert result.exit_code == 3
-    policy = checks["schema-policy"]
-    assert policy["status"] == "failed"
-    assert policy["detail"].startswith(f"invalid ChartWorkspace {marker.resolve()}")
-    assert checks["schema-lock"]["status"] == "skipped"
-    # Discovery found the checkout, so git addresses it even though it is broken.
-    assert _git_probe_cwd(runner) == outside.resolve()
+    assert isinstance(result.exception, SpecError)
+    assert exit_code_for(main._outcome_for(result.exception)) == 3
 
 
 def test_event_list(monkeypatch: pytest.MonkeyPatch) -> None:

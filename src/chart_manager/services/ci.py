@@ -94,15 +94,11 @@ class CiService:
     """CI pipeline verbs for a single chart against an already-provisioned cluster."""
 
     def __init__(self, *, workspace: RepositoryWorkspace) -> None:
-        """Wire repository/git against the workspace root.
-
-        `Git` is constructed inline: it is addressed by the workspace root,
-        which this service already owns.
-        """
+        """Wire repository/git against the workspace root."""
         self.workspace = workspace
         self.root = workspace.root
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
-        self.charts = ChartRepository(self.root, charts_dir=workspace.charts_dir)
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
+        self.charts = ChartRepository(self.root, charts_dir=workspace.spec.charts_dir)
         self.impact = LifecycleImpactService(workspace=workspace)
         self.git = Git(self.root)
 

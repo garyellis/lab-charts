@@ -1,20 +1,11 @@
-"""Process configuration.
-
-Repository layout is answered by `chart_manager.domain.workspace.
-RepositoryWorkspace`, which `chart_manager.composition.Container` loads once
-per root and hands to every service. This module deliberately imports nothing
-from `domain/`: `domain/` sits below the composition root, and a `settings`
-that reached into it while domain modules read their defaults from here was
-an import cycle.
-"""
+"""Process configuration. Repository layout lives in `domain.workspace`."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ValidationError, field_validator, model_validator
+from pydantic import ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -56,24 +47,6 @@ def set_config_file(path: Path) -> None:
     _config_file = path
 
 
-#: Environment variables that once configured the repository layout. Layout
-#: now lives only in `.chart-manager/workspace.yaml`; `extra="forbid"` rejects
-#: these as config.yaml keys, but pydantic-settings ignores unknown
-#: environment variables, so `Settings` checks for them itself rather than
-#: letting a stale export silently stop applying. The marker path is spelled
-#: out rather than imported from `domain.workspace`, which this module must
-#: not import.
-_REMOVED_ENV_VARS: dict[str, str] = {
-    "CHART_MANAGER_CHARTS_DIR": "spec.chartsDir",
-    "CHART_MANAGER_LOCAL_CONFIG": "spec.localCluster",
-}
-
-
-def _environ_has(name: str) -> bool:
-    """Whether `name` is set, ignoring case as pydantic-settings' env source does."""
-    return any(key.upper() == name for key in os.environ)
-
-
 class Settings(BaseSettings):
     """Process-level adapter configuration. Repository layout is not here."""
 
@@ -90,9 +63,6 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
     #: The repository this invocation operates on.
-    #:
-    #: Not validated as a repository-relative path: `.` is its default and an
-    #: absolute path is the normal way to point at a checkout elsewhere.
     #:
     #: Explicit operator override. When absent, repository-bound entry points
     #: discover the nearest workspace marker; non-repository commands ignore it.
@@ -128,24 +98,6 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_removed_layout_env(cls, data: object) -> object:
-        """Fail on a removed layout variable instead of ignoring it.
-
-        Raises `SpecError` rather than `ValueError` so it escapes pydantic
-        unwrapped and reaches the operator as one `error:` line (exit 3),
-        not as a validation traceback.
-        """
-        removed = [
-            f"{name} was removed; set {field} in .chart-manager/workspace.yaml instead"
-            for name, field in _REMOVED_ENV_VARS.items()
-            if _environ_has(name)
-        ]
-        if removed:
-            raise SpecError("; ".join(removed))
-        return data
-
     @field_validator("log_level", mode="before")
     @classmethod
     def _normalize_log_level(cls, value: object) -> object:
@@ -156,48 +108,16 @@ class Settings(BaseSettings):
     def _normalize_log_format(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
 
-    def describe_root(self) -> str | None:
-        """Name where an explicit `root` came from, for an error message.
-
-        `None` when `root` was not set at all. Settings keeps only the merged
-        value, so the source is recovered the way the sources were applied:
-        the environment beats the config file, and anything else was passed
-        to the constructor.
-        """
-        if "root" not in self.model_fields_set:
-            return None
-        path = self.root.resolve()
-        if _environ_has("CHART_MANAGER_ROOT"):
-            return f"CHART_MANAGER_ROOT={path}"
-        document = load_yaml_file(config_file()) if config_file().is_file() else None
-        if isinstance(document, dict) and "root" in document:
-            return f"root={path} in {config_file()}"
-        return f"Settings.root={path}"
-
 
 def load_settings() -> Settings:
-    """Build `Settings`, turning a validation failure into a `SpecError`.
-
-    The one place process configuration is constructed for the CLI. A
-    pydantic `ValidationError` is a traceback to the operator and carries no
-    exit code, while a bad `config.yaml` key or `CHART_MANAGER_*` value is
-    invalid authored configuration -- exit 3, one line per problem, naming
-    the file and the key.
-    """
+    """Build `Settings`, reporting invalid configuration as a `SpecError`."""
     try:
         return Settings()
     except ValidationError as exc:
-        problems = []
-        for error in exc.errors():
-            key = ".".join(str(part) for part in error["loc"]) or "<settings>"
-            if error["type"] == "extra_forbidden":
-                # Unknown environment variables are ignored, so an unknown
-                # key can only have come from the config file.
-                problems.append(f"unknown key {key!r} in {config_file()}")
-            else:
-                source = f"CHART_MANAGER_{key.upper()} or {config_file()}"
-                problems.append(f"{key}: {error['msg']} (from {source})")
-        raise SpecError("invalid settings: " + "; ".join(problems)) from None
+        problems = "; ".join(
+            f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors()
+        )
+        raise SpecError(f"invalid settings ({config_file()}): {problems}") from None
 
 
 __all__ = [

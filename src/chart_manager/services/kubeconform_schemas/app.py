@@ -24,7 +24,7 @@ class RepositoryKubeconformSchemaService:
         self.sync_service = sync
 
     def sync(self, *, update: bool = False) -> KubeconformSchemaSyncResult:
-        policy = self.workspace.validation
+        policy = self.workspace.spec.validation
         if policy is None:
             raise KubeconformSchemaConfigurationError(
                 f"{self.workspace.marker} must declare spec.validation "

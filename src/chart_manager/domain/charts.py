@@ -122,15 +122,8 @@ class ChartRepository:
     """Discover and load Helm charts under the configured repository directory."""
 
     def __init__(self, root: Path, *, charts_dir: Path) -> None:
-        """Anchor the repository at the resolved repo root.
-
-        ``charts_dir`` is repository-relative and has no default: the
-        workspace decides it, and some callers deliberately pass another
-        directory (a bootstrap release's chart parent, a ``chart test <dir>``
-        target outside the managed chart root).
-        """
+        """Anchor the repository at the resolved repo root."""
         self.root = root.resolve()
-        # pathlib drops a `.` segment, so `charts_dir=Path(".")` is the root.
         self.charts_dir = self.root / charts_dir
 
     def list_names(self) -> list[str]:

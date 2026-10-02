@@ -27,11 +27,7 @@ def resolve_chart_path(
     *,
     charts_dir: Path,
 ) -> tuple[Path, Path, dict[str, Any]]:
-    """Resolve and validate one chart without allowing an escape from ``root``.
-
-    ``root`` is the request's repository root and ``charts_dir`` the
-    workspace's managed chart directory; a bare chart name resolves beneath it.
-    """
+    """Resolve and validate one chart without allowing an escape from ``root``."""
     try:
         repo_root = root.expanduser().resolve(strict=True)
     except OSError as exc:

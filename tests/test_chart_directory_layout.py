@@ -64,7 +64,7 @@ def test_offline_environment_variable_has_no_settings_surface(
 
 
 def test_workspace_parses_nested_chart_prefix(tmp_path: Path) -> None:
-    workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
+    workspace = workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR)
 
     assert workspace.chart_name_from_repo_path("deploy/helm/loki/values.yaml") == "loki"
     assert workspace.chart_name_from_repo_path("charts/loki/values.yaml") is None
@@ -85,8 +85,8 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     dashboard.parent.mkdir(parents=True)
     dashboard.write_text("{}", encoding="utf-8")
 
-    workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
-    repository = ChartRepository(tmp_path, charts_dir=workspace.charts_dir)
+    workspace = workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR)
+    repository = ChartRepository(tmp_path, charts_dir=workspace.spec.charts_dir)
     assert repository.list_names() == ["demo"]
     assert repository.get("demo").path == chart
 
@@ -104,7 +104,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     _, resolved, _ = resolve_chart_path(
         tmp_path,
         Path("demo"),
-        charts_dir=workspace.charts_dir,
+        charts_dir=workspace.spec.charts_dir,
     )
     assert resolved == chart.resolve()
     assert discover_dashboards(workspace=workspace) == [dashboard]
@@ -133,7 +133,7 @@ spec:
     (chart / "values.yaml").write_text("", encoding="utf-8")
 
     result = build_worklist(
-        workspace=workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR),
+        workspace=workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR),
         changed_files=["deploy/helm/demo/values.yaml"],
     )
 
@@ -150,14 +150,14 @@ def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path
     `local up` and `chart cache clean` all address it.
     """
     _write_chart(tmp_path, "demo")
-    write_workspace(tmp_path, charts_dir=CUSTOM_CHARTS_DIR.as_posix())
+    write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())
 
     catalog = container.chart_catalog_service(tmp_path).list_entries()
     assert [entry.name for entry in catalog] == ["demo"]
 
     impact = container.impact_service(tmp_path)
-    assert impact.workspace.charts_dir == CUSTOM_CHARTS_DIR
+    assert impact.workspace.spec.charts_dir == CUSTOM_CHARTS_DIR
 
     resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()

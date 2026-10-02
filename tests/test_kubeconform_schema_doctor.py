@@ -59,11 +59,13 @@ def test_bad_lock_fails_before_store_inspection(tmp_path):
     assert result["schema-store"].status is CheckStatus.SKIPPED
 
 
-def test_no_workspace_skips_managed_schema_checks_with_a_hint(tmp_path):
-    result = KubeconformSchemaDoctor(None, cache_root=tmp_path / "cache").preflight()
+def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path):
+    result = KubeconformSchemaDoctor(
+        None, skip_reason="no workspace here", cache_root=tmp_path / "cache"
+    ).preflight()
     assert [check.name for check in result] == ["schema-policy", "schema-lock", "schema-store"]
     assert all(check.status is CheckStatus.SKIPPED for check in result)
-    assert all("set CHART_MANAGER_ROOT" in check.detail for check in result)
+    assert all(check.detail == "no workspace here" for check in result)
     assert not (tmp_path / "cache").exists()
 
 

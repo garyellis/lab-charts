@@ -35,13 +35,9 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
 
-from .conftest import MakeChart, cli, write_workspace
+from .conftest import MakeChart, cli
 
-
-@pytest.fixture(autouse=True)
-def _workspace(tmp_path: Path) -> None:
-    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
-    write_workspace(tmp_path)
+pytestmark = pytest.mark.usefixtures("tmp_workspace")
 
 
 def _chart(root: Path, name: str = "alloy") -> Path:

@@ -1,11 +1,4 @@
-"""Load the fixed repository ``ChartWorkspace`` resource into a `RepositoryWorkspace`.
-
-The loader keeps the validated ``ChartWorkspaceSpec`` whole and adds what the
-file cannot say: the resolved checkout root and the filesystem checks
-(root escape, ``renderDir`` symlinks) that the spec's lexical validators
-cannot make. `RepositoryWorkspace` then answers every layout question --
-paths, chart names, fanout patterns -- through properties over that spec.
-"""
+"""Load and compile the fixed repository ``ChartWorkspace`` resource."""
 
 from __future__ import annotations
 
@@ -16,11 +9,7 @@ from pathlib import Path, PurePath
 
 from pydantic import ValidationError
 
-from chart_manager.api.v1alpha1.chart_workspace import (
-    ChartWorkspace,
-    ChartWorkspaceSpec,
-    WorkspaceValidation,
-)
+from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, ChartWorkspaceSpec
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
@@ -31,71 +20,21 @@ SCHEMA_LOCK_FILE = Path(".chart-manager/schemas.lock.yaml")
 
 @dataclass(frozen=True)
 class RepositoryWorkspace:
-    """One compiled, immutable interpretation of a repository checkout.
-
-    Wraps the validated ``ChartWorkspaceSpec`` rather than copying its
-    fields, so the authored file stays the single source of layout truth.
-    Callers read layout through the properties below, never through
-    ``.spec`` (``tests/test_layering.py`` enforces it). Every nested spec
-    model is frozen and holds tuples, so equality and hashing are by value.
-
-    Constructed only by `load_repository_workspace` and `with_charts_dir`,
-    which both apply the root-escape checks a bare constructor cannot.
-    """
+    """One compiled, immutable interpretation of a repository checkout."""
 
     root: Path
     name: str
     spec: ChartWorkspaceSpec
 
-    @property
-    def charts_dir(self) -> Path:
-        return self.spec.charts_dir
-
-    @property
-    def local_cluster(self) -> Path:
-        return self.spec.local_cluster
-
-    @property
-    def render_dir(self) -> Path:
-        return self.spec.render_dir
-
-    @property
-    def policies_dir(self) -> Path:
-        return self.spec.policies_dir
-
-    @property
-    def validation(self) -> WorkspaceValidation | None:
-        return self.spec.validation
-
-    @property
-    def validation_fanout(self) -> tuple[str, ...]:
-        return self.spec.fanout.validation
-
-    @property
-    def cluster_test_fanout(self) -> tuple[str, ...]:
-        return self.spec.fanout.cluster_test
-
-    @property
-    def shared_prerequisites(self) -> tuple[str, ...]:
-        return self.spec.cluster_test.shared_prerequisites
-
     def with_charts_dir(self, path: Path) -> RepositoryWorkspace:
-        """Return this workspace with ``chartsDir`` re-pointed at ``path``.
-
-        For an explicit chart target (`chart test <chart>`, single-chart
-        `chart validate <chart>`), whose parent directory may or may not be
-        the authored ``chartsDir``. The new spec is re-validated and the
-        root-escape checks re-applied, exactly as if ``path`` had been
-        authored; a failure is a one-line `SpecError` naming the directory.
-        """
-        label = f"chart directory {path}"
+        """Return this workspace with ``chartsDir`` re-pointed at ``path``."""
         try:
             spec = ChartWorkspaceSpec.model_validate(
                 {**self.spec.model_dump(by_alias=True), "chartsDir": path}
             )
         except ValidationError as exc:
-            raise SpecError(f"invalid {label}: {_charts_dir_error(exc)}") from exc
-        _check_layout(self.root, spec, charts_dir_label=label)
+            raise SpecError(f"invalid chart directory {path}: {exc.errors()[0]['msg']}") from exc
+        _check_layout(self.root, spec)
         return RepositoryWorkspace(root=self.root, name=self.name, spec=spec)
 
     @property
@@ -105,19 +44,19 @@ class RepositoryWorkspace:
     @property
     def charts_root(self) -> Path:
         """Absolute directory containing managed chart directories."""
-        return self.root if self.charts_dir == Path(".") else self.root / self.charts_dir
+        return self.root if self.spec.charts_dir == Path(".") else self.root / self.spec.charts_dir
 
     @property
     def local_cluster_path(self) -> Path:
-        return self.root / self.local_cluster
+        return self.root / self.spec.local_cluster
 
     @property
     def render_root(self) -> Path:
-        return self.root / self.render_dir
+        return self.root / self.spec.render_dir
 
     @property
     def policies_root(self) -> Path:
-        return self.root / self.policies_dir
+        return self.root / self.spec.policies_dir
 
     def chart_path(self, name: str) -> Path:
         """Absolute path for one managed chart name."""
@@ -125,13 +64,13 @@ class RepositoryWorkspace:
 
     def repo_chart_path(self, name: str, *children: str) -> Path:
         """Repository-relative path beneath one managed chart."""
-        base = Path(name) if self.charts_dir == Path(".") else self.charts_dir / name
+        base = Path(name) if self.spec.charts_dir == Path(".") else self.spec.charts_dir / name
         return base / Path(*children)
 
     def chart_name_from_repo_path(self, path: PurePath | str) -> str | None:
         """Return the managed chart name owning a repository-relative path."""
         parts = PurePath(path).parts
-        prefix = () if self.charts_dir == Path(".") else self.charts_dir.parts
+        prefix = () if self.spec.charts_dir == Path(".") else self.spec.charts_dir.parts
         if len(parts) <= len(prefix) or parts[: len(prefix)] != prefix:
             return None
         return parts[len(prefix)]
@@ -149,23 +88,22 @@ class RepositoryWorkspace:
 
     def matching_cluster_test_patterns(self, path: PurePath | str) -> tuple[str, ...]:
         return tuple(
-            pattern
-            for pattern in self.cluster_test_patterns()
-            if _pattern_matches(pattern, path)
+            pattern for pattern in self.cluster_test_patterns() if _pattern_matches(pattern, path)
         )
 
     def validation_patterns(self) -> tuple[str, ...]:
         implicit = (
-            _path_pattern(self.policies_dir),
+            _path_pattern(self.spec.policies_dir),
             SCHEMA_LOCK_FILE.as_posix(),
             WORKSPACE_FILE.as_posix(),
         )
-        return tuple(sorted({*self.validation_fanout, *implicit}))
+        return tuple(sorted({*self.spec.fanout.validation, *implicit}))
 
     def cluster_test_patterns(self) -> tuple[str, ...]:
-        implicit = [self.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
+        implicit = [self.spec.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
         implicit.extend(
-            _path_pattern(self.repo_chart_path(name)) for name in self.shared_prerequisites
+            _path_pattern(self.repo_chart_path(name))
+            for name in self.spec.cluster_test.shared_prerequisites
         )
         # LocalCluster dependency discovery is intentionally lazy. A malformed
         # cluster resource cannot break chart listing or validation.
@@ -183,7 +121,7 @@ class RepositoryWorkspace:
                     for release in cluster.spec.bootstrap.releases
                     if isinstance(release, (LifecycleRelease, LocalChartRelease))
                 )
-        return tuple(sorted({*self.cluster_test_fanout, *implicit}))
+        return tuple(sorted({*self.spec.fanout.cluster_test, *implicit}))
 
 
 def _path_pattern(path: Path) -> str:
@@ -227,27 +165,10 @@ def discover_workspace_root(start: Path) -> Path | None:
     return None
 
 
-def resolve_repository_root(
-    *,
-    configured: Path | None,
-    configured_by: str | None = None,
-    start: Path | None = None,
-) -> Path:
-    """Return the workspace root: the operator override, else the nearest marker.
-
-    An explicit root is taken as given -- no walk-up -- so pointing
-    `CHART_MANAGER_ROOT` at a subdirectory is an error rather than a silent
-    switch to whichever ancestor happens to hold a marker. `configured_by`
-    describes where an explicit root came from, path included
-    (`CHART_MANAGER_ROOT=/srv/charts`), so the error names the setting to
-    fix; `None` means a caller passed the path and the path alone is named.
-    """
+def resolve_repository_root(*, configured: Path | None, start: Path | None = None) -> Path:
+    """Return the operator override, else the nearest ancestor holding the marker."""
     if configured is not None:
-        resolved = configured.resolve()
-        if not (resolved / WORKSPACE_FILE).is_file():
-            source = configured_by or str(resolved)
-            raise WorkspaceNotFoundError(f"{source} has no {WORKSPACE_FILE.as_posix()}")
-        return resolved
+        return configured.resolve()
     origin = (start or Path.cwd()).resolve()
     discovered = discover_workspace_root(origin)
     if discovered is None:
@@ -270,27 +191,11 @@ def load_repository_workspace(root: Path) -> RepositoryWorkspace:
     except (YamlError, ValidationError, ValueError) as exc:
         raise SpecError(f"invalid ChartWorkspace {marker}: {exc}") from exc
     _check_layout(resolved_root, resource.spec)
-    return RepositoryWorkspace(
-        root=resolved_root,
-        name=resource.metadata.name,
-        spec=resource.spec,
-    )
+    return RepositoryWorkspace(root=resolved_root, name=resource.metadata.name, spec=resource.spec)
 
 
-def _check_layout(
-    root: Path,
-    spec: ChartWorkspaceSpec,
-    *,
-    charts_dir_label: str | None = None,
-) -> None:
-    """Reject layout paths that leave ``root`` once symlinks are resolved.
-
-    The spec validators judge each path only as spelled; this is the
-    filesystem half. ``renderDir`` is also refused any symlink component.
-    Shared by the loader and `RepositoryWorkspace.with_charts_dir`, which
-    passes ``charts_dir_label`` so a failure names the chart directory the
-    operator targeted rather than a workspace.yaml field they never wrote.
-    """
+def _check_layout(root: Path, spec: ChartWorkspaceSpec) -> None:
+    """Reject layout paths that resolve outside ``root`` and a symlinked ``renderDir``."""
     for field, relative in (
         ("spec.chartsDir", spec.charts_dir),
         ("spec.localCluster", spec.local_cluster),
@@ -299,8 +204,6 @@ def _check_layout(
     ):
         resolved = (root / relative).resolve()
         if not resolved.is_relative_to(root):
-            if field == "spec.chartsDir" and charts_dir_label is not None:
-                raise SpecError(f"{charts_dir_label} resolves outside repository root {root}")
             raise SpecError(f"{field} resolves outside repository root: {relative}")
         if field == "spec.renderDir":
             current = root
@@ -310,19 +213,6 @@ def _check_layout(
                     raise SpecError(
                         f"spec.renderDir must not contain symlink components: {relative}"
                     )
-
-
-def _charts_dir_error(exc: ValidationError) -> str:
-    """One line from a ``chartsDir`` validation failure, minus pydantic framing.
-
-    The field validators raise ``"spec.chartsDir must be ..."``; pydantic
-    wraps that as ``"Value error, spec.chartsDir must be ..."``. Only the
-    predicate is kept, since the caller names the directory itself.
-    """
-    errors = exc.errors()
-    error = next((e for e in errors if e["loc"][:1] == ("chartsDir",)), errors[0])
-    message = str(error["msg"]).removeprefix("Value error, ")
-    return message.removeprefix("spec.chartsDir ")
 
 
 __all__ = [

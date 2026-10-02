@@ -167,8 +167,6 @@ def global_options(
     """
     # Order matters: the config file must be located before anything reads
     # Settings, because Settings is where the config file's values enter.
-    # This builds the invocation's one Container, so every command below
-    # reuses these Settings and its workspace memo.
     set_config_file(config)
     settings = start_invocation().settings
 
@@ -274,9 +272,8 @@ app.add_typer(schemas_app, name="schemas")
 #: before this every one of them exited 1 (except the absent binary, which
 #: already had its own clause). A `CapabilityUnavailableError` deliberately
 #: falls through to `FAILED`: asking a chart for a capability it has switched
-#: off is not invalid configuration, so it is not a spec error. Nor is a
-#: missing `workspace.yaml`: the command ran outside a chart repository, which
-#: is the environment's fault (5), not the configuration's.
+#: off is not invalid configuration, so it is not a spec error. A missing
+#: `workspace.yaml` is an environment error (5).
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
@@ -329,9 +326,6 @@ def main() -> None:
     errors are `OSError` too), which is design §6.1's environment error, 5.
     """
     try:
-        # Bootstrap logging before argv is parsed, so `--config` is not known
-        # yet. The invocation's own Settings come from its Container, built
-        # by the root callback.
         settings = load_settings()
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
