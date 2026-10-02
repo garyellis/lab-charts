@@ -106,16 +106,21 @@ impact, publishing, upgrades/finalization, and Grafana discovery.
 
 `version`, `event`, `helmrelease`, `grafana dashboard export`, and
 `grafana dashboard lint --path` never ask for the workspace. `doctor` asks
-through `Container.find_workspace()`, which performs the same discovery but
-returns `None` instead of raising when no marker exists (an invalid
-`workspace.yaml` still raises); without a workspace it probes git from the
-working directory and skips the schema checks.
+through `Container.find_workspace()`, which performs the same resolution but
+returns `None` when *discovery* finds no marker. An explicit root without a
+marker and an invalid `workspace.yaml` still raise; `doctor_service` turns
+either into a failed `schema-policy` check (environment and spec outcomes
+respectively) so the rest of the report still runs. Without a workspace,
+git/gh probe the explicit root if one is set, else the working directory.
+`doctor` reports outside a workspace; it does not necessarily pass there.
 
 Repository policy is checkout-owned. Machine settings such as kube context,
 Docker host, timeouts, logging, credentials, and backend endpoints remain in
 `Settings`, which carries no layout and forbids unknown config keys. The
 removed `CHART_MANAGER_CHARTS_DIR` and `CHART_MANAGER_LOCAL_CONFIG`
-variables are an error rather than silently ignored.
+variables are an error rather than silently ignored. The CLI builds
+`Settings` only through `load_settings()`, which reports a validation
+failure as a `SpecError` (exit 3) naming the file and key, not a traceback.
 
 ## Rules `api/` must obey
 
