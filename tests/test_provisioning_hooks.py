@@ -40,7 +40,7 @@ def _repository(tmp_path: Path, hooks: str) -> LocalCluster:
     scripts.mkdir()
     (scripts / "prepare").write_text("#!/bin/sh\n", encoding="utf-8")
     config = tmp_path / ".chart-manager" / "local-cluster.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(_document(hooks), encoding="utf-8")
     return LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
@@ -99,7 +99,7 @@ def test_hook_contract_rejects_shell_empty_and_unsafe_commands(
 ) -> None:
     (tmp_path / "kind.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     config = tmp_path / ".chart-manager" / "local-cluster.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(_document(hooks), encoding="utf-8")
 
     with pytest.raises(SpecError, match=message):

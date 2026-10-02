@@ -2,10 +2,13 @@
 
 Repository-root precedence is:
 
-    CHART_MANAGER_ROOT env > config.yaml > nearest workspace > cwd fallback
+    CHART_MANAGER_ROOT env > config.yaml > nearest workspace
 
-It is split across two mechanisms and neither half is obvious, which is why
-each step below is asserted rather than assumed:
+There is no cwd fallback: an explicit root must hold
+`.chart-manager/workspace.yaml` itself, and discovery that finds no marker
+is a `WorkspaceNotFoundError` (exit 5). It is split across two mechanisms and
+neither half is obvious, which is why each step below is asserted rather
+than assumed:
 
 `Settings` implements environment over config-file precedence. Repository
 commands then perform nearest-marker discovery; non-repository commands do
@@ -30,7 +33,7 @@ from chart_manager import composition
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
-from .conftest import cli
+from .conftest import cli, write_workspace
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +57,7 @@ def _repo_with_chart(directory: Path, name: str) -> Path:
     (chart / "Chart.yaml").write_text(
         f"apiVersion: v2\nname: {name}\nversion: 0.1.0\n", encoding="utf-8"
     )
+    write_workspace(directory)
     return directory
 
 
@@ -106,19 +110,6 @@ def test_a_repository_command_loads_the_workspace_once_per_invocation(
     Container, and with it a fresh workspace memo, so the file was read twice.
     """
     root = _repo_with_chart(tmp_path, "zeta")
-    marker = root / ".chart-manager" / "workspace.yaml"
-    marker.parent.mkdir()
-    marker.write_text(
-        "apiVersion: chartmanager.io/v1alpha1\n"
-        "kind: ChartWorkspace\n"
-        "metadata: {name: example}\n"
-        "spec:\n"
-        "  chartsDir: charts\n"
-        "  localCluster: .chart-manager/local-cluster.yaml\n"
-        "  renderDir: .chart-manager/rendered\n"
-        "  policiesDir: policies\n",
-        encoding="utf-8",
-    )
     monkeypatch.chdir(root)
     loaded: list[Path] = []
     real = composition.load_repository_workspace
@@ -180,7 +171,7 @@ def test_environment_root_reaches_a_nested_group(
     """A deeply nested repository command uses the same operator override."""
     monkeypatch.chdir(_repo_with_chart(tmp_path / "cwd", "zeta"))
     elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
+    write_workspace(elsewhere)
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(elsewhere))
 
     result = cli("grafana", "dashboard", "lint")

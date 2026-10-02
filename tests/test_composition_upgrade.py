@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.composition import Container
 from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.services.upgrader import FinalizeRequest, UpgradeRequest
-from tests.conftest import FakeCommandRunner, Reply
+from tests.conftest import FakeCommandRunner, Reply, write_workspace
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path: Path) -> None:
+    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
+    write_workspace(tmp_path)
 
 
 class _Container(Container):

@@ -35,7 +35,13 @@ from chart_manager.services.lifecycle.models import (
 )
 from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
 
-from .conftest import MakeChart, cli
+from .conftest import MakeChart, cli, write_workspace
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path: Path) -> None:
+    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
+    write_workspace(tmp_path)
 
 
 def _chart(root: Path, name: str = "alloy") -> Path:
@@ -814,7 +820,7 @@ def test_chart_test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(
     """Dry run plans hooks but runs none; the table redacts argv, JSON keeps it."""
     (chart_root / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     config = chart_root / ".chart-manager" / "local-cluster.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(
         "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: LocalCluster\n"
@@ -997,7 +1003,7 @@ def test_chart_teardown_dry_run_lists_redacted_cleanups_and_runs_nothing(
 ) -> None:
     (chart_root / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     config = chart_root / ".chart-manager" / "local-cluster.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(
         "apiVersion: chartmanager.io/v1alpha1\n"
         "kind: LocalCluster\n"

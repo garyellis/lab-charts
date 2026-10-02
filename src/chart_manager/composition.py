@@ -77,7 +77,7 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.ci import CiService
 from chart_manager.services.clusters.development import DevelopmentClusterService
@@ -148,9 +148,10 @@ class Container:
     def workspace(self, root: Path | None = None) -> RepositoryWorkspace:
         """Resolve the single repository layout/policy used by every capability.
 
-        The memo -- including the `None` key used for cwd discovery -- is what
-        guarantees workspace.yaml is parsed once per container, and so once per
-        CLI invocation.
+        Raises `WorkspaceNotFoundError` when there is no workspace.yaml to
+        load. The memo -- including the `None` key used for cwd discovery --
+        is what guarantees workspace.yaml is parsed once per container, and
+        so once per CLI invocation.
         """
         key = root.resolve() if root is not None else None
         if key not in self._workspaces:
@@ -159,30 +160,38 @@ class Container:
             self._workspaces[compiled.root] = compiled
         return self._workspaces[key]
 
+    def find_workspace(self, root: Path | None = None) -> RepositoryWorkspace | None:
+        """Like `workspace()`, but `None` when there is no workspace.yaml.
+
+        For commands that work inside or outside a checkout (`doctor`). Only
+        a *missing* marker is absorbed: an invalid workspace.yaml still
+        raises, because silently treating a broken checkout as "not a
+        checkout" would hide the one thing the operator needs to fix. Shares
+        `workspace()`'s memo, so a later `workspace()` call in the same
+        invocation does not parse the file again.
+        """
+        try:
+            return self.workspace(root)
+        except WorkspaceNotFoundError:
+            return None
+
     def _load_workspace(self, root: Path | None) -> RepositoryWorkspace:
         """Discover and compile one checkout's workspace from these settings.
 
         Root precedence: the `root` argument, then an explicitly configured
         `Settings.root` (`CHART_MANAGER_ROOT` or `root:` in config.yaml), then
-        nearest-marker discovery from the working directory. The legacy
-        `charts_dir`/`local_config` settings only apply when the repository
-        has no workspace.yaml; setting either explicitly beside one is an
-        error raised by the loader.
+        nearest-marker discovery from the working directory. An explicit
+        root must itself hold the marker; only discovery walks up.
 
         Lives here rather than on `Settings` so `settings.py` need not import
         `domain/`: process configuration and repository layout meet in the
         composition root, which is the one module that may see both.
         """
-        settings = self._settings
-        configured = root
-        if configured is None and "root" in settings.model_fields_set:
-            configured = settings.root
-        legacy_explicit = bool({"charts_dir", "local_config"} & settings.model_fields_set)
+        configured, configured_by = root, None
+        if configured is None and "root" in self._settings.model_fields_set:
+            configured, configured_by = self._settings.root, "CHART_MANAGER_ROOT"
         return load_repository_workspace(
-            resolve_repository_root(configured=configured),
-            legacy_charts_dir=settings.charts_dir,
-            legacy_local_cluster=settings.local_config,
-            legacy_layout_explicit=legacy_explicit,
+            resolve_repository_root(configured=configured, configured_by=configured_by)
         )
 
     # --- adapters ---------------------------------------------------------
@@ -263,12 +272,19 @@ class Container:
         then telemetry. `DoctorService` preserves it rather than sorting, so
         the order is decided here, next to the reasoning.
 
-        `root` addresses the git/gh checks; it falls back to the configured
-        repository root through the same workspace discovery as other capabilities.
+        `doctor` is the command you run when things are broken, so it must
+        answer outside a chart repository too. It uses `find_workspace`, not
+        `workspace`: with a workspace, the git/gh checks address its root and
+        the schema checks read its policy; without one, the git/gh checks
+        address `root` (default: the working directory) -- so "not a git
+        work tree" is still reported -- and the schema checks are skipped
+        with a hint. An invalid workspace.yaml still raises.
         """
         runner = self.command_runner()
-        workspace = self.workspace(root)
-        resolved_root = workspace.root
+        workspace = self.find_workspace(root)
+        resolved_root = (
+            workspace.root if workspace is not None else (root or Path.cwd()).resolve()
+        )
         providers: dict[str, CheckProvider] = {
             "helm": self.helm().preflight,
             "kubeconform": Kubeconform(runner, timeout=self._settings.command_timeout).preflight,

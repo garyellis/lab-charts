@@ -12,6 +12,7 @@ from chart_manager.services.kubeconform_schemas.models import (
     build_lock,
 )
 from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+from tests.conftest import workspace_for
 
 
 def git(root: Path, *args: str) -> str:
@@ -43,10 +44,9 @@ def repository(root: Path, files: dict[str, str]) -> str:
 
 
 def workspace(root: Path) -> RepositoryWorkspace:
-    return RepositoryWorkspace(
-        root=root,
+    return workspace_for(
+        root,
         name="lab",
-        authored=True,
         validation=WorkspaceValidation.model_validate(
             {
                 "kubernetesVersion": "1.35.3",

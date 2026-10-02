@@ -45,6 +45,7 @@ from chart_manager.plumbing.errors import (
     ExternalCommandError,
     MissingToolError,
     SpecError,
+    WorkspaceNotFoundError,
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
@@ -274,7 +275,9 @@ app.add_typer(schemas_app, name="schemas")
 #: before this every one of them exited 1 (except the absent binary, which
 #: already had its own clause). A `CapabilityUnavailableError` deliberately
 #: falls through to `FAILED`: asking a chart for a capability it has switched
-#: off is not invalid configuration, so it is not a spec error.
+#: off is not invalid configuration, so it is not a spec error. Nor is a
+#: missing `workspace.yaml`: the command ran outside a chart repository, which
+#: is the environment's fault (5), not the configuration's.
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
@@ -284,6 +287,7 @@ _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (KubeconformSchemaLockError, Outcome.SPEC),
     (KubeconformSchemaError, Outcome.TOOL),
     (SpecError, Outcome.SPEC),
+    (WorkspaceNotFoundError, Outcome.ENVIRONMENT),
     (ChartManagerError, Outcome.FAILED),
 )
 

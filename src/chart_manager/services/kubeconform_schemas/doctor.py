@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from chart_manager.domain.workspace import (
+    SCHEMA_LOCK_FILE,
+    WORKSPACE_FILE,
+    RepositoryWorkspace,
+)
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.services.kubeconform_schemas.errors import (
@@ -32,7 +36,7 @@ class KubeconformSchemaDoctor:
 
     def __init__(
         self,
-        workspace: RepositoryWorkspace,
+        workspace: RepositoryWorkspace | None,
         *,
         cache_root: Path | None = None,
     ) -> None:
@@ -40,21 +44,30 @@ class KubeconformSchemaDoctor:
         self.cache_root = cache_root
 
     def preflight(self) -> tuple[Check, ...]:
-        """Report policy, lock, and immutable generation readiness from disk only."""
-        if not self.workspace.authored:
+        """Report policy, lock, and immutable generation readiness from disk only.
+
+        `workspace=None` is `doctor` run outside a chart repository: the
+        schema policy lives in workspace.yaml, so there is nothing to check
+        and nothing wrong -- every check is skipped, naming how to get one.
+        """
+        if self.workspace is None:
             return tuple(
-                Check.skipped(name, "legacy workspace uses chart-local schema configuration")
+                Check.skipped(
+                    name,
+                    f"no {WORKSPACE_FILE.as_posix()} found; run from a chart repository "
+                    "checkout or set CHART_MANAGER_ROOT",
+                )
                 for name in ("schema-policy", "schema-lock", "schema-store")
             )
-        policy_check, policy = self._policy_check()
-        if policy is None or not self.workspace.name:
+        policy_check, policy = self._policy_check(self.workspace)
+        if policy is None:
             return (
                 policy_check,
                 Check.skipped("schema-lock", "workspace schema policy is unavailable"),
                 Check.skipped("schema-store", "workspace schema policy is unavailable"),
             )
 
-        lock_check, lock = self._lock_check(policy)
+        lock_check, lock = self._lock_check(self.workspace, policy)
         if lock is None:
             return (
                 policy_check,
@@ -92,18 +105,18 @@ class KubeconformSchemaDoctor:
             _store_check(lock, status, policy_matches=policy_matches),
         )
 
-    def _policy_check(self) -> tuple[Check, AuthoredSchemaPolicy | None]:
-        validation = self.workspace.validation
-        if validation is None or not self.workspace.name:
-            missing = (
-                "metadata.name" if not self.workspace.name else "spec.validation schema policy"
-            )
+    @staticmethod
+    def _policy_check(
+        workspace: RepositoryWorkspace,
+    ) -> tuple[Check, AuthoredSchemaPolicy | None]:
+        validation = workspace.validation
+        if validation is None:
             return (
                 Check.failed(
                     "schema-policy",
-                    f"{self.workspace.marker} is missing {missing}",
+                    f"{workspace.marker} is missing spec.validation schema policy",
                     remediation=(
-                        "configure metadata.name, spec.validation.kubernetesVersion, and "
+                        "configure spec.validation.kubernetesVersion and "
                         "spec.validation.schemas, then " + _UPDATE
                     ),
                     outcome=Outcome.SPEC,
@@ -117,19 +130,20 @@ class KubeconformSchemaDoctor:
             catalog_repository=validation.schemas.catalog.repository,
             catalog_track=validation.schemas.catalog.track,
         )
-        data = _policy_data(self.workspace.name, policy)
+        data = _policy_data(workspace.name, policy)
         detail = (
-            f"workspace={self.workspace.name}; kubernetes={policy.normalized_version()}; "
+            f"workspace={workspace.name}; kubernetes={policy.normalized_version()}; "
             f"generateFromCRDs={str(policy.generate_from_crds).lower()}; "
             f"catalog={policy.catalog_repository}@{policy.catalog_track}"
         )
         return Check.ok("schema-policy", detail, data=data), policy
 
+    @staticmethod
     def _lock_check(
-        self,
+        workspace: RepositoryWorkspace,
         policy: AuthoredSchemaPolicy,
     ) -> tuple[Check, SchemaLock | None]:
-        path = self.workspace.root / SCHEMA_LOCK_FILE
+        path = workspace.root / SCHEMA_LOCK_FILE
         if not path.is_file():
             return (
                 Check.failed(
@@ -154,7 +168,7 @@ class KubeconformSchemaDoctor:
                 ),
                 None,
             )
-        mismatches = _policy_mismatches(self.workspace.name or "", policy, lock)
+        mismatches = _policy_mismatches(workspace.name, policy, lock)
         data: dict[str, Any] = {
             "path": str(path),
             "present": True,

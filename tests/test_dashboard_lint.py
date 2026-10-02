@@ -12,7 +12,7 @@ from chart_manager.services.grafana.dashboard_lint import (
 )
 from chart_manager.services.grafana.wire import SCHEMA_VERSION, lint_result_to_dict
 
-from .conftest import cli
+from .conftest import cli, write_workspace
 
 #: A dashboard that satisfies every rule, for the "exit 0 still means clean"
 #: case below.
@@ -149,6 +149,7 @@ def _lint(*argv: str) -> Result:
 def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
     tmp_path: Path,
 ) -> None:
+    write_workspace(tmp_path)
     result = _lint("--root", str(tmp_path))
 
     assert result.exit_code == 1
@@ -161,6 +162,7 @@ def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
 def test_lint_dashboards_allow_empty_opts_back_into_exit_zero(
     tmp_path: Path,
 ) -> None:
+    write_workspace(tmp_path)
     result = _lint("--root", str(tmp_path), "--allow-empty")
 
     assert result.exit_code == 0

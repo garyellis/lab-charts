@@ -4,21 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.ci import CiService
 from chart_manager.services.lifecycle import LifecycleImpact
 
-from .conftest import MakeChart
+from .conftest import MakeChart, workspace_for
 
 
 def _service(root: Path) -> CiService:
     return CiService(
-        workspace=RepositoryWorkspace(
-            root=root.resolve(),
-            cluster_test_fanout=("kind-config.yaml",),
-        )
+        workspace=workspace_for(root, cluster_test_fanout=("kind-config.yaml",))
     )
 
 

@@ -19,6 +19,9 @@ from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.services.kubeconform_schemas.errors import (
+    KubeconformSchemaConfigurationError,
+)
 from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaLocations
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
@@ -79,6 +82,44 @@ def _chart(root: Path, name: str, *, spec: str | None = _SPEC, extra: str = "") 
         )
         (chart_dir / "chart-lifecycle.yaml").write_text(envelope)
     return chart_dir
+
+
+_SCHEMA_POLICY = WorkspaceValidation.model_validate(
+    {
+        "kubernetesVersion": "1.35.3",
+        "schemas": {
+            "generateFromCRDs": True,
+            "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+        },
+    }
+)
+
+
+class _EmptySchemaRuntime:
+    """A verified schema runtime that contributes no schema locations.
+
+    Every workspace now carries its schema policy, so any run that reaches the
+    kubeconform schema phase loads a runtime. Tests that are not about schema
+    wiring use this one instead of materializing a lock and an XDG store.
+    """
+
+    lock = SimpleNamespace(policy=SimpleNamespace(kubernetes_version="1.35.3"))
+
+    def locations(self) -> KubeconformSchemaLocations:
+        return KubeconformSchemaLocations(
+            generated_schema_locations=(), fallback_schema_locations=()
+        )
+
+    def ignored_missing_kinds(self) -> tuple[str, ...]:
+        return ()
+
+
+def _schema_ready(root: Path) -> dict[str, object]:
+    """Service kwargs for a direct construction that reaches the schema phase."""
+    return {
+        "workspace": workspace_for(root, validation=_SCHEMA_POLICY),
+        "schema_runtime_factory": lambda _workspace: _EmptySchemaRuntime(),
+    }
 
 
 class FakeRunner:
@@ -149,8 +190,14 @@ class FakeGit:
 def _app(
     root: Path, rec: Recorder, *, git: FakeGit | None = None, **kwargs
 ) -> ManifestValidationService:
-    """Build a ManifestValidationService wired to the recorder (and optionally a fake git)."""
-    kwargs.setdefault("workspace", workspace_for(root))
+    """Build a ManifestValidationService wired to the recorder (and optionally a fake git).
+
+    The default workspace carries a schema policy and the default runtime is
+    `_EmptySchemaRuntime`, so the schema phase runs without a lock or store.
+    Tests about schema wiring pass their own `workspace`/`schema_runtime_factory`.
+    """
+    for key, value in _schema_ready(root).items():
+        kwargs.setdefault(key, value)
     return ManifestValidationService(
         runner_factory=rec.factory,
         on_warn=rec.warnings.append,
@@ -207,12 +254,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
             },
         }
     )
-    workspace = RepositoryWorkspace(
-        root=tmp_path,
-        name="demo",
-        validation=policy,
-        authored=True,
-    )
+    workspace = workspace_for(tmp_path, name="demo", validation=policy)
     calls: list[RepositoryWorkspace] = []
 
     class Runtime:
@@ -257,6 +299,20 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
             "/cache/shared/generated",
             "/cache/shared/fallback",
         )
+
+
+def test_schema_phase_requires_a_workspace_schema_policy(tmp_path: Path) -> None:
+    _chart(tmp_path, "alpha")
+    loaded: list[RepositoryWorkspace] = []
+
+    with pytest.raises(KubeconformSchemaConfigurationError, match=r"no spec\.validation"):
+        _app(
+            tmp_path,
+            Recorder(),
+            workspace=workspace_for(tmp_path),
+            schema_runtime_factory=loaded.append,
+        ).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    assert loaded == []
 
 
 def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:
@@ -414,7 +470,7 @@ policies:
     kyverno = cfg.validator_invocations[1].config
     assert isinstance(kubeconform, KubeconformConfig)
     assert isinstance(kyverno, KyvernoConfig)
-    assert kubeconform.kubernetes_version is None
+    assert kubeconform.kubernetes_version == "1.35.3"
     assert kubeconform.schema_locations == (
         str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
     )
@@ -490,7 +546,7 @@ def test_fail_fast_is_delegated_to_the_single_runner(tmp_path: Path) -> None:
     outcome = ManifestValidationService(
         runner_factory=lambda spec: _FailFastRecordingRunner(spec, rec.runs),
         run_id_factory=lambda: "RUNID",
-        workspace=workspace_for(tmp_path),
+        **_schema_ready(tmp_path),
     ).run(
         RunRequest(
             root=tmp_path,
@@ -785,7 +841,7 @@ def test_progress_sink_is_started_with_every_row_and_always_stopped(
 
     ManifestValidationService(
         runner_factory=rec.factory, progress=sink, run_id_factory=lambda: "RUNID",
-        workspace=workspace_for(tmp_path),
+        **_schema_ready(tmp_path),
     ).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert len(sink.started) == 1
@@ -804,7 +860,7 @@ def test_runner_construction_failure_becomes_outcomes_and_progress(
 
     app = ManifestValidationService(
         runner_factory=exploding_factory, progress=sink, run_id_factory=lambda: "RUNID",
-        workspace=workspace_for(tmp_path),
+        **_schema_ready(tmp_path),
     )
     outcome = app.run(RunRequest(root=tmp_path, skip_change_detection=True))
 

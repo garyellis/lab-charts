@@ -7,23 +7,26 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
+from chart_manager.cli import main
+from chart_manager.cli._container import reset_invocation
 from chart_manager.composition import Container
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.workspace import (
-    LEGACY_CHARTS_DIR,
-    LEGACY_LOCAL_CLUSTER,
     SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
-    RepositoryWorkspace,
     discover_workspace_root,
     load_repository_workspace,
     resolve_repository_root,
 )
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.settings import Settings
+
+from .conftest import cli, workspace_for
 
 
 def _document(**spec: object) -> dict[str, object]:
@@ -87,45 +90,163 @@ def test_configured_root_precedes_nearest_marker(tmp_path: Path) -> None:
     assert resolve_repository_root(configured=configured, start=leaf) == configured
 
 
-def test_missing_marker_uses_start_as_legacy_root(tmp_path: Path) -> None:
-    assert resolve_repository_root(configured=None, start=tmp_path) == tmp_path
-    workspace = load_repository_workspace(tmp_path)
-    assert not workspace.authored
-    assert workspace.name == tmp_path.name
-    assert workspace.charts_dir == Path("charts")
+def test_missing_marker_is_an_error_naming_the_discovery_start(tmp_path: Path) -> None:
+    expected = (
+        f"no .chart-manager/workspace.yaml in {tmp_path.resolve()} or any parent; "
+        "run from a chart repository checkout or set CHART_MANAGER_ROOT"
+    )
+
+    with pytest.raises(WorkspaceNotFoundError) as excinfo:
+        resolve_repository_root(configured=None, start=tmp_path)
+    assert str(excinfo.value) == expected
 
 
-def test_authored_workspace_is_authoritative_over_explicit_legacy_settings(
-    tmp_path: Path,
+def test_environment_root_without_marker_names_the_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("CHART_MANAGER_ROOT", str(tmp_path))
+
+    with pytest.raises(WorkspaceNotFoundError) as excinfo:
+        Container(Settings()).workspace()
+    assert str(excinfo.value) == (
+        f"CHART_MANAGER_ROOT={tmp_path.resolve()} has no .chart-manager/workspace.yaml"
+    )
+
+
+def test_explicit_root_never_walks_up(tmp_path: Path) -> None:
+    """An explicit root that is a subdirectory of a workspace is still wrong."""
     _write_workspace(tmp_path)
+    nested = tmp_path / "charts"
+    nested.mkdir()
 
-    with pytest.raises(SpecError, match="authoritative"):
-        load_repository_workspace(tmp_path, legacy_layout_explicit=True)
+    with pytest.raises(WorkspaceNotFoundError, match=r"has no \.chart-manager/workspace\.yaml"):
+        resolve_repository_root(configured=nested, configured_by="CHART_MANAGER_ROOT")
+    with pytest.raises(WorkspaceNotFoundError) as excinfo:
+        Container(Settings()).workspace(nested)
+    # A root passed as an argument is not attributed to the environment.
+    assert str(excinfo.value) == f"{nested.resolve()} has no .chart-manager/workspace.yaml"
 
 
-def test_settings_detects_legacy_environment_conflict(
+def test_find_workspace_absorbs_only_a_missing_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert Container(Settings()).find_workspace() is None
+
+    _write_workspace(tmp_path, "apiVersion: chartmanager.io/v1alpha1\nkind: ChartWorkspace\n")
+    with pytest.raises(SpecError, match="invalid ChartWorkspace"):
+        Container(Settings()).find_workspace()
+
+
+def test_find_workspace_shares_the_workspace_memo(tmp_path: Path) -> None:
+    _write_workspace(tmp_path)
+    container = Container(Settings())
+
+    found = container.find_workspace(tmp_path)
+
+    assert found is not None
+    assert container.workspace(tmp_path) is found
+
+
+def test_missing_workspace_exits_with_the_environment_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = cli("chart", "list")
+
+    # `CliRunner` stops at Click; the exception is what `main()` maps.
+    assert isinstance(result.exception, WorkspaceNotFoundError)
+    assert "set CHART_MANAGER_ROOT" in str(result.exception)
+    assert exit_code_for(main._outcome_for(result.exception)) == 5
+
+
+def test_missing_workspace_exit_code_through_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`main()` -- not Click -- owns the error-to-exit-code mapping."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["chart-manager", "chart", "list"])
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            main.main()
+    finally:
+        reset_invocation()
+
+    assert excinfo.value.code == 5
+    assert "no .chart-manager/workspace.yaml" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "variable,field",
+    [
+        ("CHART_MANAGER_CHARTS_DIR", "spec.chartsDir"),
+        ("CHART_MANAGER_LOCAL_CONFIG", "spec.localCluster"),
+    ],
+)
+def test_removed_layout_environment_variables_are_errors(
+    monkeypatch: pytest.MonkeyPatch, variable: str, field: str
+) -> None:
+    monkeypatch.setenv(variable, "anything")
+
+    with pytest.raises(SpecError) as excinfo:
+        Settings()
+    assert str(excinfo.value) == (
+        f"{variable} was removed; set {field} in .chart-manager/workspace.yaml instead"
+    )
+
+
+def test_removed_layout_environment_variable_exits_with_the_spec_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_workspace(tmp_path)
-    monkeypatch.setenv("CHART_MANAGER_CHARTS_DIR", "other/charts")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CHART_MANAGER_CHARTS_DIR", "charts")
 
-    with pytest.raises(SpecError, match="authoritative"):
-        Container(Settings()).workspace(tmp_path)
+    result = cli("version")
 
-
-def test_settings_legacy_defaults_match_the_workspace_fallback() -> None:
-    """`settings.py` spells these itself so it need not import `domain/`."""
-    assert Settings.model_fields["charts_dir"].default == LEGACY_CHARTS_DIR
-    assert Settings.model_fields["local_config"].default == LEGACY_LOCAL_CLUSTER
+    assert isinstance(result.exception, SpecError)
+    assert "CHART_MANAGER_CHARTS_DIR was removed" in str(result.exception)
 
 
-def test_charts_dir_dot_is_authored_only() -> None:
+@pytest.mark.parametrize("key", ["charts_dir", "local_config"])
+def test_layout_keys_in_config_file_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(f"{key}: charts\n", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "_config_file", config)
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Settings()
+
+
+def test_other_chart_manager_environment_variables_still_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`extra="forbid"` covers init and config-file input, never the environment.
+
+    These variables share the `CHART_MANAGER_` prefix but are read by other
+    code (hooks, publish, the exit-code table), not by `Settings`; a
+    `forbid` that rejected them would break every hook invocation.
+    """
+    for variable in (
+        "CHART_MANAGER_CHART",
+        "CHART_MANAGER_PROFILE",
+        "CHART_MANAGER_HOOK_PHASE",
+        "CHART_MANAGER_OCI_REPOSITORY",
+        "CHART_MANAGER_LEGACY_EXIT_CODES",
+    ):
+        monkeypatch.setenv(variable, "x")
+    monkeypatch.setenv("CHART_MANAGER_KUBE_CONTEXT", "kind-lab")
+
+    assert Settings().kube_context == "kind-lab"
+
+
+def test_charts_dir_dot_is_accepted_by_the_workspace_schema() -> None:
     resource = ChartWorkspace.model_validate(_document(chartsDir="."))
 
     assert resource.spec.charts_dir == Path(".")
-    with pytest.raises(ValidationError):
-        Settings(charts_dir=Path("."))
 
 
 def test_workspace_and_nested_policy_are_frozen() -> None:
@@ -269,12 +390,7 @@ def test_fanout_rejects_unsafe_or_unsupported_patterns(pattern: str) -> None:
     ],
 )
 def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
-    workspace = RepositoryWorkspace(
-        root=Path("/repo"),
-        validation_fanout=(pattern,),
-        cluster_test_fanout=(),
-        shared_prerequisites=(),
-    )
+    workspace = workspace_for(Path("/repo"), validation_fanout=(pattern,))
 
     assert workspace.matches_validation_fanout(path) is expected
 
@@ -283,7 +399,7 @@ def test_implicit_fanout_includes_marker_policies_cluster_and_prerequisites(
     tmp_path: Path,
 ) -> None:
     local = tmp_path / ".chart-manager/local-cluster.yaml"
-    local.parent.mkdir()
+    local.parent.mkdir(exist_ok=True)
     local.write_text(
         """apiVersion: chartmanager.io/v1alpha1
 kind: LocalCluster
@@ -296,12 +412,7 @@ spec:
 """,
         encoding="utf-8",
     )
-    workspace = RepositoryWorkspace(
-        root=tmp_path,
-        validation_fanout=(),
-        cluster_test_fanout=(),
-        shared_prerequisites=("base",),
-    )
+    workspace = workspace_for(tmp_path, shared_prerequisites=("base",))
 
     assert workspace.matches_validation_fanout("policies/rule.yaml")
     assert workspace.matches_validation_fanout(WORKSPACE_FILE)
@@ -384,6 +495,6 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     repository = ChartRepository(tmp_path, charts_dir=Path("."))
 
     assert repository.list_names() == ["alpha", "grafana-dashboards"]
-    workspace = RepositoryWorkspace(root=tmp_path.resolve(), charts_dir=Path("."))
+    workspace = workspace_for(tmp_path, charts_dir=Path("."))
     assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
     assert discover_dashboards(workspace=workspace) == [dashboard]

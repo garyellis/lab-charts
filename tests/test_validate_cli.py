@@ -31,7 +31,13 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 
-from .conftest import REPO_ROOT, cli, workspace_for
+from .conftest import REPO_ROOT, cli, workspace_for, write_workspace
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path: Path) -> None:
+    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
+    write_workspace(tmp_path)
 
 
 def _emit(source, **options) -> None:
