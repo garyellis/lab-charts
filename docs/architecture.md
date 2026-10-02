@@ -105,36 +105,21 @@ chart discovery, local resources, validation policy and render locations, CI
 impact, publishing, upgrades/finalization, and Grafana discovery.
 
 `RepositoryWorkspace` is the resolved root, `metadata.name`, and the validated
-`ChartWorkspaceSpec` kept whole; it does not copy spec fields. Callers read
-layout through its properties (`charts_dir`, `charts_root`, `render_root`,
-`validation`, the fanout helpers, ...), never through `.spec`. The loader adds
-the filesystem checks the spec's lexical validators cannot make: no layout
-path may resolve outside the root, and `renderDir` may hold no symlink
-component. Every explicit chart target (`chart test <chart>`, single-chart
-`chart validate <chart>`) re-points the workspace at that chart's parent
-directory with `workspace.with_charts_dir(path)` -- usually `chartsDir`
-itself, but not necessarily -- which re-validates the spec and re-applies
-those checks, failing with a one-line error naming the chart directory. `tests/test_layering.py`
-holds construction to the loader, `with_charts_dir`, and the test fixture, and
-flags `.spec` reads on a workspace.
+`ChartWorkspaceSpec` (`workspace.spec`), plus derived path and fanout helpers.
+The loader also rejects layout paths that resolve outside the root and a
+`renderDir` with a symlink component. An explicit chart target (`chart test
+<chart>`, `chart validate <chart>`) re-points `chartsDir` at the chart's parent
+with `workspace.with_charts_dir(path)`, which re-runs the same checks.
 
 `version`, `event`, `helmrelease`, `grafana dashboard export`, and
-`grafana dashboard lint --path` never ask for the workspace. `doctor` asks
-through `Container.find_workspace()`, which performs the same resolution but
-returns `None` when *discovery* finds no marker. An explicit root without a
-marker and an invalid `workspace.yaml` still raise; `doctor_service` turns
-either into a failed `schema-policy` check (environment and spec outcomes
-respectively) so the rest of the report still runs. Without a workspace,
-git/gh probe the explicit root if one is set, else the working directory.
-`doctor` reports outside a workspace; it does not necessarily pass there.
+`grafana dashboard lint --path` never ask for the workspace. Without one,
+`doctor` skips its schema checks with the reason; an invalid `workspace.yaml`
+fails it with exit 3.
 
 Repository policy is checkout-owned. Machine settings such as kube context,
 Docker host, timeouts, logging, credentials, and backend endpoints remain in
-`Settings`, which carries no layout and forbids unknown config keys. The
-removed `CHART_MANAGER_CHARTS_DIR` and `CHART_MANAGER_LOCAL_CONFIG`
-variables are an error rather than silently ignored. The CLI builds
-`Settings` only through `load_settings()`, which reports a validation
-failure as a `SpecError` (exit 3) naming the file and key, not a traceback.
+`Settings`, which carries no layout and forbids unknown config keys;
+`load_settings()` reports a bad key or value as a `SpecError` (exit 3).
 
 ## Rules `api/` must obey
 
