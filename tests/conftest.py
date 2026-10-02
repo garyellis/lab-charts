@@ -40,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: The conventional layout, for domain loaders that take it explicitly.
 CHARTS_DIR = Path("charts")
 LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
+POLICIES_DIR = Path("policies")
+RENDER_DIR = Path(".chart-manager/rendered")
 
 MakeChart = Callable[..., Path]
 
@@ -139,13 +141,16 @@ def _spec_body(
     """The raw `spec` mapping `workspace_for` and `write_workspace` share.
 
     The conventional layout this repository also uses, unless ``spec``
-    overrides a camelCase key.
+    overrides a camelCase key. ``chartsDir`` is spelled ``charts_dir`` here;
+    passing both would leave one silently ignored, so it is an error.
     """
+    if "chartsDir" in spec:
+        raise TypeError("pass charts_dir=, not chartsDir=")
     body: dict[str, Any] = {
         "chartsDir": charts_dir,
         "localCluster": LOCAL_CONFIG.as_posix(),
-        "renderDir": ".chart-manager/rendered",
-        "policiesDir": "policies",
+        "renderDir": RENDER_DIR.as_posix(),
+        "policiesDir": POLICIES_DIR.as_posix(),
         **spec,
     }
     if validation is not None:

@@ -110,9 +110,11 @@ layout through its properties (`charts_dir`, `charts_root`, `render_root`,
 `validation`, the fanout helpers, ...), never through `.spec`. The loader adds
 the filesystem checks the spec's lexical validators cannot make: no layout
 path may resolve outside the root, and `renderDir` may hold no symlink
-component. A chart target outside `chartsDir` (`chart test <dir>`,
-single-chart `validate`) gets `workspace.with_charts_dir(path)`, which
-re-validates the spec and re-applies those checks. `tests/test_layering.py`
+component. Every explicit chart target (`chart test <chart>`, single-chart
+`chart validate <chart>`) re-points the workspace at that chart's parent
+directory with `workspace.with_charts_dir(path)` -- usually `chartsDir`
+itself, but not necessarily -- which re-validates the spec and re-applies
+those checks, failing with a one-line error naming the chart directory. `tests/test_layering.py`
 holds construction to the loader, `with_charts_dir`, and the test fixture, and
 flags `.spec` reads on a workspace.
 

@@ -26,7 +26,7 @@ from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.settings import Settings, load_settings
 
-from .conftest import cli, workspace_for, write_workspace
+from .conftest import RENDER_DIR, cli, workspace_for, write_workspace
 
 
 def _document(**spec: object) -> dict[str, object]:
@@ -533,13 +533,13 @@ def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
     link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        RenderOutputService(tmp_path)
+        RenderOutputService(tmp_path, render_dir=RENDER_DIR)
 
 
 def test_render_cleanup_rechecks_symlinks_created_after_construction(
     tmp_path: Path,
 ) -> None:
-    service = RenderOutputService(tmp_path)
+    service = RenderOutputService(tmp_path, render_dir=RENDER_DIR)
     outside = tmp_path.parent / f"{tmp_path.name}-late-outside"
     outside.mkdir()
     marker = tmp_path / ".chart-manager"
@@ -633,8 +633,15 @@ def test_with_charts_dir_rejects_paths_the_spec_would_reject(
     write_workspace(tmp_path)
     workspace = load_repository_workspace(tmp_path)
 
-    with pytest.raises(SpecError, match=r"spec\.chartsDir"):
+    with pytest.raises(SpecError) as raised:
         workspace.with_charts_dir(path)
+
+    # One line naming the targeted directory, not a pydantic dump naming a
+    # workspace.yaml field the operator never wrote.
+    assert str(raised.value) == (
+        f"invalid chart directory {path}: must be a repository-relative path "
+        "without empty, '.' or '..' segments"
+    )
 
 
 def test_with_charts_dir_rejects_a_path_escaping_through_a_symlink(tmp_path: Path) -> None:
@@ -645,7 +652,28 @@ def test_with_charts_dir_rejects_a_path_escaping_through_a_symlink(tmp_path: Pat
     write_workspace(root)
     workspace = load_repository_workspace(root)
 
-    with pytest.raises(SpecError, match=r"spec\.chartsDir resolves outside repository root"):
+    with pytest.raises(SpecError) as raised:
+        workspace.with_charts_dir(Path("vendor"))
+
+    assert str(raised.value) == (
+        f"chart directory vendor resolves outside repository root {root.resolve()}"
+    )
+
+
+def test_with_charts_dir_reports_other_layout_paths_as_workspace_fields(
+    tmp_path: Path,
+) -> None:
+    """Only the re-pointed chart directory is described as the operator's target."""
+    write_workspace(tmp_path)
+    workspace = load_repository_workspace(tmp_path)
+    (tmp_path / "real").mkdir()
+    (tmp_path / ".chart-manager" / "rendered").symlink_to(
+        tmp_path / "real", target_is_directory=True
+    )
+
+    with pytest.raises(
+        SpecError, match=r"^spec\.renderDir must not contain symlink components"
+    ):
         workspace.with_charts_dir(Path("vendor"))
 
 
@@ -702,3 +730,11 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
     assert same_dir == first
     assert hash(same_dir) == hash(first)
     assert first.with_charts_dir(Path("other")) != first
+
+
+def test_workspace_fixtures_refuse_the_camel_case_charts_dir(tmp_path: Path) -> None:
+    """`charts_dir=` is the one spelling; `chartsDir=` would be silently dropped."""
+    with pytest.raises(TypeError, match="charts_dir="):
+        workspace_for(tmp_path, chartsDir="deploy")
+    with pytest.raises(TypeError, match="charts_dir="):
+        write_workspace(tmp_path, chartsDir="deploy")

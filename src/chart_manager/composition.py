@@ -484,8 +484,8 @@ class Container:
     ) -> EphemeralTestClusterService:
         """Build the local chart-test installer for the repository at `root`.
 
-        `charts_dir` overrides the workspace's chart directory for a target
-        outside it (`chart test <dir>`).
+        `charts_dir` re-points the workspace's chart directory at an explicit
+        target's parent (`chart test <chart>`) via `with_charts_dir`.
         """
         workspace = self.workspace(root)
         if charts_dir is not None:
