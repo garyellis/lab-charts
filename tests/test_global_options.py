@@ -26,6 +26,7 @@ import pytest
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager import composition
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
@@ -90,7 +91,7 @@ def test_non_repository_command_never_discovers_a_workspace(
     def fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("version must not load repository state")
 
-    monkeypatch.setattr(Settings, "repository_workspace", fail)
+    monkeypatch.setattr(composition, "load_repository_workspace", fail)
 
     assert cli("version").exit_code == 0
 

@@ -17,6 +17,7 @@ from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.local_resources import LocalResourceLoader
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -53,7 +54,6 @@ from chart_manager.services.lifecycle.plan_projection import (
     exclude_required_lifecycles,
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
-from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 #: Diagnostic channel. This service is the CI-shaped one, where the process
 #: that failed is frequently no longer around to be asked and its terminal
@@ -140,14 +140,12 @@ class EphemeralTestClusterService:
 
     def __init__(
         self,
-        root: Path,
         *,
+        workspace: RepositoryWorkspace,
         helm: Helm,
         kind: Kind,
         kubectl: Kubectl,
         progress: ProgressCallback | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
-        local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: ClientFactory | None = None,
         command_runner: CommandRunner | None = None,
@@ -157,16 +155,18 @@ class EphemeralTestClusterService:
 
         See ``DevelopmentClusterService.__init__``: defaulting these silently
         discarded the composition root's cluster configuration.
+
+        ``workspace.charts_dir`` may differ from the repository's managed
+        chart root: ``chart test <dir>`` points it at the target's parent.
         """
-        self.root = root.resolve()
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=charts_dir)
+        self.root = workspace.root
+        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
         self.resolver = DependencyResolver(self.cluster_tests.get)
         # Share the catalog/resolver instances so authored configuration is
         # loaded consistently and tests/alternate surfaces can replace the
         # repository seams once rather than patching two independent graphs.
         self.cluster_test_compiler = ClusterTestCompiler(
-            self.root,
-            charts_dir=charts_dir,
+            workspace=workspace,
             cluster_tests=self.cluster_tests,
             resolver=self.resolver,
         )
@@ -174,7 +174,9 @@ class EphemeralTestClusterService:
         self.kind = kind
         self.kubectl = kubectl
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
-        self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
+        self.local_resources = LocalResourceLoader(
+            self.root, local_config=workspace.local_cluster
+        )
         self._client_factory = client_factory
         self._command_runner = command_runner or SubprocessRunner()
         self._hooks = ProvisioningHookRunner(

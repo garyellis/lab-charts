@@ -28,8 +28,9 @@ Wiring example (what the CLI does):
     from chart_manager.cli.validate_progress import LiveTableDisplay
     from chart_manager.services.manifest_validation.app import RunRequest, ManifestValidationService
 
-    request = RunRequest(skip_change_detection=True)
-    ManifestValidationService(progress=LiveTableDisplay()).run(request)
+    workspace = Container().workspace()  # chart_manager.composition
+    request = RunRequest(root=workspace.root, skip_change_detection=True)
+    ManifestValidationService(progress=LiveTableDisplay(), workspace=workspace).run(request)
 
 `ManifestValidationService` owns the `start`/`stop` lifecycle and hands `on_event` to the
 runner, so a surface only has to choose an implementation.

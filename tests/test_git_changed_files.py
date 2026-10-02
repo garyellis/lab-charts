@@ -1,13 +1,15 @@
-"""Unit coverage for `Git.changed_files` (mirrors `changed_charts`)."""
+"""Unit coverage for `Git.changed_files`."""
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.errors import ExternalCommandError
-from tests.conftest import FakeCommandRunner
+from tests.conftest import FakeCommandRunner, workspace_for
 
 
 def _runner(*, is_repo: bool, diff_stdout: str = "") -> FakeCommandRunner:
@@ -29,9 +31,10 @@ def test_changed_files_returns_sorted_unique_paths(tmp_path: Path) -> None:
     git = Git(tmp_path, runner=runner)
 
     assert git.changed_files(base="origin/main") == ["README.md", "charts/a/values.yaml"]
-    # Confirm we issued `...HEAD` so feature-branch semantics match changed_charts.
+    # Confirm we issued `...HEAD` (merge-base semantics) relative to the root.
     diff_call = next(c for c in runner.calls if c[:2] == ("git", "diff"))
     assert diff_call[-1] == "origin/main...HEAD"
+    assert "--relative" in diff_call
 
 
 def test_changed_files_raises_outside_git_repo(tmp_path: Path) -> None:
@@ -47,3 +50,52 @@ def test_changed_files_empty_diff_returns_empty_list(tmp_path: Path) -> None:
     git = Git(tmp_path, runner=runner)
 
     assert git.changed_files() == []
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run real git hermetically: no user config, signing or hooks apply."""
+    result = subprocess.run(
+        [
+            "git",
+            "-c", "user.name=test",
+            "-c", "user.email=test@example.com",
+            "-c", "commit.gpgsign=false",
+            "-c", "core.hooksPath=/dev/null",
+            *args,
+        ],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_changed_files_are_relative_to_a_workspace_below_the_git_top_level(
+    tmp_path: Path,
+) -> None:
+    """A repository root nested in a larger checkout sees its own paths only.
+
+    Without `--relative`, git reports `platform/charts/demo/values.yaml`, which
+    no chart prefix or fanout pattern under `platform/` can match, so change
+    detection silently selected nothing.
+    """
+    workspace_root = tmp_path / "platform"
+    chart = workspace_root / "charts" / "demo"
+    chart.mkdir(parents=True)
+    (chart / "values.yaml").write_text("a: 1\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("top\n", encoding="utf-8")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    (chart / "values.yaml").write_text("a: 2\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("changed outside the workspace\n", encoding="utf-8")
+    _git(tmp_path, "commit", "-q", "-am", "change")
+
+    changed = Git(workspace_root).changed_files(base=base)
+
+    assert changed == ["charts/demo/values.yaml"]
+    workspace = workspace_for(workspace_root)
+    assert [workspace.chart_name_from_repo_path(path) for path in changed] == ["demo"]

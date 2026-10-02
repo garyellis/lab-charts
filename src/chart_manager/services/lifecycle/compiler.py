@@ -9,6 +9,7 @@ from pathlib import Path
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.paths import validate_hook_executable
 from chart_manager.services.lifecycle.models import (
@@ -18,7 +19,6 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.plan_projection import cleanup_tail
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 #: Frozen first segment of every action ID (formerly `Workflow.CLUSTER_TEST`,
 #: deleted as a single-member enum). Changing this string changes every
@@ -31,9 +31,8 @@ class ClusterTestCompiler:
 
     def __init__(
         self,
-        root: Path,
         *,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
+        workspace: RepositoryWorkspace,
         cluster_tests: ClusterTestCatalog | None = None,
         resolver: DependencyResolver | None = None,
     ) -> None:
@@ -44,9 +43,10 @@ class ClusterTestCompiler:
         and reassigning the attributes afterwards -- a fourth seam added here
         would then leave such a call site silently holding a stale one.
         """
-        self.root = root.resolve()
-        self.charts_dir = charts_dir
-        self.cluster_tests = cluster_tests or ClusterTestCatalog(self.root, charts_dir=charts_dir)
+        self.root = workspace.root
+        self.cluster_tests = cluster_tests or ClusterTestCatalog(
+            self.root, charts_dir=workspace.charts_dir
+        )
         self.resolver = resolver or DependencyResolver(self.cluster_tests.get)
 
     def compile_cluster_test(

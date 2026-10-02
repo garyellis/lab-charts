@@ -16,6 +16,7 @@ from chart_manager.services.publish import (
     validate_semver,
     with_version_suffix,
 )
+from tests.conftest import workspace_for
 
 from .conftest import MakeChart
 
@@ -98,7 +99,7 @@ def test_batch_prepares_every_chart_before_any_push(
     make_chart("beta", version="2.0.0")
     helm = _Helm()
 
-    result = PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+    result = PublishService(workspace=workspace_for(chart_root), helm=helm).publish(  # type: ignore[arg-type]
         ["alpha", "beta"],
         repository="oci://registry.local/library",
         version_suffix="pr.8.gabc",
@@ -122,7 +123,7 @@ def test_preflight_failure_pushes_nothing(chart_root: Path, make_chart: MakeChar
     events = _Events()
 
     with pytest.raises(ExternalCommandError, match="package failed"):
-        PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
+        PublishService(workspace=workspace_for(chart_root), helm=helm, events=events).publish(  # type: ignore[arg-type]
             ["alpha", "beta"], repository="oci://registry.local/library"
         )
 
@@ -138,7 +139,7 @@ def test_push_failures_are_consolidated_and_remaining_pushes_continue(
     helm = _Helm(fail_push="alpha")
     events = _Events()
 
-    result = PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
+    result = PublishService(workspace=workspace_for(chart_root), helm=helm, events=events).publish(  # type: ignore[arg-type]
         ["alpha", "beta"], repository="oci://registry.local/library"
     )
 
@@ -155,7 +156,7 @@ def test_preview_publish_emits_retry_safe_event_for_each_success(
     make_chart("beta", version="2.0.0")
     events = _Events()
     helm = _Helm()
-    service = PublishService(chart_root, helm=helm, events=events)  # type: ignore[arg-type]
+    service = PublishService(workspace=workspace_for(chart_root), helm=helm, events=events)  # type: ignore[arg-type]
 
     first = service.publish(
         ["alpha", "beta"],
@@ -207,7 +208,7 @@ def test_release_publish_uses_final_published_phase(
     make_chart("alpha", version="1.2.3")
     events = _Events()
 
-    PublishService(chart_root, helm=_Helm(), events=events).publish(  # type: ignore[arg-type]
+    PublishService(workspace=workspace_for(chart_root), helm=_Helm(), events=events).publish(  # type: ignore[arg-type]
         ["alpha"],
         repository="oci://registry.local/library",
         publish_kind=PublishKind.RELEASE,
@@ -223,7 +224,7 @@ def test_release_kind_rejects_preview_version_suffix(
     make_chart("alpha", version="1.2.3")
 
     with pytest.raises(SpecError, match="release publishing"):
-        PublishService(chart_root, helm=_Helm()).publish(  # type: ignore[arg-type]
+        PublishService(workspace=workspace_for(chart_root), helm=_Helm()).publish(  # type: ignore[arg-type]
             ["alpha"],
             repository="oci://registry.local/library",
             version_suffix="pr.8.gabc",
@@ -239,7 +240,7 @@ def test_event_failure_is_reported_without_changing_artifact_success(
     events = _Events(fail_chart="alpha")
 
     result = PublishService(
-        chart_root, helm=_Helm(), events=events  # type: ignore[arg-type]
+        workspace=workspace_for(chart_root), helm=_Helm(), events=events  # type: ignore[arg-type]
     ).publish(["alpha", "beta"], repository="oci://registry.local/library")
 
     assert result.ok
@@ -258,7 +259,7 @@ def test_dry_run_packages_everything_and_pushes_nothing(
     helm = _Helm()
     events = _Events()
 
-    result = PublishService(chart_root, helm=helm, events=events).publish(  # type: ignore[arg-type]
+    result = PublishService(workspace=workspace_for(chart_root), helm=helm, events=events).publish(  # type: ignore[arg-type]
         ["alpha", "beta"],
         repository="oci://registry.local/library/",
         version_suffix="pr.8.gabc",
@@ -288,7 +289,7 @@ def test_dry_run_emits_no_lifecycle_event(chart_root: Path, make_chart: MakeChar
     """
     make_chart("alpha", version="1.2.3")
     events = _Events()
-    service = PublishService(chart_root, helm=_Helm(), events=events)  # type: ignore[arg-type]
+    service = PublishService(workspace=workspace_for(chart_root), helm=_Helm(), events=events)  # type: ignore[arg-type]
 
     service.publish(
         ["alpha"],
@@ -327,11 +328,11 @@ def test_dry_run_plan_matches_what_the_real_publish_pushes(
     }
 
     planning_helm = _Helm()
-    planned = PublishService(chart_root, helm=planning_helm).publish(  # type: ignore[arg-type]
+    planned = PublishService(workspace=workspace_for(chart_root), helm=planning_helm).publish(  # type: ignore[arg-type]
         ["alpha", "beta"], dry_run=True, **arguments  # type: ignore[arg-type]
     )
     real_helm = _Helm()
-    real = PublishService(chart_root, helm=real_helm).publish(  # type: ignore[arg-type]
+    real = PublishService(workspace=workspace_for(chart_root), helm=real_helm).publish(  # type: ignore[arg-type]
         ["alpha", "beta"], **arguments  # type: ignore[arg-type]
     )
 
@@ -353,14 +354,14 @@ def test_dry_run_rejects_what_a_real_publish_rejects(
     helm = _Helm()
 
     with pytest.raises(SpecError, match="exactly one"):
-        PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+        PublishService(workspace=workspace_for(chart_root), helm=helm).publish(  # type: ignore[arg-type]
             ["alpha", "beta"],
             repository="oci://registry.local/library",
             version="2.0.0",
             dry_run=True,
         )
     with pytest.raises(SpecError, match="release publishing"):
-        PublishService(chart_root, helm=helm).publish(  # type: ignore[arg-type]
+        PublishService(workspace=workspace_for(chart_root), helm=helm).publish(  # type: ignore[arg-type]
             ["alpha"],
             repository="oci://registry.local/library",
             version_suffix="pr.8.gabc",
@@ -376,7 +377,7 @@ def test_dry_run_reports_the_inferred_release_kind(
     """Kind inference is silent today; the plan is where it becomes visible."""
     make_chart("alpha", version="1.2.3")
 
-    result = PublishService(chart_root, helm=_Helm()).publish(  # type: ignore[arg-type]
+    result = PublishService(workspace=workspace_for(chart_root), helm=_Helm()).publish(  # type: ignore[arg-type]
         ["alpha"], repository="oci://registry.local/library", dry_run=True
     )
 
@@ -395,7 +396,7 @@ def test_exact_version_requires_one_chart(chart_root: Path, make_chart: MakeChar
     make_chart("alpha")
     make_chart("beta")
     with pytest.raises(SpecError, match="exactly one"):
-        PublishService(chart_root, helm=_Helm()).publish(  # type: ignore[arg-type]
+        PublishService(workspace=workspace_for(chart_root), helm=_Helm()).publish(  # type: ignore[arg-type]
             ["alpha", "beta"],
             repository="oci://registry.local/library",
             version="2.0.0",

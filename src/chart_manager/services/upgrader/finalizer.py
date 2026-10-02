@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.semver import SemVer, parse_bare_version
@@ -25,7 +26,6 @@ from chart_manager.services.upgrader.models import (
     UpdateMetadata,
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path, safe_output_path
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 #: This runs as a Renovate post-upgrade task inside Renovate's own checkout,
 #: where nothing renders narration and the only surviving record of the run is
@@ -127,10 +127,10 @@ class UpgradeFinalizer:
         self,
         baseline: BaselineReader | None = None,
         *,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
+        workspace: RepositoryWorkspace,
     ) -> None:
         self._baseline = baseline or GitBaselineReader()
-        self._charts_dir = charts_dir
+        self._charts_dir = workspace.charts_dir
 
     def finalize(self, request: FinalizeRequest) -> FinalizeResult:
         root, chart_path, _ = resolve_chart_path(

@@ -59,7 +59,11 @@ from typing import cast
 
 from chart_manager.domain import chart_deps
 from chart_manager.domain.local_resources import LocalTargetResolver
-from chart_manager.domain.workspace import RepositoryWorkspace
+from chart_manager.domain.workspace import (
+    RepositoryWorkspace,
+    load_repository_workspace,
+    resolve_repository_root,
+)
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -145,10 +149,36 @@ class Container:
         """Resolve the single repository layout/policy used by every capability."""
         key = root.resolve() if root is not None else None
         if key not in self._workspaces:
-            compiled = self._settings.repository_workspace(root)
+            compiled = self._load_workspace(root)
             self._workspaces[key] = compiled
             self._workspaces[compiled.root] = compiled
         return self._workspaces[key]
+
+    def _load_workspace(self, root: Path | None) -> RepositoryWorkspace:
+        """Discover and compile one checkout's workspace from these settings.
+
+        Root precedence: the `root` argument, then an explicitly configured
+        `Settings.root` (`CHART_MANAGER_ROOT` or `root:` in config.yaml), then
+        nearest-marker discovery from the working directory. The legacy
+        `charts_dir`/`local_config` settings only apply when the repository
+        has no workspace.yaml; setting either explicitly beside one is an
+        error raised by the loader.
+
+        Lives here rather than on `Settings` so `settings.py` need not import
+        `domain/`: process configuration and repository layout meet in the
+        composition root, which is the one module that may see both.
+        """
+        settings = self._settings
+        configured = root
+        if configured is None and "root" in settings.model_fields_set:
+            configured = settings.root
+        legacy_explicit = bool({"charts_dir", "local_config"} & settings.model_fields_set)
+        return load_repository_workspace(
+            resolve_repository_root(configured=configured),
+            legacy_charts_dir=settings.charts_dir,
+            legacy_local_cluster=settings.local_config,
+            legacy_layout_explicit=legacy_explicit,
+        )
 
     # --- adapters ---------------------------------------------------------
 
@@ -240,7 +270,7 @@ class Container:
             "kyverno": Kyverno(runner, timeout=self._settings.command_timeout).preflight,
             "kubectl": self.kubectl().preflight,
             "kind": self.kind().preflight,
-            "git": Git(resolved_root, runner, charts_dir=workspace.charts_dir).preflight,
+            "git": Git(resolved_root, runner).preflight,
             "github": Github(resolved_root, runner).preflight,
             "renovate": Renovate(runner).preflight,
             "schemas": KubeconformSchemaDoctor(workspace).preflight,
@@ -315,8 +345,7 @@ class Container:
         charts at all, and a surface that supplies it itself can answer
         `chart list` from a different directory than `plan` selected against.
         """
-        workspace = self.workspace(root)
-        return ChartCatalogService(workspace.root, charts_dir=workspace.charts_dir)
+        return ChartCatalogService(workspace=self.workspace(root))
 
     def render_output_service(self, root: Path) -> RenderOutputService:
         """Build the render-tree describer/remover for the repo at `root`.
@@ -380,16 +409,14 @@ class Container:
         `Settings`. Every cluster-facing adapter is passed in, so there is
         no path by which the service can fall back to an unconfigured one.
         """
-        workspace = self.workspace(root)
         kind = self.kind()
         return DevelopmentClusterService(
-            workspace.root,
+            workspace=self.workspace(root),
             helm=self.helm(),
             kind=kind,
             kubectl=self.kubectl(),
             expose=self.expose_service(),
             progress=progress,
-            local_config=workspace.local_cluster,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
             command_runner=self.command_runner(),
@@ -403,17 +430,21 @@ class Container:
         progress: ProgressCallback | None = None,
         charts_dir: Path | None = None,
     ) -> EphemeralTestClusterService:
-        """Build the local chart-test installer for the repository at `root`."""
+        """Build the local chart-test installer for the repository at `root`.
+
+        `charts_dir` overrides the workspace's chart directory for a target
+        outside it (`chart test <dir>`).
+        """
         workspace = self.workspace(root)
+        if charts_dir is not None:
+            workspace = replace(workspace, charts_dir=charts_dir)
         kind = self.kind()
         return EphemeralTestClusterService(
-            workspace.root,
+            workspace=workspace,
             helm=self.helm(),
             kind=kind,
             kubectl=self.kubectl(),
             progress=progress,
-            charts_dir=charts_dir or workspace.charts_dir,
-            local_config=workspace.local_cluster,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,
             command_runner=self.command_runner(),
@@ -426,12 +457,10 @@ class Container:
 
     def publish_service(self, root: Path) -> PublishService:
         """Build the headless OCI publisher for charts below ``root``."""
-        workspace = self.workspace(root)
         return PublishService(
-            workspace.root,
+            workspace=self.workspace(root),
             helm=self.helm(verbose=False),
             events=self.event_writer(),
-            charts_dir=workspace.charts_dir,
         )
 
     def validate_app(
@@ -521,15 +550,14 @@ class Container:
             branch_file_reader=github.read_file_at_ref,
             repository=repository,
             telemetry=UpgradeTelemetry(writer=self.event_writer()),
-            charts_dir=workspace.charts_dir,
+            workspace=workspace,
         )
 
     def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:
         """Build the trusted callback finalizer with the shared git runner."""
-        workspace = self.workspace(root)
         return UpgradeFinalizer(
             baseline=GitBaselineReader(self.command_runner()),
-            charts_dir=workspace.charts_dir,
+            workspace=self.workspace(root),
         )
 
     def _repository_slug(self, root: Path) -> str:

@@ -22,7 +22,6 @@ from chart_manager.domain.charts import (
 )
 from chart_manager.plumbing.errors import ChartManagerError, SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file, parse_yaml_mapping
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml
 # near the front of an ordinary tar stream, but we scan the complete bounded
@@ -89,7 +88,7 @@ _DEPENDENCY_FIELDS = frozenset(
 
 
 def build_helm_dependency_index(
-    root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR
+    root: Path, *, charts_dir: Path
 ) -> dict[str, set[str]]:
     """Map each local chart name to the managed charts that depend on it.
 

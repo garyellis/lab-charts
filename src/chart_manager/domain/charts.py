@@ -8,7 +8,6 @@ from typing import Any
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 @dataclass(frozen=True)
@@ -122,11 +121,17 @@ def load_chart_name(path: Path) -> str:
 class ChartRepository:
     """Discover and load Helm charts under the configured repository directory."""
 
-    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
-        """Anchor the repository at the resolved repo root."""
-        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
-        self.root = self.layout.root
-        self.charts_dir = self.layout.charts_root
+    def __init__(self, root: Path, *, charts_dir: Path) -> None:
+        """Anchor the repository at the resolved repo root.
+
+        ``charts_dir`` is repository-relative and has no default: the
+        workspace decides it, and some callers deliberately pass another
+        directory (a bootstrap release's chart parent, a ``chart test <dir>``
+        target outside the managed chart root).
+        """
+        self.root = root.resolve()
+        # pathlib drops a `.` segment, so `charts_dir=Path(".")` is the root.
+        self.charts_dir = self.root / charts_dir
 
     def list_names(self) -> list[str]:
         """Return sorted names of chart directories containing a Chart.yaml."""

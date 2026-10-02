@@ -22,7 +22,6 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root
 from chart_manager.cli._options import ClusterNameOption
 from chart_manager.cli.streams import console, narration
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
@@ -192,9 +191,8 @@ def grafana_dashboard_lint(
     from chart_manager.services.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
-    root = repository_root()
-    workspace = _container().workspace(root)
-    # `discover_dashboards` reads the container's `charts_dir` rather than a
+    workspace = _container().workspace()
+    # `discover_dashboards` reads the container's workspace rather than a
     # `Settings()` of its own. Lint's three entry points are free functions
     # over paths -- no adapter, no state, nothing to memoize -- so there is
     # no object for the container to build and wrapping them in a class
@@ -205,7 +203,7 @@ def grafana_dashboard_lint(
     targets = (
         expand_targets(path)
         if path
-        else discover_dashboards(root, charts_dir=workspace.charts_dir)
+        else discover_dashboards(workspace=workspace)
     )
     if not targets:
         # Linting nothing is not the same as linting clean. A wrong workspace, a

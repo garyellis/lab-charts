@@ -32,3 +32,7 @@ callable) rather than importing upward."""
 "chart_manager.integrations".msg = """not importable from chart_manager.domain. \
 Domain interprets authored documents and Chart.yaml; running helm, kubectl or \
 flux is a service's job, wired in `chart_manager.composition.Container`."""
+"chart_manager.settings".msg = """not importable from chart_manager.domain. \
+Repository layout reaches domain as parameters taken from RepositoryWorkspace, \
+which `chart_manager.composition.Container` loads; `settings` is process \
+configuration and must not depend on domain either (an import cycle)."""

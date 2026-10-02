@@ -99,10 +99,6 @@ from chart_manager.services.manifest_validation.validators import (
     validate_registry,
 )
 from chart_manager.services.manifest_validation.wire import to_json
-from chart_manager.settings import (
-    DEFAULT_CHARTS_DIR,
-    validate_charts_dir,
-)
 
 # Re-exports, so a surface needs one import for "drive the validate
 # capability": `ALL_PHASES` and the request/result vocabulary are defined in
@@ -249,11 +245,7 @@ class ManifestValidationService:
         command_runner: CommandRunner | None = None,
         git_factory: Callable[[Path], Git] | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
-        policies_dir: Path = Path("policies"),
-        render_dir: Path = Path(".chart-manager/rendered"),
-        validation_fanout: tuple[str, ...] = (),
-        workspace: RepositoryWorkspace | None = None,
+        workspace: RepositoryWorkspace,
         validator_providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
         schema_runtime_factory: KubeconformSchemaRuntimeFactory | None = None,
         run_log_level: int = logging.INFO,
@@ -261,24 +253,12 @@ class ManifestValidationService:
         """Wire the progress sink, warning channel, and construction hooks."""
         self.workspace = workspace
         self._run_log_level = run_log_level
-        if workspace is None:
-            self._charts_dir = (
-                Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
-            )
-            self._policies_dir = policies_dir
-            self._render_dir = render_dir
-            self._validation_fanout = validation_fanout
-        else:
-            self._charts_dir = workspace.charts_dir
-            self._policies_dir = workspace.policies_dir
-            self._render_dir = workspace.render_dir
-            self._validation_fanout = workspace.validation_patterns()
         self._progress: ProgressDisplay = progress or NullDisplay()
         # No-op default so call sites can warn unconditionally.
         self._on_warn: WarnCallback = on_warn or (lambda _msg: None)
         self._runner_factory: RunnerFactory = runner_factory or self._build_runner
         self._command_runner = command_runner or SubprocessRunner()
-        self._git_factory = git_factory or (lambda root: Git(root, charts_dir=self._charts_dir))
+        self._git_factory = git_factory or Git
         self._run_id_factory = run_id_factory or new_run_id
         self._validator_providers = validate_registry(validator_providers)
         self._schema_runtime_factory = schema_runtime_factory or self._prepare_schema_runtime
@@ -364,15 +344,7 @@ class ManifestValidationService:
         run_started = time.monotonic()
         repo_root = request.root.resolve()
         workspace = self.workspace
-        if workspace is None:
-            workspace = RepositoryWorkspace(
-                root=repo_root,
-                charts_dir=self._charts_dir,
-                policies_dir=self._policies_dir,
-                render_dir=self._render_dir,
-                validation_fanout=self._validation_fanout,
-            )
-        elif workspace.root != repo_root:
+        if workspace.root != repo_root:
             raise ValidateInputError(
                 f"request root {repo_root} does not match workspace root {workspace.root}",
                 hint="root",
@@ -380,7 +352,6 @@ class ManifestValidationService:
 
         changed = self._resolve_changed_files(repo_root, request)
         build = build_worklist(
-            root=repo_root,
             changed_files=changed,
             skip_change_detection=request.skip_change_detection,
             selected_charts=(request.charts if request.charts and changed is None else ()),
@@ -413,7 +384,7 @@ class ManifestValidationService:
                 load_manifest_validation_target(
                     repo_root,
                     chart_name,
-                    charts_dir=self._charts_dir,
+                    charts_dir=workspace.charts_dir,
                 )
             except SpecError as exc:
                 # Repository discovery already records malformed present
@@ -480,7 +451,7 @@ class ManifestValidationService:
                     target,
                     repo_root,
                     providers=self._validator_providers,
-                    policies_dir=self._policies_dir,
+                    policies_dir=workspace.policies_dir,
                     kubeconform=runtime_inputs,
                 )
                 compiled_by_case[case] = compiled
@@ -688,7 +659,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / self._render_dir / run_id).resolve(), keep
+        return (repo_root / self.workspace.render_dir / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".

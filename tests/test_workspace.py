@@ -11,6 +11,8 @@ from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.composition import Container
 from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.workspace import (
+    LEGACY_CHARTS_DIR,
+    LEGACY_LOCAL_CLUSTER,
     SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
     RepositoryWorkspace,
@@ -58,7 +60,9 @@ spec:
     return marker
 
 
-def test_nearest_ancestor_marker_is_discovered(tmp_path: Path) -> None:
+def test_nearest_ancestor_marker_is_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     outer = tmp_path / "outer"
     inner = outer / "nested/repo"
     leaf = inner / "charts/app/templates"
@@ -68,7 +72,8 @@ def test_nearest_ancestor_marker_is_discovered(tmp_path: Path) -> None:
 
     assert discover_workspace_root(leaf) == inner
     assert resolve_repository_root(configured=None, start=leaf) == inner
-    assert Settings().repository_workspace(start=leaf).root == inner
+    monkeypatch.chdir(leaf)
+    assert Container(Settings()).workspace().root == inner
 
 
 def test_configured_root_precedes_nearest_marker(tmp_path: Path) -> None:
@@ -106,7 +111,13 @@ def test_settings_detects_legacy_environment_conflict(
     monkeypatch.setenv("CHART_MANAGER_CHARTS_DIR", "other/charts")
 
     with pytest.raises(SpecError, match="authoritative"):
-        Settings().repository_workspace(tmp_path)
+        Container(Settings()).workspace(tmp_path)
+
+
+def test_settings_legacy_defaults_match_the_workspace_fallback() -> None:
+    """`settings.py` spells these itself so it need not import `domain/`."""
+    assert Settings.model_fields["charts_dir"].default == LEGACY_CHARTS_DIR
+    assert Settings.model_fields["local_config"].default == LEGACY_LOCAL_CLUSTER
 
 
 def test_charts_dir_dot_is_authored_only() -> None:
@@ -340,22 +351,22 @@ spec:
     container = Container(Settings())
     workspace = container.workspace(tmp_path)
 
-    assert container.chart_catalog_service(tmp_path).repository.layout.charts_dir == Path(
-        "helm/charts"
+    assert container.chart_catalog_service(tmp_path).repository.charts_dir == (
+        tmp_path / "helm/charts"
     )
     assert container.local_target_resolver(tmp_path).local_config == Path("ops/local.yaml")
     assert container.render_output_service(tmp_path).path == tmp_path / "artifacts/rendered"
     assert container.impact_service(tmp_path).workspace is workspace
     assert container.ci_service(tmp_path).workspace is workspace
-    assert container.publish_service(tmp_path).repository.layout.charts_dir == Path(
-        "helm/charts"
+    assert container.publish_service(tmp_path).repository.charts_dir == (
+        tmp_path / "helm/charts"
     )
     assert container.upgrade_finalizer(tmp_path)._charts_dir == Path("helm/charts")
     validation = container.validate_app(root=tmp_path)
     assert validation.workspace is workspace
-    assert validation._charts_dir == Path("helm/charts")
-    assert validation._policies_dir == Path("compliance/policies")
-    assert validation._render_dir == Path("artifacts/rendered")
+    assert validation.workspace.charts_dir == Path("helm/charts")
+    assert validation.workspace.policies_dir == Path("compliance/policies")
+    assert validation.workspace.render_dir == Path("artifacts/rendered")
 
 
 def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> None:
@@ -373,5 +384,6 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     repository = ChartRepository(tmp_path, charts_dir=Path("."))
 
     assert repository.list_names() == ["alpha", "grafana-dashboards"]
-    assert repository.layout.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
-    assert discover_dashboards(tmp_path, charts_dir=Path(".")) == [dashboard]
+    workspace = RepositoryWorkspace(root=tmp_path.resolve(), charts_dir=Path("."))
+    assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
+    assert discover_dashboards(workspace=workspace) == [dashboard]

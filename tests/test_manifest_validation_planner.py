@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from chart_manager.domain.charts import ChartRepository
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
@@ -24,6 +23,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
+from tests.conftest import CHARTS_DIR, workspace_for
 
 
 def _chart(
@@ -77,7 +77,7 @@ def test_skip_change_detection_cross_product(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("alpha", "dev"), ("alpha", "prod"), ("beta", "dev"), ("beta", "prod")}
@@ -99,11 +99,11 @@ def test_skip_change_detection_overrides_a_non_empty_changed_files_list(
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
     changed = ["charts/alpha/values-prod.yaml"]
 
-    impacted = build_worklist(root=tmp_path, changed_files=changed)
+    impacted = build_worklist(workspace=workspace_for(tmp_path), changed_files=changed)
     assert {(row.chart, row.env) for row in impacted.rows} == {("alpha", "prod")}
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=changed,
         skip_change_detection=True,
         selected_charts=("alpha",),
@@ -132,7 +132,7 @@ def test_selected_charts_do_not_enumerate_or_parse_unrelated_charts(
     )
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         skip_change_detection=True,
         selected_charts=("alpha",),
     )
@@ -151,7 +151,7 @@ def test_trigger_specific_env(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/values-prod.yaml"],
     )
 
@@ -175,7 +175,7 @@ triggers:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/envs/dev.yaml"],
     )
 
@@ -188,7 +188,7 @@ def test_root_policies_fanout(tmp_path: Path) -> None:
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["policies/require-non-root.yaml"],
     )
 
@@ -200,10 +200,9 @@ def test_validate_code_path_fanout(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
         changed_files=["src/chart_manager/services/manifest_validation/runner.py"],
-        workspace=RepositoryWorkspace(
-            root=tmp_path,
+        workspace=workspace_for(
+            tmp_path,
             validation_fanout=("src/chart_manager/services/manifest_validation/**",),
         ),
     )
@@ -216,7 +215,7 @@ def test_other_chart_manager_path_is_ignored(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["src/chart_manager/cli/grafana_export.py"],
     )
 
@@ -227,7 +226,7 @@ def test_chart_yaml_edit_fanouts_to_all_envs(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/Chart.yaml"],
     )
 
@@ -239,7 +238,7 @@ def test_missing_spec_emits_warning(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=None)
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("beta", "dev"), ("beta", "prod")}
@@ -251,7 +250,7 @@ def test_missing_spec_emits_warning(tmp_path: Path) -> None:
 def test_spec_parse_error_records_spec_error(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec="releaseName: x\nmystery: true\n")
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     assert result.rows == ()
     assert any("alpha" in e for e in result.spec_errors)
@@ -262,7 +261,7 @@ def test_disabled_capability_is_silently_skipped(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=skipped_spec)
     _chart(tmp_path, "beta", spec=_DEFAULT_SPEC.format(name="beta"))
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     pairs = {(r.chart, r.env) for r in result.rows}
     assert pairs == {("beta", "dev"), ("beta", "prod")}
@@ -287,7 +286,7 @@ def test_library_chart_edit_fanouts_to_dependents(tmp_path: Path) -> None:
     )
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/common/templates/_helpers.tpl"],
     )
 
@@ -310,7 +309,7 @@ def test_wrapper_chart_remote_same_name_dependency_respects_triggers(tmp_path: P
         dependencies=[{"name": "alpha", "repository": "https://charts.example.com"}],
     )
 
-    result = build_worklist(root=tmp_path, changed_files=["charts/alpha/values-prod.yaml"])
+    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=["charts/alpha/values-prod.yaml"])
 
     assert {(r.chart, r.env) for r in result.rows} == {("alpha", "prod")}
 
@@ -319,7 +318,7 @@ def test_per_chart_policies_dir_edit_fanouts_to_all_envs(tmp_path: Path) -> None
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/policies/require-x.yaml"],
     )
 
@@ -331,7 +330,7 @@ def test_chart_lifecycle_edit_fanouts_to_all_envs(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/chart-lifecycle.yaml"],
     )
 
@@ -358,7 +357,7 @@ triggers:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/values.yaml"],
     )
 
@@ -384,7 +383,7 @@ triggers:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=[
             "charts/alpha/envs/dev.local.yaml",
             "charts/alpha/envs/staging.yaml",  # undeclared -> dropped
@@ -399,7 +398,7 @@ def test_unrelated_file_is_ignored(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["README.md", "docs/foo.md"],
     )
 
@@ -426,7 +425,7 @@ unmatchedChanges: all-environments
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/crds/widget.yaml"],
     )
 
@@ -452,7 +451,7 @@ unmatchedChanges: all-environments
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/values-dev.yaml"],
     )
 
@@ -475,7 +474,7 @@ triggers:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/crds/widget.yaml"],
     )
 
@@ -503,7 +502,7 @@ triggerIgnores:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=[
             "charts/alpha/README.md",
             "charts/alpha/docs/configuration.md",
@@ -537,7 +536,7 @@ triggerIgnores:
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/README.md"],
     )
 
@@ -561,7 +560,7 @@ unmatchedChanges: all-environments
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/crds/widget.yaml"],
     )
 
@@ -581,7 +580,7 @@ def test_catalog_composes_validate_spec_over_authoritative_helm_chart(
 ) -> None:
     chart_dir = _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     target = result.targets["alpha"]
     assert target.name == "alpha"
@@ -597,7 +596,7 @@ def test_repository_scan_records_malformed_chart_metadata_without_aborting(
     (malformed / "Chart.yaml").write_text("name: [not-a-string]\n")
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
-    result = build_worklist(root=tmp_path, skip_change_detection=True)
+    result = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
 
     assert {(row.chart, row.env) for row in result.rows} == {
         ("alpha", "dev"),
@@ -613,7 +612,7 @@ def test_explicit_validatable_chart_load_is_strict(tmp_path: Path) -> None:
         ChartManagerError,
         match=r"has no validation configuration in chart-lifecycle\.yaml",
     ):
-        load_manifest_validation_target(tmp_path, "alpha")
+        load_manifest_validation_target(tmp_path, "alpha", charts_dir=CHARTS_DIR)
 
 
 def test_compiler_resolves_chart_relative_paths_independently_of_cwd(
@@ -638,7 +637,7 @@ policies:
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
-    build = build_worklist(root=tmp_path, skip_change_detection=True)
+    build = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
     dev = next(row for row in build.rows if row.env == "dev")
     config = row_config_for(compiled, dev)
@@ -670,7 +669,7 @@ policies:
     repository_policy = tmp_path / "legacy-policies"
     repository_policy.mkdir()
 
-    build = build_worklist(root=tmp_path, skip_change_detection=True)
+    build = build_worklist(workspace=workspace_for(tmp_path), skip_change_detection=True)
     compiled = resolve_manifest_validation(build.targets["alpha"], tmp_path)
 
     assert len(compiled.warnings) == 1
@@ -682,7 +681,7 @@ def test_explicit_filter_diagnostics_use_catalog_not_affected_rows(
     tmp_path: Path,
 ) -> None:
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
-    build = build_worklist(root=tmp_path, changed_files=["README.md"])
+    build = build_worklist(workspace=workspace_for(tmp_path), changed_files=["README.md"])
     available_environments = {
         environment for target in build.targets.values() for environment in target.spec.environments
     }
@@ -743,7 +742,7 @@ def test_rendering_default_triggers_select_all_environments(
     # Rendering inputs render or validate differently under each env's values.
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(root=tmp_path, changed_files=[f"charts/alpha/{chart_file}"])
+    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"])
 
     assert {(row.chart, row.env) for row in result.rows} == {
         ("alpha", "ci"),
@@ -766,7 +765,7 @@ def test_ci_only_default_triggers_select_ci_without_unmatched_warning(
 ) -> None:
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(root=tmp_path, changed_files=[f"charts/alpha/{chart_file}"])
+    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=[f"charts/alpha/{chart_file}"])
 
     assert {(row.chart, row.env) for row in result.rows} == {("alpha", "ci")}
     assert result.unmatched_changes == ()
@@ -776,7 +775,7 @@ def test_ci_only_default_triggers_select_ci_without_unmatched_warning(
 def test_readme_is_not_covered_by_default_triggers(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_CI_SPEC)
 
-    result = build_worklist(root=tmp_path, changed_files=["charts/alpha/README.md"])
+    result = build_worklist(workspace=workspace_for(tmp_path), changed_files=["charts/alpha/README.md"])
 
     assert result.rows == ()
     assert result.unmatched_changes == (Path("charts/alpha/README.md"),)
@@ -787,7 +786,7 @@ def test_authored_trigger_replaces_default_with_the_same_pattern(tmp_path: Path)
     _chart(tmp_path, "alpha", spec=_CI_SPEC + '  "templates/**": [dev]\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/templates/deployment.yaml"],
     )
 
@@ -799,7 +798,7 @@ def test_authored_ci_trigger_narrows_all_environments_default(tmp_path: Path) ->
     _chart(tmp_path, "alpha", spec=_CI_SPEC + '  "templates/**": [ci]\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/templates/deployment.yaml"],
     )
 
@@ -814,7 +813,7 @@ def test_authored_all_environments_trigger_selects_every_environment(
     _chart(tmp_path, "alpha", spec=spec)
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/crds/widget.yaml"],
     )
 
@@ -831,7 +830,7 @@ def test_authored_templates_all_environments_trigger_selects_every_environment(
     _chart(tmp_path, "alpha", spec=_CI_SPEC + '  "templates/**": all-environments\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/templates/deployment.yaml"],
     )
 
@@ -846,7 +845,7 @@ def test_authored_empty_trigger_opts_out_of_default(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha", spec=_CI_SPEC + '  "templates/**": []\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/templates/deployment.yaml"],
     )
 
@@ -858,7 +857,7 @@ def test_trigger_ignores_take_precedence_over_default_triggers(tmp_path: Path) -
     _chart(tmp_path, "alpha", spec=_CI_SPEC + 'triggerIgnores:\n  - "templates/NOTES.txt"\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/templates/NOTES.txt"],
     )
 
@@ -873,7 +872,7 @@ def test_trigger_ignores_take_precedence_over_all_environments_default(
     _chart(tmp_path, "alpha", spec=_CI_SPEC + 'triggerIgnores:\n  - "values.schema.json"\n')
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/values.schema.json"],
     )
 
@@ -892,7 +891,7 @@ def test_default_trigger_without_target_env_falls_through_to_warning(
     _chart(tmp_path, "alpha", spec=_DEFAULT_SPEC.format(name="alpha"))
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/tests/test-connection.yaml"],
     )
 
@@ -911,7 +910,7 @@ def test_default_trigger_without_target_env_honors_all_environments_policy(
     )
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path),
         changed_files=["charts/alpha/tests/test-connection.yaml"],
     )
 

@@ -21,6 +21,7 @@ from chart_manager.domain.local_resources import (
     load_local_stack,
 )
 from chart_manager.plumbing.errors import SpecError
+from tests.conftest import LOCAL_CONFIG
 
 from .conftest import REPO_ROOT
 
@@ -59,7 +60,7 @@ spec:
 
 
 def test_repository_default_local_cluster_is_available_to_fresh_checkouts() -> None:
-    cluster = LocalResourceLoader(REPO_ROOT).load_cluster()
+    cluster = LocalResourceLoader(REPO_ROOT, local_config=LOCAL_CONFIG).load_cluster()
 
     assert cluster.metadata.name == "default"
     assert (REPO_ROOT / cluster.spec.cluster.config).is_file()
@@ -115,7 +116,7 @@ spec:
 """,
     )
 
-    releases = LocalResourceLoader(tmp_path).load_cluster().spec.bootstrap.releases
+    releases = LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster().spec.bootstrap.releases
 
     assert [type(release) for release in releases] == [
         BootstrapLifecycleRelease,
@@ -167,7 +168,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match="field 'dependencies' must be a list"):
-        LocalResourceLoader(tmp_path).load_cluster()
+        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
 
 def test_stack_accepts_lifecycle_oci_and_https_repo_releases(tmp_path: Path) -> None:
@@ -260,7 +261,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match=message):
-        LocalResourceLoader(tmp_path).load_cluster()
+        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
 
 @pytest.mark.parametrize("field", ["runtimeValues: {}", "readiness: {nodesReady: true}"])
@@ -411,7 +412,7 @@ spec:
       timeout: 10m
 """,
     )
-    resolver = LocalTargetResolver(tmp_path)
+    resolver = LocalTargetResolver(tmp_path, local_config=LOCAL_CONFIG)
 
     chart_target = resolver.resolve("charts/demo")
     named_target = resolver.resolve("observability")
@@ -442,7 +443,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match="escapes repository root"):
-        LocalResourceLoader(tmp_path).load_cluster()
+        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
 
 def test_custom_config_and_stack_directories_are_supported(tmp_path: Path) -> None:

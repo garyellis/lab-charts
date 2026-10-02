@@ -29,6 +29,7 @@ from chart_manager.domain.local_resources import (
     ResolvedChartTarget,
     ResolvedLocalTarget,
 )
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -79,7 +80,6 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
-from chart_manager.settings import DEFAULT_LOCAL_CONFIG
 
 #: Diagnostic channel, parallel to `self._progress`. Every `failure(...)` /
 #: `warn(...)` narration below records an outcome the converge then *continues
@@ -126,14 +126,13 @@ class DevelopmentClusterService:
 
     def __init__(
         self,
-        root: Path,
         *,
+        workspace: RepositoryWorkspace,
         helm: Helm,
         kind: Kind,
         kubectl: Kubectl,
         expose: ExposeService,
         progress: ProgressCallback | None = None,
-        local_config: Path = DEFAULT_LOCAL_CONFIG,
         environment_provider: KubernetesEnvironmentProvider | None = None,
         client_factory: ClientFactory | None = None,
         command_runner: CommandRunner | None = None,
@@ -146,7 +145,7 @@ class DevelopmentClusterService:
         was configured in the composition root and then discarded here. The
         composition root is now the only place these are built.
         """
-        self.root = root.resolve()
+        self.root = workspace.root
         self.helm = helm
         self.kind = kind
         self.kubectl = kubectl
@@ -157,7 +156,9 @@ class DevelopmentClusterService:
         # the lifecycle across two layers.
         self.expose = expose
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
-        self.local_resources = LocalResourceLoader(self.root, local_config=local_config)
+        self.local_resources = LocalResourceLoader(
+            self.root, local_config=workspace.local_cluster
+        )
         self._client_factory = client_factory
         self._hooks = ProvisioningHookRunner(
             self.root,

@@ -24,7 +24,6 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 from chart_manager.services.manifest_validation.namespaces import resolve_namespace
-from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 # Repository-wide triggers merged UNDER each chart's authored `triggers`; an
 # authored pattern with the identical spelling replaces the default, so a chart
@@ -75,12 +74,10 @@ class WorklistBuildResult:
 
 def build_worklist(
     *,
-    root: Path,
+    workspace: RepositoryWorkspace,
     changed_files: list[str] | None = None,
     skip_change_detection: bool = False,
     selected_charts: tuple[str, ...] = (),
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
-    workspace: RepositoryWorkspace | None = None,
 ) -> WorklistBuildResult:
     """Build the deterministic chart/environment worklist.
 
@@ -88,13 +85,11 @@ def build_worklist(
     those charts are loaded. Callers performing change-impact analysis must
     leave it empty so repository-wide dependencies and fanout remain visible.
     """
-    workspace = workspace or RepositoryWorkspace(root=root.resolve(), charts_dir=charts_dir)
-    layout = RepositoryLayout(root=workspace.root, charts_dir=workspace.charts_dir)
-    root = layout.root
+    root = workspace.root
     catalog = build_catalog(
         root,
         chart_names=selected_charts or None,
-        charts_dir=layout.charts_dir,
+        charts_dir=workspace.charts_dir,
     )
     targets = catalog.by_name()
     specs = {name: target.spec for name, target in targets.items()}
@@ -113,7 +108,7 @@ def build_worklist(
     accumulated: set[tuple[str, str]] = set()
     ignored_changes: set[Path] = set()
     unmatched_changes: set[Path] = set()
-    dependency_index = build_helm_dependency_index(root, charts_dir=layout.charts_dir)
+    dependency_index = build_helm_dependency_index(root, charts_dir=workspace.charts_dir)
     for raw in changed_files:
         if not raw:
             continue
@@ -121,11 +116,11 @@ def build_worklist(
         if workspace.matches_validation_fanout(Path(raw)):
             fanout_all = True
             continue
-        chart_name = layout.chart_name_from_repo_path(Path(raw))
+        chart_name = workspace.chart_name_from_repo_path(Path(raw))
         if chart_name is None:
             continue
 
-        prefix_length = len(layout.charts_dir.parts)
+        prefix_length = len(workspace.charts_dir.parts)
         if len(parts) == prefix_length + 1:
             _add_all_envs(accumulated, specs, chart_name)
             _fanout_dependents(accumulated, specs, dependency_index, chart_name)
@@ -164,7 +159,7 @@ def build_worklist(
         ignored=ordered_ignored,
         unmatched=ordered_unmatched,
         specs=specs,
-        layout=layout,
+        workspace=workspace,
     )
     return WorklistBuildResult(
         rows=rows,
@@ -259,7 +254,7 @@ def _trigger_coverage_warnings(
     ignored: tuple[Path, ...],
     unmatched: tuple[Path, ...],
     specs: dict[str, ManifestValidationSpec],
-    layout: RepositoryLayout,
+    workspace: RepositoryWorkspace,
 ) -> tuple[str, ...]:
     """Explain why changed chart files did not use an explicit trigger."""
     warnings = [
@@ -267,7 +262,7 @@ def _trigger_coverage_warnings(
         for path in ignored
     ]
     for path in unmatched:
-        chart = layout.chart_name_from_repo_path(path) or ""
+        chart = workspace.chart_name_from_repo_path(path) or ""
         spec = specs.get(chart)
         behavior = (
             "unmatchedChanges=all-environments selected all environments"

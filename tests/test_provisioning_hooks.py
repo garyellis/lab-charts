@@ -15,6 +15,7 @@ from chart_manager.services.clusters.development.models import DevelopmentCluste
 from chart_manager.services.clusters.development.wire import plan_to_dict
 from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
+from tests.conftest import LOCAL_CONFIG, workspace_for
 
 from .conftest import FakeCommandRunner
 
@@ -41,7 +42,7 @@ def _repository(tmp_path: Path, hooks: str) -> LocalCluster:
     config = tmp_path / ".chart-manager" / "local-cluster.yaml"
     config.parent.mkdir()
     config.write_text(_document(hooks), encoding="utf-8")
-    return LocalResourceLoader(tmp_path).load_cluster()
+    return LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
 
 def test_hook_contract_accepts_one_argv_per_phase_and_runner_scopes_metadata(
@@ -102,7 +103,7 @@ def test_hook_contract_rejects_shell_empty_and_unsafe_commands(
     config.write_text(_document(hooks), encoding="utf-8")
 
     with pytest.raises(SpecError, match=message):
-        LocalResourceLoader(tmp_path).load_cluster()
+        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
 
 
 @pytest.mark.parametrize("value", ["1", "TRUE", " yes ", "On"])
@@ -157,7 +158,7 @@ def test_reset_pre_hook_failure_prevents_destroy(
 
     provider = Provider()
     service = DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=SimpleNamespace(),  # type: ignore[arg-type]
         kind=SimpleNamespace(),  # type: ignore[arg-type]
         kubectl=SimpleNamespace(),  # type: ignore[arg-type]

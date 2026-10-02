@@ -18,13 +18,12 @@ from chart_manager.domain.lifecycle_policy import (
     validate_chart_lifecycle_identity,
 )
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 class ClusterTestCatalog:
     """Load cluster-test capabilities without coupling Helm discovery to them."""
 
-    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
+    def __init__(self, root: Path, *, charts_dir: Path) -> None:
         """Anchor Helm and lifecycle-intent lookup at ``root``."""
         self.repository = ChartRepository(root, charts_dir=charts_dir)
 

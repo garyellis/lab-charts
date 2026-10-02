@@ -33,6 +33,7 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+from tests.conftest import workspace_for
 
 from .conftest import MakeChart, cli
 
@@ -324,7 +325,7 @@ spec:
     )
     kubectl = _MigrationKubectl(calls)
     service = EphemeralTestClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=_MigrationHelm(
             calls,
             fail_dependency=fail_dependency,
@@ -1209,7 +1210,7 @@ def test_merged_fanout_plans_keep_one_reverse_install_order_cleanup_tail(
                 }
             },
         )
-    compiler = ClusterTestCompiler(chart_root)
+    compiler = ClusterTestCompiler(workspace=workspace_for(chart_root))
 
     merged = _merge_lifecycle_plans(
         [

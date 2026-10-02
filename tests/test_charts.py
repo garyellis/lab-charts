@@ -17,6 +17,7 @@ from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.chart_catalog import ChartCatalogService
+from tests.conftest import CHARTS_DIR, workspace_for
 
 from .conftest import REPO_ROOT, MakeChart, cli
 
@@ -26,7 +27,7 @@ def test_list_charts_discovers_wrappers(chart_root: Path, make_chart: MakeChart)
     make_chart("alloy")
     make_chart("grafana")
 
-    repository = ChartRepository(chart_root)
+    repository = ChartRepository(chart_root, charts_dir=CHARTS_DIR)
 
     assert repository.list_names() == ["alloy", "grafana", "tempo"]
 
@@ -39,11 +40,11 @@ def test_list_charts_ignores_directories_without_a_chart_yaml(
     (chart_root / "charts" / "scratch").mkdir()
     (chart_root / "charts" / "README.md").write_text("", encoding="utf-8")
 
-    assert ChartRepository(chart_root).list_names() == ["alloy"]
+    assert ChartRepository(chart_root, charts_dir=CHARTS_DIR).list_names() == ["alloy"]
 
 
 def test_list_charts_is_empty_when_there_is_no_charts_dir(tmp_path: Path) -> None:
-    assert ChartRepository(tmp_path).list_names() == []
+    assert ChartRepository(tmp_path, charts_dir=CHARTS_DIR).list_names() == []
 
 
 def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart) -> None:
@@ -51,7 +52,7 @@ def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart)
         "prometheus-operator",
         profiles={"minimal": {"values": ["values.yaml", "values-ci.yaml"]}},
     )
-    catalog = ClusterTestCatalog(chart_root)
+    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     chart = catalog.get("prometheus-operator")
 
     paths = catalog.value_paths(chart, "minimal")
@@ -68,7 +69,7 @@ def test_get_loads_library_chart_without_test_spec(chart_root: Path) -> None:
         encoding="utf-8",
     )
 
-    chart = ChartRepository(chart_root).get("common")
+    chart = ChartRepository(chart_root, charts_dir=CHARTS_DIR).get("common")
 
     assert chart.name == "common"
     assert chart.metadata.version == "1.2.3"
@@ -89,7 +90,7 @@ def test_cluster_test_catalog_requires_chart_manager_configuration(
         CapabilityUnavailableError,
         match=r"no clusterTest configuration in chart-lifecycle\.yaml",
     ):
-        ClusterTestCatalog(chart_root).get("common")
+        ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get("common")
 
 
 def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
@@ -129,7 +130,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
         encoding="utf-8",
     )
 
-    assert ClusterTestCatalog(chart_root).enabled_names() == ["enabled"]
+    assert ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).enabled_names() == ["enabled"]
 
 
 def test_chart_catalog_retains_invalid_config_for_operator_visibility(
@@ -139,7 +140,7 @@ def test_chart_catalog_retains_invalid_config_for_operator_visibility(
     chart = make_chart("broken")
     (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
-    entry = ChartCatalogService(chart_root).list_entries()[0]
+    entry = ChartCatalogService(workspace=workspace_for(chart_root)).list_entries()[0]
 
     assert entry.name == "broken"
     assert entry.lifecycle_status == "invalid"
@@ -158,7 +159,7 @@ def test_chart_catalog_rejects_lifecycle_identity_mismatch(
         encoding="utf-8",
     )
 
-    entry = ChartCatalogService(chart_root).list_entries()[0]
+    entry = ChartCatalogService(workspace=workspace_for(chart_root)).list_entries()[0]
 
     assert entry.lifecycle_status == "invalid"
     assert entry.error is not None
@@ -166,7 +167,7 @@ def test_chart_catalog_rejects_lifecycle_identity_mismatch(
     assert "Chart.yaml name 'actual'" in entry.error
 
     with pytest.raises(SpecError, match=r"metadata\.name 'other'"):
-        ChartCatalogService(chart_root).get_lifecycle("actual")
+        ChartCatalogService(workspace=workspace_for(chart_root)).get_lifecycle("actual")
 
 
 def test_charts_list_returns_nonzero_after_rendering_invalid_config(
@@ -210,12 +211,12 @@ def test_get_rejects_invalid_dependency_shape(chart_root: Path) -> None:
     )
 
     with pytest.raises(SpecError, match="'dependencies' must be a list"):
-        ChartRepository(chart_root).get("broken")
+        ChartRepository(chart_root, charts_dir=CHARTS_DIR).get("broken")
 
 
 def test_the_repo_chart_tree_loads() -> None:
     """Smoke test over the real charts/ tree: contents, not inventory."""
-    names = ChartRepository(REPO_ROOT).list_names()
+    names = ChartRepository(REPO_ROOT, charts_dir=CHARTS_DIR).list_names()
 
     assert names, "the repo should ship at least one chart"
     assert names == sorted(names)

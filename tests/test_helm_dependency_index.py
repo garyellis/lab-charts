@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.domain.chart_deps import build_helm_dependency_index
+from tests.conftest import CHARTS_DIR
 
 
 def _chart(root: Path, name: str, *, chart_yaml: str) -> None:
@@ -20,7 +21,7 @@ def _chart(root: Path, name: str, *, chart_yaml: str) -> None:
 
 
 def test_empty_when_no_charts_dir(tmp_path: Path) -> None:
-    assert build_helm_dependency_index(tmp_path) == {}
+    assert build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR) == {}
 
 
 def test_indexes_simple_dependency(tmp_path: Path) -> None:
@@ -34,7 +35,7 @@ def test_indexes_simple_dependency(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"common": {"alpha"}}
 
@@ -59,7 +60,7 @@ def test_handles_cycle_without_crashing(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"beta": {"alpha"}, "alpha": {"beta"}}
 
@@ -81,7 +82,7 @@ def test_skips_chart_with_invalid_dependency_entry(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {}
 
@@ -99,7 +100,7 @@ def test_unknown_dependency_name_still_indexed(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"not-here": {"alpha"}}
 
@@ -118,7 +119,7 @@ def test_malformed_yaml_is_silently_skipped(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"common": {"alpha"}}
 
@@ -139,7 +140,7 @@ def test_remote_dependencies_are_not_indexed(tmp_path: Path) -> None:
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {}
 
@@ -161,7 +162,7 @@ def test_self_named_dependency_is_not_indexed(
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {}
 
@@ -184,6 +185,6 @@ def test_file_and_repository_less_dependencies_are_indexed(tmp_path: Path) -> No
         ),
     )
 
-    index = build_helm_dependency_index(tmp_path)
+    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"common": {"alpha"}, "vendored": {"alpha"}, "blank": {"alpha"}}

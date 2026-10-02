@@ -9,23 +9,15 @@ from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, CheckStatus, probe_binary
-from chart_manager.settings import DEFAULT_CHARTS_DIR, RepositoryLayout
 
 
 class Git:
     """Run git subcommands rooted at one working tree."""
 
-    def __init__(
-        self,
-        root: Path,
-        runner: CommandRunner | None = None,
-        *,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
-    ) -> None:
+    def __init__(self, root: Path, runner: CommandRunner | None = None) -> None:
         """Bind the working-tree root and a CommandRunner."""
         self.root = root
         self.runner = runner or SubprocessRunner()
-        self.layout = RepositoryLayout(root=root, charts_dir=charts_dir)
 
     def preflight(self) -> tuple[Check, ...]:
         """Report the git binary and whether `root` is actually a work tree.
@@ -116,39 +108,27 @@ class Git:
         args.extend([remote, branch])
         self.runner.run(args, cwd=self.root)
 
-    def changed_charts(self, base: str = "origin/main") -> list[str]:
-        """Return chart names with committed changes vs `base` (merge-base diff).
-
-        A "chart" is the first directory under the configured chart root.
-        """
-        if not self.is_repository():
-            raise ExternalCommandError(
-                "not a git repository; changed chart detection requires git metadata"
-            )
-        result = self.runner.run(
-            ["git", "diff", "--name-only", f"{base}...HEAD"], cwd=self.root
-        )
-        charts: set[str] = set()
-        for line in result.stdout.splitlines():
-            chart = self.layout.chart_name_from_repo_path(line)
-            if chart is not None:
-                charts.add(chart)
-        return sorted(charts)
-
     def changed_files(self, base: str = "origin/main") -> list[str]:
-        """Return repo-relative paths changed vs `base`.
+        """Return paths changed vs `base`, relative to `root`.
 
         Uses `...HEAD` (merge-base diff) so feature branches see only their
-        own deltas, matching `changed_charts`. Uncommitted changes are NOT
-        included — surface them by committing or by an explicit override at
-        the CLI layer. Empty lines are filtered; output is sorted.
+        own deltas. Uncommitted changes are NOT included — surface them by
+        committing or by an explicit override at the CLI layer. Empty lines
+        are filtered; output is sorted.
+
+        `--relative` (run from `root`) makes the paths relative to `root`
+        rather than to the git top level, and drops changes outside it. The
+        two differ when the repository root is a subdirectory of the checkout;
+        without it every path would carry the subdirectory prefix and no
+        chart or fanout pattern would match. Callers map a path to its chart
+        with `RepositoryWorkspace.chart_name_from_repo_path`.
         """
         if not self.is_repository():
             raise ExternalCommandError(
                 "not a git repository; changed file detection requires git metadata"
             )
         result = self.runner.run(
-            ["git", "diff", "--name-only", f"{base}...HEAD"], cwd=self.root
+            ["git", "diff", "--name-only", "--relative", f"{base}...HEAD"], cwd=self.root
         )
         files = {line for line in result.stdout.splitlines() if line.strip()}
         return sorted(files)

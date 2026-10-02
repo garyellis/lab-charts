@@ -34,6 +34,7 @@ from chart_manager.services.clusters.development import (
 from chart_manager.services.clusters.development.service import _TargetLocalExecution
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+from tests.conftest import workspace_for
 
 
 class _Helm:
@@ -140,7 +141,7 @@ class _Catalog:
 
 def _service(root: Path, *, helm: _Helm | None = None) -> DevelopmentClusterService:
     return DevelopmentClusterService(
-        root,
+        workspace=workspace_for(root),
         helm=helm or _Helm("kind-lab", []),  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=_Kubectl(),  # type: ignore[arg-type]
@@ -220,7 +221,7 @@ def test_bootstrap_installs_through_the_context_bound_clients(tmp_path: Path) ->
         )
 
     service = DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=_Helm("ambient", calls),  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
@@ -256,7 +257,7 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
         namespace_raises={"observability": ExternalCommandError("timed out")}
     )
     service = DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=_Helm("kind-lab", calls),  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
@@ -302,7 +303,7 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
         namespace_raises={"observability": ExternalCommandError("timed out")}
     )
     service = DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=_Helm("kind-lab", []),  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]
@@ -337,7 +338,7 @@ def test_https_repo_release_stays_out_of_lifecycle_and_preserves_result_semantic
     calls: list[tuple[str, str]] = []
     helm = _Helm("kind-lab", calls)
     service = DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=helm,  # type: ignore[arg-type]
         kind=_Kind(),  # type: ignore[arg-type]
         kubectl=_Kubectl(),  # type: ignore[arg-type]

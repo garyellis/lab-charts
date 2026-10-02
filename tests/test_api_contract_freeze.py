@@ -64,9 +64,8 @@ from chart_manager.api.v1alpha1.releases import (
 from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 from chart_manager.domain.local_resources import DEFAULT_STACKS_DIR
 from chart_manager.plumbing.yaml_files import parse_yaml
-from chart_manager.settings import DEFAULT_LOCAL_CONFIG
 
-from .conftest import REPO_ROOT
+from .conftest import LOCAL_CONFIG, REPO_ROOT
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "api"
 SCHEMA_SNAPSHOT = FIXTURES / "expected-schemas.json"
@@ -158,11 +157,11 @@ def test_authored_api_constants_are_frozen() -> None:
 # --------------------------------------------------------------------------
 
 LIFECYCLE_DOCUMENTS = _discover(LIFECYCLE_FILENAME)
-LOCAL_CLUSTER_DOCUMENT = REPO_ROOT / DEFAULT_LOCAL_CONFIG
+LOCAL_CLUSTER_DOCUMENT = REPO_ROOT / LOCAL_CONFIG
 WORKSPACE_DOCUMENT = REPO_ROOT / ".chart-manager/workspace.yaml"
 LOCAL_STACK_DOCUMENTS = sorted(
     path
-    for path in (REPO_ROOT / DEFAULT_LOCAL_CONFIG.parent / DEFAULT_STACKS_DIR).glob("*")
+    for path in (REPO_ROOT / LOCAL_CONFIG.parent / DEFAULT_STACKS_DIR).glob("*")
     if path.suffix in {".yaml", ".yml"}
 )
 

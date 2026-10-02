@@ -39,7 +39,6 @@ from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 DEFAULT_STACKS_DIR = Path("stacks")
 
@@ -98,7 +97,7 @@ class LocalResourceLoader:
         self,
         root: Path,
         *,
-        local_config: Path = DEFAULT_LOCAL_CONFIG,
+        local_config: Path,
         stacks_dir: Path = DEFAULT_STACKS_DIR,
     ) -> None:
         self.root = root.resolve()
@@ -246,8 +245,8 @@ def resolve_chart_target(
     root: Path,
     chart: str,
     *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
-    local_config: Path = DEFAULT_LOCAL_CONFIG,
+    charts_dir: Path,
+    local_config: Path,
 ) -> ResolvedChartTarget:
     """Resolve a configured chart name or an explicit chart directory."""
     root = root.resolve()

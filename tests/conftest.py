@@ -27,12 +27,17 @@ import typer
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: The conventional layout, for domain loaders that take it explicitly.
+CHARTS_DIR = Path("charts")
+LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 
 MakeChart = Callable[..., Path]
 
@@ -95,6 +100,16 @@ def hermetic_logging() -> Iterator[None]:
     finally:
         root.handlers = handlers
         root.setLevel(level)
+
+
+def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
+    """A `RepositoryWorkspace` over ``root`` without reading workspace.yaml.
+
+    Services take a required workspace. Tests that do not exercise loading
+    build one here instead of each spelling the constructor; ``fields``
+    override the layout (``charts_dir=Path("deploy/helm")``, ...).
+    """
+    return RepositoryWorkspace(root=root.resolve(), **fields)
 
 
 @pytest.fixture

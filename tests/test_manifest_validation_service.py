@@ -39,6 +39,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
+from tests.conftest import workspace_for
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -145,8 +146,11 @@ class FakeGit:
         return self.files
 
 
-def _app(rec: Recorder, *, git: FakeGit | None = None, **kwargs) -> ManifestValidationService:
+def _app(
+    root: Path, rec: Recorder, *, git: FakeGit | None = None, **kwargs
+) -> ManifestValidationService:
     """Build a ManifestValidationService wired to the recorder (and optionally a fake git)."""
+    kwargs.setdefault("workspace", workspace_for(root))
     return ManifestValidationService(
         runner_factory=rec.factory,
         on_warn=rec.warnings.append,
@@ -185,7 +189,7 @@ def test_run_passes_resolved_workers_to_the_runner(
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert rec.runs[0][0].max_workers == 4
 
@@ -231,6 +235,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
 
     rec = Recorder()
     _app(
+        tmp_path,
         rec,
         workspace=workspace,
         schema_runtime_factory=runtime_factory,
@@ -258,7 +263,7 @@ def test_verbose_forces_serial_and_streams_helm(tmp_path: Path) -> None:
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, workers=8, verbose=True))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, workers=8, verbose=True))
 
     spec = rec.runs[0][0]
     assert spec.max_workers == 1
@@ -269,7 +274,7 @@ def test_zero_timeouts_become_unbounded_at_the_runner_boundary(tmp_path: Path) -
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    _app(rec).run(
+    _app(tmp_path, rec).run(
         RunRequest(root=tmp_path, skip_change_detection=True, tool_timeout=0.0, dep_update_timeout=0.0)
     )
 
@@ -286,7 +291,7 @@ def test_skip_change_detection_never_consults_git(tmp_path: Path) -> None:
     git = FakeGit(files=["charts/alpha/values.yaml"])
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert git.calls == []
     assert {r.row.env for r in outcome.result.rows} == {"dev", "prod"}
@@ -299,7 +304,7 @@ def test_explicit_changed_files_wins_over_git(tmp_path: Path) -> None:
     git = FakeGit(files=["charts/alpha/values.yaml"])
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, changed_files=listing))
+    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path, changed_files=listing))
 
     assert git.calls == []
     # values-prod.yaml matches no trigger in the fixture spec => no rows.
@@ -317,7 +322,7 @@ def test_explicit_chart_selection_validates_all_environments_without_git(
     git = FakeGit(files=[])
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, charts=("alpha",)))
+    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path, charts=("alpha",)))
 
     assert git.calls == []
     assert {(row.row.chart, row.row.env) for row in outcome.result.rows} == {
@@ -331,7 +336,7 @@ def test_git_diff_supplies_changed_files_by_default(tmp_path: Path) -> None:
     git = FakeGit(files=["charts/alpha/values.yaml"])
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path, base="origin/trunk"))
+    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path, base="origin/trunk"))
 
     assert git.calls == ["origin/trunk"]
     assert {r.row.env for r in outcome.result.rows} == {"dev", "prod"}
@@ -344,7 +349,7 @@ def test_failed_git_diff_warns_and_validates_everything(tmp_path: Path) -> None:
     git = FakeGit(error="bad revision")
     rec = Recorder()
 
-    outcome = _app(rec, git=git).run(RunRequest(root=tmp_path))
+    outcome = _app(tmp_path, rec, git=git).run(RunRequest(root=tmp_path))
 
     assert len(outcome.result.rows) == 4  # 2 charts x 2 envs
     assert any("git diff failed" in w for w in rec.warnings)
@@ -355,7 +360,7 @@ def test_unreadable_changed_files_raises_input_error(tmp_path: Path) -> None:
     rec = Recorder()
 
     with pytest.raises(ValidateInputError) as exc:
-        _app(rec).run(RunRequest(root=tmp_path, changed_files=tmp_path / "nope.txt"))
+        _app(tmp_path, rec).run(RunRequest(root=tmp_path, changed_files=tmp_path / "nope.txt"))
 
     assert exc.value.hint == "changed_files"
 
@@ -368,7 +373,7 @@ def test_chart_and_env_filters_narrow_the_worklist(tmp_path: Path) -> None:
     _chart(tmp_path, "beta")
     rec = Recorder()
 
-    outcome = _app(rec).run(
+    outcome = _app(tmp_path, rec).run(
         RunRequest(root=tmp_path, skip_change_detection=True, charts=("alpha",), envs=("dev",))
     )
 
@@ -393,7 +398,7 @@ policies:
     (tmp_path / "schemas").mkdir()
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("prod",)))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("prod",)))
 
     cfg = rec.configs[0]
     assert cfg.chart_path == (tmp_path / "charts" / "alpha").resolve()
@@ -420,7 +425,7 @@ def test_spec_policy_extra_that_does_not_exist_is_skipped(tmp_path: Path) -> Non
     _chart(tmp_path, "alpha", extra="policies:\n  extra: [missing-dir]\n")
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
 
     config = rec.configs[0].validator_invocations[1].config
     assert isinstance(config, KyvernoConfig)
@@ -443,7 +448,7 @@ def test_mixed_helm_bindings_reach_one_runner_carrying_their_binding(
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, envs=("dev",)))
 
     assert len(rec.runs) == 1
     assert {cfg.row.chart: cfg.helm_binding for cfg in rec.runs[0][1]} == {
@@ -458,7 +463,7 @@ def test_all_rows_share_one_runner_when_bindings_match(tmp_path: Path) -> None:
     _chart(tmp_path, "beta")
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert len(rec.runs) == 1
     assert len(rec.runs[0][1]) == 4
@@ -479,6 +484,7 @@ def test_fail_fast_is_delegated_to_the_single_runner(tmp_path: Path) -> None:
     outcome = ManifestValidationService(
         runner_factory=lambda spec: _FailFastRecordingRunner(spec, rec.runs),
         run_id_factory=lambda: "RUNID",
+        workspace=workspace_for(tmp_path),
     ).run(
         RunRequest(
             root=tmp_path,
@@ -502,7 +508,7 @@ def test_run_builds_the_run_result_itself(tmp_path: Path) -> None:
     _chart(tmp_path, "broken", spec="releaseName: broken\nmystery: true\n")
     rec = Recorder()
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert isinstance(outcome.result, RunResult)
     assert outcome.result.rendered_root == outcome.out_dir
@@ -516,7 +522,7 @@ def test_missing_spec_is_a_warning_not_a_failure(tmp_path: Path) -> None:
     _chart(tmp_path, "nospec", spec=None)
     rec = Recorder()
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert outcome.charts_unvalidated == 1
     assert any("nospec" in w for w in outcome.warnings)
@@ -528,7 +534,7 @@ def test_unknown_explicit_chart_filter_is_an_input_error(tmp_path: Path) -> None
     rec = Recorder()
 
     with pytest.raises(ValidateInputError) as exc:
-        _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, charts=("ghost",)))
+        _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, charts=("ghost",)))
 
     assert exc.value.hint == "charts"
     assert rec.runs == []
@@ -541,7 +547,7 @@ def test_explicit_chart_without_config_fails_precisely(tmp_path: Path) -> None:
         ValidateInputError,
         match=r"has no validation configuration in chart-lifecycle\.yaml",
     ):
-        _app(Recorder()).run(
+        _app(tmp_path, Recorder()).run(
             RunRequest(root=tmp_path, skip_change_detection=True, charts=("alpha",))
         )
 
@@ -553,7 +559,7 @@ def test_explicit_chart_with_disabled_capability_fails_precisely(tmp_path: Path)
         ValidateInputError,
         match="manifest validation is disabled for chart 'alpha'",
     ):
-        _app(Recorder()).run(
+        _app(tmp_path, Recorder()).run(
             RunRequest(root=tmp_path, skip_change_detection=True, charts=("alpha",))
         )
 
@@ -561,7 +567,7 @@ def test_explicit_chart_with_disabled_capability_fails_precisely(tmp_path: Path)
 def test_explicit_chart_with_malformed_config_returns_a_spec_outcome(tmp_path: Path) -> None:
     _chart(tmp_path, "broken", spec="releaseName: broken\nmystery: true\n")
 
-    outcome = _app(Recorder()).run(
+    outcome = _app(tmp_path, Recorder()).run(
         RunRequest(root=tmp_path, skip_change_detection=True, charts=("broken",))
     )
 
@@ -577,7 +583,7 @@ def test_explicit_chart_is_isolated_from_unrelated_repository_errors(
     _chart(tmp_path, "unconfigured", spec=None)
     rec = Recorder()
 
-    outcome = _app(rec).run(
+    outcome = _app(tmp_path, rec).run(
         RunRequest(root=tmp_path, skip_change_detection=True, charts=("alpha",))
     )
 
@@ -595,7 +601,7 @@ def test_enabled_phases_reach_the_runner_and_the_outcome(tmp_path: Path) -> None
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    outcome = _app(rec).run(
+    outcome = _app(tmp_path, rec).run(
         RunRequest(root=tmp_path, skip_change_detection=True, phases=frozenset({"render"}))
     )
 
@@ -615,7 +621,7 @@ def test_mixed_charts_keep_validator_selection_on_each_row(tmp_path: Path) -> No
     )
     rec = Recorder()
 
-    _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     enabled_by_chart = {
         config.row.chart: frozenset(
@@ -649,7 +655,7 @@ def test_default_out_dir_is_a_minted_run_id_under_the_repo(tmp_path: Path) -> No
     _chart(tmp_path, "alpha")
     rec = Recorder()
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert outcome.out_dir == (tmp_path / ".chart-manager" / "rendered" / "RUNID").resolve()
     assert outcome.keep is False
@@ -660,7 +666,7 @@ def test_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
     rec = Recorder()
     target = tmp_path / "named"
 
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, out=target))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, out=target))
 
     assert outcome.out_dir == target.resolve()
     assert outcome.keep is True
@@ -669,14 +675,14 @@ def test_explicit_out_dir_is_an_implicit_keep(tmp_path: Path) -> None:
 def _outcome_for_cleanup(tmp_path: Path, rec: Recorder, **kwargs):
     """Run a passing worklist so cleanup has a real out dir to consider."""
     _chart(tmp_path, "alpha")
-    outcome = _app(rec).run(RunRequest(root=tmp_path, skip_change_detection=True, **kwargs))
+    outcome = _app(tmp_path, rec).run(RunRequest(root=tmp_path, skip_change_detection=True, **kwargs))
     outcome.out_dir.mkdir(parents=True, exist_ok=True)
     return outcome
 
 
 def test_cleanup_removes_the_render_dir_on_success(tmp_path: Path) -> None:
     rec = Recorder()
-    app = _app(rec)
+    app = _app(tmp_path, rec)
     outcome = _outcome_for_cleanup(tmp_path, rec)
 
     app.cleanup(outcome)
@@ -686,7 +692,7 @@ def test_cleanup_removes_the_render_dir_on_success(tmp_path: Path) -> None:
 
 def test_cleanup_keeps_the_render_dir_when_asked(tmp_path: Path) -> None:
     rec = Recorder()
-    app = _app(rec)
+    app = _app(tmp_path, rec)
     outcome = _outcome_for_cleanup(tmp_path, rec, keep=True)
 
     app.cleanup(outcome)
@@ -697,7 +703,7 @@ def test_cleanup_keeps_the_render_dir_when_asked(tmp_path: Path) -> None:
 def test_cleanup_keeps_the_render_dir_on_failure(tmp_path: Path) -> None:
     """Artifacts are the evidence for a failed run."""
     rec = Recorder()
-    app = _app(rec)
+    app = _app(tmp_path, rec)
     _chart(tmp_path, "bad-app")
     outcome = app.run(RunRequest(root=tmp_path, skip_change_detection=True))
     outcome.out_dir.mkdir(parents=True, exist_ok=True)
@@ -713,7 +719,7 @@ def test_cleanup_keeps_the_render_dir_when_debug_is_true(
 ) -> None:
     monkeypatch.setenv("DEBUG", "TRUE")
     rec = Recorder()
-    app = _app(rec)
+    app = _app(tmp_path, rec)
     outcome = _outcome_for_cleanup(tmp_path, rec)
 
     app.cleanup(outcome)
@@ -725,7 +731,7 @@ def test_cleanup_warns_instead_of_raising_when_removal_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rec = Recorder()
-    app = _app(rec)
+    app = _app(tmp_path, rec)
     outcome = _outcome_for_cleanup(tmp_path, rec)
 
     def boom(_path):
@@ -766,7 +772,8 @@ def test_progress_sink_is_started_with_every_row_and_always_stopped(
     sink = SpySink()
 
     ManifestValidationService(
-        runner_factory=rec.factory, progress=sink, run_id_factory=lambda: "RUNID"
+        runner_factory=rec.factory, progress=sink, run_id_factory=lambda: "RUNID",
+        workspace=workspace_for(tmp_path),
     ).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     assert len(sink.started) == 1
@@ -784,7 +791,8 @@ def test_runner_construction_failure_becomes_outcomes_and_progress(
         raise RuntimeError("boom")
 
     app = ManifestValidationService(
-        runner_factory=exploding_factory, progress=sink, run_id_factory=lambda: "RUNID"
+        runner_factory=exploding_factory, progress=sink, run_id_factory=lambda: "RUNID",
+        workspace=workspace_for(tmp_path),
     )
     outcome = app.run(RunRequest(root=tmp_path, skip_change_detection=True))
 
@@ -814,6 +822,7 @@ def test_runner_construction_failure_preserves_disabled_validator_semantics(
     outcome = ManifestValidationService(
         runner_factory=exploding_factory,
         run_id_factory=lambda: "RUNID",
+        workspace=workspace_for(tmp_path),
     ).run(RunRequest(root=tmp_path, skip_change_detection=True))
 
     phases = outcome.result.rows[0].phases
