@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Count the patterns review keeps adding and fail if any rises above the baseline.
+
+Each count is a CODING_STANDARDS.md design default that no lint rule enforces.
+Lower `scripts/drift-baseline.json` when a count drops; never raise it.
+"""
+
+import ast
+import json
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+SRC = REPO / "src" / "chart_manager"
+BASELINE = Path(__file__).with_name("drift-baseline.json")
+
+
+def is_none(node: ast.expr | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def members(cls: ast.ClassDef) -> set[str]:
+    """Names a class defines: methods, annotated attributes and plain assignments."""
+    names = set()
+    for node in cls.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            names.add(node.name)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
+def is_protocol(cls: ast.ClassDef) -> bool:
+    return any(ast.unparse(base).endswith("Protocol") for base in cls.bases)
+
+
+def count() -> dict[str, int]:
+    trees = [ast.parse(path.read_text()) for path in sorted(SRC.rglob("*.py"))]
+    nodes = [node for tree in trees for node in ast.walk(tree)]
+    classes = [node for node in nodes if isinstance(node, ast.ClassDef)]
+    inits = [n for n in nodes if isinstance(n, ast.FunctionDef) and n.name == "__init__"]
+    protocols = [cls for cls in classes if is_protocol(cls)]
+    concrete = [members(cls) for cls in classes if not is_protocol(cls)]
+    return {
+        # Design default 3: a `= None` constructor parameter hides wiring.
+        "init_params_defaulting_to_none": sum(
+            is_none(default)
+            for init in inits
+            for default in init.args.defaults + init.args.kw_defaults
+        ),
+        # Design default 3: `name or Call()`, e.g. `runner or SubprocessRunner()`.
+        "or_default_fallbacks": sum(
+            isinstance(n, ast.BoolOp)
+            and isinstance(n.op, ast.Or)
+            and [type(value) for value in n.values] == [ast.Name, ast.Call]
+            for n in nodes
+        ),
+        # Review question: a Protocol needs a second real implementation.
+        "protocols_with_fewer_than_2_impls": sum(
+            sum(members(proto) <= names for names in concrete) < 2
+            for proto in protocols
+        ),
+        # Design default 6: a nested .ruff.toml replaces the root tables.
+        "nested_ruff_toml": sum(len(list((REPO / d).rglob(".ruff.toml"))) for d in ("src", "tests")),
+    }
+
+
+def main() -> int:
+    baseline = json.loads(BASELINE.read_text())
+    failed = False
+    for name, value in count().items():
+        limit = baseline[name]
+        status = "ok" if value == limit else "ROSE" if value > limit else "dropped"
+        print(f"{name}: {value} (baseline {limit}) {status}")
+        failed |= value > limit
+    if failed:
+        print(f"A count rose above {BASELINE.relative_to(REPO)}; remove the new instance.")
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

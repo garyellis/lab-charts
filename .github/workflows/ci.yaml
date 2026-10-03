@@ -108,6 +108,15 @@ jobs:
       - name: Type check
         run: uv run --extra dev mypy src/chart_manager
 
+      # Dead code. Scope and confidence live in pyproject.toml under [tool.vulture].
+      - name: Dead code
+        run: uv run --extra dev vulture
+
+      # Counts of patterns no lint rule catches; fails if one rises above
+      # scripts/drift-baseline.json.
+      - name: Drift ratchet
+        run: scripts/check-drift
+
   # Keep rendered-chart behavior and security contracts independent from the
   # Python architecture gate. The aggregator prepares each chart's locked
   # dependencies, then runs every chart-owned offline source contract.
