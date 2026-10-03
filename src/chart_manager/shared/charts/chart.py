@@ -5,9 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ClusterTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
+from chart_manager.shared.charts.lifecycle import (
+    LIFECYCLE_FILENAME,
+    load_optional_chart_lifecycle,
+    validate_chart_lifecycle_identity,
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,38 @@ class HelmChart:
     name: str
     path: Path
     metadata: ChartMetadata
+
+
+@dataclass(frozen=True)
+class Chart:
+    """A chart directory: its Helm metadata and its optional lifecycle, names agreeing."""
+
+    name: str
+    path: Path
+    metadata: ChartMetadata
+    lifecycle: ChartLifecycle | None
+
+
+def load_chart(path: Path) -> Chart:
+    """Load the chart in ``path``; directory, Chart.yaml and lifecycle names must agree."""
+    helm = load_helm_chart(path)
+    lifecycle = load_optional_chart_lifecycle(path / LIFECYCLE_FILENAME)
+    if lifecycle is not None:
+        validate_chart_lifecycle_identity(lifecycle, chart_name=helm.name, chart_directory=path)
+    return Chart(name=helm.name, path=path, metadata=helm.metadata, lifecycle=lifecycle)
+
+
+def load_helm_chart(path: Path) -> HelmChart:
+    """Load the Helm metadata in ``path``; its name must match the directory."""
+    chart_yaml = path / "Chart.yaml"
+    if not chart_yaml.exists():
+        raise ChartNotFoundError(f"chart not found: {path.name}")
+    metadata = load_chart_metadata(chart_yaml)
+    if metadata.name != path.name:
+        raise SpecError(
+            f"{chart_yaml} name '{metadata.name}' does not match directory '{path.name}'"
+        )
+    return HelmChart(name=path.name, path=path, metadata=metadata)
 
 
 @dataclass(frozen=True)
@@ -139,16 +176,7 @@ class ChartRepository:
 
     def get(self, name: str) -> HelmChart:
         """Load Helm metadata; no cluster-test configuration is required."""
-        path = self.charts_dir / name
-        chart_yaml_path = path / "Chart.yaml"
-        if not chart_yaml_path.exists():
-            raise ChartNotFoundError(f"chart not found: {name}")
-        metadata = load_chart_metadata(chart_yaml_path)
-        if metadata.name != name:
-            raise SpecError(
-                f"{chart_yaml_path} name '{metadata.name}' does not match directory '{name}'"
-            )
-        return HelmChart(name=name, path=path, metadata=metadata)
+        return load_helm_chart(self.charts_dir / name)
 
 def _required_string(
     data: dict[str, Any],

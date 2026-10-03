@@ -186,6 +186,8 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # business running a command.
 "src/chart_manager/integrations/**/*.py" = ["TID251"]
 "src/chart_manager/services/**/*.py" = ["TID251"]
+# Command packages own their flow and call integrations directly (ADR-0001).
+"src/chart_manager/commands/**/*.py" = ["TID251"]
 "src/chart_manager/composition.py" = ["TID251"]
 
 [tool.ruff.format]

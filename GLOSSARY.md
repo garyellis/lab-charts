@@ -54,6 +54,16 @@ Installing or upgrading one release on a cluster, waiting for the workloads and 
 manifest to be ready, and reporting why it failed if it did not.
 _Avoid_: deploy, install loop
 
+### Validating a chart
+
+**Validation check**:
+Render, schema or policy, run on one chart in one environment by `chart validate`.
+_Avoid_: phase, validator, gate
+
+**Row**:
+One chart in one environment in a validate run, with the result of each validation check.
+_Avoid_: worklist row, target
+
 ### Testing a chart
 
 **Chart test**:
