@@ -31,7 +31,7 @@ from typer.testing import CliRunner, Result
 
 from chart_manager import composition
 from chart_manager.cli import main
-from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
+from chart_manager.shared.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
 from .conftest import cli, write_workspace
 

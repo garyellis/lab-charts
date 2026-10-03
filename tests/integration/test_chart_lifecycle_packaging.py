@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from chart_manager.api.v1alpha1.common import API_VERSION
-from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.shared.charts.lifecycle import LIFECYCLE_FILENAME
 
 pytestmark = pytest.mark.integration
 

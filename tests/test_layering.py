@@ -103,7 +103,7 @@ _FORBIDDEN_ROOTS = ("rich", "typer")
 
 # Chart concepts are domain policy, not generic plumbing.
 # `graph.py` and `spec.py` no longer exist anywhere -- their contents split
-# across `api/v1alpha1/chart_lifecycle.py`, `domain/lifecycle_policy.py` and
+# across `api/v1alpha1/chart_lifecycle.py`, `shared/charts/lifecycle.py` and
 # `manifest_validation/namespaces.py`. They stay on this ban list regardless:
 # it names spellings that may not appear under `plumbing/`, and a future
 # `plumbing/spec.py` would be exactly the violation it always was.
@@ -172,19 +172,11 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
         f"not plumbing: {', '.join(misplaced)}"
     )
 
-    # `lifecycle_policy.py` is here because the capability gate and the profile
-    # lookup were split out of the authored models when they moved to
-    # `api/v1alpha1/chart_lifecycle.py`: shape is a contract; deciding whether a
-    # capability is usable and phrasing the failure is policy. It must not
-    # drift back -- and it must not drift *up* into `services/` either, which
-    # is where `require_validation` and `require_cluster_test` used to sit
-    # while their sibling `require_cluster_test_profile` sat down here.
+    # Chart loading, dependencies and lifecycle policy moved to `shared/charts`
+    # (ADR-0001); the rest leave `domain/` as their command packages are built.
     expected = {
-        "chart_deps.py",
-        "charts.py",
         "cluster_tests.py",
         "install_plan.py",
-        "lifecycle_policy.py",
         "local_resources.py",
     }
     actual = {path.name for path in _DOMAIN.glob("*.py") if path.name != "__init__.py"}
@@ -241,9 +233,9 @@ def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
 def test_domain_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
     paths = sorted(_DOMAIN.rglob("*.py"))
-    assert len(paths) > 5, f"suspiciously few domain modules found: {paths}"
+    assert len(paths) > 3, f"suspiciously few domain modules found: {paths}"
     assert _DOMAIN / "install_plan.py" in paths
-    assert _DOMAIN / "lifecycle_policy.py" in paths
+    assert _DOMAIN / "local_resources.py" in paths
 
 
 #: What `chart_manager.domain` may import, beyond the standard library.
@@ -251,7 +243,7 @@ def test_domain_modules_are_discoverable() -> None:
 #: bounds for `domain/` on the day it is created, the same way the TID251 lift
 #: table in pyproject.toml defaults a new package to "no adapters".
 #:
-#: `chart_manager.settings` is absent (see
+#: `chart_manager.shared.settings` is absent (see
 #: `test_settings_and_domain_do_not_import_each_other`). `pydantic` remains
 #: here because domain owns model loading; byte decoding is centralized in
 #: `plumbing.yaml_files`.
@@ -260,6 +252,8 @@ _DOMAIN_ALLOWED_IMPORTS = frozenset(
         "chart_manager.api",
         "chart_manager.domain",
         "chart_manager.plumbing",
+        "chart_manager.shared.charts",
+        "chart_manager.shared.workspace",
         "pydantic",
     }
 )
@@ -370,14 +364,14 @@ def test_integrations_do_not_import_services() -> None:
 
 def test_settings_and_domain_do_not_import_each_other() -> None:
     """Layout reaches domain/ and integrations/ from RepositoryWorkspace, not Settings."""
-    settings = _PKG / "settings.py"
+    settings = _PKG / "shared" / "settings.py"
     upward = [
         module
         for _, module in _imports_in(settings.read_text(encoding="utf-8"), "settings.py")
         if module.startswith("chart_manager.domain")
     ]
-    downward = _imports_matching(_DOMAIN, ("chart_manager.settings",)) + _imports_matching(
-        _INTEGRATIONS, ("chart_manager.settings",)
+    downward = _imports_matching(_DOMAIN, ("chart_manager.shared.settings",)) + _imports_matching(
+        _INTEGRATIONS, ("chart_manager.shared.settings",)
     )
 
     assert not upward, f"settings.py must not import domain/: {upward}"
@@ -456,7 +450,7 @@ def test_service_modules_are_discoverable() -> None:
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
     assert "chart_manager.services.manifest_validation.app" in modules
-    assert "chart_manager.domain.lifecycle_policy" in modules
+    assert "chart_manager.domain.local_resources" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -798,7 +792,7 @@ _API_FORBIDDEN_IMPORTS = {
     "chart_manager.integrations": "adapters run commands; a contract describes text",
     "chart_manager.cli": "a contract must not know how it is rendered",
     "chart_manager.composition": "wiring adapters is the composition root's job",
-    "chart_manager.settings": "settings are repository state, not authored shape",
+    "chart_manager.shared.settings": "settings are repository state, not authored shape",
     "rich": "a contract must be decodable where there is no terminal",
     "typer": "a contract must be decodable where there is no terminal",
     "yaml": "turning bytes into dicts is the loader's job, in services/",
@@ -1126,10 +1120,10 @@ def test_authored_resource_envelopes_live_under_the_api_package() -> None:
 # --------------------------------------------------------------------------
 
 _API_LEAKS = {
-    "reaching-for-the-loader": "from chart_manager.domain.lifecycle_policy import load",
+    "reaching-for-the-loader": "from chart_manager.shared.charts.lifecycle import load",
     "reaching-for-an-adapter": "from chart_manager.integrations.helm import Helm",
     "reaching-for-the-surface": "import chart_manager.cli.output",
-    "reaching-for-settings": "from chart_manager.settings import Settings",
+    "reaching-for-settings": "from chart_manager.shared.settings import Settings",
     "decoding-its-own-yaml": "import yaml",
     "rendering-its-own-errors": "from rich.console import Console",
     "a-plumbing-module-that-is-not-a-pure-rule": (

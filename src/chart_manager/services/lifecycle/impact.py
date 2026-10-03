@@ -8,10 +8,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.planner import build_worklist
+from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 class ImpactReasonCode(StrEnum):

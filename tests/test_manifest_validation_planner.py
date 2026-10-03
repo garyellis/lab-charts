@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.charts import ChartRepository
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.planner import build_worklist, select_rows
@@ -23,6 +22,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
+from chart_manager.shared.charts.chart import ChartRepository
 from tests.conftest import CHARTS_DIR, POLICIES_DIR, workspace_for
 
 

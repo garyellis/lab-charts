@@ -11,12 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.chart_catalog import ChartCatalogService
+from chart_manager.shared.charts.chart import ChartRepository
 from tests.conftest import CHARTS_DIR, workspace_for
 
 from .conftest import REPO_ROOT, MakeChart, cli

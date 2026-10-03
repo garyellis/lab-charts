@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
-from chart_manager.domain.charts import ChartDependency, ChartRepository
-from chart_manager.domain.lifecycle_policy import (
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.shared.charts.chart import ChartDependency, ChartRepository
+from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,
@@ -14,8 +15,7 @@ from chart_manager.domain.lifecycle_policy import (
     validate_chart_lifecycle_identity,
     validation_status,
 )
-from chart_manager.domain.workspace import RepositoryWorkspace
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 @dataclass(frozen=True)

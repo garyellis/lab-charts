@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.chart_deps import build_helm_dependency_index
+from chart_manager.shared.charts.dependencies import build_helm_dependency_index
 from tests.conftest import CHARTS_DIR
 
 

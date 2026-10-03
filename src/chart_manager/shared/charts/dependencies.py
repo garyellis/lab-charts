@@ -15,13 +15,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from chart_manager.domain.charts import (
+from chart_manager.plumbing.errors import ChartManagerError, SpecError, YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_file, parse_yaml_mapping
+from chart_manager.shared.charts.chart import (
     ChartDependency,
     ChartRepository,
     load_chart_metadata,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError, YamlError
-from chart_manager.plumbing.yaml_files import load_yaml_file, parse_yaml_mapping
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml
 # near the front of an ordinary tar stream, but we scan the complete bounded

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaConfigurationError
 from chart_manager.services.kubeconform_schemas.models import AuthoredSchemaPolicy
 from chart_manager.services.kubeconform_schemas.source import KubeconformSchemaSource
@@ -14,6 +13,7 @@ from chart_manager.services.kubeconform_schemas.sync import (
     KubeconformSchemaSyncResult,
     KubeconformSchemaSyncService,
 )
+from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
 
 class RepositoryKubeconformSchemaService:

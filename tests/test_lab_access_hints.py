@@ -20,11 +20,6 @@ import pytest
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec as _TestSpec
-from chart_manager.domain.charts import (
-    ChartMetadata,
-    ClusterTestChart,
-    HelmChart,
-)
 from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.integrations.kubectl import VirtualService
@@ -37,6 +32,11 @@ from chart_manager.services.clusters.development import (
 )
 from chart_manager.services.clusters.development.drift import kind_config_host_ports
 from chart_manager.services.progress import ProgressEvent
+from chart_manager.shared.charts.chart import (
+    ChartMetadata,
+    ClusterTestChart,
+    HelmChart,
+)
 from tests.conftest import workspace_for
 
 # Re-use the same shape of fakes the existing converge tests use; new

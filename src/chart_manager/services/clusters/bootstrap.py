@@ -21,7 +21,6 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import InstallPlanEntry
-from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -35,6 +34,7 @@ from chart_manager.services.clusters._shared import (
 from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.progress import ProgressCallback, emit, step
+from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
 
 DEFAULT_TIMEOUT = "10m"
 _RUNTIME_FACTS = {

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.services.kubeconform_schemas.errors import (
@@ -22,6 +21,7 @@ from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaStore,
     StoreStatus,
 )
+from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
 _UPDATE = "run chart-manager schemas sync --update"
 _HYDRATE = "run chart-manager schemas sync"

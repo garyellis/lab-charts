@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.semver import SemVer, parse_bare_version
@@ -26,6 +25,7 @@ from chart_manager.services.upgrader.models import (
     UpdateMetadata,
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path, safe_output_path
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: This runs as a Renovate post-upgrade task inside Renovate's own checkout,
 #: where nothing renders narration and the only surviving record of the run is

@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.kubeconform_schemas.errors import (
@@ -41,6 +40,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformConfig,
     KyvernoConfig,
 )
+from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import workspace_for
 
 # --- fixtures ---------------------------------------------------------------

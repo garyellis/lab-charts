@@ -176,7 +176,7 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # settings.py:110. Both are structural, not dead code, so they are exempted
 # by code rather than left as a standing lint backlog.
 "src/chart_manager/services/events/store.py" = ["ARG002"]
-"src/chart_manager/settings.py" = ["ARG003"]
+"src/chart_manager/shared/settings.py" = ["ARG003"]
 # TID251 lift: the layers that are *supposed* to reach for adapters.
 # integrations/ is the adapter layer itself; services/ owns the ports that
 # wrap adapters; composition.py is the composition root, by definition the

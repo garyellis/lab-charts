@@ -29,10 +29,10 @@ from typer.testing import CliRunner, Result
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspaceSpec
 from chart_manager.cli._container import reset_invocation
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]

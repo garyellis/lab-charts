@@ -42,8 +42,6 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from chart_manager.domain import chart_deps
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
@@ -99,6 +97,8 @@ from chart_manager.services.manifest_validation.validators import (
     validate_registry,
 )
 from chart_manager.services.manifest_validation.wire import to_json
+from chart_manager.shared.charts import dependencies as chart_deps
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 # Re-exports, so a surface needs one import for "drive the validate
 # capability": `ALL_PHASES` and the request/result vocabulary are defined in

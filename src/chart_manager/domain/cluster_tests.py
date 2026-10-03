@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.domain.charts import (
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.shared.charts.chart import (
     ChartRepository,
     ClusterTestChart,
 )
-from chart_manager.domain.lifecycle_policy import (
+from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,
@@ -17,7 +18,6 @@ from chart_manager.domain.lifecycle_policy import (
     require_cluster_test_profile,
     validate_chart_lifecycle_identity,
 )
-from chart_manager.plumbing.errors import SpecError
 
 
 class ClusterTestCatalog:
