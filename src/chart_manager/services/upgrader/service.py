@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.semver import parse_bare_version
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
@@ -18,7 +19,6 @@ from chart_manager.services.upgrader.models import (
 )
 from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.services.upgrader.telemetry import UpgradeTelemetry
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 _LOG = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class UpgradeService:
         repository: str | None = None,
         base: str | None = None,
         telemetry: UpgradeTelemetry | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
+        workspace: RepositoryWorkspace,
     ) -> None:
         self._renovate = renovate
         self._request_factory = request_factory
@@ -79,7 +79,7 @@ class UpgradeService:
         # configured events backend, and the ad-hoc callers (tests, a bare
         # UpgradeService) should not need one to work.
         self._telemetry = telemetry
-        self._charts_dir = charts_dir
+        self._charts_dir = workspace.charts_dir
 
     def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
         plan = build_upgrade_plan(
@@ -327,7 +327,7 @@ def build_upgrade_plan(
     root: Path,
     chart_path: Path,
     *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
+    charts_dir: Path,
 ) -> UpgradePlan:
     """Build deterministic chart identity, branch, group and callback overlay."""
     repo_root, resolved, chart = resolve_chart_path(

@@ -28,6 +28,7 @@ from chart_manager.services.clusters.development import (
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.expose import ExposeStatus
 from chart_manager.services.progress import ProgressEvent
+from tests.conftest import workspace_for
 
 
 class _Helm:
@@ -178,7 +179,7 @@ def _service(
     client_factory: Any | None = None,
 ) -> DevelopmentClusterService:
     return DevelopmentClusterService(
-        root,
+        workspace=workspace_for(root),
         helm=helm or _Helm(),  # type: ignore[arg-type]
         kind=kind or _Kind(),  # type: ignore[arg-type]
         kubectl=kubectl or _Kubectl(),  # type: ignore[arg-type]

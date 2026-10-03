@@ -17,7 +17,6 @@ from chart_manager.domain.lifecycle_policy import (
 )
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.models import ManifestValidationTarget
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 @dataclass(frozen=True)
@@ -49,7 +48,7 @@ def load_manifest_validation_target(
     root: Path,
     name: str,
     *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
+    charts_dir: Path,
 ) -> ManifestValidationTarget:
     """Strictly load one explicitly requested manifest-validation target."""
     chart = ChartRepository(root, charts_dir=charts_dir).get(name)
@@ -72,7 +71,7 @@ def load_chart_specs(
     root: Path,
     charts: Iterable[str],
     *,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
+    charts_dir: Path,
 ) -> list[CatalogEntry]:
     """Compose Helm metadata and validation specs without aborting a full scan."""
     repository = ChartRepository(root, charts_dir=charts_dir)
@@ -121,7 +120,7 @@ def build_catalog(
     root: Path,
     *,
     chart_names: Iterable[str] | None = None,
-    charts_dir: Path = DEFAULT_CHARTS_DIR,
+    charts_dir: Path,
 ) -> ValidationCatalog:
     """Load selected charts, or discover the repository when none are selected.
 

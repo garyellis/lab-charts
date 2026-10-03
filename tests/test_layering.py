@@ -256,10 +256,10 @@ def test_domain_modules_are_discoverable() -> None:
 #: bounds for `domain/` on the day it is created, the same way the TID251 lift
 #: table in pyproject.toml defaults a new package to "no adapters".
 #:
-#: `chart_manager.settings` is on the list and `api/` is denied it, and the
-#: asymmetry is the point: a contract must describe what a YAML file may say
-#: without knowing which repository it was found in, while resolving
-#: `charts/<name>/Chart.yaml` is most of what domain does. `pydantic` remains
+#: `chart_manager.settings` is deliberately absent: repository layout reaches
+#: domain as parameters taken from `RepositoryWorkspace`, never as process
+#: configuration, and `settings` itself may not import `domain/` (see
+#: `test_settings_and_domain_do_not_import_each_other`). `pydantic` remains
 #: here because domain owns model loading; byte decoding is centralized in
 #: `plumbing.yaml_files`.
 _DOMAIN_ALLOWED_IMPORTS = frozenset(
@@ -267,7 +267,6 @@ _DOMAIN_ALLOWED_IMPORTS = frozenset(
         "chart_manager.api",
         "chart_manager.domain",
         "chart_manager.plumbing",
-        "chart_manager.settings",
         "pydantic",
     }
 )
@@ -337,8 +336,8 @@ def test_domain_imports_only_api_plumbing_and_the_standard_library() -> None:
             offenders.append(f"{label}:{lineno}: {module}")
 
     assert not offenders, (
-        "domain/ sits below services/ and may import only api/, plumbing/, "
-        "settings and the standard library:\n  "
+        "domain/ sits below services/ and may import only api/, plumbing/ "
+        "and the standard library:\n  "
         + "\n  ".join(offenders)
         + "\n\nTake what the algorithm needs as a parameter instead -- "
         "DependencyResolver's ClusterTestLoader callable is the pattern."
@@ -373,6 +372,94 @@ def test_integrations_do_not_import_services() -> None:
         "integrations/ is the adapter layer and must not import services/:\n  "
         + "\n  ".join(offenders)
         + "\n\nPass what the adapter needs in from the composition root instead."
+    )
+
+
+def _settings_imports(source: str, label: str, package: str = "") -> list[int]:
+    """Lines in `source` that import `chart_manager.settings`, in any spelling.
+
+    `_imports_in` records `from chart_manager import settings` as plain
+    `chart_manager`, so this also checks the imported names.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            parts = package.split(".") if package else []
+            base = ".".join(parts[: len(parts) - node.level + 1]) if node.level else ""
+            module = ".".join(part for part in (base, node.module) if part)
+            names = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        if any(
+            name == "chart_manager.settings" or name.startswith("chart_manager.settings.")
+            for name in names
+        ):
+            lines.append(node.lineno)
+    return lines
+
+
+def _settings_importers(directory: Path) -> list[str]:
+    """Every `chart_manager.settings` import under `directory`, as `file:line`."""
+    offenders: list[str] = []
+    for path in sorted(directory.rglob("*.py")):
+        label = str(path.relative_to(_SRC))
+        offenders.extend(
+            f"{label}:{lineno}"
+            for lineno in _settings_imports(
+                path.read_text(encoding="utf-8"), label, _package_of(path)
+            )
+        )
+    return offenders
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from chart_manager.settings import Settings",
+        "from chart_manager import settings",
+        "import chart_manager.settings",
+        "from ... import settings",
+        "def f():\n    from chart_manager.settings import Settings",
+    ],
+)
+def test_the_settings_import_rule_fires_on_each_spelling(source: str) -> None:
+    assert _settings_imports(source, "probe.py", "chart_manager.integrations.sub")
+
+
+def test_the_settings_import_rule_stays_quiet_on_lookalikes() -> None:
+    source = "from chart_manager import settings_like\nimport chart_manager.settingsx"
+    assert not _settings_imports(source, "probe.py", "chart_manager.integrations")
+
+
+def test_settings_and_domain_do_not_import_each_other() -> None:
+    """Process configuration and repository layout meet only in the composition root.
+
+    `settings.py` once imported `domain.workspace` to compile the workspace,
+    while four `domain/` modules imported `settings` for their default chart
+    directory -- a cycle that worked only because of import order. Layout now
+    reaches `domain/` and `integrations/` as parameters from
+    `RepositoryWorkspace`, which `chart_manager.composition.Container` loads;
+    `settings` carries process configuration and knows nothing of `domain/`.
+    """
+    settings = _PKG / "settings.py"
+    label = str(settings.relative_to(_SRC))
+    upward = [
+        f"{label}:{lineno}: {module}"
+        for lineno, module in _imports_in(
+            settings.read_text(encoding="utf-8"), label, _package_of(settings)
+        )
+        if module == "chart_manager.domain" or module.startswith("chart_manager.domain.")
+    ]
+    downward = _settings_importers(_DOMAIN) + _settings_importers(_INTEGRATIONS)
+
+    assert not upward, "settings.py must not import domain/:\n  " + "\n  ".join(upward)
+    assert not downward, (
+        "domain/ and integrations/ must not import chart_manager.settings:\n  "
+        + "\n  ".join(downward)
+        + "\n\nTake the layout value as a parameter; the composition root reads it "
+        "from RepositoryWorkspace."
     )
 
 

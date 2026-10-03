@@ -18,7 +18,6 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpact,
     LifecycleImpactService,
 )
-from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG
 
 
 @dataclass(frozen=True)
@@ -94,40 +93,25 @@ def _select_cluster_tests(
 class CiService:
     """CI pipeline verbs for a single chart against an already-provisioned cluster."""
 
-    def __init__(
-        self,
-        root: Path | None = None,
-        *,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
-        local_config: Path = DEFAULT_LOCAL_CONFIG,
-        workspace: RepositoryWorkspace | None = None,
-    ) -> None:
-        """Wire repository/git against `root`.
+    def __init__(self, *, workspace: RepositoryWorkspace) -> None:
+        """Wire repository/git against the workspace root.
 
-        `Git` is constructed inline: it is addressed by `root`, which this
-        service already owns.
+        `Git` is constructed inline: it is addressed by the workspace root,
+        which this service already owns.
         """
-        if workspace is None:
-            if root is None:
-                raise TypeError("root or workspace is required")
-            workspace = RepositoryWorkspace(
-                root=root.resolve(), charts_dir=charts_dir, local_cluster=local_config
-            )
         self.workspace = workspace
         self.root = workspace.root
         self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
         self.charts = ChartRepository(self.root, charts_dir=workspace.charts_dir)
-        self.impact = LifecycleImpactService(
-            self.root,
-            workspace=workspace,
-        )
-        self.git = Git(self.root, charts_dir=workspace.charts_dir)
+        self.impact = LifecycleImpactService(workspace=workspace)
+        self.git = Git(self.root)
 
     def directly_changed_charts(self, changed_files: Path) -> list[str]:
         """Select chart owners from an explicit newline-delimited file list.
 
         This is deliberately a lexical projection: publishing must not inherit
         lifecycle capability, dependency fanout, Renovate, or Git policy.
+        Paths must be relative to the workspace root, not the git top level.
         """
         try:
             paths = changed_files.read_text(encoding="utf-8").splitlines()
@@ -138,7 +122,7 @@ class CiService:
             name
             for raw in paths
             if raw.strip()
-            if (name := self.charts.layout.chart_name_from_repo_path(raw.strip()))
+            if (name := self.workspace.chart_name_from_repo_path(raw.strip()))
             is not None
             if name in current_charts
         }

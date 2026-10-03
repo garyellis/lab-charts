@@ -1,0 +1,24 @@
+# Layer contract for `chart_manager.integrations`, enforced where ruff can see it.
+#
+# Adapters are handed resolved inputs: a repository root, a runner, a context.
+# They never read process configuration themselves, so `chart_manager.settings`
+# is banned here -- what an adapter needs is passed in by
+# `chart_manager.composition.Container`.
+#
+# Mechanics mirror `domain/.ruff.toml`: `extend` inherits the root config, and
+# a nested `banned-api` table REPLACES the root one. That replacement is
+# deliberate here: the root table bans `chart_manager.integrations`, which this
+# package imports from itself. The root config also lifts TID251 for
+# `integrations/**` through per-file-ignores, which would silence the ban
+# below, so this file resets per-file-ignores; none of the other root entries
+# match a file under this directory. Also checked structurally in
+# tests/test_layering.py, which does not depend on ruff's config discovery.
+extend = "../../../pyproject.toml"
+
+[lint.per-file-ignores]
+
+[lint.flake8-tidy-imports.banned-api]
+"chart_manager.settings".msg = """not importable from chart_manager.integrations. \
+Adapters take resolved values as parameters; build them in \
+`chart_manager.composition.Container`, which reads Settings and the \
+RepositoryWorkspace."""

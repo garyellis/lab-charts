@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.domain.charts import ChartDependency, ChartRepository
@@ -15,8 +14,8 @@ from chart_manager.domain.lifecycle_policy import (
     validate_chart_lifecycle_identity,
     validation_status,
 )
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 
 @dataclass(frozen=True)
@@ -37,9 +36,9 @@ class ChartCatalogEntry:
 class ChartCatalogService:
     """Inspect Helm charts and their optional lifecycle intent."""
 
-    def __init__(self, root: Path, *, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
-        """Build the Helm repository from the chart repo root."""
-        self.repository = ChartRepository(root, charts_dir=charts_dir)
+    def __init__(self, *, workspace: RepositoryWorkspace) -> None:
+        """Build the Helm repository from the workspace's chart root."""
+        self.repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
 
     def list_entries(self) -> list[ChartCatalogEntry]:
         """Return every chart, retaining malformed metadata/intent diagnostics."""

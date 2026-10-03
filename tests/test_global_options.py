@@ -26,6 +26,7 @@ import pytest
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager import composition
 from chart_manager.cli import main
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
@@ -90,9 +91,49 @@ def test_non_repository_command_never_discovers_a_workspace(
     def fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("version must not load repository state")
 
-    monkeypatch.setattr(Settings, "repository_workspace", fail)
+    monkeypatch.setattr(composition, "load_repository_workspace", fail)
 
     assert cli("version").exit_code == 0
+
+
+def test_a_repository_command_loads_the_workspace_once_per_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One Container per invocation, so workspace.yaml is parsed once.
+
+    `chart list` asks for the workspace twice -- once to discover the root,
+    once to build the catalog. Each `container()` call used to build a fresh
+    Container, and with it a fresh workspace memo, so the file was read twice.
+    """
+    root = _repo_with_chart(tmp_path, "zeta")
+    marker = root / ".chart-manager" / "workspace.yaml"
+    marker.parent.mkdir()
+    marker.write_text(
+        "apiVersion: chartmanager.io/v1alpha1\n"
+        "kind: ChartWorkspace\n"
+        "metadata: {name: example}\n"
+        "spec:\n"
+        "  chartsDir: charts\n"
+        "  localCluster: .chart-manager/local-cluster.yaml\n"
+        "  renderDir: .chart-manager/rendered\n"
+        "  policiesDir: policies\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    loaded: list[Path] = []
+    real = composition.load_repository_workspace
+
+    def counting(path: Path, **kwargs):  # type: ignore[no-untyped-def]
+        loaded.append(path)
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(composition, "load_repository_workspace", counting)
+
+    result = _charts("chart", "list")
+
+    assert result.exit_code == 0, result.output
+    assert "zeta" in result.stdout
+    assert loaded == [root.resolve()]
 
 
 def test_config_file_beats_the_default(

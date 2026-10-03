@@ -31,7 +31,7 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 
-from .conftest import cli
+from .conftest import REPO_ROOT, cli, workspace_for
 
 
 def _emit(source, **options) -> None:
@@ -44,7 +44,9 @@ def _emit(source, **options) -> None:
     """
     validate_cli._emit_result(
         source,
-        app=ManifestValidationService(on_warn=validate_cli._warn),
+        app=ManifestValidationService(
+            on_warn=validate_cli._warn, workspace=workspace_for(REPO_ROOT)
+        ),
         **options,
     )
 
@@ -465,7 +467,9 @@ class _FakeApp:
 
     def write_summaries(self, source, **options) -> str:
         """Delegate to the real writer: the ordering assertions read the files."""
-        return ManifestValidationService().write_summaries(source, **options)
+        return ManifestValidationService(workspace=workspace_for(REPO_ROOT)).write_summaries(
+            source, **options
+        )
 
     def cleanup(self, outcome: RunOutcome) -> None:
         self.cleanups.append(outcome)

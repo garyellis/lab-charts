@@ -13,8 +13,8 @@ from chart_manager.integrations.git import Git
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.services.upgrader.paths import resolve_chart_path
-from chart_manager.settings import DEFAULT_LOCAL_CONFIG, RepositoryLayout, Settings
-from tests.conftest import FakeCommandRunner
+from chart_manager.settings import Settings
+from tests.conftest import LOCAL_CONFIG, FakeCommandRunner, workspace_for
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
 
@@ -74,7 +74,7 @@ def test_local_resource_file_has_default_and_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CHART_MANAGER_LOCAL_CONFIG", raising=False)
-    assert Settings().local_config == DEFAULT_LOCAL_CONFIG
+    assert Settings().local_config == LOCAL_CONFIG
 
     monkeypatch.setenv("CHART_MANAGER_LOCAL_CONFIG", "ops/local-dev.yaml")
     assert Settings().local_config == Path("ops/local-dev.yaml")
@@ -98,12 +98,12 @@ def test_settings_rejects_unsafe_local_config_paths(value: Path) -> None:
         Settings(local_config=value)
 
 
-def test_repository_layout_parses_nested_chart_prefix(tmp_path: Path) -> None:
-    layout = RepositoryLayout(root=tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
+def test_workspace_parses_nested_chart_prefix(tmp_path: Path) -> None:
+    workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
 
-    assert layout.chart_name_from_repo_path("deploy/helm/loki/values.yaml") == "loki"
-    assert layout.chart_name_from_repo_path("charts/loki/values.yaml") is None
-    assert layout.repo_chart_path("loki", "values.yaml") == Path(
+    assert workspace.chart_name_from_repo_path("deploy/helm/loki/values.yaml") == "loki"
+    assert workspace.chart_name_from_repo_path("charts/loki/values.yaml") is None
+    assert workspace.repo_chart_path("loki", "values.yaml") == Path(
         "deploy/helm/loki/values.yaml"
     )
 
@@ -120,6 +120,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     dashboard.parent.mkdir(parents=True)
     dashboard.write_text("{}", encoding="utf-8")
 
+    workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
     repository = ChartRepository(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
     assert repository.list_names() == ["demo"]
     assert repository.get("demo").path == chart
@@ -132,9 +133,8 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
             stdout="deploy/helm/demo/values.yaml\ncharts/ignored/values.yaml\n",
         )
     )
-    assert Git(
-        tmp_path, runner=runner, charts_dir=CUSTOM_CHARTS_DIR
-    ).changed_charts() == ["demo"]
+    changed = Git(tmp_path, runner=runner).changed_files()
+    assert {workspace.chart_name_from_repo_path(path) for path in changed} - {None} == {"demo"}
 
     _, resolved, _ = resolve_chart_path(
         tmp_path,
@@ -142,9 +142,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
         charts_dir=CUSTOM_CHARTS_DIR,
     )
     assert resolved == chart.resolve()
-    assert discover_dashboards(
-        tmp_path, charts_dir=CUSTOM_CHARTS_DIR
-    ) == [dashboard]
+    assert discover_dashboards(workspace=workspace) == [dashboard]
 
 
 def test_manifest_planner_classifies_changes_under_custom_root(tmp_path: Path) -> None:
@@ -170,9 +168,8 @@ spec:
     (chart / "values.yaml").write_text("", encoding="utf-8")
 
     result = build_worklist(
-        root=tmp_path,
+        workspace=workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR),
         changed_files=["deploy/helm/demo/values.yaml"],
-        charts_dir=CUSTOM_CHARTS_DIR,
     )
 
     assert [(row.chart, row.env) for row in result.rows] == [("demo", "dev")]
@@ -198,7 +195,7 @@ def test_an_injected_settings_reaches_the_services_the_cli_used_to_build(
     assert [entry.name for entry in catalog] == ["demo"]
 
     impact = container.impact_service(tmp_path)
-    assert impact.layout.charts_dir == CUSTOM_CHARTS_DIR
+    assert impact.workspace.charts_dir == CUSTOM_CHARTS_DIR
 
     resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()

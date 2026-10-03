@@ -33,6 +33,7 @@ from chart_manager.services.manifest_validation.validators import (
     ValidatorInvocation,
     validate_registry,
 )
+from tests.conftest import CHARTS_DIR, REPO_ROOT, workspace_for
 
 
 class _HelmStub:
@@ -80,7 +81,8 @@ def test_runner_factory_injects_dependency_predicates(
     monkeypatch.setattr(manifest_app, "Helm", _CapturingHelm)
     service = ManifestValidationService(
         validator_providers=(),
-        command_runner=object(),  # type: ignore[arg-type]
+        command_runner=object(),  # type: ignore[arg-type],
+        workspace=workspace_for(REPO_ROOT),
     )
     runner = service._build_runner(
         RunnerSpec(output_root=tmp_path / "out", validator_ids=frozenset())
@@ -174,7 +176,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
         "        namespace: default\n"
         "        values: [values.yaml]\n"
     )
-    target = load_manifest_validation_target(tmp_path, "demo")
+    target = load_manifest_validation_target(tmp_path, "demo", charts_dir=CHARTS_DIR)
     compiled = resolve_manifest_validation(
         target,
         tmp_path,
@@ -184,7 +186,8 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     config = row_config_for(compiled, row)
     service = ManifestValidationService(
         validator_providers=(provider,),
-        command_runner=object(),  # type: ignore[arg-type]
+        command_runner=object(),  # type: ignore[arg-type],
+        workspace=workspace_for(REPO_ROOT),
     )
     runner = service._build_runner(
         RunnerSpec(
@@ -215,7 +218,8 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     )
     service = ManifestValidationService(
         validator_providers=providers,
-        command_runner=object(),  # type: ignore[arg-type]
+        command_runner=object(),  # type: ignore[arg-type],
+        workspace=workspace_for(REPO_ROOT),
     )
     runner = service._build_runner(
         RunnerSpec(

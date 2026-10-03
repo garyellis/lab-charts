@@ -27,12 +27,18 @@ import typer
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager.cli._container import reset_invocation
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: The conventional layout, for domain loaders that take it explicitly.
+CHARTS_DIR = Path("charts")
+LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 
 MakeChart = Callable[..., Path]
 
@@ -95,6 +101,31 @@ def hermetic_logging() -> Iterator[None]:
     finally:
         root.handlers = handlers
         root.setLevel(level)
+
+
+@pytest.fixture(autouse=True)
+def fresh_cli_invocation() -> Iterator[None]:
+    """Drop the CLI's per-invocation `Container` when a test ends.
+
+    `cli/_container.py` keeps the current invocation's container in module
+    state. Each `cli()` call replaces it, but a test that drives a helper
+    directly after another test's invocation must not inherit that one's
+    settings or workspace memo.
+    """
+    try:
+        yield
+    finally:
+        reset_invocation()
+
+
+def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
+    """A `RepositoryWorkspace` over ``root`` without reading workspace.yaml.
+
+    Services take a required workspace. Tests that do not exercise loading
+    build one here instead of each spelling the constructor; ``fields``
+    override the layout (``charts_dir=Path("deploy/helm")``, ...).
+    """
+    return RepositoryWorkspace(root=root.resolve(), **fields)
 
 
 @pytest.fixture
@@ -345,13 +376,18 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
         tokens.append(token)
         index += 1
     env = {"CHART_MANAGER_ROOT": root_override} if root_override is not None else None
-    return CliRunner().invoke(
-        _root_app(),
-        resolve_argv(tokens),
-        input=input,
-        catch_exceptions=catch_exceptions,
-        env=env,
-    )
+    try:
+        return CliRunner().invoke(
+            _root_app(),
+            resolve_argv(tokens),
+            input=input,
+            catch_exceptions=catch_exceptions,
+            env=env,
+        )
+    finally:
+        # The invocation's Container outlives `invoke`; drop it so a helper
+        # the test calls next builds its own instead of reusing this one's.
+        reset_invocation()
 
 
 # --- the command-runner seam -------------------------------------------------

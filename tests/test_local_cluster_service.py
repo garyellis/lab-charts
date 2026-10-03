@@ -25,6 +25,7 @@ from chart_manager.services.clusters.ephemeral import (
 from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.lifecycle.plan_projection import RequiredLifecycleProjection
 from chart_manager.services.progress import ProgressEvent
+from tests.conftest import workspace_for
 
 
 class _Kind:
@@ -128,7 +129,7 @@ def _service(
     if configure:
         _local_cluster(tmp_path)
     return EphemeralTestClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
         kubectl=_Kubectl(),  # type: ignore[arg-type]

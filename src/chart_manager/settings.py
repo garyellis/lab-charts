@@ -1,14 +1,16 @@
-"""Process configuration and repository layout.
+"""Process configuration.
 
-The managed Helm chart directory is repository layout, not chart-domain data.
-It is loaded once at a composition boundary and passed to services so chart
-discovery, changed-file classification, lifecycle planning, and upgrades all
-agree on the same location.
+Repository layout is answered by `chart_manager.domain.workspace.
+RepositoryWorkspace`, which `chart_manager.composition.Container` loads once
+per root and hands to every service. This module deliberately imports nothing
+from `domain/`: `domain/` sits below the composition root, and a `settings`
+that reached into it while domain modules read their defaults from here was
+an import cycle.
 """
 
 from __future__ import annotations
 
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
@@ -19,17 +21,15 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from chart_manager.domain.workspace import (
-    LEGACY_CHARTS_DIR,
-    LEGACY_LOCAL_CLUSTER,
-    RepositoryWorkspace,
-    load_repository_workspace,
-    resolve_repository_root,
-)
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
-DEFAULT_CHARTS_DIR = LEGACY_CHARTS_DIR
-DEFAULT_LOCAL_CONFIG = LEGACY_LOCAL_CLUSTER
+#: Defaults for the legacy layout fields, used only when a repository has no
+#: `.chart-manager/workspace.yaml`. Spelled out here rather than imported from
+#: `domain.workspace` (whose `LEGACY_*` constants carry the same values) so this
+#: module stays free of `domain/`; `tests/test_workspace.py` pins the two
+#: spellings together. Both go when the legacy fallback does.
+_LEGACY_CHARTS_DIR = Path("charts")
+_LEGACY_LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 DEFAULT_CONFIG_FILE = Path(".chart-manager/config.yaml")
 DEFAULT_ROOT = Path(".")
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -74,13 +74,8 @@ def _validate_repository_dir(value: Path, *, field: str) -> Path:
     return Path(*parts)
 
 
-def validate_charts_dir(value: Path) -> Path:
-    """Validate the managed chart directory."""
-    return _validate_repository_dir(value, field="charts_dir")
-
-
 class Settings(BaseSettings):
-    """Process-level adapter and repository-layout configuration."""
+    """Process-level adapter configuration plus the legacy layout fallback."""
 
     model_config = SettingsConfigDict(
         env_prefix="CHART_MANAGER_",
@@ -92,8 +87,9 @@ class Settings(BaseSettings):
     docker_host: str | None = None
     command_timeout: float | None = None
     event_source: str = "chart-manager"
-    charts_dir: Path = DEFAULT_CHARTS_DIR
-    local_config: Path = DEFAULT_LOCAL_CONFIG
+    #: Legacy layout, read only when the repository has no workspace.yaml.
+    charts_dir: Path = _LEGACY_CHARTS_DIR
+    local_config: Path = _LEGACY_LOCAL_CONFIG
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
     #: The repository this invocation operates on.
@@ -139,7 +135,7 @@ class Settings(BaseSettings):
     @field_validator("charts_dir")
     @classmethod
     def _validate_charts_directory(cls, value: Path) -> Path:
-        return validate_charts_dir(value)
+        return _validate_repository_dir(value, field="charts_dir")
 
     @field_validator("local_config")
     @classmethod
@@ -156,74 +152,13 @@ class Settings(BaseSettings):
     def _normalize_log_format(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
 
-    def layout(self, root: Path) -> RepositoryLayout:
-        """Bind this process configuration to one repository root."""
-        return RepositoryLayout(root=root, charts_dir=self.charts_dir)
-
-    def repository_workspace(
-        self,
-        root: Path | None = None,
-        *,
-        start: Path | None = None,
-    ) -> RepositoryWorkspace:
-        """Discover and compile one checkout-invariant repository policy."""
-        configured_root = root
-        if configured_root is None and "root" in self.model_fields_set:
-            configured_root = self.root
-        resolved_root = resolve_repository_root(configured=configured_root, start=start)
-        explicit_legacy = bool(
-            {"charts_dir", "local_config"}.intersection(self.model_fields_set)
-        )
-        return load_repository_workspace(
-            resolved_root,
-            legacy_charts_dir=self.charts_dir,
-            legacy_local_cluster=self.local_config,
-            legacy_layout_explicit=explicit_legacy,
-        )
-
-
-class RepositoryLayout:
-    """Resolved repository root plus the configured managed-chart prefix."""
-
-    def __init__(self, *, root: Path, charts_dir: Path = DEFAULT_CHARTS_DIR) -> None:
-        self.root = root.resolve()
-        self.charts_dir = (
-            Path(".") if Path(charts_dir) == Path(".") else validate_charts_dir(charts_dir)
-        )
-
-    @property
-    def charts_root(self) -> Path:
-        """Absolute directory containing managed chart directories."""
-        return self.root if self.charts_dir == Path(".") else self.root / self.charts_dir
-
-    def chart_path(self, name: str) -> Path:
-        """Absolute path for one managed chart name."""
-        return self.charts_root / name
-
-    def chart_name_from_repo_path(self, path: PurePath | str) -> str | None:
-        """Return the managed chart name owning a repository-relative path."""
-        parts = PurePath(path).parts
-        prefix = () if self.charts_dir == Path(".") else self.charts_dir.parts
-        if len(parts) <= len(prefix) or parts[: len(prefix)] != prefix:
-            return None
-        return parts[len(prefix)]
-
-    def repo_chart_path(self, name: str, *children: str) -> Path:
-        """Repository-relative path beneath one managed chart."""
-        return self.charts_dir / name / Path(*children)
-
 
 __all__ = [
-    "DEFAULT_CHARTS_DIR",
     "DEFAULT_CONFIG_FILE",
-    "DEFAULT_LOCAL_CONFIG",
     "DEFAULT_ROOT",
     "LogFormat",
     "LogLevel",
-    "RepositoryLayout",
-    "RepositoryWorkspace",
     "Settings",
     "config_file",
     "set_config_file",
-    "validate_charts_dir",
 ]

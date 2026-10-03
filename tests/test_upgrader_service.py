@@ -13,6 +13,7 @@ from chart_manager.services.upgrader import (
     build_upgrade_plan,
 )
 from chart_manager.services.upgrader.wire import upgrade_to_dict
+from tests.conftest import CHARTS_DIR, workspace_for
 
 
 def _chart(tmp_path: Path) -> Path:
@@ -26,8 +27,8 @@ def _chart(tmp_path: Path) -> Path:
 
 def test_plan_has_deterministic_branch_group_and_scoped_overlay(tmp_path: Path) -> None:
     chart = _chart(tmp_path)
-    first = build_upgrade_plan(tmp_path, chart)
-    second = build_upgrade_plan(tmp_path, Path("my-chart"))
+    first = build_upgrade_plan(tmp_path, chart, charts_dir=CHARTS_DIR)
+    second = build_upgrade_plan(tmp_path, Path("my-chart"), charts_dir=CHARTS_DIR)
     assert first.branch_prefix == second.branch_prefix == "renovate/my-chart/"
     assert first.group == second.group == "chart-manager:my-chart"
     assert first.runtime_overlay["packageRules"][0]["matchFileNames"] == ["charts/my-chart/**"]
@@ -54,7 +55,7 @@ def test_plan_rejects_a_wrapper_version_that_is_not_strict_x_y_z(
     chart = _chart(tmp_path)
     (chart / "Chart.yaml").write_text(f"name: my-chart\nversion: {version}\n", encoding="utf-8")
     with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
-        build_upgrade_plan(tmp_path, chart)
+        build_upgrade_plan(tmp_path, chart, charts_dir=CHARTS_DIR)
 
 
 def test_service_uses_injected_adapter_and_factory(tmp_path: Path) -> None:
@@ -69,7 +70,7 @@ def test_service_uses_injected_adapter_and_factory(tmp_path: Path) -> None:
     def factory(plan: object, *, dry_run: bool) -> object:
         return (plan, dry_run)
 
-    result = UpgradeService(Adapter(), factory).upgrade(
+    result = UpgradeService(Adapter(), factory, workspace=workspace_for(tmp_path)).upgrade(
         UpgradeRequest(root=tmp_path, chart_path=chart, dry_run=True)
     )
     assert calls
@@ -106,6 +107,7 @@ def test_service_projects_new_and_existing_pull_request_status(tmp_path: Path) -
         pull_request_lookup=lambda prefix: next(responses),
         repository="owner/repository",
         base="main",
+        workspace=workspace_for(tmp_path),
     )
 
     opened = service.upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
@@ -141,6 +143,7 @@ def test_proposed_version_is_read_back_from_the_upgrade_branch(tmp_path: Path) -
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=read,
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version == "0.4.3"
@@ -163,6 +166,7 @@ def test_unbumped_wrapper_version_on_the_branch_is_reported(tmp_path: Path) -> N
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=lambda path, ref: "name: my-chart\nversion: 0.4.2\n",
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version == "0.4.2"
@@ -180,6 +184,7 @@ def test_unreadable_branch_file_degrades_to_a_diagnostic(tmp_path: Path) -> None
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=unavailable,
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version is None
@@ -199,6 +204,7 @@ def test_no_branch_read_without_a_pull_request(tmp_path: Path) -> None:
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (),
         branch_file_reader=unexpected,
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "no_changes"
@@ -225,6 +231,7 @@ def test_service_rejects_renovate_errors_logged_with_zero_exit(tmp_path: Path) -
             Adapter(),
             lambda plan, *, dry_run: plan,
             pull_request_lookup=lambda prefix: (),
+            workspace=workspace_for(tmp_path),
         ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
 
@@ -243,6 +250,7 @@ def test_service_preserves_renovate_warning_headlines(tmp_path: Path) -> None:
         Adapter(),
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.diagnostics[0] == "WARN: Package lookup failed"
@@ -265,6 +273,7 @@ def test_service_reports_drift_when_a_chart_holds_more_than_one_branch(
         Adapter(),
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: found,
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "pr_updated"
@@ -287,6 +296,7 @@ def test_service_does_not_report_no_changes_when_pr_status_is_unavailable(
         Adapter(),
         lambda plan, *, dry_run: plan,
         pull_request_lookup=unavailable,
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "status_unknown"
@@ -311,6 +321,7 @@ def test_service_rejects_relevant_uncommitted_inputs_before_renovate(tmp_path: P
             Adapter(),
             lambda plan, *, dry_run: plan,
             relevant_changes=lambda paths: ("charts/my-chart/values.yaml",),
+            workspace=workspace_for(tmp_path),
         ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert called is False
@@ -356,6 +367,7 @@ def test_service_emits_the_version_it_read_back_from_the_branch(tmp_path: Path) 
         branch_file_reader=lambda path, ref: "name: my-chart\nversion: 0.4.3\n",
         repository="owner/repository",
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version == "0.4.3"
@@ -386,6 +398,7 @@ def test_service_emits_nothing_when_the_version_read_failed(tmp_path: Path) -> N
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=unavailable,
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "pr_updated"
@@ -401,6 +414,7 @@ def test_dry_run_emits_nothing(tmp_path: Path) -> None:
         _Ok(),
         lambda plan, *, dry_run: plan,
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart, dry_run=True))
 
     assert events.events == []
@@ -417,6 +431,7 @@ def test_a_failed_emission_does_not_fail_the_upgrade(tmp_path: Path) -> None:
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=lambda path, ref: "name: my-chart\nversion: 0.4.3\n",
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version == "0.4.3"
@@ -431,6 +446,7 @@ def test_service_without_telemetry_still_upgrades(tmp_path: Path) -> None:
         lambda plan, *, dry_run: plan,
         pull_request_lookup=lambda prefix: (_pr(),),
         branch_file_reader=lambda path, ref: "name: my-chart\nversion: 0.4.3\n",
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.proposed_version == "0.4.3"
@@ -458,6 +474,7 @@ def test_rerun_against_an_unchanged_pull_request_emits_nothing(tmp_path: Path) -
         branch_file_reader=read,
         repository="owner/repository",
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "pr_updated"
@@ -484,6 +501,7 @@ def test_rerun_that_retargets_the_version_still_emits(tmp_path: Path) -> None:
         ),
         repository="owner/repository",
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "pr_updated"
@@ -508,6 +526,7 @@ def test_no_pre_read_when_no_pull_request_is_open(tmp_path: Path) -> None:
         ),
         repository="owner/repository",
         telemetry=_telemetry(events),
+        workspace=workspace_for(tmp_path),
     ).upgrade(UpgradeRequest(root=tmp_path, chart_path=chart))
 
     assert result.outcome == "pr_open"

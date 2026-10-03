@@ -37,6 +37,7 @@ from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import schemas as schemas_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
+from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
 from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import (
@@ -166,8 +167,10 @@ def global_options(
     """
     # Order matters: the config file must be located before anything reads
     # Settings, because Settings is where the config file's values enter.
+    # This builds the invocation's one Container, so every command below
+    # reuses these Settings and its workspace memo.
     set_config_file(config)
-    settings = Settings()
+    settings = start_invocation().settings
 
     # NO_COLOR is a convention, not a value: the spec says any non-empty
     # value disables color.
@@ -323,6 +326,9 @@ def main() -> None:
     errors are `OSError` too), which is design §6.1's environment error, 5.
     """
     try:
+        # Bootstrap logging before argv is parsed, so `--config` is not known
+        # yet. The invocation's own Settings come from its Container, built
+        # by the root callback.
         settings = Settings()
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()

@@ -44,6 +44,7 @@ class RepositoryWorkspace:
 
     @property
     def charts_root(self) -> Path:
+        """Absolute directory containing managed chart directories."""
         return self.root if self.charts_dir == Path(".") else self.root / self.charts_dir
 
     @property
@@ -59,13 +60,16 @@ class RepositoryWorkspace:
         return self.root / self.policies_dir
 
     def chart_path(self, name: str) -> Path:
+        """Absolute path for one managed chart name."""
         return self.charts_root / name
 
     def repo_chart_path(self, name: str, *children: str) -> Path:
+        """Repository-relative path beneath one managed chart."""
         base = Path(name) if self.charts_dir == Path(".") else self.charts_dir / name
         return base / Path(*children)
 
     def chart_name_from_repo_path(self, path: PurePath | str) -> str | None:
+        """Return the managed chart name owning a repository-relative path."""
         parts = PurePath(path).parts
         prefix = () if self.charts_dir == Path(".") else self.charts_dir.parts
         if len(parts) <= len(prefix) or parts[: len(prefix)] != prefix:

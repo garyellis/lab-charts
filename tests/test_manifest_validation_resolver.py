@@ -19,6 +19,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformRuntimeInputs,
     KyvernoConfig,
 )
+from tests.conftest import CHARTS_DIR
 
 
 def _kubeconform_config(
@@ -58,7 +59,7 @@ def _target(
         f"        values: [{values}]\n"
         f"{textwrap.indent(extra, '    ') if extra else ''}"
     )
-    return load_manifest_validation_target(root, "alpha")
+    return load_manifest_validation_target(root, "alpha", charts_dir=CHARTS_DIR)
 
 
 def test_missing_required_value_fails_with_environment_and_authored_path(

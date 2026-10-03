@@ -37,6 +37,7 @@ from chart_manager.services.clusters.development import (
 )
 from chart_manager.services.clusters.development.drift import kind_config_host_ports
 from chart_manager.services.progress import ProgressEvent
+from tests.conftest import workspace_for
 
 # Re-use the same shape of fakes the existing converge tests use; new
 # behaviour gets new attributes (e.g. VS host list, port mapping set) and
@@ -178,7 +179,7 @@ def _service(
     progress: _Recorder | None = None,
 ) -> DevelopmentClusterService:
     return DevelopmentClusterService(
-        tmp_path,
+        workspace=workspace_for(tmp_path),
         helm=helm,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
         kubectl=kubectl,  # type: ignore[arg-type]

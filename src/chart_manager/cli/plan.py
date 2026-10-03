@@ -180,7 +180,10 @@ def plan(
         Path | None,
         typer.Option(
             "--changed-files",
-            help="Path to a newline-delimited changed-file list.",
+            help=(
+                "Path to a newline-delimited changed-file list; paths are relative to "
+                "the workspace root."
+            ),
         ),
     ] = None,
     changed_file: Annotated[

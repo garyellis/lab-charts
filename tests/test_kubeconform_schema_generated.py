@@ -20,6 +20,7 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
+from tests.conftest import CHARTS_DIR
 
 from .schema_fixtures import workspace
 from .test_kubeconform_schema_inventory_crd import _crd
@@ -405,7 +406,7 @@ def test_dependency_preparation_retains_failure_classification(env, monkeypatch,
     monkeypatch.setattr(app, "Helm", FakeHelm)
     service = app.ManifestValidationService(workspace=workspace(env.root))
     with pytest.raises(KubeconformSchemaRenderError) as caught:
-        service.prepare_schema_dependencies(build_catalog(env.root).targets)
+        service.prepare_schema_dependencies(build_catalog(env.root, charts_dir=CHARTS_DIR).targets)
     assert caught.value.outcome is expected
 
 

@@ -12,7 +12,6 @@ from chart_manager.domain.lifecycle_policy import require_cluster_test_profile
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.services.manifest_validation.planner import build_worklist
-from chart_manager.settings import DEFAULT_CHARTS_DIR, DEFAULT_LOCAL_CONFIG, RepositoryLayout
 
 
 class ImpactReasonCode(StrEnum):
@@ -70,30 +69,10 @@ class LifecycleImpact:
 class LifecycleImpactService:
     """Derive both lifecycle worklists from an explicit changed-file list."""
 
-    def __init__(
-        self,
-        root: Path | None = None,
-        *,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
-        local_config: Path = DEFAULT_LOCAL_CONFIG,
-        workspace: RepositoryWorkspace | None = None,
-    ) -> None:
-        if workspace is None:
-            if root is None:
-                raise TypeError("root or workspace is required")
-            workspace = RepositoryWorkspace(
-                root=root.resolve(), charts_dir=charts_dir, local_cluster=local_config
-            )
+    def __init__(self, *, workspace: RepositoryWorkspace) -> None:
         self.workspace = workspace
-        self.layout = RepositoryLayout(
-            root=self.workspace.root,
-            charts_dir=self.workspace.charts_dir,
-        )
-        self.root = self.layout.root
-        self.local_config = self.workspace.local_cluster
-        self.cluster_catalog = ClusterTestCatalog(
-            self.root, charts_dir=self.workspace.charts_dir
-        )
+        self.root = workspace.root
+        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -106,7 +85,6 @@ class LifecycleImpactService:
         validation_reasons: dict[tuple[str, str], list[ImpactReason]] = {}
         for changed_file in changes:
             single = build_worklist(
-                root=self.root,
                 changed_files=[changed_file.as_posix()],
                 workspace=self.workspace,
             )
@@ -118,13 +96,11 @@ class LifecycleImpactService:
                     _validation_reason(
                         changed_file,
                         selected_chart=row.chart,
-                        layout=self.layout,
                         workspace=self.workspace,
                     ),
                 )
 
         combined = build_worklist(
-            root=self.root,
             changed_files=[path.as_posix() for path in changes],
             workspace=self.workspace,
         )
@@ -194,7 +170,7 @@ class LifecycleImpactService:
 
         enabled_set = set(enabled)
         for path in changes:
-            changed_chart = self.layout.chart_name_from_repo_path(path)
+            changed_chart = self.workspace.chart_name_from_repo_path(path)
             if changed_chart is None:
                 continue
             if changed_chart not in enabled_set:
@@ -255,7 +231,6 @@ def _validation_reason(
     changed_file: Path,
     *,
     selected_chart: str,
-    layout: RepositoryLayout,
     workspace: RepositoryWorkspace,
 ) -> ImpactReason:
     """Classify the existing validation worklist rule that selected a row."""
@@ -273,7 +248,7 @@ def _validation_reason(
             changed_file,
             "validation implementation changes validate every configured environment",
         )
-    changed_chart = layout.chart_name_from_repo_path(changed_file)
+    changed_chart = workspace.chart_name_from_repo_path(changed_file)
     if changed_chart is not None and changed_chart != selected_chart:
         return ImpactReason(
             ImpactReasonCode.HELM_DEPENDENT,

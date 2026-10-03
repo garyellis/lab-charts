@@ -11,13 +11,13 @@ from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.domain.charts import ChartRepository
+from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.semver import SemVer, parse_semver
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import BuildPhase
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.settings import DEFAULT_CHARTS_DIR
 
 #: Pushes cannot be rolled back, so this channel exists to answer "which
 #: artifacts actually reached the registry?" for a batch that half-succeeded.
@@ -92,13 +92,12 @@ class PublishService:
 
     def __init__(
         self,
-        root: Path,
         *,
+        workspace: RepositoryWorkspace,
         helm: Helm,
         events: EventWriter | None = None,
-        charts_dir: Path = DEFAULT_CHARTS_DIR,
     ) -> None:
-        self.repository = ChartRepository(root, charts_dir=charts_dir)
+        self.repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
         self.helm = helm
         self.events = events
 
