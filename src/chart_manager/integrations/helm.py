@@ -10,7 +10,7 @@ from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from weakref import WeakKeyDictionary
 
 from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
@@ -438,32 +438,6 @@ class Helm:
                 return info.revision
         return None
 
-    def upgrade(
-        self,
-        release: str,
-        chart_ref: str | Path,
-        *,
-        namespace: str,
-        values: list[Path] | None = None,
-        timeout: str = "10m",
-        wait: bool = True,
-    ) -> None:
-        """Run a plain `helm upgrade` (no --install, no outcome classification)."""
-        args = [
-            self._helm_bin,
-            "upgrade",
-            release,
-            str(chart_ref),
-            "--namespace",
-            namespace,
-            "--timeout",
-            timeout,
-        ]
-        if wait:
-            args.append("--wait")
-        args.extend(_values_args(values or []))
-        self.runner.run(self._with_context(args), capture=not self.verbose, timeout=self.timeout)
-
     def template(
         self,
         release: str,
@@ -616,49 +590,6 @@ class Helm:
                 )
             )
         return releases
-
-    def get_values(self, release: str, *, namespace: str) -> dict[str, Any]:
-        """Return the user-supplied values for a release as a dict.
-
-        Runs `helm get values <release> -n <ns> -o json`. Returns an empty
-        dict for releases that were installed with no overrides (helm
-        emits `null`). Raises ExternalCommandError on subprocess failure
-        (release missing, kubeconfig unset) so callers can decide whether
-        to swallow or surface the error -- we deliberately do NOT collapse
-        "release missing" into an empty dict, since that distinction
-        matters for drift detection.
-        """
-        result = self.runner.run(
-            self._with_context([
-                self._helm_bin,
-                "get",
-                "values",
-                release,
-                "-n",
-                namespace,
-                "-o",
-                "json",
-            ]),
-            capture=True,
-            timeout=self.timeout,
-        )
-        raw = result.stdout.strip()
-        if not raw:
-            return {}
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ExternalCommandError(
-                f"helm get values returned non-JSON output: {exc}\n{raw[:200]}"
-            ) from exc
-        if payload is None:
-            return {}
-        if not isinstance(payload, dict):
-            raise ExternalCommandError(
-                f"helm get values returned non-object JSON for {release}: "
-                f"{type(payload).__name__}"
-            )
-        return payload
 
     def status(self, release: str, *, namespace: str) -> CommandResult:
         """Return the inspectable `helm status` result; never raise for its exit code."""

@@ -128,9 +128,6 @@ class _Helm:
     ) -> list[ReleaseInfo]:
         return []
 
-    def get_values(self, _release: str, *, namespace: str) -> dict[str, Any]:
-        return {}
-
     def dependency_update_if_stale(self, _path: Path) -> bool:
         return False
 
