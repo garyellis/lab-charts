@@ -104,6 +104,20 @@ composition boundary compiles one `RepositoryWorkspace` per invocation for
 chart discovery, local resources, validation policy and render locations, CI
 impact, publishing, upgrades/finalization, and Grafana discovery.
 
+`RepositoryWorkspace` is the resolved root, `metadata.name`, and the validated
+`ChartWorkspaceSpec` kept whole; it does not copy spec fields. Callers read
+layout through its properties (`charts_dir`, `charts_root`, `render_root`,
+`validation`, the fanout helpers, ...), never through `.spec`. The loader adds
+the filesystem checks the spec's lexical validators cannot make: no layout
+path may resolve outside the root, and `renderDir` may hold no symlink
+component. Every explicit chart target (`chart test <chart>`, single-chart
+`chart validate <chart>`) re-points the workspace at that chart's parent
+directory with `workspace.with_charts_dir(path)` -- usually `chartsDir`
+itself, but not necessarily -- which re-validates the spec and re-applies
+those checks, failing with a one-line error naming the chart directory. `tests/test_layering.py`
+holds construction to the loader, `with_charts_dir`, and the test fixture, and
+flags `.spec` reads on a workspace.
+
 `version`, `event`, `helmrelease`, `grafana dashboard export`, and
 `grafana dashboard lint --path` never ask for the workspace. `doctor` asks
 through `Container.find_workspace()`, which performs the same resolution but

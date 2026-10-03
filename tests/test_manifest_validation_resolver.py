@@ -19,7 +19,7 @@ from chart_manager.services.manifest_validation.validators import (
     KubeconformRuntimeInputs,
     KyvernoConfig,
 )
-from tests.conftest import CHARTS_DIR
+from tests.conftest import CHARTS_DIR, POLICIES_DIR
 
 
 def _kubeconform_config(
@@ -68,7 +68,7 @@ def test_missing_required_value_fails_with_environment_and_authored_path(
     target = _target(tmp_path)
 
     with pytest.raises(SpecError) as caught:
-        resolve_manifest_validation(target, tmp_path)
+        resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     message = str(caught.value)
     assert "environment 'dev'" in message
@@ -82,7 +82,7 @@ def test_required_value_must_be_a_regular_file(tmp_path: Path) -> None:
     (target.path / "values.yaml").mkdir()
 
     with pytest.raises(SpecError, match="is not a regular file"):
-        resolve_manifest_validation(target, tmp_path)
+        resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
 
 def test_required_value_must_resolve_beneath_chart(
@@ -94,7 +94,7 @@ def test_required_value_must_resolve_beneath_chart(
     (target.path / "values.yaml").symlink_to(outside)
 
     with pytest.raises(SpecError, match="escapes its base directory"):
-        resolve_manifest_validation(target, tmp_path)
+        resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
 
 def test_missing_extra_policy_is_omitted_with_warning(tmp_path: Path) -> None:
@@ -104,7 +104,7 @@ def test_missing_extra_policy_is_omitted_with_warning(tmp_path: Path) -> None:
     )
     (target.path / "values.yaml").write_text("{}\n")
 
-    compiled = resolve_manifest_validation(target, tmp_path)
+    compiled = resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     assert _kyverno_config(compiled).policy_paths == ()
     assert len(compiled.warnings) == 1
@@ -119,7 +119,7 @@ def test_validator_toggles_compile_into_per_row_execution_policy(tmp_path: Path)
     )
     (target.path / "values.yaml").write_text("{}\n")
 
-    compiled = resolve_manifest_validation(target, tmp_path)
+    compiled = resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     assert [
         (invocation.validator_id, invocation.category.value, invocation.enabled)
@@ -146,7 +146,7 @@ def test_disabled_validators_do_not_resolve_unused_runtime_inputs(
     )
     (target.path / "values.yaml").write_text("{}\n")
 
-    compiled = resolve_manifest_validation(target, tmp_path)
+    compiled = resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     assert not any(invocation.enabled for invocation in compiled.validator_invocations)
     assert _kubeconform_config(compiled).schema_locations == ()
@@ -162,7 +162,7 @@ def test_extra_policy_must_be_a_directory(tmp_path: Path) -> None:
     (target.path / "values.yaml").write_text("{}\n")
     (target.path / "policy.yaml").write_text("apiVersion: kyverno.io/v1\n")
 
-    compiled = resolve_manifest_validation(target, tmp_path)
+    compiled = resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     assert _kyverno_config(compiled).policy_paths == ()
     assert len(compiled.warnings) == 1
@@ -177,7 +177,7 @@ def test_missing_local_schema_location_fails_early(tmp_path: Path) -> None:
     (target.path / "values.yaml").write_text("{}\n")
 
     with pytest.raises(SpecError) as caught:
-        resolve_manifest_validation(target, tmp_path)
+        resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     message = str(caught.value)
     assert "local schema location 'schemas/{{.ResourceKind}}.json'" in message
@@ -195,7 +195,7 @@ def test_local_schema_template_requires_existing_base_directory(
     (target.path / "values.yaml").write_text("{}\n")
 
     with pytest.raises(SpecError, match="missing template base directory"):
-        resolve_manifest_validation(target, tmp_path)
+        resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
 
 def test_schema_locations_absolutize_local_templates(
@@ -212,7 +212,7 @@ def test_schema_locations_absolutize_local_templates(
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
-    compiled = resolve_manifest_validation(target, tmp_path)
+    compiled = resolve_manifest_validation(target, tmp_path, policies_dir=POLICIES_DIR)
 
     assert _kubeconform_config(compiled).schema_locations == (
         str((tmp_path / "schemas" / "{{.ResourceKind}}.json").resolve()),
@@ -240,7 +240,9 @@ def test_managed_runtime_preserves_generated_local_upstream_precedence(
         ),
     )
 
-    compiled = resolve_manifest_validation(target, tmp_path, kubeconform=runtime)
+    compiled = resolve_manifest_validation(
+        target, tmp_path, policies_dir=POLICIES_DIR, kubeconform=runtime
+    )
     config = _kubeconform_config(compiled)
 
     assert config.kubernetes_version == "1.35.3"
@@ -267,4 +269,4 @@ def test_local_schema_location_must_resolve_beneath_repository(
     (root / "schemas").symlink_to(outside)
 
     with pytest.raises(SpecError, match="escapes its base directory"):
-        resolve_manifest_validation(target, root)
+        resolve_manifest_validation(target, root, policies_dir=POLICIES_DIR)

@@ -1,4 +1,11 @@
-"""Load and compile the fixed repository ``ChartWorkspace`` resource."""
+"""Load the fixed repository ``ChartWorkspace`` resource into a `RepositoryWorkspace`.
+
+The loader keeps the validated ``ChartWorkspaceSpec`` whole and adds what the
+file cannot say: the resolved checkout root and the filesystem checks
+(root escape, ``renderDir`` symlinks) that the spec's lexical validators
+cannot make. `RepositoryWorkspace` then answers every layout question --
+paths, chart names, fanout patterns -- through properties over that spec.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +16,11 @@ from pathlib import Path, PurePath
 
 from pydantic import ValidationError
 
-from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, WorkspaceValidation
+from chart_manager.api.v1alpha1.chart_workspace import (
+    ChartWorkspace,
+    ChartWorkspaceSpec,
+    WorkspaceValidation,
+)
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
@@ -20,18 +31,72 @@ SCHEMA_LOCK_FILE = Path(".chart-manager/schemas.lock.yaml")
 
 @dataclass(frozen=True)
 class RepositoryWorkspace:
-    """One compiled, immutable interpretation of a repository checkout."""
+    """One compiled, immutable interpretation of a repository checkout.
+
+    Wraps the validated ``ChartWorkspaceSpec`` rather than copying its
+    fields, so the authored file stays the single source of layout truth.
+    Callers read layout through the properties below, never through
+    ``.spec`` (``tests/test_layering.py`` enforces it). Every nested spec
+    model is frozen and holds tuples, so equality and hashing are by value.
+
+    Constructed only by `load_repository_workspace` and `with_charts_dir`,
+    which both apply the root-escape checks a bare constructor cannot.
+    """
 
     root: Path
     name: str
-    charts_dir: Path
-    local_cluster: Path
-    render_dir: Path
-    policies_dir: Path
-    validation: WorkspaceValidation | None = None
-    validation_fanout: tuple[str, ...] = ()
-    cluster_test_fanout: tuple[str, ...] = ()
-    shared_prerequisites: tuple[str, ...] = ()
+    spec: ChartWorkspaceSpec
+
+    @property
+    def charts_dir(self) -> Path:
+        return self.spec.charts_dir
+
+    @property
+    def local_cluster(self) -> Path:
+        return self.spec.local_cluster
+
+    @property
+    def render_dir(self) -> Path:
+        return self.spec.render_dir
+
+    @property
+    def policies_dir(self) -> Path:
+        return self.spec.policies_dir
+
+    @property
+    def validation(self) -> WorkspaceValidation | None:
+        return self.spec.validation
+
+    @property
+    def validation_fanout(self) -> tuple[str, ...]:
+        return self.spec.fanout.validation
+
+    @property
+    def cluster_test_fanout(self) -> tuple[str, ...]:
+        return self.spec.fanout.cluster_test
+
+    @property
+    def shared_prerequisites(self) -> tuple[str, ...]:
+        return self.spec.cluster_test.shared_prerequisites
+
+    def with_charts_dir(self, path: Path) -> RepositoryWorkspace:
+        """Return this workspace with ``chartsDir`` re-pointed at ``path``.
+
+        For an explicit chart target (`chart test <chart>`, single-chart
+        `chart validate <chart>`), whose parent directory may or may not be
+        the authored ``chartsDir``. The new spec is re-validated and the
+        root-escape checks re-applied, exactly as if ``path`` had been
+        authored; a failure is a one-line `SpecError` naming the directory.
+        """
+        label = f"chart directory {path}"
+        try:
+            spec = ChartWorkspaceSpec.model_validate(
+                {**self.spec.model_dump(by_alias=True), "chartsDir": path}
+            )
+        except ValidationError as exc:
+            raise SpecError(f"invalid {label}: {_charts_dir_error(exc)}") from exc
+        _check_layout(self.root, spec, charts_dir_label=label)
+        return RepositoryWorkspace(root=self.root, name=self.name, spec=spec)
 
     @property
     def marker(self) -> Path:
@@ -204,36 +269,60 @@ def load_repository_workspace(root: Path) -> RepositoryWorkspace:
         resource = ChartWorkspace.model_validate(document)
     except (YamlError, ValidationError, ValueError) as exc:
         raise SpecError(f"invalid ChartWorkspace {marker}: {exc}") from exc
-    spec = resource.spec
+    _check_layout(resolved_root, resource.spec)
+    return RepositoryWorkspace(
+        root=resolved_root,
+        name=resource.metadata.name,
+        spec=resource.spec,
+    )
+
+
+def _check_layout(
+    root: Path,
+    spec: ChartWorkspaceSpec,
+    *,
+    charts_dir_label: str | None = None,
+) -> None:
+    """Reject layout paths that leave ``root`` once symlinks are resolved.
+
+    The spec validators judge each path only as spelled; this is the
+    filesystem half. ``renderDir`` is also refused any symlink component.
+    Shared by the loader and `RepositoryWorkspace.with_charts_dir`, which
+    passes ``charts_dir_label`` so a failure names the chart directory the
+    operator targeted rather than a workspace.yaml field they never wrote.
+    """
     for field, relative in (
         ("spec.chartsDir", spec.charts_dir),
         ("spec.localCluster", spec.local_cluster),
         ("spec.renderDir", spec.render_dir),
         ("spec.policiesDir", spec.policies_dir),
     ):
-        resolved = (resolved_root / relative).resolve()
-        if not resolved.is_relative_to(resolved_root):
+        resolved = (root / relative).resolve()
+        if not resolved.is_relative_to(root):
+            if field == "spec.chartsDir" and charts_dir_label is not None:
+                raise SpecError(f"{charts_dir_label} resolves outside repository root {root}")
             raise SpecError(f"{field} resolves outside repository root: {relative}")
         if field == "spec.renderDir":
-            current = resolved_root
+            current = root
             for part in relative.parts:
                 current /= part
                 if current.is_symlink():
                     raise SpecError(
                         f"spec.renderDir must not contain symlink components: {relative}"
                     )
-    return RepositoryWorkspace(
-        root=resolved_root,
-        name=resource.metadata.name,
-        charts_dir=spec.charts_dir,
-        local_cluster=spec.local_cluster,
-        render_dir=spec.render_dir,
-        policies_dir=spec.policies_dir,
-        validation=spec.validation,
-        validation_fanout=tuple(spec.fanout.validation),
-        cluster_test_fanout=tuple(spec.fanout.cluster_test),
-        shared_prerequisites=tuple(spec.cluster_test.shared_prerequisites),
-    )
+
+
+def _charts_dir_error(exc: ValidationError) -> str:
+    """One line from a ``chartsDir`` validation failure, minus pydantic framing.
+
+    The field validators raise ``"spec.chartsDir must be ..."``; pydantic
+    wraps that as ``"Value error, spec.chartsDir must be ..."``. Only the
+    predicate is kept, since the caller names the directory itself.
+    """
+    errors = exc.errors()
+    error = next((e for e in errors if e["loc"][:1] == ("chartsDir",)), errors[0])
+    message = str(error["msg"]).removeprefix("Value error, ")
+    return message.removeprefix("spec.chartsDir ")
 
 
 __all__ = [

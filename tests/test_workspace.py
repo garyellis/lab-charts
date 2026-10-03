@@ -26,7 +26,7 @@ from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.settings import Settings, load_settings
 
-from .conftest import cli, workspace_for
+from .conftest import RENDER_DIR, cli, workspace_for, write_workspace
 
 
 def _document(**spec: object) -> dict[str, object]:
@@ -493,7 +493,7 @@ def test_fanout_rejects_unsafe_or_unsupported_patterns(pattern: str) -> None:
     ],
 )
 def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
-    workspace = workspace_for(Path("/repo"), validation_fanout=(pattern,))
+    workspace = workspace_for(Path("/repo"), fanout={"validation": [pattern]})
 
     assert workspace.matches_validation_fanout(path) is expected
 
@@ -515,7 +515,7 @@ spec:
 """,
         encoding="utf-8",
     )
-    workspace = workspace_for(tmp_path, shared_prerequisites=("base",))
+    workspace = workspace_for(tmp_path, clusterTest={"sharedPrerequisites": ["base"]})
 
     assert workspace.matches_validation_fanout("policies/rule.yaml")
     assert workspace.matches_validation_fanout(WORKSPACE_FILE)
@@ -533,13 +533,13 @@ def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
     link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        RenderOutputService(tmp_path)
+        RenderOutputService(tmp_path, render_dir=RENDER_DIR)
 
 
 def test_render_cleanup_rechecks_symlinks_created_after_construction(
     tmp_path: Path,
 ) -> None:
-    service = RenderOutputService(tmp_path)
+    service = RenderOutputService(tmp_path, render_dir=RENDER_DIR)
     outside = tmp_path.parent / f"{tmp_path.name}-late-outside"
     outside.mkdir()
     marker = tmp_path / ".chart-manager"
@@ -601,3 +601,140 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     workspace = workspace_for(tmp_path, charts_dir=Path("."))
     assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
     assert discover_dashboards(workspace=workspace) == [dashboard]
+
+
+# --- the wrapped spec: escape checks, with_charts_dir, equality --------------
+
+
+def test_loader_rejects_a_layout_path_escaping_through_a_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (tmp_path / "outside").mkdir()
+    root.mkdir()
+    (root / "charts").symlink_to(tmp_path / "outside", target_is_directory=True)
+    write_workspace(root)
+
+    with pytest.raises(SpecError, match=r"spec\.chartsDir resolves outside repository root"):
+        load_repository_workspace(root)
+
+
+def test_loader_rejects_a_render_dir_with_a_symlink_component(tmp_path: Path) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
+    write_workspace(tmp_path, renderDir="linked/rendered")
+
+    with pytest.raises(SpecError, match=r"spec\.renderDir must not contain symlink components"):
+        load_repository_workspace(tmp_path)
+
+
+@pytest.mark.parametrize("path", [Path("/abs/charts"), Path("../charts"), Path("a/../b")])
+def test_with_charts_dir_rejects_paths_the_spec_would_reject(
+    tmp_path: Path, path: Path
+) -> None:
+    write_workspace(tmp_path)
+    workspace = load_repository_workspace(tmp_path)
+
+    with pytest.raises(SpecError) as raised:
+        workspace.with_charts_dir(path)
+
+    # One line naming the targeted directory, not a pydantic dump naming a
+    # workspace.yaml field the operator never wrote.
+    assert str(raised.value) == (
+        f"invalid chart directory {path}: must be a repository-relative path "
+        "without empty, '.' or '..' segments"
+    )
+
+
+def test_with_charts_dir_rejects_a_path_escaping_through_a_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (tmp_path / "outside").mkdir()
+    root.mkdir()
+    (root / "vendor").symlink_to(tmp_path / "outside", target_is_directory=True)
+    write_workspace(root)
+    workspace = load_repository_workspace(root)
+
+    with pytest.raises(SpecError) as raised:
+        workspace.with_charts_dir(Path("vendor"))
+
+    assert str(raised.value) == (
+        f"chart directory vendor resolves outside repository root {root.resolve()}"
+    )
+
+
+def test_with_charts_dir_reports_other_layout_paths_as_workspace_fields(
+    tmp_path: Path,
+) -> None:
+    """Only the re-pointed chart directory is described as the operator's target."""
+    write_workspace(tmp_path)
+    workspace = load_repository_workspace(tmp_path)
+    (tmp_path / "real").mkdir()
+    (tmp_path / ".chart-manager" / "rendered").symlink_to(
+        tmp_path / "real", target_is_directory=True
+    )
+
+    with pytest.raises(
+        SpecError, match=r"^spec\.renderDir must not contain symlink components"
+    ):
+        workspace.with_charts_dir(Path("vendor"))
+
+
+def test_with_charts_dir_accepts_the_root_itself(tmp_path: Path) -> None:
+    write_workspace(tmp_path)
+    workspace = load_repository_workspace(tmp_path).with_charts_dir(Path("."))
+
+    assert workspace.charts_dir == Path(".")
+    assert workspace.charts_root == workspace.root
+    assert workspace.chart_path("alpha") == workspace.root / "alpha"
+
+
+def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> None:
+    write_workspace(
+        tmp_path,
+        fanout={"validation": ["tooling/**"]},
+        clusterTest={"sharedPrerequisites": ["base"]},
+    )
+    original = load_repository_workspace(tmp_path)
+    workspace = original.with_charts_dir(Path("vendor/helm"))
+
+    assert workspace.charts_dir == Path("vendor/helm")
+    assert workspace.chart_path("alpha") == tmp_path.resolve() / "vendor/helm/alpha"
+    assert workspace.repo_chart_path("alpha", "values.yaml") == Path(
+        "vendor/helm/alpha/values.yaml"
+    )
+    assert workspace.chart_name_from_repo_path("vendor/helm/alpha/Chart.yaml") == "alpha"
+    assert (workspace.root, workspace.name) == (original.root, original.name)
+    assert workspace.validation_fanout == original.validation_fanout
+    assert workspace.shared_prerequisites == original.shared_prerequisites
+    assert workspace.render_dir == original.render_dir
+    assert original.charts_dir == Path("charts")
+
+
+def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
+    write_workspace(
+        tmp_path,
+        validation={
+            "kubernetesVersion": "1.35.3",
+            "schemas": {
+                "generateFromCRDs": True,
+                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+            },
+        },
+        fanout={"validation": ["tooling/**"], "clusterTest": ["kind/**"]},
+    )
+    first = load_repository_workspace(tmp_path)
+    second = load_repository_workspace(tmp_path)
+
+    assert first is not second
+    assert first == second
+    assert hash(first) == hash(second)
+    same_dir = first.with_charts_dir(first.charts_dir)
+    assert same_dir == first
+    assert hash(same_dir) == hash(first)
+    assert first.with_charts_dir(Path("other")) != first
+
+
+def test_workspace_fixtures_refuse_the_camel_case_charts_dir(tmp_path: Path) -> None:
+    """`charts_dir=` is the one spelling; `chartsDir=` would be silently dropped."""
+    with pytest.raises(TypeError, match="charts_dir="):
+        workspace_for(tmp_path, chartsDir="deploy")
+    with pytest.raises(TypeError, match="charts_dir="):
+        write_workspace(tmp_path, chartsDir="deploy")

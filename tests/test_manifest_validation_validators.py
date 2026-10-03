@@ -33,7 +33,7 @@ from chart_manager.services.manifest_validation.validators import (
     ValidatorInvocation,
     validate_registry,
 )
-from tests.conftest import CHARTS_DIR, REPO_ROOT, workspace_for
+from tests.conftest import CHARTS_DIR, POLICIES_DIR, REPO_ROOT, workspace_for
 
 
 class _HelmStub:
@@ -180,6 +180,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     compiled = resolve_manifest_validation(
         target,
         tmp_path,
+        policies_dir=POLICIES_DIR,
         providers=(provider,),
     )
     row = _row()
@@ -214,6 +215,7 @@ def test_third_validator_uses_shared_runner_without_orchestrator_branch(
     compiled = resolve_manifest_validation(
         target,
         tmp_path,
+        policies_dir=POLICIES_DIR,
         providers=providers,
     )
     service = ManifestValidationService(

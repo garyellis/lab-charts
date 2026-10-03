@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.kubeconform.repository_snapshot import RepositorySnapshot
 from chart_manager.plumbing.commands import SubprocessRunner
@@ -47,15 +46,13 @@ def workspace(root: Path) -> RepositoryWorkspace:
     return workspace_for(
         root,
         name="lab",
-        validation=WorkspaceValidation.model_validate(
-            {
-                "kubernetesVersion": "1.35.3",
-                "schemas": {
-                    "generateFromCRDs": True,
-                    "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
-                },
-            }
-        ),
+        validation={
+            "kubernetesVersion": "1.35.3",
+            "schemas": {
+                "generateFromCRDs": True,
+                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+            },
+        },
     )
 
 

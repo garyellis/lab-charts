@@ -78,6 +78,13 @@ One more invariant -- versioned wire contracts live in `services/*/wire.py`,
 never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
 because it is about dict literals rather than imports and so is invisible to
 both TID251 and the scans here.
+
+  (g) `RepositoryWorkspace` is the only answer to layout questions. It is
+      constructed only where its spec is validated and checked against the
+      checkout (`load_repository_workspace`, `with_charts_dir`, and the test
+      fixture), and callers read layout through its properties rather than
+      through the `ChartWorkspaceSpec` it wraps. Both are calls and attribute
+      reads, not imports, so neither is visible to TID251. Under "(g)" below.
 """
 
 from __future__ import annotations
@@ -1319,3 +1326,259 @@ def test_the_raise_rule_fires_on_each_synthetic_leak() -> None:
     missed = [name for name, source in _RAISE_LEAKS.items() if not _raise_offenders(source, name)]
     assert not missed, f"the raise rule silently allows: {missed}"
     assert not _raise_offenders('raise ValueError("release.chart must be non-empty")', "ok")
+
+
+# --------------------------------------------------------------------------
+# (g) RepositoryWorkspace is the only answer to layout questions
+# --------------------------------------------------------------------------
+
+_REPO = _SRC.parent
+_TESTS = Path(__file__).resolve().parent
+
+#: `path::function` scopes allowed to call `RepositoryWorkspace(...)`.
+#:
+#: The loader and `with_charts_dir` are the two places that apply the
+#: root-escape and `renderDir` symlink checks; a bare constructor applies
+#: neither. `workspace_for` is the test fixture, which validates the spec but
+#: deliberately skips the filesystem checks so a test needs no real tree.
+_WORKSPACE_CONSTRUCTORS = frozenset(
+    {
+        "src/chart_manager/domain/workspace.py::load_repository_workspace",
+        "src/chart_manager/domain/workspace.py::with_charts_dir",
+        "tests/conftest.py::workspace_for",
+    }
+)
+
+#: The one module that may read a workspace's wrapped spec directly.
+_WORKSPACE_SPEC_READERS = frozenset({"src/chart_manager/domain/workspace.py"})
+
+
+def _workspace_replace(call: ast.Call) -> bool:
+    """Whether `call` is a `replace(<workspace>, ...)` copy of a workspace.
+
+    `replace`, `dataclasses.replace` and `copy.replace` all build a new
+    frozen dataclass without running anything but `__init__` -- which is how
+    `chartsDir` was once re-pointed with no validation and no escape check.
+    The first argument is judged by `_is_workspace_name`, the same receiver
+    heuristic as the `.spec` rule, so `str.replace` and a `replace` of some
+    other dataclass stay quiet.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        is_replace = func.id == "replace"
+    elif isinstance(func, ast.Attribute):
+        is_replace = (
+            func.attr == "replace"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in {"dataclasses", "copy"}
+        )
+    else:
+        is_replace = False
+    if not is_replace or not call.args:
+        return False
+    first = call.args[0]
+    identifier = (
+        first.id
+        if isinstance(first, ast.Name)
+        else first.attr
+        if isinstance(first, ast.Attribute)
+        else None
+    )
+    return identifier is not None and _is_workspace_name(identifier)
+
+
+def _workspace_constructions(source: str, label: str) -> list[str]:
+    """Workspace constructions in `source`, outside the allowed scopes.
+
+    Two shapes build a `RepositoryWorkspace`: calling the class, and copying
+    one with `replace(workspace, ...)` (bare, `dataclasses.` or `copy.`).
+    Each call is attributed to its innermost enclosing function, so the
+    allowance is for one function, not for the whole module it lives in.
+    """
+    offenders: list[str] = []
+
+    def visit(node: ast.AST, scope: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = scope
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = child.name
+            elif isinstance(child, ast.Call):
+                func = child.func
+                name = (
+                    func.id
+                    if isinstance(func, ast.Name)
+                    else func.attr
+                    if isinstance(func, ast.Attribute)
+                    else None
+                )
+                allowed = f"{label}::{scope}" in _WORKSPACE_CONSTRUCTORS
+                if name == "RepositoryWorkspace" and not allowed:
+                    offenders.append(f"  {label}:{child.lineno}: RepositoryWorkspace(...)")
+                elif _workspace_replace(child) and not allowed:
+                    offenders.append(f"  {label}:{child.lineno}: {ast.unparse(child.func)}(...)")
+            visit(child, inner)
+
+    visit(ast.parse(source, filename=label), "<module>")
+    return offenders
+
+
+def _is_workspace_name(identifier: str) -> bool:
+    """Whether a variable or attribute name conventionally holds a workspace."""
+    return identifier in {"workspace", "ws"} or identifier.endswith("_workspace")
+
+
+def _workspace_spec_reads(source: str, label: str) -> list[str]:
+    """`<workspace>.spec` attribute reads in `source`.
+
+    A heuristic, by necessity: `.spec` is also how every authored resource
+    (`ChartLifecycle`, `LocalCluster`, `ChartWorkspace` itself) exposes its
+    body, and the AST carries no types. So the rule matches on the *receiver's
+    name* -- `workspace.spec`, `self.workspace.spec`, `ws.spec`,
+    `selected_workspace.spec` -- which is how this codebase spells a
+    `RepositoryWorkspace` everywhere. It cannot see `getattr(w, "spec")` or a
+    workspace bound to an unconventional name; review covers those.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if not (isinstance(node, ast.Attribute) and node.attr == "spec"):
+            continue
+        receiver = node.value
+        identifier = (
+            receiver.id
+            if isinstance(receiver, ast.Name)
+            else receiver.attr
+            if isinstance(receiver, ast.Attribute)
+            else None
+        )
+        if identifier is not None and _is_workspace_name(identifier):
+            offenders.append(f"  {label}:{node.lineno}: {ast.unparse(node)}")
+    return offenders
+
+
+def _python_sources() -> list[tuple[Path, str]]:
+    """Every .py file under `src/` and `tests/`, with its repo-relative label."""
+    paths = sorted(_SRC.rglob("*.py")) + sorted(_TESTS.rglob("*.py"))
+    return [(path, path.relative_to(_REPO).as_posix()) for path in paths]
+
+
+def test_workspace_sources_are_discoverable() -> None:
+    """Guard the guard: both (g) scans must cover the modules they police."""
+    labels = {label for _, label in _python_sources()}
+    for scope in _WORKSPACE_CONSTRUCTORS | _WORKSPACE_SPEC_READERS:
+        assert scope.split("::")[0] in labels
+    assert "src/chart_manager/composition.py" in labels
+
+
+def test_repository_workspace_is_constructed_only_where_it_is_checked() -> None:
+    """A workspace comes from the loader, `with_charts_dir`, or the test fixture.
+
+    Those are the places that validate the spec (and, outside tests, check it
+    against the filesystem). `dataclasses.replace(workspace, charts_dir=...)`
+    once re-pointed the chart directory with neither check, so the rule flags
+    both a direct `RepositoryWorkspace(...)` call and a `replace(...)` /
+    `dataclasses.replace(...)` / `copy.replace(...)` whose first argument is
+    named like a workspace; any new way to build one would reopen that hole.
+    """
+    offenders: list[str] = []
+    for path, label in _python_sources():
+        offenders += _workspace_constructions(path.read_text(encoding="utf-8"), label)
+
+    assert not offenders, (
+        "RepositoryWorkspace(...) is constructed outside its checked factories:\n"
+        + "\n".join(offenders)
+        + "\n\nLoad one with load_repository_workspace (Container.workspace), derive "
+        "one with workspace.with_charts_dir(...), or in tests use workspace_for(...)."
+    )
+
+
+def test_layout_is_read_through_workspace_properties_not_its_spec() -> None:
+    """Services ask the workspace, never the file schema behind it.
+
+    `RepositoryWorkspace` wraps `ChartWorkspaceSpec` so the authored file is
+    the single source of truth, but the wrapper's properties are the API:
+    reading `workspace.spec.x` would tie a service to how the file spells a
+    field, which is exactly what the wrapper exists to absorb.
+    """
+    offenders: list[str] = []
+    for path, label in _python_sources():
+        if label in _WORKSPACE_SPEC_READERS:
+            continue
+        offenders += _workspace_spec_reads(path.read_text(encoding="utf-8"), label)
+
+    assert not offenders, (
+        "read layout through RepositoryWorkspace properties, not .spec:\n"
+        + "\n".join(offenders)
+        + "\n\nAdd a property to RepositoryWorkspace in domain/workspace.py if the "
+        "value you need is not exposed yet."
+    )
+
+
+_WORKSPACE_LEAKS = {
+    "a-bare-construction": "ws = RepositoryWorkspace(root=root, name='x', spec=spec)",
+    "reached-through-the-module": "ws = workspace.RepositoryWorkspace(root, 'x', spec)",
+    "via-replace": "w = replace(workspace, spec=s)",
+    "via-dataclasses-replace": "w = dataclasses.replace(self.workspace, spec=s)",
+    "via-copy-replace": "w = copy.replace(ws, name='other')",
+    "inside-an-unlisted-method": (
+        "def build(self):\n"
+        "    return RepositoryWorkspace(root=self.root, name=self.name, spec=spec)\n"
+    ),
+}
+
+_SPEC_LEAKS = {
+    "a-local": "d = workspace.spec.charts_dir",
+    "an-attribute": "d = self.workspace.spec.render_dir",
+    "a-short-name": "v = ws.spec.validation",
+    "a-qualified-name": "v = selected_workspace.spec.fanout",
+}
+
+_SPEC_NON_LEAKS = {
+    "an-authored-resource": "chart = lifecycle.spec.cluster_test",
+    "the-workspace-resource-itself": "s = resource.spec",
+    "a-property-read": "d = workspace.charts_dir",
+    "a-workspace-validation-policy": "v = workspace.validation.schemas",
+}
+
+
+def test_the_workspace_construction_rule_fires_on_each_synthetic_leak() -> None:
+    """Positive control, and a negative one: the allowed scopes stay quiet."""
+    missed = [
+        name
+        for name, source in _WORKSPACE_LEAKS.items()
+        if not _workspace_constructions(source, "src/chart_manager/composition.py")
+    ]
+    assert not missed, f"the workspace construction rule silently allows: {missed}"
+    quiet = {
+        "str-replace": "name = workspace_name.replace('-', '_')",
+        "a-method-on-a-workspace-attribute": "s = workspace.name.replace('-', '_')",
+        "replace-of-another-dataclass": "row = replace(row, status='PASS')",
+    }
+    noisy = {
+        name: found
+        for name, source in quiet.items()
+        if (found := _workspace_constructions(source, "src/chart_manager/composition.py"))
+    }
+    assert not noisy, f"the workspace construction rule flags non-constructions: {noisy}"
+    allowed = "def with_charts_dir(self, path):\n    return RepositoryWorkspace(1, 2, 3)\n"
+    assert not _workspace_constructions(allowed, "src/chart_manager/domain/workspace.py")
+    # The allowance is per function: the same module elsewhere is still caught.
+    elsewhere = "def other():\n    return RepositoryWorkspace(1, 2, 3)\n"
+    assert _workspace_constructions(elsewhere, "src/chart_manager/domain/workspace.py")
+
+
+def test_the_workspace_spec_rule_fires_on_each_synthetic_leak() -> None:
+    """Positive control: every receiver spelling the heuristic promises to see."""
+    missed = [
+        name for name, source in _SPEC_LEAKS.items() if not _workspace_spec_reads(source, name)
+    ]
+    assert not missed, f"the workspace .spec rule silently allows: {missed}"
+
+
+def test_the_workspace_spec_rule_stays_quiet_on_other_specs() -> None:
+    """Negative control: `.spec` on an authored resource is not a workspace read."""
+    noisy = {
+        name: found
+        for name, source in _SPEC_NON_LEAKS.items()
+        if (found := _workspace_spec_reads(source, name))
+    }
+    assert not noisy, f"the workspace .spec rule flags legitimate reads: {noisy}"

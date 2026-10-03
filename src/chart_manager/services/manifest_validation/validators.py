@@ -50,7 +50,7 @@ class ValidatorCompileContext:
     repo_root: Path
     chart_path: Path
     spec_path: Path
-    policies_dir: Path = Path("policies")
+    policies_dir: Path
     kubeconform: KubeconformRuntimeInputs = field(
         default_factory=KubeconformRuntimeInputs
     )

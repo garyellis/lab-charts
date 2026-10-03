@@ -14,7 +14,7 @@ from .conftest import MakeChart, workspace_for
 
 def _service(root: Path) -> CiService:
     return CiService(
-        workspace=workspace_for(root, cluster_test_fanout=("kind-config.yaml",))
+        workspace=workspace_for(root, fanout={"clusterTest": ["kind-config.yaml"]})
     )
 
 

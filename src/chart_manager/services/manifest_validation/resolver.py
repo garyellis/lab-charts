@@ -54,7 +54,7 @@ def resolve_manifest_validation(
     repo_root: Path,
     *,
     providers: tuple[ValidatorProvider, ...] = VALIDATOR_REGISTRY,
-    policies_dir: Path = Path("policies"),
+    policies_dir: Path,
     kubeconform: KubeconformRuntimeInputs | None = None,
 ) -> ResolvedManifestValidation:
     """Resolve an authored spec against its Helm chart and repository."""

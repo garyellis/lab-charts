@@ -27,6 +27,7 @@ import typer
 import typer.main
 from typer.testing import CliRunner, Result
 
+from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspaceSpec
 from chart_manager.cli._container import reset_invocation
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
@@ -39,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: The conventional layout, for domain loaders that take it explicitly.
 CHARTS_DIR = Path("charts")
 LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
+POLICIES_DIR = Path("policies")
+RENDER_DIR = Path(".chart-manager/rendered")
 
 MakeChart = Callable[..., Path]
 
@@ -130,25 +133,53 @@ def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-#: The layout `workspace_for` and `write_workspace` give a test unless it
-#: overrides a field -- the conventional one this repository also uses.
-_DEFAULT_LAYOUT: dict[str, Any] = {
-    "name": "test-workspace",
-    "charts_dir": CHARTS_DIR,
-    "local_cluster": LOCAL_CONFIG,
-    "render_dir": Path(".chart-manager/rendered"),
-    "policies_dir": Path("policies"),
-}
+def _spec_body(
+    charts_dir: str | Path,
+    validation: Mapping[str, Any] | None,
+    spec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """The raw `spec` mapping `workspace_for` and `write_workspace` share.
+
+    The conventional layout this repository also uses, unless ``spec``
+    overrides a camelCase key. ``chartsDir`` is spelled ``charts_dir`` here;
+    passing both would leave one silently ignored, so it is an error.
+    """
+    if "chartsDir" in spec:
+        raise TypeError("pass charts_dir=, not chartsDir=")
+    body: dict[str, Any] = {
+        "chartsDir": charts_dir,
+        "localCluster": LOCAL_CONFIG.as_posix(),
+        "renderDir": RENDER_DIR.as_posix(),
+        "policiesDir": POLICIES_DIR.as_posix(),
+        **spec,
+    }
+    if validation is not None:
+        body["validation"] = dict(validation)
+    return body
 
 
-def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
+def workspace_for(
+    root: Path,
+    *,
+    name: str = "test-workspace",
+    charts_dir: str | Path = "charts",
+    validation: Mapping[str, Any] | None = None,
+    **spec: Any,
+) -> RepositoryWorkspace:
     """A `RepositoryWorkspace` over ``root`` without reading workspace.yaml.
 
     Services take a required workspace. Tests that do not exercise loading
-    build one here instead of each spelling the constructor; ``fields``
-    override the layout (``charts_dir=Path("deploy/helm")``, ...).
+    build one here instead of writing the file; the arguments mean what they
+    mean to `write_workspace` (``fanout={"validation": [...]}``, ...). The
+    spec is validated exactly as the loader validates it, so a test cannot
+    hand a service a layout no workspace.yaml could express. The loader's
+    filesystem checks are skipped: ``root`` need not exist.
     """
-    return RepositoryWorkspace(root=root.resolve(), **{**_DEFAULT_LAYOUT, **fields})
+    return RepositoryWorkspace(
+        root=root.resolve(),
+        name=name,
+        spec=ChartWorkspaceSpec.model_validate(_spec_body(charts_dir, validation, spec)),
+    )
 
 
 def write_workspace(
@@ -167,15 +198,6 @@ def write_workspace(
     lock) deliberately. ``spec`` adds or overrides other camelCase spec keys
     (``fanout={...}``, ``localCluster="..."``). Returns the marker path.
     """
-    body: dict[str, Any] = {
-        "chartsDir": charts_dir,
-        "localCluster": LOCAL_CONFIG.as_posix(),
-        "renderDir": ".chart-manager/rendered",
-        "policiesDir": "policies",
-        **spec,
-    }
-    if validation is not None:
-        body["validation"] = dict(validation)
     marker = root / ".chart-manager" / "workspace.yaml"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
@@ -184,7 +206,7 @@ def write_workspace(
                 "apiVersion": "chartmanager.io/v1alpha1",
                 "kind": "ChartWorkspace",
                 "metadata": {"name": "test-workspace"},
-                "spec": body,
+                "spec": _spec_body(charts_dir, validation, spec),
             }
         ),
         encoding="utf-8",

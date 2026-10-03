@@ -49,7 +49,7 @@ def discover_policy_paths(
     repo_root: Path,
     chart_path: Path,
     *,
-    policies_dir: Path = Path("policies"),
+    policies_dir: Path,
 ) -> tuple[Path, ...]:
     """Return existing repository-wide and per-chart policy directories."""
     return tuple(
@@ -65,7 +65,7 @@ def resolve_policy_paths(
     chart_path: Path,
     spec_path: Path,
     extras: list[str],
-    policies_dir: Path = Path("policies"),
+    policies_dir: Path,
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Resolve discovered and authored chart-relative policy directories."""
     policies = list(discover_policy_paths(repo_root, chart_path, policies_dir=policies_dir))

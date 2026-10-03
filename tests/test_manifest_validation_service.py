@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
@@ -84,15 +83,13 @@ def _chart(root: Path, name: str, *, spec: str | None = _SPEC, extra: str = "") 
     return chart_dir
 
 
-_SCHEMA_POLICY = WorkspaceValidation.model_validate(
-    {
-        "kubernetesVersion": "1.35.3",
-        "schemas": {
-            "generateFromCRDs": True,
-            "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
-        },
-    }
-)
+_SCHEMA_POLICY = {
+    "kubernetesVersion": "1.35.3",
+    "schemas": {
+        "generateFromCRDs": True,
+        "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
+    },
+}
 
 
 class _EmptySchemaRuntime:
@@ -245,16 +242,7 @@ def test_locked_schema_runtime_is_loaded_once_and_scoped_per_environment(
     tmp_path: Path,
 ) -> None:
     _chart(tmp_path, "alpha")
-    policy = WorkspaceValidation.model_validate(
-        {
-            "kubernetesVersion": "1.35.3",
-            "schemas": {
-                "generateFromCRDs": True,
-                "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
-            },
-        }
-    )
-    workspace = workspace_for(tmp_path, name="demo", validation=policy)
+    workspace = workspace_for(tmp_path, name="demo", validation=_SCHEMA_POLICY)
     calls: list[RepositoryWorkspace] = []
 
     class Runtime:
