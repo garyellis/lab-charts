@@ -13,9 +13,9 @@ Ask these of every diff first.
 - **Does each new Protocol, parameter, helper or rule have a second real caller?** One caller
   means it is speculative; inline it. Review findings that add code go to the user with their
   cost, and aren't applied automatically.
-- **Is it where a human would look?** Two checks: the code is in the package named after its
-  command or shared capability (ADR-0001), and it uses the `GLOSSARY.md` name for each
-  concept, never one listed under _Avoid_.
+- **Is it where a human would look?** Two checks: the code is in `commands/<subcommand>`,
+  `shared/<capability>` or `integrations/<system>` as ADR-0001 places it, and it uses the
+  `GLOSSARY.md` name for each concept, never one listed under _Avoid_.
 
 ## Design defaults: code a human can read, own and debug
 
@@ -48,7 +48,23 @@ Ask these of every diff first.
    diff's new comment lines should not outweigh its new code lines.
 10. **Readable over clever.** Prefer a flat function to a new class and a parameter to a new
     protocol. Add a single-caller helper only when it names a real concept. Don't trade away
-    performance or reliability for brevity, and don't optimise speculatively.
+    performance or reliability for brevity, and don't optimise speculatively. In rebuilt
+    packages, name entry points after what they do (`validate.run`), not `*Service`.
+
+## Integrations
+
+Every call to the outside world is an adapter in `integrations/`, one module per system.
+
+- **Deep, not wide.** Few methods, each returning an answer (`ReleaseStatus`, `TestResult`)
+  rather than raw command output. Add a method when a real caller needs it; delete it when the
+  last caller goes.
+- **Wiring is required.** The runner or client is a required argument.
+- **No policy.** An adapter reports what is true; deciding what to do about it belongs to the
+  calling package.
+- **Imports** only `plumbing/` and `api/`.
+- **Protocols only for two or more real adapters.** Tests fake external tools at the command
+  runner (`FakeCommandRunner`), not with a Protocol per tool. Today only the event store has a
+  Protocol.
 
 ## Tests
 
