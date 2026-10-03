@@ -60,8 +60,8 @@ class PlatformLifecycleEvent:
     pr_url: str | None
     git_sha: str | None
     detail: dict[str, Any] | None
-    # Stable identity for retry-safe transitions. Legacy/ad-hoc events leave
-    # this unset and retain append-only UUID identity.
+    # Stable identity for retry-safe transitions. Events without one keep
+    # append-only UUID identity.
     idempotency_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

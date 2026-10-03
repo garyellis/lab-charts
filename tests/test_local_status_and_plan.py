@@ -334,7 +334,6 @@ def test_status_payload_carries_the_documented_keys(tmp_path: Path) -> None:
 
     payload = status_to_dict(_service(tmp_path, helm=helm).status("chart-manager"))
 
-    assert payload["schema_version"] == 1
     assert payload["command"] == "status"
     assert payload["cluster_name"] == "chart-manager"
     # `ok` is existence, not health: status reports, it does not grade.

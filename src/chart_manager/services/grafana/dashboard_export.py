@@ -158,7 +158,7 @@ def summarize_dashboard(dashboard: dict[str, Any]) -> DashboardSummary:
 def normalize_dashboard(dashboard: dict[str, Any]) -> dict[str, Any]:
     """Strip churn, force editable, rewrite datasource UIDs to template form.
 
-    Pure function -- equivalent to the jq pipeline in the legacy shell script.
+    Pure function.
     """
     out = {k: v for k, v in dashboard.items() if k not in _CHURN_KEYS}
     out["editable"] = True

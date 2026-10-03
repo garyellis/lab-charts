@@ -16,13 +16,11 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.wire import (
-    SCHEMA_VERSION,
     impact_to_dict,
     plan_to_dict,
 )
 
 __all__ = [
-    "SCHEMA_VERSION",
     "ActionKind",
     "ActionTarget",
     "ClusterTestCompiler",

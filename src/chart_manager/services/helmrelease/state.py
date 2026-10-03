@@ -12,9 +12,7 @@ layers and how the promotion timeline ended up with a start and no end.
 
 `StrEnum` is deliberate, not cosmetic. Members compare equal to their wire
 strings, hash like them (so `"ready" in PASSING_VERDICTS` still works for a
-caller holding a plain string), and `json.dump` writes the value verbatim --
-so adopting these types changes no byte of the `--output json` contract pinned
-by `tests/fixtures/golden/helmrelease-*.json.golden`.
+caller holding a plain string), and `json.dump` writes the value verbatim.
 
 The three phase tables below are data, not code, on purpose: mapping a
 terminal state to a lifecycle event is the kind of decision that gets
@@ -283,15 +281,7 @@ DETAIL_MAX = 200
 
 
 class PromoteStatus(StrEnum):
-    """The single terminal state of one `promote` run.
-
-    Replaces five independent booleans (`no_changes`, `dry_run`,
-    `already_open`, `aborted`, plus `pull_request is not None`) that encoded
-    2**5 combinations for six real states and were decoded in two different
-    orders -- `promote.py`'s event mapping and the CLI's printer -- so adding
-    a seventh state meant editing both and the type permitted pairs neither
-    of them handled.
-    """
+    """The single terminal state of one `promote` run."""
 
     NO_CHANGES = "no-changes"
     DRY_RUN = "dry-run"

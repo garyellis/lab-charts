@@ -577,7 +577,7 @@ class ManifestValidationService:
 
     def write_summaries(
         self,
-        outcome: RunOutcome | RunResult,
+        outcome: RunOutcome,
         *,
         out_dir: Path,
         include_timings: bool = False,

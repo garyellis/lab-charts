@@ -172,7 +172,7 @@ def test_promote_no_changes_when_already_target(tmp_path: Path) -> None:
     )
     result = _service(fixture).promote(req)
 
-    assert result.no_changes is True
+    assert result.status is PromoteStatus.NO_CHANGES
     assert result.changed_files == []
     assert result.pull_request is None
 
@@ -193,7 +193,7 @@ def test_promote_dry_run_does_not_edit_or_call_git(tmp_path: Path) -> None:
     gits, ghs, _workdirs, service = _capture_factories(fixture)
     result = service.promote(req)
 
-    assert result.dry_run is True
+    assert result.status is PromoteStatus.DRY_RUN
     assert result.pull_request is None
     assert result.branch == "promote/prod/loki-0.1.2"
     assert len(result.changed_files) == 1
@@ -313,7 +313,7 @@ def test_promote_returns_existing_pr_without_mutating(tmp_path: Path) -> None:
         )
     )
 
-    assert result.already_open is True
+    assert result.status is PromoteStatus.ALREADY_OPEN
     assert result.pull_request is pre_existing
     assert result.branch == "promote/prod/loki-0.1.2"
     assert result.changed_files == []
@@ -448,7 +448,7 @@ def test_downgrade_proceeds_when_callback_returns_true(tmp_path: Path) -> None:
     result = service.promote(_downgrade_request())
 
     assert received == [(1, "0.1.0")]
-    assert result.aborted is False
+    assert result.status is not PromoteStatus.ABORTED
     assert result.pull_request is not None
     assert len(result.downgrades) == 1
     assert result.downgrades[0].current_version == "0.2.0"
@@ -479,7 +479,7 @@ def test_downgrade_aborts_when_callback_returns_false(tmp_path: Path) -> None:
     )
     result = service.promote(_downgrade_request())
 
-    assert result.aborted is True
+    assert result.status is PromoteStatus.ABORTED
     assert result.pull_request is None
     assert result.changed_files == []
     assert len(result.downgrades) == 1
@@ -515,7 +515,7 @@ def test_downgrade_skips_callback_in_dry_run(tmp_path: Path) -> None:
     result = service.promote(req)
 
     assert called is False
-    assert result.dry_run is True
+    assert result.status is PromoteStatus.DRY_RUN
     assert len(result.downgrades) == 1
 
 

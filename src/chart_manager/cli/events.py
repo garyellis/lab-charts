@@ -43,47 +43,16 @@ from chart_manager.services.events.ref import (
     ChartRefError,
     parse_ref,
     parse_selector,
-    ref_from_parts,
 )
 from chart_manager.services.events.store import query_events
 from chart_manager.services.events.wire import events_to_dict
 from chart_manager.services.events.writer import EventWriter
 
-#: The `CHART@VERSION` positional. Optional in the signature only so the
-#: deprecated flag pair below can stand in for it; exactly one of the two
-#: spellings is required, which `_resolve_ref` enforces.
 RefArgument = Annotated[
-    str | None,
+    str,
     typer.Argument(
         metavar="CHART@VERSION",
-        help=(
-            "The chart release this event is about, e.g. grafana@1.2.3. "
-            "Required; it renders as optional only because the deprecated "
-            "flag pair may stand in for it."
-        ),
-    ),
-]
-
-#: Deprecated spelling of the positional, kept working per design doc 5
-#: ("flags accepted as alias"). Hidden for the same reason a deprecated
-#: command name is hidden: `--help` is the documented surface, and a
-#: deprecated spelling that advertises itself recruits new callers.
-#:
-#: `--chart-version` is the primary name -- it matches the schema field
-#: (`lifecycle.py`) and does not collide with the CLI's own version (design
-#: doc 8.6) -- while `--version` stays accepted because that is the flag
-#: actually being aliased.
-ChartOption = Annotated[
-    str | None,
-    typer.Option("--chart", hidden=True, help="Deprecated; use the CHART@VERSION argument."),
-]
-ChartVersionOption = Annotated[
-    str | None,
-    typer.Option(
-        "--chart-version",
-        "--version",
-        hidden=True,
-        help="Deprecated; use the CHART@VERSION argument.",
+        help="The chart release this event is about, e.g. grafana@1.2.3.",
     ),
 ]
 
@@ -124,45 +93,11 @@ def _parse_at(at: str | None) -> datetime | None:
     return ts.astimezone(UTC)
 
 
-def _resolve_ref(ref: str | None, chart: str | None, chart_version: str | None) -> ChartRef:
-    """Turn whichever spelling the caller used into one `ChartRef`.
-
-    The only judgement the surface makes here is *how the caller was
-    invoked* -- positional token or deprecated flag pair -- which is the same
-    line `cli/plan.py` draws for `--all` versus `--chart` on the CI matrix
-    command. Both branches hand raw strings to `services/events/ref.py`,
-    which owns what a chart name and a version may be.
-
-    The flag form deliberately does not narrate a deprecation line, and there
-    is no flag-level deprecation mechanism anywhere in `cli/`. Every other
-    renamed flag on this surface was renamed outright, with its in-repo
-    callers updated in the same commit, because every caller of this CLI
-    lives in this repository. `--chart`/`--chart-version` survive here only
-    because they are a *shape* change (two flags collapsing into one
-    positional), not a rename, so there is nothing to alias them to.
-    """
-    if ref is not None and (chart is not None or chart_version is not None):
-        raise typer.BadParameter(
-            "give the CHART@VERSION argument or the deprecated "
-            "--chart/--chart-version pair, not both"
-        )
+def _parse_ref(ref: str) -> ChartRef:
+    """Parse `CHART@VERSION`; a malformed token is a usage error (exit 2)."""
     try:
-        if ref is not None:
-            return parse_ref(ref)
-        if chart is None:
-            raise typer.BadParameter(
-                "missing the CHART@VERSION argument, e.g. 'grafana@1.2.3'"
-                + (" (--chart-version alone does not name a chart)" if chart_version else "")
-            )
-        if chart_version is None:
-            raise typer.BadParameter(
-                "--chart needs a version; prefer the CHART@VERSION argument, "
-                "e.g. 'grafana@1.2.3'"
-            )
-        return ref_from_parts(chart, chart_version)
+        return parse_ref(ref)
     except ChartRefError as exc:
-        # Narrowed to a usage error, as `_parse_at` already does for `--at`:
-        # a malformed argument is exit 2 with usage, not a domain failure.
         raise typer.BadParameter(str(exc)) from exc
 
 
@@ -241,9 +176,7 @@ def _emit(
 def build(
     ctx: typer.Context,
     phase: Annotated[BuildPhase, typer.Option(help="Build lifecycle phase.")],
-    ref: RefArgument = None,
-    chart: ChartOption = None,
-    chart_version: ChartVersionOption = None,
+    ref: RefArgument,
     build_correlation_id: Annotated[str | None, typer.Option(help="Charts-repo PR.")] = None,
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
     git_sha: Annotated[str | None, typer.Option(help="Charts-repo commit SHA.")] = None,
@@ -256,12 +189,8 @@ def build(
     ] = False,
     ) -> None:
     """Emit a build-lifecycle event (charts repo CI)."""
-    # `phase` leads the signature only because Python forbids a required
-    # parameter after an optional one, and the positional ref has to be
-    # optional for the deprecated flag pair to substitute for it. Click does
-    # not care about declaration order for options.
     output_mod.require_dry_run(output, dry_run=dry_run)
-    resolved = _resolve_ref(ref, chart, chart_version)
+    resolved = _parse_ref(ref)
     timestamp = _parse_at(at)
     if dry_run:
         event = _make_event_writer().compose_build(
@@ -286,9 +215,7 @@ def promote(
     ctx: typer.Context,
     environment: Annotated[str, typer.Option("--env", help="Target environment.")],
     phase: Annotated[PromotionPhase, typer.Option(help="Promotion lifecycle phase.")],
-    ref: RefArgument = None,
-    chart: ChartOption = None,
-    chart_version: ChartVersionOption = None,
+    ref: RefArgument,
     promotion_correlation_id: Annotated[str | None, typer.Option(help="Flux-repo PR.")] = None,
     build_correlation_id: Annotated[str | None, typer.Option(help="Originating charts-repo PR.")] = None,
     pr_url: Annotated[str | None, typer.Option(help="PR URL")] = None,
@@ -303,7 +230,7 @@ def promote(
     ) -> None:
     """Emit a promotion-lifecycle event (flux repo CI)."""
     output_mod.require_dry_run(output, dry_run=dry_run)
-    resolved = _resolve_ref(ref, chart, chart_version)
+    resolved = _parse_ref(ref)
     timestamp = _parse_at(at)
     if dry_run:
         event = _make_event_writer().compose_promote(
@@ -331,7 +258,7 @@ def promote(
 
 # --- the read side ---------------------------------------------------------
 
-#: The listing renders as a table, or as the versioned wire document from
+#: The listing renders as a table, or as the wire document from
 #: `services/events/wire.py`.
 _LIST_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
 
@@ -378,7 +305,7 @@ def list_events(
     try:
         parsed = None if selector is None else parse_selector(selector)
     except ChartRefError as exc:
-        # A usage error, exactly as `_resolve_ref` narrows it for emit.
+        # A usage error, exactly as `_parse_ref` narrows it for emit.
         raise typer.BadParameter(str(exc)) from exc
     request = EventQuery.from_selector(parsed, limit=limit)
     try:

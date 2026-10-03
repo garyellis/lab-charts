@@ -23,7 +23,7 @@ Architectural contract, by owner:
                      resolution, render-dir paths, run ids, summary
                      artifacts, retention/cleanup, worker counts, helm
                      bindings.
-    `wire.py`      — the versioned machine-readable JSON contract.
+    `wire.py`      — the machine-readable JSON payload.
     `markdown.py`  — the GitHub-flavored markdown rendering of a run.
     `progress.py`  — the progress port surfaces plug a display into.
 

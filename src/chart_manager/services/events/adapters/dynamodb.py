@@ -22,7 +22,7 @@ class DynamoDBEventStore:
         item = event.to_dict()
 
         # Authoritative retry-safe transitions use a stable range key and
-        # overwrite their prior attempt. Legacy/ad-hoc events remain an
+        # overwrite their prior attempt. Events without a key remain an
         # append-only, time-ordered stream.
         item[self._sort_key] = (
             f"idempotent#{event.idempotency_key}"

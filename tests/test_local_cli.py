@@ -33,7 +33,6 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.lifecycle.wire import SCHEMA_VERSION
 
 from .conftest import MakeChart, cli
 
@@ -361,7 +360,6 @@ def test_every_local_command_emits_a_json_document_on_stdout(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == 1
     assert payload["command"] == command
     assert payload["cluster_name"] == "chart-manager"
     assert payload["ok"] is True
@@ -541,7 +539,7 @@ def test_chart_name_and_directory_resolve_to_the_same_target(tmp_path: Path) -> 
         (["--namespace", "override"], "override"),
     ],
 )
-def test_charts_test_uses_chart_option_and_optional_namespace_override(
+def test_charts_test_uses_chart_argument_and_optional_namespace_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     extra: list[str],
@@ -572,7 +570,6 @@ def test_charts_test_uses_chart_option_and_optional_namespace_override(
     result = cli(
         "chart",
         "test",
-        "--chart",
         "alloy",
         "--root",
         str(tmp_path),
@@ -615,58 +612,6 @@ def test_chart_test_passes_skip_requires_to_the_service(
 
     assert result.exit_code == 0, result.output
     assert requests[0].skip_requires is True  # type: ignore[attr-defined]
-
-
-def test_chart_test_accepts_the_chart_positionally(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`chart test X` and `chart test --chart X` must reach the same request.
-
-    P1.2 adds the positional and keeps `--chart` permanently, so the two
-    spellings are not a migration -- they are two ways to say one thing, and
-    a divergence between them would be invisible until CI (which uses the
-    flag) and a human (who uses the argument) disagreed.
-    """
-    _chart(tmp_path)
-    charts: list[str] = []
-
-    class Service:
-        def run(self, request: object) -> None:
-            charts.append(request.chart)  # type: ignore[attr-defined]
-
-    class Container:
-        def ephemeral_test_cluster_service(
-            self, _root: Path, *, progress: object, charts_dir: Path
-        ) -> Service:
-            return Service()
-
-    monkeypatch.setattr(chart_cli, "_container", Container)
-    positional = cli("chart", "test", "alloy", "--root", str(tmp_path))
-    flag = cli("chart", "test", "--chart", "alloy", "--root", str(tmp_path))
-
-    assert positional.exit_code == flag.exit_code == 0, positional.output
-    assert charts == ["alloy", "alloy"]
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        pytest.param([], id="neither"),
-        pytest.param(["alloy", "--chart", "alloy"], id="both"),
-    ],
-)
-def test_chart_test_requires_exactly_one_chart(tmp_path: Path, argv: list[str]) -> None:
-    """Naming the chart twice is as unusable as not naming it at all.
-
-    Silently letting one spelling win would make `chart test a --chart b`
-    install *something*, and which one is not guessable from the command line.
-    """
-    _chart(tmp_path)
-
-    result = cli("chart", "test", *argv, "--root", str(tmp_path))
-
-    assert result.exit_code != 0
-    assert "exactly one chart" in str(result.exception)
 
 
 # --- `chart test --dry-run` --------------------------------------------------
@@ -740,7 +685,6 @@ def test_chart_test_dry_run_prints_the_plan_and_runs_nothing(
     assert result.exit_code == 0, result.output
     assert planning_container == ["plan"]
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == SCHEMA_VERSION
     assert [action["kind"] for action in payload["actions"]] == [
         "helm-upgrade-install",
         "helm-test",
@@ -789,7 +733,6 @@ def test_chart_test_dry_run_takes_the_invocation_wide_output(
     )
 
     assert result.exit_code == 0, result.output
-    assert parse_yaml(result.stdout)["schema_version"] == SCHEMA_VERSION
 
 
 def test_chart_test_output_without_dry_run_is_a_usage_error(
@@ -924,7 +867,7 @@ def test_chart_teardown_defaults(
 ) -> None:
     _chart(tmp_path)
 
-    result = cli("chart", "teardown", "--chart", "alloy", "--root", str(tmp_path))
+    result = cli("chart", "teardown", "alloy", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert teardown_requests == [

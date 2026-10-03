@@ -13,7 +13,6 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.services.lifecycle import (
-    SCHEMA_VERSION,
     ActionKind,
     ClusterTestCompiler,
     LifecyclePlan,
@@ -181,7 +180,6 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     second = plan_to_dict(compiler.compile_cluster_test("app", "minimal"))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["schema_version"] == SCHEMA_VERSION
     assert first["chart"] == "app"
     assert first["profile"] == "minimal"
     assert first["actions"][0]["action_id"].startswith("cluster-test.app.minimal.")

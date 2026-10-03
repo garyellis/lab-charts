@@ -572,7 +572,7 @@ jobs:
           # Only the Twingate chart's hooks get the admin API key.
           TWINGATE_API_TOKEN: ${{ matrix.chart == 'twingate-connector' && secrets.TWINGATE_API_TOKEN || '' }}
         run: |
-          uv run chart-manager chart test --chart "$CHART" \
+          uv run chart-manager chart test "$CHART" \
             --profile "$PROFILE" \
             --cluster-name "$CLUSTER_NAME"
 
@@ -639,7 +639,7 @@ jobs:
           # Only the Twingate chart's hooks get the admin API key.
           TWINGATE_API_TOKEN: ${{ matrix.chart == 'twingate-connector' && secrets.TWINGATE_API_TOKEN || '' }}
         run: |
-          uv run chart-manager chart teardown --chart "$CHART" \
+          uv run chart-manager chart teardown "$CHART" \
             --profile "$PROFILE" \
             --cluster-name "$CLUSTER_NAME"
 

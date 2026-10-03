@@ -41,7 +41,6 @@ from .state import (
     Verdict,
 )
 from .wire import (
-    SCHEMA_VERSION,
     monitor_to_dict,
     promote_to_dict,
     test_to_dict,
@@ -51,7 +50,6 @@ __all__ = [
     "NO_MATCH_REF",
     "PASSING_VERDICTS",
     "PROMOTE_OUTCOME",
-    "SCHEMA_VERSION",
     "EditResult",
     "HelmReleaseMatch",
     "HelmReleaseRef",

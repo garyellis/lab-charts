@@ -8,12 +8,9 @@ Built in the CLI it was invisible to `services/`; a REST or Slack surface
 that wanted to hand the same matrix to a workflow would have had to copy the
 dict literal out of `cli/main.py`.
 
-**Editing this module is a breaking change.** GitHub's `matrix.include` shape
-is fixed by GitHub, not by us -- which is why there is no `SCHEMA_VERSION`
-here, unlike `services/helmrelease/wire.py`. Adding a key to an entry is
-additive and safe (it becomes another `matrix.<key>` in the workflow);
-renaming or removing `chart`/`profile` breaks every job that references
-`matrix.chart` or `matrix.profile`.
+GitHub fixes the `matrix.include` shape. Adding a key to an entry adds a
+`matrix.<key>` to every job; renaming `chart`/`profile` breaks the jobs that
+reference `matrix.chart` or `matrix.profile`.
 
 Deliberately I/O-free and format-free, matching the other wire modules:
 these functions return plain dicts. Choosing an encoder -- `json.dumps`

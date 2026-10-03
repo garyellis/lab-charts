@@ -101,7 +101,7 @@ def list_charts(
     `-o` defaults to `auto`: the table on a terminal, JSON in a pipe or in
     CI. The table was this command's only output for its whole life, which
     made `chart list | grep` a habit and the chart inventory unreadable to
-    anything else; the JSON payload is the versioned document in
+    anything else; the JSON payload is the document in
     `services/chart_catalog_wire.py`, so a second surface answers this
     question with the same bytes.
     """
@@ -270,17 +270,10 @@ def _plan_table(plan: LifecyclePlan) -> Table:
 
 def chart_test(
     ctx: typer.Context,
-    chart_argument: Annotated[
-        str | None,
-        typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
-    ] = None,
     chart: Annotated[
-        str | None,
-        typer.Option(
-            "--chart",
-            help="Chart name or chart directory. Retained alongside the CHART argument.",
-        ),
-    ] = None,
+        str,
+        typer.Argument(metavar="CHART", help="Chart name or chart directory."),
+    ],
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
@@ -318,10 +311,6 @@ def chart_test(
 ) -> None:
     """Install and exercise one chart on an ephemeral local Kubernetes cluster.
 
-    The chart is named positionally; `--chart` is the older spelling and is
-    kept permanently, because `.github/workflows/ci.yaml` uses it and the
-    flag costs nothing to keep once the positional exists.
-
     `--dry-run` prints the compiled lifecycle plan -- every namespace,
     install and helm test the run would perform, in order -- and exits 0
     having touched nothing. It is the same plan object the real run
@@ -332,14 +321,10 @@ def chart_test(
     document -- so naming it without `--dry-run` is a usage error rather
     than a flag that is quietly ignored.
     """
-    if (chart_argument is None) == (chart is None):
-        raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
     output_mod.require_dry_run(output, dry_run=dry_run)
-    selected = chart_argument if chart_argument is not None else chart
-    assert selected is not None
     root = repository_root()
     _run_chart_test(
-        selected,
+        chart,
         ctx=ctx,
         output=output,
         root=root,
@@ -356,14 +341,10 @@ def chart_test(
 
 
 def chart_teardown(
-    chart_argument: Annotated[
-        str | None,
-        typer.Argument(metavar="[CHART]", help="Chart name or chart directory."),
-    ] = None,
     chart: Annotated[
-        str | None,
-        typer.Option("--chart", help="Chart name or chart directory."),
-    ] = None,
+        str,
+        typer.Argument(metavar="CHART", help="Chart name or chart directory."),
+    ],
     profile: ProfileOption = DEFAULT_PROFILE,
     namespace: NamespaceOverrideOption = None,
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
@@ -381,12 +362,8 @@ def chart_teardown(
     ] = False,
 ) -> None:
     """Run cleanup hooks in reverse install order, then delete the test cluster."""
-    if (chart_argument is None) == (chart is None):
-        raise ChartManagerError("name exactly one chart, as the CHART argument or --chart")
-    selected = chart_argument if chart_argument is not None else chart
-    assert selected is not None
     root = repository_root()
-    target = resolve_chart(root, selected)
+    target = resolve_chart(root, chart)
     service = _container().ephemeral_test_cluster_service(
         root,
         progress=_print_progress,

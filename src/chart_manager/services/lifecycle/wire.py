@@ -1,30 +1,14 @@
-"""Versioned wire contract for compiled lifecycle plans and change impact.
+"""Wire contract for compiled lifecycle plans and change impact.
 
 This module is the single source of truth for the machine-readable shape of
 the two documents `services/lifecycle/` produces: the action plan a compiler
 emits (`chart test --dry-run`) and the change-impact selection CI reads
 (`plan -o json|yaml`, `ci impact`). Every surface -- the CLI's `-o json`, a
 REST endpoint, a Slack app, a CI step -- projects through `plan_to_dict` /
-`impact_to_dict` so they cannot diverge while all claiming the same
-`SCHEMA_VERSION`.
+`impact_to_dict` so they cannot diverge.
 
-**Editing this module is a breaking change.** Adding a key is additive and
-safe at the current version; renaming, removing, or retyping a key requires
-bumping `SCHEMA_VERSION`.
-
-These payloads used to be `to_dict()` methods on the dataclasses, emitting an
-`apiVersion:`/`kind:` envelope with camelCase keys. That envelope is `api/`'s
-contract style and it belongs to documents a *person authors* --
-`ChartLifecycle`, `LocalCluster`, `LocalStack`. A compiled plan and a change
-selection are neither: nobody writes one, they are what the compiler and the
-impact service *produce*. Emitting an envelope for them claimed a second
-machine contract from one binary, so they now carry `schema_version` and
-snake_case keys like every other `services/*/wire.py`.
-
-Both projections emit a stable key set rather than omitting empty ones. The
-old methods dropped `profile`, `timeout`, `values` and `metadata` when unset,
-which makes a consumer distinguish "absent" from "null" for no gain and turns
-`jq '.actions[].timeout'` into an error on some runs and not others.
+Both projections emit a stable key set rather than omitting empty ones, so
+`jq '.actions[].timeout'` works on every run.
 
 Deliberately I/O-free and format-free: these functions return plain,
 JSON-ready dicts. They take no `file`, no `format=`, no `console=`. Choosing
@@ -48,21 +32,15 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 
-# Bump only on a breaking change to the payload shape; additive fields are
-# safe at this version.
-SCHEMA_VERSION = 1
-
 __all__ = [
-    "SCHEMA_VERSION",
     "impact_to_dict",
     "plan_to_dict",
 ]
 
 
 def plan_to_dict(plan: LifecyclePlan) -> dict[str, Any]:
-    """Project a compiled `LifecyclePlan` onto the versioned wire payload."""
+    """Project a compiled `LifecyclePlan` onto the wire payload."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "chart": plan.chart,
         "profile": plan.profile,
         "environment": plan.environment,
@@ -72,7 +50,7 @@ def plan_to_dict(plan: LifecyclePlan) -> dict[str, Any]:
 
 
 def impact_to_dict(impact: LifecycleImpact) -> dict[str, Any]:
-    """Project a `LifecycleImpact` onto the versioned wire payload.
+    """Project a `LifecycleImpact` onto the wire payload.
 
     `spec_errors` is carried in the document rather than replacing it: the
     selection derived from the files that *did* parse is still the answer to
@@ -80,7 +58,6 @@ def impact_to_dict(impact: LifecycleImpact) -> dict[str, Any]:
     `cli/plan.py` for why that is a spec exit rather than a generic failure.
     """
     return {
-        "schema_version": SCHEMA_VERSION,
         "changed_files": [path.as_posix() for path in impact.changed_files],
         "validation_selection": [_validation_case(case) for case in impact.validation],
         "cluster_test_matrix": [_cluster_test_case(case) for case in impact.cluster_tests],

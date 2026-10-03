@@ -7,7 +7,7 @@ Rich Live table; thread-safe under the monitor/test executor.
 
 Everything here is terminal-shaped: Rich tables, color styles, panels, and
 the encoder settings for the CLI's JSON stream. The *payload* those JSON
-writers emit is not defined here -- it is a versioned wire contract owned by
+writers emit is not defined here -- it is a wire contract owned by
 `services.helmrelease.wire`, so an HTTP/Slack/RPC surface can return the same
 bytes without importing anything under `cli/`.
 """

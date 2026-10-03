@@ -21,7 +21,6 @@ import pytest
 from chart_manager.cli import plan as plan_cli
 from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
-    SCHEMA_VERSION,
     ClusterTestImpact,
     ImpactReason,
     ImpactReasonCode,
@@ -202,7 +201,6 @@ def test_json_emits_the_whole_document_even_when_for_narrows_the_view(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == SCHEMA_VERSION
     assert [
         (entry["chart"], entry["profile"]) for entry in payload["cluster_test_matrix"]
     ] == [("grafana", "minimal")]

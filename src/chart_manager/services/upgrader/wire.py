@@ -1,13 +1,9 @@
-"""Versioned wire contract for `upgrade` and `upgrade-finalize`.
+"""Wire contract for `upgrade` and `upgrade-finalize`.
 
 This module is the single source of truth for the machine-readable shape of an
 upgrade outcome. Every surface -- the CLI's `-o json`, a REST endpoint, a
 Slack app, a CI step -- projects through `upgrade_to_dict` / `finalize_to_dict`
-so they cannot diverge while all claiming the same `SCHEMA_VERSION`.
-
-**Editing this module is a breaking change.** Adding a key is additive and safe
-at the current version; renaming, removing, or retyping a key requires bumping
-`SCHEMA_VERSION`.
+so they cannot diverge.
 
 Both projections emit the *same* key set, because they describe the same event
 from two angles: `UpgradeService` proposes a new wrapper-chart version and may
@@ -34,19 +30,14 @@ from typing import Any
 
 from .models import FinalizeResult, UpgradeResult
 
-# Bump only on a breaking change to the payload shape; additive fields are
-# safe at this version.
-SCHEMA_VERSION = 1
-
 __all__ = [
-    "SCHEMA_VERSION",
     "finalize_to_dict",
     "upgrade_to_dict",
 ]
 
 
 def upgrade_to_dict(result: UpgradeResult) -> dict[str, Any]:
-    """Project an `UpgradeResult` onto the versioned wire payload."""
+    """Project an `UpgradeResult` onto the wire payload."""
     return _payload(
         repository=result.repository,
         base=result.base,
@@ -62,7 +53,7 @@ def upgrade_to_dict(result: UpgradeResult) -> dict[str, Any]:
 
 
 def finalize_to_dict(result: FinalizeResult, *, chart_path: Path) -> dict[str, Any]:
-    """Project a `FinalizeResult` onto the versioned wire payload.
+    """Project a `FinalizeResult` onto the wire payload.
 
     The finalizer runs inside Renovate's callback on an already-checked-out
     branch: it resolves no repository, no base, and no branch, and it never
@@ -103,7 +94,6 @@ def _payload(
 ) -> dict[str, Any]:
     """Assemble the one payload shape both projections must produce."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "repository": repository,
         "base": base,
         "chart": chart,

@@ -22,14 +22,8 @@ Scope note. Every exit in `cli/` now comes from here, and
 is the gate that keeps it that way: no module but this one may write a
 nonzero exit-code integer.
 
-The one renumbering this table has done is tool error, 2 -> 4. It shipped in
-a single step with no compatibility window -- the `CHART_MANAGER_LEGACY_EXIT_CODES=1`
-escape hatch the plan once proposed was **cancelled**, because nothing
-outside this repo reads a chart-manager exit code (`.github/workflows/`
-branches on success/failure only) and a ramp nobody needs is just a second
-table to keep honest. 2 now means what Click means by it and nothing else,
-so a CI wrapper can separate "you typed a bad flag" from "kubeconform would
-not run".
+2 means what Click means by it and nothing else, so a CI wrapper can
+separate "you typed a bad flag" (2) from "kubeconform would not run" (4).
 
 Why the table is keyed on a semantic `Outcome` and not on each caller's own
 status enum

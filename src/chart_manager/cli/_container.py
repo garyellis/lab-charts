@@ -16,7 +16,7 @@ exactly what a module with a leading underscore is for -- this is internal
 to `cli/` and nothing outside it should import it.
 
 Named `_container` rather than `_wiring` because `services/*/wire.py` means
-something else entirely -- a versioned `X -> dict` projection -- and one
+something else entirely -- an `X -> dict` projection -- and one
 `cli/` reader already took the two for the same thing. There is one wiring
 concept on this surface and it is the composition root, so the file is named
 after it.

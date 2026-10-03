@@ -12,14 +12,12 @@ from pathlib import Path
 
 from chart_manager.services.upgrader import FinalizeResult, UpgradeResult
 from chart_manager.services.upgrader.wire import (
-    SCHEMA_VERSION,
     finalize_to_dict,
     upgrade_to_dict,
 )
 
-#: Every key both projections must emit, at every version of the contract.
+#: Every key both projections must emit.
 _CONTRACT_KEYS = {
-    "schema_version",
     "repository",
     "base",
     "chart",
@@ -66,7 +64,6 @@ def _finalize_result(**overrides: object) -> FinalizeResult:
 
 def test_upgrade_projection_is_the_full_contract() -> None:
     assert upgrade_to_dict(_upgrade_result()) == {
-        "schema_version": SCHEMA_VERSION,
         "repository": "owner/repository",
         "base": "main",
         "chart": "loki",
@@ -82,7 +79,6 @@ def test_upgrade_projection_is_the_full_contract() -> None:
 
 def test_finalize_projection_is_the_full_contract() -> None:
     assert finalize_to_dict(_finalize_result(), chart_path=Path("charts/loki")) == {
-        "schema_version": SCHEMA_VERSION,
         "repository": None,
         "base": None,
         "chart": "loki",
@@ -183,9 +179,3 @@ def test_absolute_chart_paths_are_posix_normalized() -> None:
     payload = finalize_to_dict(_finalize_result(), chart_path=Path("/repo/charts/loki"))
 
     assert payload["path"] == "/repo/charts/loki"
-
-
-def test_schema_version_lives_in_the_service_layer() -> None:
-    """The declared version is the service's to own -- see design commitment 5."""
-    assert upgrade_to_dict(_upgrade_result())["schema_version"] == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 1

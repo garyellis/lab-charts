@@ -126,7 +126,7 @@ class Helm:
         # stdout/stderr into an unreadable mess.
         self.verbose = verbose
         # Per-subprocess wall-clock cap for all helm invocations on this
-        # instance. None = unbounded (legacy behavior). Validate sets this
+        # instance. None = unbounded. Validate sets this
         # from --tool-timeout so a hung helm template doesn't pin a worker.
         # dependency_update's own `timeout=` kwarg takes precedence when set.
         self.timeout = timeout

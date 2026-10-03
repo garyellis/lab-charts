@@ -73,11 +73,6 @@ that ruff resolves per file; the scan below is the copy that does not depend
 on ruff's config discovery. The one arrow TID251 carries for free everywhere
 is `-/-> integrations`: that ban is global, and `api/`, `domain/` and `cli/`
 are all deliberately absent from the lift table in pyproject.toml.
-
-One more invariant -- versioned wire contracts live in `services/*/wire.py`,
-never in `cli/` -- is enforced separately in `tests/test_wire_contracts.py`,
-because it is about dict literals rather than imports and so is invisible to
-both TID251 and the scans here.
 """
 
 from __future__ import annotations

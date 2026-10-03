@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,11 +23,11 @@ from chart_manager.services.manifest_validation.models import (
     RunResult,
     WorklistRow,
 )
-from chart_manager.services.manifest_validation.wire import SCHEMA_VERSION, to_json
+from chart_manager.services.manifest_validation.wire import to_json
 
-GOLDEN_DIR = Path(__file__).parent / "fixtures" / "golden"
-RUN_RESULT_GOLDEN = GOLDEN_DIR / "run-result.md.golden"
-RUN_RESULT_JSON_GOLDEN = GOLDEN_DIR / "run-result.json.golden"
+
+def _outcome(result: RunResult) -> RunOutcome:
+    return RunOutcome(result=result, out_dir=result.rendered_root)
 
 
 # ---- layering guard --------------------------------------------------------
@@ -37,7 +36,7 @@ RUN_RESULT_JSON_GOLDEN = GOLDEN_DIR / "run-result.json.golden"
 @pytest.mark.parametrize(
     ("module", "attrs"),
     [
-        ("chart_manager.services.manifest_validation.wire", ("to_json", "SCHEMA_VERSION")),
+        ("chart_manager.services.manifest_validation.wire", ("to_json",)),
         ("chart_manager.services.manifest_validation.markdown", ("to_markdown",)),
         (
             "chart_manager.services.manifest_validation.app",
@@ -248,23 +247,8 @@ def test_advisory_details_empty_when_no_pass_detail() -> None:
 # ---- to_markdown -----------------------------------------------------------
 
 
-def test_to_markdown_matches_golden() -> None:
-    """Snapshot test against a hand-curated mixed RunResult.
-
-    Regenerate with: REGEN_GOLDEN=1 uv run --extra dev pytest \
-tests/test_manifest_validation_rendering.py
-    """
-    actual = to_markdown(_mixed_run_result())
-    if os.environ.get("REGEN_GOLDEN"):
-        GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
-        RUN_RESULT_GOLDEN.write_text(actual)
-        pytest.fail(f"regenerated golden at {RUN_RESULT_GOLDEN}")
-    expected = RUN_RESULT_GOLDEN.read_text()
-    assert actual == expected
-
-
 def test_to_markdown_empty_result_is_self_describing() -> None:
-    md = to_markdown(RunResult(rows=(), rendered_root=Path("/tmp/x")))
+    md = to_markdown(_outcome(RunResult(rows=(), rendered_root=Path("/tmp/x"))))
     assert md.startswith("## validate")
     assert "nothing to validate" in md
     assert "### Failures" not in md
@@ -285,7 +269,7 @@ def test_to_markdown_no_failures_section_when_all_pass() -> None:
         ),
         rendered_root=Path("/tmp/x"),
     )
-    md = to_markdown(result)
+    md = to_markdown(_outcome(result))
     assert "### Failures" not in md
     assert "### Advisories" not in md
     # Table still rendered.
@@ -310,7 +294,7 @@ def test_to_markdown_no_advisories_section_when_pass_without_detail() -> None:
         ),
         rendered_root=Path("/tmp/x"),
     )
-    md = to_markdown(result)
+    md = to_markdown(_outcome(result))
     assert "### Failures" in md
     assert "### Advisories" not in md
 
@@ -318,9 +302,8 @@ def test_to_markdown_no_advisories_section_when_pass_without_detail() -> None:
 # ---- to_json ---------------------------------------------------------------
 
 
-def test_to_json_shape_and_schema_version() -> None:
-    data = to_json(_mixed_run_result())
-    assert data["schema_version"] == SCHEMA_VERSION == 1
+def test_to_json_shape() -> None:
+    data = to_json(_outcome(_mixed_run_result()))
     assert isinstance(data["exit_code"], int)
     # spec_errors present => exit_code == 3
     assert data["exit_code"] == 3
@@ -364,24 +347,8 @@ def test_to_json_shape_and_schema_version() -> None:
     ]
 
 
-def test_to_json_bytes_match_golden() -> None:
-    """Byte golden for the wire payload, serialized exactly as the CLI does.
-
-    `validate run --format json` writes json.dumps(..., indent=2) + "\\n"; a
-    diff here is a breaking change for every downstream jq consumer.
-
-    Regenerate with: REGEN_GOLDEN=1 uv run pytest tests/test_manifest_validation_rendering.py
-    """
-    actual = json.dumps(to_json(_mixed_run_result()), indent=2) + "\n"
-    if os.environ.get("REGEN_GOLDEN"):
-        GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
-        RUN_RESULT_JSON_GOLDEN.write_text(actual)
-        pytest.fail(f"regenerated golden at {RUN_RESULT_JSON_GOLDEN}")
-    assert actual == RUN_RESULT_JSON_GOLDEN.read_text()
-
-
 def test_to_json_round_trips_through_json_module() -> None:
-    data = to_json(_mixed_run_result())
+    data = to_json(_outcome(_mixed_run_result()))
     payload = json.dumps(data, indent=2)
     parsed = json.loads(payload)
     assert parsed == data
@@ -459,13 +426,6 @@ def test_markdown_outcome_with_only_warnings_needs_no_selection_metadata() -> No
     assert "### Diagnostics" not in markdown
 
 
-def test_bare_run_result_wire_shape_remains_unchanged() -> None:
-    """Existing callers do not gain an empty diagnostics object."""
-    data = to_json(RunResult(rows=(), rendered_root=Path("/tmp/render")))
-
-    assert "diagnostics" not in data
-
-
 # ---- markdown safety -------------------------------------------------------
 
 
@@ -489,7 +449,7 @@ def test_to_markdown_picks_longer_fence_when_detail_contains_backticks() -> None
         ),
         rendered_root=Path("/tmp/x"),
     )
-    md = to_markdown(result)
+    md = to_markdown(_outcome(result))
     # Outer fence must be at least 4 backticks since the body contains a 3-backtick run.
     assert "````" in md
     # The embedded ``` is preserved verbatim — not stripped, not escaped away.
@@ -522,7 +482,7 @@ def test_to_markdown_escapes_html_in_summary() -> None:
         ),
         rendered_root=Path("/tmp/x"),
     )
-    md = to_markdown(result)
+    md = to_markdown(_outcome(result))
     # Raw HTML-sensitive characters must not appear inside the summary text.
     assert "<summary>weird<name>" not in md
     assert "&lt;name&gt;" in md

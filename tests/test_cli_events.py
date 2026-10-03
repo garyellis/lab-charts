@@ -175,7 +175,7 @@ def test_the_surface_delegates_the_grammar_to_the_service() -> None:
         for alias in node.names
     }
 
-    assert {"parse_ref", "ref_from_parts"} <= imported
+    assert "parse_ref" in imported
 
 
 def test_the_surface_never_names_the_separator() -> None:
@@ -200,73 +200,8 @@ def test_the_surface_never_names_the_separator() -> None:
     )
 
 
-# --------------------------------------------------------------------------
-# the deprecated flag form (design doc 5: "flags accepted as alias")
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("version_flag", ["--version", "--chart-version"])
-def test_the_flag_pair_resolves_to_the_same_ref_as_the_positional(
-    writer: RecordingWriter, version_flag: str
-) -> None:
-    """`--version` is the flag actually being aliased; `--chart-version` is
-    its replacement name, matching the schema field (design doc 7.5)."""
-    cli(
-        "event", "emit", "build",
-        "--chart", "grafana", version_flag, "1.2.3",
-        "--phase", "published",
-    )
-    cli("event", "emit", "build", "grafana@1.2.3", "--phase", "published")
-
-    assert writer.build_calls[0] == writer.build_calls[1]
-
-
-def test_the_flag_pair_works_on_promote_too(writer: RecordingWriter) -> None:
-    cli(
-        "event", "emit", "promote",
-        "--chart", "grafana", "--version", "1.2.3",
-        "--env", "dev", "--phase", "promoted",
-    )
-
-    assert writer.promote_calls[0]["chart_name"] == "grafana"
-    assert writer.promote_calls[0]["chart_version"] == "1.2.3"
-
-
-def test_the_deprecated_flags_are_hidden_from_help() -> None:
-    """A deprecated spelling that advertises itself recruits new callers."""
-    result = cli("event", "emit", "build", "--help")
-
-    assert "CHART@VERSION" in result.stdout
-    assert "--chart " not in result.stdout
-    assert "--chart-version" not in result.stdout
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ("--chart", "grafana", "--phase", "published"),
-        ("--chart-version", "1.2.3", "--phase", "published"),
-        ("--phase", "published"),
-    ],
-    ids=["chart-without-version", "version-without-chart", "neither"],
-)
-def test_an_incomplete_selection_is_a_usage_error(
-    writer: RecordingWriter, argv: tuple[str, ...]
-) -> None:
-    result = cli("event", "emit", "build", *argv)
-
-    assert result.exit_code == 2
-    assert writer.build_calls == []
-
-
-def test_the_positional_and_the_flags_may_not_be_combined(
-    writer: RecordingWriter,
-) -> None:
-    """Silently preferring one would make the ignored one a lie."""
-    result = cli(
-        "event", "emit", "build", "grafana@1.2.3",
-        "--chart", "loki", "--phase", "published",
-    )
+def test_a_missing_ref_is_a_usage_error(writer: RecordingWriter) -> None:
+    result = cli("event", "emit", "build", "--phase", "published")
 
     assert result.exit_code == 2
     assert writer.build_calls == []
@@ -529,13 +464,10 @@ def test_the_table_shows_the_pr_url(reader) -> None:
     assert "pull/38" in result.stdout.replace("\n", "")
 
 
-def test_the_json_projection_is_the_versioned_wire_document(reader) -> None:
-    from chart_manager.services.events.wire import SCHEMA_VERSION
-
+def test_the_json_projection_is_the_wire_document(reader) -> None:
     result = cli("event", "list", "grafana@1.2.3", "-o", "json")
 
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["chart"] == "grafana"
     assert payload["correlation_id"] == "grafana@1.2.3"
     assert payload["count"] == 1

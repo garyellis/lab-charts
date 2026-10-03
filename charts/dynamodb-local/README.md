@@ -4,7 +4,7 @@ Local-development chart for Amazon DynamoDB Local.
 
 ```bash
 mise run validate -- --all --chart dynamodb-local --env ci
-mise run kind-test -- dynamodb-local --profile routed
+uv run chart-manager chart test dynamodb-local --profile routed
 ```
 
 Default Istio host:

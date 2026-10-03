@@ -80,9 +80,8 @@ Worked examples where the halves look like one thing:
   explicit namespace and a `${env}` substitution is interpretation of an
   already-valid document.
 - **`LifecyclePlan`** — looks like an API type, is not one. Nobody authors
-  it; the compiler produces it. It lives in `services/lifecycle/models.py`,
-  projects through `wire.py` with a `schema_version`, and its wire shape is
-  guarded by `tests/test_wire_contracts.py`.
+  it; the compiler produces it. It lives in `services/lifecycle/models.py`
+  and projects through `wire.py`.
 
 ## What stays out of `api/`
 

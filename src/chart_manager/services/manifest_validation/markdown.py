@@ -1,12 +1,6 @@
 """GitHub-flavored markdown projection of a validate run.
 
-Suitable for `$GITHUB_STEP_SUMMARY`, a PR comment, or a Slack upload. This
-was ~300 lines inside `wire.py` -- emoji tables, `<details>` blocks,
-hand-rolled HTML escaping, fence-length computation -- which made that module
-four times the size of every other `wire.py` in the tree and made it a
-renderer wearing a contract's name. `wire.py` keeps the versioned JSON
-payload; markdown is a *rendering* of the same `RunResult` and versions with
-nothing.
+Suitable for `$GITHUB_STEP_SUMMARY`, a PR comment, or a Slack upload.
 
 It stays in `services/` rather than moving to `cli/` because
 `ManifestValidationService.write_summaries` writes `summary.md`, and a
@@ -41,38 +35,25 @@ _MD_STATUS_EMOJI = {
 
 
 def to_markdown(
-    source: RunResult | RunOutcome,
+    outcome: RunOutcome,
     *,
     include_timings: bool = False,
     requested_charts: tuple[str, ...] = (),
     requested_environments: tuple[str, ...] = (),
 ) -> str:
-    """Render a run result or outcome as GitHub-flavored markdown.
+    """Render a run outcome as GitHub-flavored markdown.
 
     Always emits a heading + tally line so an empty result is still
-    self-describing. Passing the full outcome preserves planning
-    diagnostics; accepting a bare RunResult keeps the original projection
-    API compatible.
-
-    The outcome is threaded through as itself rather than flattened into a
-    diagnostics dict first: every field the diagnostics section renders is
-    already typed on `RunOutcome`, and the intermediate `dict[str, object]`
-    only bought two `isinstance` re-checks of shapes this module had just
-    built.
+    self-describing.
     """
-    result = source.result if isinstance(source, RunOutcome) else source
-    outcome = source if isinstance(source, RunOutcome) else None
+    result = outcome.result
     lines: list[str] = ["## validate", ""]
 
     if not result.rows:
-        reason = (
-            None
-            if outcome is None
-            else no_work_reason(
-                outcome,
-                requested_charts=requested_charts,
-                requested_environments=requested_environments,
-            )
+        reason = no_work_reason(
+            outcome,
+            requested_charts=requested_charts,
+            requested_environments=requested_environments,
         )
         lines.append(
             f"_nothing to validate: {reason}_" if reason else "_nothing to validate_"
@@ -84,16 +65,9 @@ def to_markdown(
         )
         if diagnostic_lines:
             lines.extend(["", "### Diagnostics", "", *diagnostic_lines])
-        warnings = _markdown_warnings(result, outcome)
+        warnings = _markdown_warnings(outcome)
         if warnings:
-            # An outcome always carries a no-work reason on an empty run, so
-            # "did a caller hand us diagnostics at all" is exactly "is this
-            # an outcome" -- which decides whether the warnings need their
-            # own heading to stay distinguishable from the section above.
-            if outcome is not None:
-                lines.extend(["", "### Warnings", "", *warnings])
-            else:
-                lines.extend(["", *warnings])
+            lines.extend(["", "### Warnings", "", *warnings])
         return "\n".join(lines).rstrip() + "\n"
 
     # Status table.
@@ -148,7 +122,7 @@ def to_markdown(
     if diagnostic_lines:
         lines.extend(["### Diagnostics", "", *diagnostic_lines, ""])
 
-    warnings = _markdown_warnings(result, outcome)
+    warnings = _markdown_warnings(outcome)
     if warnings:
         lines.extend(["### Warnings", ""])
         lines.extend(warnings)
@@ -243,27 +217,24 @@ def _safe_fence(body: str) -> str:
     return "`" * max(3, longest + 1)
 
 
-def _markdown_warnings(result: RunResult, outcome: RunOutcome | None) -> list[str]:
+def _markdown_warnings(outcome: RunOutcome) -> list[str]:
     """Render operator warnings and spec errors as markdown bullets."""
-    out: list[str] = []
-    if outcome is not None:
-        out.extend(f"- {warning}" for warning in outcome.warnings)
-    if result.spec_errors:
-        out.append(f"- {len(result.spec_errors)} spec error(s):")
-        for err in result.spec_errors:
+    out = [f"- {warning}" for warning in outcome.warnings]
+    spec_errors = outcome.result.spec_errors
+    if spec_errors:
+        out.append(f"- {len(spec_errors)} spec error(s):")
+        for err in spec_errors:
             out.append(f"  - {err}")
     return out
 
 
 def _markdown_diagnostics(
-    outcome: RunOutcome | None,
+    outcome: RunOutcome,
     *,
     requested_charts: tuple[str, ...],
     requested_environments: tuple[str, ...],
 ) -> list[str]:
     """Render non-warning selection diagnostics as concise bullets."""
-    if outcome is None:
-        return []
     lines: list[str] = []
     if requested_charts:
         lines.append(f"- Requested charts: {', '.join(requested_charts)}")

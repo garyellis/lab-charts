@@ -131,7 +131,7 @@ is not deployment evidence.
 mise run validate -- --chart thanos --env ci
 mise run validate -- --chart thanos --env hub
 charts/thanos/tests/source-contract.sh charts/thanos
-mise run kind-test -- thanos --profile minimal
+uv run chart-manager chart test thanos --profile minimal
 ```
 
 The minimal profile installs Prometheus Operator and the dedicated RustFS
