@@ -35,5 +35,5 @@ resources, but it does not scrape metrics or evaluate rules itself.
 
 ```shell
 mise run validate -- --chart prometheus-operator --env ci
-mise run kind-test -- prometheus-operator --profile minimal
+uv run chart-manager chart test prometheus-operator --profile minimal
 ```

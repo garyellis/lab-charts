@@ -46,8 +46,8 @@ Keep `harbor.externalURL` aligned with the VirtualService host when overriding
 
 ```sh
 mise run validate -- --all --chart harbor --env ci
-mise run kind-test -- harbor --profile minimal
-mise run kind-test -- harbor --profile routed
+uv run chart-manager chart test harbor --profile minimal
+uv run chart-manager chart test harbor --profile routed
 ```
 
 CI uses ephemeral storage, disables Trivy, and supplies deterministic local-only

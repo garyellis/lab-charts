@@ -220,7 +220,7 @@ def plan(
     lexical ownership projection that must not inherit lifecycle fanout) and
     narrows the `table` view for `validate`/`test`. `-o json`/`-o yaml`
     deliberately emit the *complete* impact document whatever `--for` says:
-    the payload is a versioned wire contract owned by `services/`, and
+    the payload is a wire contract owned by `services/`, and
     deleting a key from it here would fork that contract in the surface.
 
     The output default is `auto`, so a bare `plan` in a pipe emits `json`

@@ -1,13 +1,8 @@
-"""Versioned wire contract for `event list`.
+"""Wire contract for `event list`.
 
 This module is the single source of truth for the machine-readable shape of
 an event listing. Every surface -- the CLI's `-o json|yaml`, a REST endpoint,
-a Slack app -- projects through `events_to_dict` so they cannot diverge while
-all claiming the same `SCHEMA_VERSION`.
-
-**Editing this module is a breaking change.** Adding a key is additive and
-safe at the current version; renaming, removing, or retyping a key requires
-bumping `SCHEMA_VERSION`.
+a Slack app -- projects through `events_to_dict` so they cannot diverge.
 
 The `events` entries are the stored ledger documents themselves (the shape
 `PlatformLifecycleEvent.to_dict` writes), passed through rather than
@@ -27,20 +22,14 @@ from typing import Any
 
 from chart_manager.services.events.query import EventQuery
 
-# Bump only on a breaking change to the payload shape; additive fields are
-# safe at this version.
-SCHEMA_VERSION = 1
-
 __all__ = [
-    "SCHEMA_VERSION",
     "events_to_dict",
 ]
 
 
 def events_to_dict(events: list[dict[str, Any]], *, query: EventQuery) -> dict[str, Any]:
-    """Project one event listing onto the versioned wire payload."""
+    """Project one event listing onto the wire payload."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "chart": query.chart_name,
         "correlation_id": query.correlation_id,
         "limit": query.limit,

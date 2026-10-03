@@ -88,7 +88,7 @@ def test_upgrade_json_is_stable_and_request_preserves_flags(tmp_path: Path, monk
         '"diagnostics":["registry lookup retried"],"outcome":"pr_open",'
         '"path":"charts/loki","proposed_wrapper_version":"1.2.4",'
         '"pull_request":{"number":7,"url":"https://example.test/pull/7"},'
-        '"repository":"owner/repository","schema_version":1}\n'
+        '"repository":"owner/repository"}\n'
     )
     request = service.requests[0]
     assert request.root == tmp_path.resolve()
@@ -159,7 +159,7 @@ def test_finalize_is_hidden_and_reads_callback_data_from_environment(
         '"current_wrapper_version":"1.2.3","diagnostics":[],'
         '"outcome":"updated","path":"charts/loki",'
         '"proposed_wrapper_version":"2.0.0","pull_request":null,'
-        '"repository":null,"schema_version":1}\n'
+        '"repository":null}\n'
     )
     request = service.requests[0]
     assert request.repo_root == tmp_path.resolve()

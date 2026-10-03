@@ -25,7 +25,7 @@ from chart_manager.services.events.query import (
 )
 from chart_manager.services.events.ref import parse_selector
 from chart_manager.services.events.store import NullEventStore, query_events
-from chart_manager.services.events.wire import SCHEMA_VERSION, events_to_dict
+from chart_manager.services.events.wire import events_to_dict
 
 
 def _doc(**overrides: Any) -> dict[str, Any]:
@@ -228,7 +228,6 @@ def test_the_listing_wire_document_carries_its_selection_and_version() -> None:
     payload = events_to_dict(events, query=query)
 
     assert payload == {
-        "schema_version": SCHEMA_VERSION,
         "chart": "grafana",
         "correlation_id": "grafana@1.2.3",
         "limit": 5,

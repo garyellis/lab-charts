@@ -67,7 +67,7 @@ default. Override `rustfs.storageclass.name` where `local-path` is unavailable.
 
 ```shell
 mise run validate -- --chart rustfs --env ci
-mise run kind-test -- rustfs --profile minimal
+uv run chart-manager chart test rustfs --profile minimal
 ```
 
 The CI overlay creates deterministic, non-default local credentials and a

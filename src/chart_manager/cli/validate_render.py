@@ -7,7 +7,7 @@ carrying Rich console markup (`[red]...[/red]`) that only mean anything to a
 terminal and must not import this module.
 
 The machine-readable projections live in `services.manifest_validation` and
-import no Rich: `wire.to_json` + `SCHEMA_VERSION` for the versioned contract,
+import no Rich: `wire.to_json` for the JSON payload,
 `markdown.to_markdown` for the GitHub-flavored summary.
 
 Note on `failure_details` / `advisory_details`: these return strings

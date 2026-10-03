@@ -241,7 +241,6 @@ def test_chart_list_json_is_the_versioned_catalog_document(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == 1
     assert payload["charts"] == [
         {
             "name": "alloy",

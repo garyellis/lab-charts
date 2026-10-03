@@ -12,7 +12,6 @@ impact explainer carried capability that exists nowhere else, since
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +21,6 @@ from chart_manager.cli import plan as plan_cli
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
-    SCHEMA_VERSION,
     ClusterTestImpact,
     ImpactReason,
     ImpactReasonCode,
@@ -135,7 +133,6 @@ def test_impact_combines_changed_file_sources_and_emits_json(
 
     assert result.exit_code == 0
     assert captured == [["charts/grafana/values-dev.yaml", "kind-config.yaml"]]
-    assert json.loads(result.stdout)["schema_version"] == SCHEMA_VERSION
 
 
 def test_impact_requires_an_explicit_change_source() -> None:
@@ -230,5 +227,4 @@ def test_impact_yaml_preserves_machine_envelope(
 
     assert result.exit_code == 0
     payload = parse_yaml(result.stdout)
-    assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["cluster_test_matrix"][0]["profile"] == "minimal"

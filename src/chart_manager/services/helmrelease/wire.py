@@ -1,14 +1,9 @@
-"""Versioned wire contract for `helmrelease monitor` / `test` / `promote`.
+"""Wire contract for `helmrelease monitor` / `test` / `promote`.
 
 This module is the single source of truth for the machine-readable shape of
 monitor, test, and promote results. Every surface -- the CLI's `--output
 json`, a REST endpoint, a Slack app, a CI step -- projects through
-`monitor_to_dict` / `test_to_dict` / `promote_to_dict` so they cannot diverge
-while all claiming the same `SCHEMA_VERSION`.
-
-**Editing this module is a breaking change.** Adding a key is additive and
-safe at the current version; renaming, removing, or retyping a key requires
-bumping `SCHEMA_VERSION`.
+`monitor_to_dict` / `test_to_dict` / `promote_to_dict` so they cannot diverge.
 
 Deliberately I/O-free and format-free: these functions return plain dicts.
 They take no `file`, no `format=`, no `console=`. Choosing an encoder
@@ -30,12 +25,7 @@ from .promote import PromoteResult
 from .scanner import HelmReleaseMatch
 from .state import PROMOTE_OUTCOME, Transition
 
-# Bump only on a breaking change to the payload shape; additive fields are
-# safe at this version.
-SCHEMA_VERSION = 1
-
 __all__ = [
-    "SCHEMA_VERSION",
     "monitor_to_dict",
     "promote_to_dict",
     "test_to_dict",
@@ -48,9 +38,8 @@ def monitor_to_dict(
     chart: str,
     version: str,
 ) -> dict[str, Any]:
-    """Project a MonitorResult onto the versioned wire payload."""
+    """Project a MonitorResult onto the wire payload."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": "monitor",
         "chart": chart,
         "version": version,
@@ -67,9 +56,8 @@ def test_to_dict(
     chart: str,
     version: str,
 ) -> dict[str, Any]:
-    """Project a TestResult onto the versioned wire payload."""
+    """Project a TestResult onto the wire payload."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": "test",
         "chart": chart,
         "version": version,
@@ -88,7 +76,7 @@ def promote_to_dict(
     environment: str,
     path: Path,
 ) -> dict[str, Any]:
-    """Project a PromoteResult onto the versioned wire payload.
+    """Project a PromoteResult onto the wire payload.
 
     `chart` / `version` / `environment` / `path` echo the request: a
     `PromoteResult` carries the outcome but not what was asked for, and a CI
@@ -103,7 +91,6 @@ def promote_to_dict(
     """
     pr = result.pull_request
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": "promote",
         "chart": chart,
         "version": version,

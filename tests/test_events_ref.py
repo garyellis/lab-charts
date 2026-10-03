@@ -21,7 +21,6 @@ from chart_manager.services.events.ref import (
     ChartSelector,
     parse_ref,
     parse_selector,
-    ref_from_parts,
 )
 
 
@@ -162,26 +161,15 @@ def test_the_error_is_a_domain_error() -> None:
 def test_direct_construction_enforces_the_same_component_rules(
     name: str, version: str
 ) -> None:
-    """Otherwise the flag form -- or P1b's reader -- could bypass the grammar."""
+    """Otherwise a direct caller could bypass the grammar."""
     with pytest.raises(ChartRefError):
         ChartRef(name=name, version=version)
-
-
-def test_ref_from_parts_normalises_the_way_parse_ref_does() -> None:
-    """The two entry points must not come to disagree about a component."""
-    assert ref_from_parts("  grafana  ", "  1.2.3  ") == parse_ref("grafana@1.2.3")
-
-
-def test_ref_from_parts_rejects_an_embedded_separator() -> None:
-    """`--chart 'a@b'` must not smuggle a second separator past the grammar."""
-    with pytest.raises(ChartRefError):
-        ref_from_parts("a@b", "1.2.3")
 
 
 def test_a_ref_is_hashable_and_compares_by_value() -> None:
     """Frozen: it is an identity, and the read side wants it as a dict key."""
     assert parse_ref("grafana@1.2.3") == parse_ref("grafana@1.2.3")
-    assert len({parse_ref("grafana@1.2.3"), ref_from_parts("grafana", "1.2.3")}) == 1
+    assert len({parse_ref("grafana@1.2.3"), parse_ref(" grafana@1.2.3 ")}) == 1
 
 
 # --------------------------------------------------------------------------

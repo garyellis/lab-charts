@@ -161,9 +161,9 @@ def global_options(
     Deliberately absent, and not an oversight:
 
     * **No global `--version` flag.** `--version` already means the *chart*
-      version on `event emit build/promote`, `chart publish`, and all three
-      `helmrelease` commands. One flag, two meanings by position, is a bad
-      flag -- so the CLI's own version is the `version` command (8.6).
+      version on `chart publish` and all three `helmrelease` commands. One
+      flag, two meanings by position, is a bad flag -- so the CLI's own
+      version is the `version` command (8.6).
     """
     # Order matters: the config file must be located before anything reads
     # Settings, because Settings is where the config file's values enter.

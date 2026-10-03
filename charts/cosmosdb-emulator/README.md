@@ -14,7 +14,7 @@ reports that its database is initialized.
 
 ```bash
 mise run validate -- --all --chart cosmosdb-emulator --env ci
-mise run kind-test -- cosmosdb-emulator --profile routed
+uv run chart-manager chart test cosmosdb-emulator --profile routed
 ```
 
 Default Istio hosts:

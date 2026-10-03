@@ -41,13 +41,7 @@ class PromoteRequest:
 class PromoteResult:
     """Outcome of a promote: the one terminal state plus what matched/changed.
 
-    `status` is the whole state machine. The four boolean properties below are
-    compatibility shims over it, kept because seven assertions in
-    `tests/test_helmrelease_promote_service.py` read them and because a
-    caller asking "did this abort?" reads better than a comparison against an
-    enum member. They are derived, never stored, so the pair
-    (`already_open=True`, `pull_request=None`) that the old five-boolean
-    encoding permitted is now unrepresentable.
+    `status` is the whole state machine.
     """
 
     status: PromoteStatus
@@ -56,32 +50,6 @@ class PromoteResult:
     branch: str | None = None
     pull_request: PullRequest | None = None
     downgrades: list[HelmReleaseMatch] = field(default_factory=list)
-
-    @property
-    def no_changes(self) -> bool:
-        """True when every match was already at the target version."""
-        return self.status is PromoteStatus.NO_CHANGES
-
-    @property
-    def dry_run(self) -> bool:
-        """True when the run planned a PR but wrote nothing.
-
-        Note this is the *outcome*, not the request flag: a `--dry-run`
-        invocation that finds no drift reports NO_CHANGES, because "nothing
-        to do" is what happened. The old encoding set both booleans; no
-        caller distinguished them and both suppress the lifecycle event.
-        """
-        return self.status is PromoteStatus.DRY_RUN
-
-    @property
-    def already_open(self) -> bool:
-        """True when a PR for this exact branch was already open."""
-        return self.status is PromoteStatus.ALREADY_OPEN
-
-    @property
-    def aborted(self) -> bool:
-        """True when a downgrade was detected and the confirm callback declined."""
-        return self.status is PromoteStatus.ABORTED
 
 
 def _loggable_repo(url: str) -> str:

@@ -10,7 +10,7 @@ from chart_manager.services.grafana.dashboard_lint import (
     lint_paths,
     rendered_configmap_name,
 )
-from chart_manager.services.grafana.wire import SCHEMA_VERSION, lint_result_to_dict
+from chart_manager.services.grafana.wire import lint_result_to_dict
 
 from .conftest import cli, write_workspace
 
@@ -198,7 +198,6 @@ def test_wire_payload_carries_the_tally_as_well_as_the_findings(
 
     payload = lint_result_to_dict(lint_paths([bad]))
 
-    assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["ok"] is False
     assert payload["files_scanned"] == 1
     assert payload["files_with_findings"] == 1

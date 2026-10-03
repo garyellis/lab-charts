@@ -72,7 +72,6 @@ from chart_manager.services.manifest_validation.app import (
     resolve_phases,
 )
 from chart_manager.services.manifest_validation.markdown import to_markdown
-from chart_manager.services.manifest_validation.models import RunResult
 from chart_manager.services.manifest_validation.paths import RenderOutputState
 from chart_manager.services.manifest_validation.progress import NullDisplay, ProgressDisplay
 from chart_manager.services.manifest_validation.wire import to_json
@@ -515,7 +514,7 @@ def _resolve_display(progress: str, *, mode: str) -> ProgressDisplay:
 
 
 def _emit_result(
-    source: RunResult | RunOutcome,
+    outcome: RunOutcome,
     *,
     app: ManifestValidationService,
     mode: str,
@@ -526,7 +525,7 @@ def _emit_result(
     timings: bool = False,
     github_step_summary: bool = False,
 ) -> None:
-    """Render a RunResult to stdout per `mode` and side-emit summaries.
+    """Render a run outcome to stdout per `mode` and side-emit summaries.
 
     Writes markdown to $GITHUB_STEP_SUMMARY only when the caller passes
     `github_step_summary=True` (driven by the `--github-step-summary`
@@ -543,7 +542,7 @@ def _emit_result(
     `mode` arrives already resolved and already validated (at parse time, by
     `OutputOption`'s callback), so there is no re-check here.
     """
-    result = source.result if isinstance(source, RunOutcome) else source
+    result = outcome.result
 
     # `-o all` renders the markdown once, in the service, and hands it back
     # so the step summary appends those exact bytes. The sidecars are
@@ -551,7 +550,7 @@ def _emit_result(
     # needs the text, and rendering it twice is how two sinks drift.
     sidecar_markdown = (
         app.write_summaries(
-            source,
+            outcome,
             out_dir=out_dir,
             include_timings=timings,
             requested_charts=requested_charts,
@@ -571,7 +570,7 @@ def _emit_result(
         if sidecar_markdown is not None:
             return sidecar_markdown
         return to_markdown(
-            source,
+            outcome,
             include_timings=timings,
             requested_charts=requested_charts,
             requested_environments=requested_environments,
@@ -581,7 +580,7 @@ def _emit_result(
         sys.stdout.write(
             json.dumps(
                 to_json(
-                    source,
+                    outcome,
                     requested_charts=requested_charts,
                     requested_environments=requested_environments,
                 ),

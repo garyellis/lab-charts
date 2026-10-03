@@ -1,7 +1,7 @@
 """CLI surface for Renovate-driven wrapper-chart upgrades.
 
 The service owns discovery, preflight, isolated worktree mutation, and PR
-idempotency. `services/upgrader/wire.py` owns the versioned machine-readable
+idempotency. `services/upgrader/wire.py` owns the machine-readable
 contract. This module owns only Typer's flag shape, the encoder settings, and
 the human-readable rendering.
 """

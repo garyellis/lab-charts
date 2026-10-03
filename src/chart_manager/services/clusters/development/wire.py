@@ -1,14 +1,10 @@
-"""Versioned wire contract for the `chart-manager local` command group.
+"""Wire contract for the `chart-manager local` command group.
 
 Single source of truth for the machine-readable shape of `up`, `down`,
 `reset`, `status`, and the `--dry-run` plan any of the three mutating
 commands prints. Every surface -- the CLI's `-o json`/`-o yaml`, a REST
 endpoint, a CI step -- projects through these functions, so they cannot
-diverge while all claiming the same `SCHEMA_VERSION`.
-
-**Editing this module is a breaking change.** Adding a key is additive and
-safe at the current version; renaming, removing, or retyping a key requires
-bumping `SCHEMA_VERSION`.
+diverge.
 
 Deliberately I/O-free and format-free, like `services/helmrelease/wire.py`:
 these return plain dicts and take no `file`, no `format=`, no `console=`.
@@ -36,12 +32,7 @@ from .models import (
     DevelopmentClusterStatus,
 )
 
-# Bump only on a breaking change to the payload shape; additive fields are
-# safe at this version.
-SCHEMA_VERSION = 1
-
 __all__ = [
-    "SCHEMA_VERSION",
     "action_to_dict",
     "converge_to_dict",
     "plan_to_dict",
@@ -55,7 +46,7 @@ def converge_to_dict(
     command: str,
     cluster_name: str,
 ) -> dict[str, Any]:
-    """Project an `up` / `reset` run onto the versioned wire payload.
+    """Project an `up` / `reset` run onto the wire payload.
 
     `command` and `cluster_name` echo the request: the result carries the
     outcome but not which verb produced it or which cluster it landed on,
@@ -67,7 +58,6 @@ def converge_to_dict(
     the table two different accounts of one run.
     """
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": command,
         "cluster_name": cluster_name,
         "ok": result.ok,
@@ -90,14 +80,13 @@ def action_to_dict(
     *,
     command: str,
 ) -> dict[str, Any]:
-    """Project a `down` onto the versioned wire payload.
+    """Project a `down` onto the wire payload.
 
     `changed` is the whole answer: `ok` is unconditionally true because a
     cluster that was already stopped is a success, and a caller that needs
     to know whether this invocation is what stopped it reads `changed`.
     """
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": command,
         "cluster_name": result.cluster_name,
         "ok": result.ok,
@@ -107,7 +96,7 @@ def action_to_dict(
 
 
 def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
-    """Project a cluster snapshot onto the versioned wire payload.
+    """Project a cluster snapshot onto the wire payload.
 
     `ok` is `exists`, not "everything is healthy". `local status` reports;
     it does not grade. A release stuck in `pending-upgrade` is what the
@@ -121,7 +110,6 @@ def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
     is not the same answer as an empty list beside `null`.
     """
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": "status",
         "cluster_name": status.cluster_name,
         "ok": status.exists,
@@ -149,7 +137,7 @@ def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
 
 
 def plan_to_dict(plan: DevelopmentClusterPlan) -> dict[str, Any]:
-    """Project a `--dry-run` plan onto the versioned wire payload.
+    """Project a `--dry-run` plan onto the wire payload.
 
     `dry_run: true` is a key rather than an inference from `command`,
     because the same `command` value appears on the payload a real run
@@ -157,7 +145,6 @@ def plan_to_dict(plan: DevelopmentClusterPlan) -> dict[str, Any]:
     converge that never happened.
     """
     return {
-        "schema_version": SCHEMA_VERSION,
         "command": plan.command,
         "dry_run": True,
         "cluster_name": plan.cluster_name,

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.lifecycle import (
-    SCHEMA_VERSION,
     ImpactReasonCode,
     LifecycleImpactService,
     impact_to_dict,
@@ -344,7 +343,6 @@ def test_impact_is_deterministic_deduplicated_and_json_serializable(
     ]
     assert len(projected["validation_selection"]) == 1
     assert len(projected["cluster_test_matrix"]) == 1
-    assert projected["schema_version"] == SCHEMA_VERSION
     assert json.loads(json.dumps(projected)) == projected
 
 

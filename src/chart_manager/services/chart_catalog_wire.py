@@ -1,22 +1,12 @@
-"""Versioned wire contracts for `chart list` and `chart show`.
+"""Wire contracts for `chart list` and `chart show`.
 
 This module is the single source of truth for the machine-readable shapes
 those two commands emit. Every surface -- the CLI's `-o json|yaml`, a REST
 endpoint, a Slack app -- projects through these functions, so a second
-surface cannot answer "what charts are there?" with a different document
-while claiming the same `SCHEMA_VERSION`.
+surface cannot answer "what charts are there?" with a different document.
 
-**Editing `catalog_to_dict` is a breaking change.** Adding a key is additive
-and safe at the current version; renaming, removing, or retyping one
-requires bumping `SCHEMA_VERSION`.
-
-`lifecycle_to_dict` carries no `schema_version` on purpose. Its payload is
-the authored `ChartLifecycle` envelope itself, which already versions
-itself in-band with `apiVersion: chartmanager.io/v1alpha1` -- the same
-string a chart author types into `chart-lifecycle.yaml`. Wrapping it in a
-second version counter would mean two numbers describing one document, and
-the round trip "what did I author / what did the tool normalize it to"
-would stop being a plain diff.
+`lifecycle_to_dict` returns the authored `ChartLifecycle` envelope itself,
+so "what did I author / what did the tool normalize it to" is a plain diff.
 
 Deliberately I/O-free and format-free, matching the other wire modules:
 these functions return plain dicts. Choosing an encoder (`json.dumps`
@@ -31,16 +21,12 @@ from typing import Any
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.services.chart_catalog import ChartCatalogEntry
 
-#: Bump only on a breaking change to the `chart list` payload.
-SCHEMA_VERSION = 1
-
-__all__ = ["SCHEMA_VERSION", "catalog_to_dict", "lifecycle_to_dict"]
+__all__ = ["catalog_to_dict", "lifecycle_to_dict"]
 
 
 def catalog_to_dict(entries: Sequence[ChartCatalogEntry]) -> dict[str, Any]:
-    """Project the chart catalog onto the versioned `chart list` payload."""
+    """Project the chart catalog onto the `chart list` payload."""
     return {
-        "schema_version": SCHEMA_VERSION,
         "charts": [_entry_to_dict(entry) for entry in entries],
     }
 

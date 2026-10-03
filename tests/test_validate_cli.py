@@ -3,7 +3,7 @@
 We don't shell out to helm/kubeconform/kyverno here — that's integration
 territory. These tests exercise the CLI's emission, format routing,
 side-file writing, and GITHUB_STEP_SUMMARY behavior by driving the
-internal `_emit_result` helper with a fabricated RunResult and by
+internal `_emit_result` helper with a fabricated RunOutcome and by
 invoking `--help` / `--output unknown` through Typer's CliRunner.
 """
 
@@ -53,8 +53,8 @@ def _emit(source, **options) -> None:
     )
 
 
-def _result() -> RunResult:
-    return RunResult(
+def _passing_outcome() -> RunOutcome:
+    result = RunResult(
         rows=(
             RowResult(
                 row=WorklistRow(chart="grafana", env="dev", release="grafana", namespace="lab-dev"),
@@ -67,6 +67,7 @@ def _result() -> RunResult:
         ),
         rendered_root=Path("/tmp/x"),
     )
+    return RunOutcome(result=result, out_dir=result.rendered_root)
 
 
 class _Captured(NamedTuple):
@@ -108,13 +109,12 @@ def _capture_stdout(fn) -> str:
     return _capture(fn).stdout
 
 
-def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None:
+def test_emit_json_writes_valid_json(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: _emit(_result(), mode="json", out_dir=out_dir)
+        lambda: _emit(_passing_outcome(), mode="json", out_dir=out_dir)
     )
     payload = json.loads(output)
-    assert payload["schema_version"] == 1
     assert payload["exit_code"] == 0
     assert payload["summary"]["rows"] == 1
     # JSON format must not write summary.md
@@ -123,7 +123,7 @@ def test_emit_json_writes_valid_json_with_schema_version(tmp_path: Path) -> None
 
 def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
     output = _capture_stdout(
-        lambda: _emit(_result(), mode="md", out_dir=tmp_path / "out")
+        lambda: _emit(_passing_outcome(), mode="md", out_dir=tmp_path / "out")
     )
     assert output.startswith("## validate")
     assert "| Chart |" in output
@@ -134,7 +134,7 @@ def test_emit_md_writes_markdown_starting_with_heading(tmp_path: Path) -> None:
 def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: _emit(_result(), mode="table", out_dir=out_dir)
+        lambda: _emit(_passing_outcome(), mode="table", out_dir=out_dir)
     )
     assert "PASS" in output  # text-table cell text
     assert "Chart" in output
@@ -145,7 +145,7 @@ def test_emit_table_prints_table_and_does_not_emit_summary_md(tmp_path: Path) ->
 def test_emit_all_prints_table_and_writes_summary_md_and_json(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     output = _capture_stdout(
-        lambda: _emit(_result(), mode="all", out_dir=out_dir)
+        lambda: _emit(_passing_outcome(), mode="all", out_dir=out_dir)
     )
     # Text table on stdout.
     assert "PASS" in output
@@ -159,7 +159,6 @@ def test_emit_all_prints_table_and_writes_summary_md_and_json(tmp_path: Path) ->
     summary_json = out_dir / "summary.json"
     assert summary_json.is_file()
     payload = json.loads(summary_json.read_text())
-    assert payload["schema_version"] == 1
     assert payload["summary"]["rows"] == 1
 
 
@@ -171,7 +170,7 @@ def test_github_step_summary_written_when_flag_passed_and_env_set(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
@@ -196,7 +195,7 @@ def test_github_step_summary_not_written_when_flag_not_passed(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             # github_step_summary defaults to False
@@ -213,7 +212,7 @@ def test_github_step_summary_warns_when_flag_passed_but_env_unset(
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     narration = _capture(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
@@ -232,7 +231,7 @@ def test_github_step_summary_appends_across_calls(
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
     _capture_stdout(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
@@ -241,7 +240,7 @@ def test_github_step_summary_appends_across_calls(
     first_len = step_summary.stat().st_size
     _capture_stdout(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
@@ -263,7 +262,7 @@ def test_github_step_summary_unwritable_does_not_crash(
     # Must not raise.
     narration = _capture(
         lambda: _emit(
-            _result(),
+            _passing_outcome(),
             mode="table",
             out_dir=tmp_path / "out",
             github_step_summary=True,
@@ -336,12 +335,14 @@ def test_emit_json_includes_elapsed_seconds_when_timings_set(tmp_path: Path) -> 
     )
     out = _capture_stdout(
         lambda: _emit(
-            result, mode="json", out_dir=tmp_path / "out", timings=True
+            RunOutcome(result=result, out_dir=result.rendered_root),
+            mode="json",
+            out_dir=tmp_path / "out",
+            timings=True,
         )
     )
     payload = json.loads(out)
     assert payload["rows"][0]["phases"]["render"]["elapsed_seconds"] == 1.5
-    assert payload["schema_version"] == 1  # additive, no bump
 
 
 def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_path: Path) -> None:
@@ -349,7 +350,7 @@ def test_emit_json_always_emits_elapsed_seconds_key_null_when_unmeasured(tmp_pat
     # can rely on the key. null when --timings is off or the phase didn't
     # record one.
     out = _capture_stdout(
-        lambda: _emit(_result(), mode="json", out_dir=tmp_path / "out")
+        lambda: _emit(_passing_outcome(), mode="json", out_dir=tmp_path / "out")
     )
     payload = json.loads(out)
     render = payload["rows"][0]["phases"]["render"]
@@ -389,7 +390,7 @@ def test_emit_json_projects_outcome_and_requested_filter_diagnostics(
 def test_text_table_includes_elapsed_column_when_timings_set(tmp_path: Path) -> None:
     output = _capture_stdout(
         lambda: _emit(
-            _result(), mode="table", out_dir=tmp_path / "out", timings=True
+            _passing_outcome(), mode="table", out_dir=tmp_path / "out", timings=True
         )
     )
     assert "Elapsed" in output

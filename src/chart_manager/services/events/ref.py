@@ -11,7 +11,7 @@ listener could not reach it.
 So the grammar lives here, and the surface passes through what the user typed
 (design commitment 6: *the surface never derives a request field from a
 heuristic -- it passes what the user typed to a service resolver*).
-`cli/events.py` calls `parse_ref` and `ref_from_parts`; nothing in `cli/`
+`cli/events.py` calls `parse_ref`; nothing in `cli/`
 looks for an `@`.
 
 The rules, and why each is a *domain* rule rather than a CLI rule
@@ -65,7 +65,6 @@ __all__ = [
     "ChartSelector",
     "parse_ref",
     "parse_selector",
-    "ref_from_parts",
 ]
 
 #: The one character that joins the two halves. Named so the schema comment
@@ -189,18 +188,6 @@ def parse_ref(text: str) -> ChartRef:
             "always knows the version it reports on."
         )
     return ChartRef(name=selector.name, version=selector.version)
-
-
-def ref_from_parts(name: str, version: str) -> ChartRef:
-    """Build a ref from two already-separated halves.
-
-    The entry point for the deprecated `--chart` / `--chart-version` flag
-    pair. It normalises the same way `parse_ref` does -- rather than the
-    surface calling `.strip()` and `ChartRef(...)` itself -- so the flag form
-    and the positional form cannot come to disagree about what a component
-    may be.
-    """
-    return ChartRef(name=name.strip(), version=version.strip())
 
 
 def _validate(label: str, value: str) -> None:

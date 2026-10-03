@@ -67,8 +67,8 @@ class LocalClusterSpec(StrictApiModel):
 class LocalCluster(StrictApiModel):
     """Envelope for one authored local environment.
 
-    Read from the path selected by ``ChartWorkspace.localCluster`` (or the
-    legacy default when no workspace exists). One per environment.
+    Read from the path selected by ``ChartWorkspace.localCluster``. One per
+    environment.
     """
 
     api_version: ApiVersion = Field(alias="apiVersion")
