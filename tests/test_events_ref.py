@@ -84,7 +84,7 @@ def test_surrounding_whitespace_is_stripped() -> None:
 
 
 @pytest.mark.parametrize(
-    ("token", "because"),
+    ("token", "_because"),
     [
         ("", "empty"),
         ("   ", "empty"),
@@ -99,7 +99,7 @@ def test_surrounding_whitespace_is_stripped() -> None:
         ("grafana@1.2 .3", "whitespace inside the version"),
     ],
 )
-def test_malformed_refs_are_rejected(token: str, because: str) -> None:
+def test_malformed_refs_are_rejected(token: str, _because: str) -> None:
     with pytest.raises(ChartRefError):
         parse_ref(token)
 

@@ -88,6 +88,7 @@ class Settings(BaseSettings):
         Repository roots intentionally have no command-line source. Environment
         or this config file overrides nearest-marker discovery.
         """
+        del dotenv_settings
         return (
             init_settings,
             env_settings,
