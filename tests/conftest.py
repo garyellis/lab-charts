@@ -118,6 +118,29 @@ def fresh_cli_invocation() -> Iterator[None]:
         reset_invocation()
 
 
+@pytest.fixture(autouse=True)
+def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a developer's repository-root and removed layout variables out.
+
+    `CHART_MANAGER_ROOT` would point every CLI test at the developer's
+    checkout instead of the test's `tmp_path`, and the two removed layout
+    variables make `Settings()` refuse to build at all.
+    """
+    for var in ("CHART_MANAGER_ROOT", "CHART_MANAGER_CHARTS_DIR", "CHART_MANAGER_LOCAL_CONFIG"):
+        monkeypatch.delenv(var, raising=False)
+
+
+#: The layout `workspace_for` and `write_workspace` give a test unless it
+#: overrides a field -- the conventional one this repository also uses.
+_DEFAULT_LAYOUT: dict[str, Any] = {
+    "name": "test-workspace",
+    "charts_dir": CHARTS_DIR,
+    "local_cluster": LOCAL_CONFIG,
+    "render_dir": Path(".chart-manager/rendered"),
+    "policies_dir": Path("policies"),
+}
+
+
 def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
     """A `RepositoryWorkspace` over ``root`` without reading workspace.yaml.
 
@@ -125,13 +148,55 @@ def workspace_for(root: Path, **fields: Any) -> RepositoryWorkspace:
     build one here instead of each spelling the constructor; ``fields``
     override the layout (``charts_dir=Path("deploy/helm")``, ...).
     """
-    return RepositoryWorkspace(root=root.resolve(), **fields)
+    return RepositoryWorkspace(root=root.resolve(), **{**_DEFAULT_LAYOUT, **fields})
+
+
+def write_workspace(
+    root: Path,
+    *,
+    charts_dir: str = "charts",
+    validation: Mapping[str, Any] | None = None,
+    **spec: Any,
+) -> Path:
+    """Write a minimal valid `.chart-manager/workspace.yaml` under ``root``.
+
+    Repository-bound commands require the marker, so a test that drives one
+    against a synthetic tree writes it here. ``validation`` is the raw
+    `spec.validation` mapping and is left out by default: a test that runs
+    the kubeconform schema phase has to opt into a schema policy (and a
+    lock) deliberately. ``spec`` adds or overrides other camelCase spec keys
+    (``fanout={...}``, ``localCluster="..."``). Returns the marker path.
+    """
+    body: dict[str, Any] = {
+        "chartsDir": charts_dir,
+        "localCluster": LOCAL_CONFIG.as_posix(),
+        "renderDir": ".chart-manager/rendered",
+        "policiesDir": "policies",
+        **spec,
+    }
+    if validation is not None:
+        body["validation"] = dict(validation)
+    marker = root / ".chart-manager" / "workspace.yaml"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        dump_yaml(
+            {
+                "apiVersion": "chartmanager.io/v1alpha1",
+                "kind": "ChartWorkspace",
+                "metadata": {"name": "test-workspace"},
+                "spec": body,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return marker
 
 
 @pytest.fixture
 def chart_root(tmp_path: Path) -> Path:
-    """An empty repo root containing a `charts/` directory."""
+    """An empty repo root: a `charts/` directory and a workspace.yaml."""
     (tmp_path / "charts").mkdir()
+    write_workspace(tmp_path)
     return tmp_path
 
 

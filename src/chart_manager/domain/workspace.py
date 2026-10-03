@@ -11,15 +11,11 @@ from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, WorkspaceValidation
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
-from chart_manager.plumbing.errors import SpecError, YamlError
+from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
 WORKSPACE_FILE = Path(".chart-manager/workspace.yaml")
 SCHEMA_LOCK_FILE = Path(".chart-manager/schemas.lock.yaml")
-LEGACY_CHARTS_DIR = Path("charts")
-LEGACY_LOCAL_CLUSTER = Path(".chart-manager/local-cluster.yaml")
-LEGACY_RENDER_DIR = Path(".chart-manager/rendered")
-LEGACY_POLICIES_DIR = Path("policies")
 
 
 @dataclass(frozen=True)
@@ -27,16 +23,15 @@ class RepositoryWorkspace:
     """One compiled, immutable interpretation of a repository checkout."""
 
     root: Path
-    name: str | None = None
-    charts_dir: Path = LEGACY_CHARTS_DIR
-    local_cluster: Path = LEGACY_LOCAL_CLUSTER
-    render_dir: Path = LEGACY_RENDER_DIR
-    policies_dir: Path = LEGACY_POLICIES_DIR
+    name: str
+    charts_dir: Path
+    local_cluster: Path
+    render_dir: Path
+    policies_dir: Path
     validation: WorkspaceValidation | None = None
     validation_fanout: tuple[str, ...] = ()
     cluster_test_fanout: tuple[str, ...] = ()
     shared_prerequisites: tuple[str, ...] = ()
-    authored: bool = False
 
     @property
     def marker(self) -> Path:
@@ -167,35 +162,43 @@ def discover_workspace_root(start: Path) -> Path | None:
     return None
 
 
-def resolve_repository_root(*, configured: Path | None, start: Path | None = None) -> Path:
-    """Apply operator override, nearest-marker discovery, then cwd fallback."""
-    if configured is not None:
-        return configured.resolve()
-    origin = (start or Path.cwd()).resolve()
-    return discover_workspace_root(origin) or origin
-
-
-def load_repository_workspace(
-    root: Path,
+def resolve_repository_root(
     *,
-    legacy_charts_dir: Path = LEGACY_CHARTS_DIR,
-    legacy_local_cluster: Path = LEGACY_LOCAL_CLUSTER,
-    legacy_layout_explicit: bool = False,
-) -> RepositoryWorkspace:
-    """Load the fixed resource once, or compile the documented legacy fallback."""
+    configured: Path | None,
+    configured_by: str | None = None,
+    start: Path | None = None,
+) -> Path:
+    """Return the workspace root: the operator override, else the nearest marker.
+
+    An explicit root is taken as given -- no walk-up -- so pointing
+    `CHART_MANAGER_ROOT` at a subdirectory is an error rather than a silent
+    switch to whichever ancestor happens to hold a marker. `configured_by`
+    describes where an explicit root came from, path included
+    (`CHART_MANAGER_ROOT=/srv/charts`), so the error names the setting to
+    fix; `None` means a caller passed the path and the path alone is named.
+    """
+    if configured is not None:
+        resolved = configured.resolve()
+        if not (resolved / WORKSPACE_FILE).is_file():
+            source = configured_by or str(resolved)
+            raise WorkspaceNotFoundError(f"{source} has no {WORKSPACE_FILE.as_posix()}")
+        return resolved
+    origin = (start or Path.cwd()).resolve()
+    discovered = discover_workspace_root(origin)
+    if discovered is None:
+        raise WorkspaceNotFoundError(
+            f"no {WORKSPACE_FILE.as_posix()} in {origin} or any parent; run from a "
+            "chart repository checkout or set CHART_MANAGER_ROOT"
+        )
+    return discovered
+
+
+def load_repository_workspace(root: Path) -> RepositoryWorkspace:
+    """Load and compile the fixed workspace resource under ``root``."""
     resolved_root = root.resolve()
     marker = resolved_root / WORKSPACE_FILE
     if not marker.is_file():
-        return RepositoryWorkspace(
-            root=resolved_root,
-            name=resolved_root.name,
-            charts_dir=legacy_charts_dir,
-            local_cluster=legacy_local_cluster,
-        )
-    if legacy_layout_explicit:
-        raise SpecError(
-            f"{marker} is authoritative; remove legacy charts_dir/local_config settings"
-        )
+        raise WorkspaceNotFoundError(f"{resolved_root} has no {WORKSPACE_FILE.as_posix()}")
     try:
         document = load_yaml_file(marker)
         resource = ChartWorkspace.model_validate(document)
@@ -230,15 +233,10 @@ def load_repository_workspace(
         validation_fanout=tuple(spec.fanout.validation),
         cluster_test_fanout=tuple(spec.fanout.cluster_test),
         shared_prerequisites=tuple(spec.cluster_test.shared_prerequisites),
-        authored=True,
     )
 
 
 __all__ = [
-    "LEGACY_CHARTS_DIR",
-    "LEGACY_LOCAL_CLUSTER",
-    "LEGACY_POLICIES_DIR",
-    "LEGACY_RENDER_DIR",
     "SCHEMA_LOCK_FILE",
     "WORKSPACE_FILE",
     "RepositoryWorkspace",

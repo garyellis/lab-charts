@@ -55,7 +55,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import cli
+from .conftest import cli, write_workspace
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 _CLI = _SRC / "chart_manager" / "cli"
@@ -72,6 +72,7 @@ _STREAM_KEYWORDS = frozenset({"file", "stderr"})
 @pytest.fixture
 def root(tmp_path: Path) -> Path:
     """An empty repository root: every command below is cluster-free."""
+    write_workspace(tmp_path)
     return tmp_path
 
 

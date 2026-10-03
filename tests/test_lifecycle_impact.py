@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.lifecycle import (
     SCHEMA_VERSION,
@@ -14,13 +13,13 @@ from chart_manager.services.lifecycle import (
     impact_to_dict,
 )
 
-from .conftest import MakeChart
+from .conftest import MakeChart, workspace_for
 
 
 def _service(root: Path) -> LifecycleImpactService:
     return LifecycleImpactService(
-        workspace=RepositoryWorkspace(
-            root=root.resolve(),
+        workspace=workspace_for(
+            root,
             validation_fanout=(
                 "src/chart_manager/services/manifest_validation/**",
                 "src/chart_manager/integrations/helm.py",
@@ -161,7 +160,7 @@ def test_local_bootstrap_chart_change_fans_out_without_cni_knowledge(
         encoding="utf-8",
     )
     config = chart_root / ".chart-manager/local-cluster.yaml"
-    config.parent.mkdir()
+    config.parent.mkdir(exist_ok=True)
     config.write_text(
         """
 apiVersion: chartmanager.io/v1alpha1
@@ -303,8 +302,8 @@ def test_validation_and_cluster_fanout_lists_are_independent(
 ) -> None:
     chart = make_chart("app")
     _with_validation(chart)
-    workspace = RepositoryWorkspace(
-        root=chart_root,
+    workspace = workspace_for(
+        chart_root,
         validation_fanout=("validation-tool/**",),
         cluster_test_fanout=("cluster-tool/**",),
     )

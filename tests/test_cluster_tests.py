@@ -311,7 +311,7 @@ def _migration_service(
 ) -> tuple[EphemeralTestClusterService, _MigrationKubectl]:
     (tmp_path / "kind-config.yaml").write_text("kind: Cluster\n", encoding="utf-8")
     local_cluster = tmp_path / ".chart-manager/local-cluster.yaml"
-    local_cluster.parent.mkdir()
+    local_cluster.parent.mkdir(exist_ok=True)
     local_cluster.write_text(
         """
 apiVersion: chartmanager.io/v1alpha1

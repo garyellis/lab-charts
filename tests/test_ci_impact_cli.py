@@ -30,7 +30,7 @@ from chart_manager.services.lifecycle import (
     ValidationImpact,
 )
 
-from .conftest import cli
+from .conftest import cli, write_workspace
 
 
 def _impact_result(
@@ -105,6 +105,7 @@ def test_impact_combines_changed_file_sources_and_emits_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    write_workspace(tmp_path)
     changed_files = tmp_path / "changes.txt"
     changed_files.write_text(
         "\ncharts/grafana/values-dev.yaml\n\n",

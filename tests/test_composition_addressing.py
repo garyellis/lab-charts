@@ -90,24 +90,24 @@ def test_defaults_add_no_flags_and_no_env() -> None:
     assert {record.timeout for record in container.runner.records} == {None}
 
 
-def test_lab_service_gets_every_adapter_configured() -> None:
+def test_lab_service_gets_every_adapter_configured(chart_root: Path) -> None:
     """The service can no longer fall back to an unconfigured adapter."""
     container = _configured()
 
-    service = container.development_cluster_service(Path("."))
+    service = container.development_cluster_service(chart_root)
 
     assert service.kubectl.context == "kind-b"
     assert service.helm._context == "kind-b"
     assert service.expose.kubectl.context == "kind-b"
 
 
-def test_sandbox_service_gets_configured_adapters() -> None:
+def test_sandbox_service_gets_configured_adapters(chart_root: Path) -> None:
     container = _configured()
 
-    assert container.ephemeral_test_cluster_service(Path(".")).kubectl.context == "kind-b"
+    assert container.ephemeral_test_cluster_service(chart_root).kubectl.context == "kind-b"
 
 
-def test_one_client_factory_serves_both_cluster_services() -> None:
+def test_one_client_factory_serves_both_cluster_services(chart_root: Path) -> None:
     """Both services rebind through the same factory, and it binds all three.
 
     There used to be two closures here of two different arities -- three
@@ -129,8 +129,8 @@ def test_one_client_factory_serves_both_cluster_services() -> None:
     # `==` rather than `is`: a bound method is a fresh object per attribute
     # access, and equal ones are the same function on the same container.
     assert (
-        container.development_cluster_service(Path("."))._client_factory
-        == container.ephemeral_test_cluster_service(Path("."))._client_factory
+        container.development_cluster_service(chart_root)._client_factory
+        == container.ephemeral_test_cluster_service(chart_root)._client_factory
         == container.cluster_clients
     )
 

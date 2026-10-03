@@ -191,7 +191,6 @@ def grafana_dashboard_lint(
     from chart_manager.services.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
-    workspace = _container().workspace()
     # `discover_dashboards` reads the container's workspace rather than a
     # `Settings()` of its own. Lint's three entry points are free functions
     # over paths -- no adapter, no state, nothing to memoize -- so there is
@@ -200,10 +199,13 @@ def grafana_dashboard_lint(
     # bypass actually broke was the configuration seam, and reading
     # `container().settings` closes exactly that: a caller that injected a
     # Settings discovers dashboards under the chart directory it named.
+    #
+    # Only discovery needs the workspace. `--path` names the files outright,
+    # so it lints them from anywhere, chart repository or not.
     targets = (
         expand_targets(path)
         if path
-        else discover_dashboards(workspace=workspace)
+        else discover_dashboards(workspace=_container().workspace())
     )
     if not targets:
         # Linting nothing is not the same as linting clean. A wrong workspace, a

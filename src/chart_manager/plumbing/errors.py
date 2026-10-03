@@ -13,6 +13,15 @@ class SpecError(ChartManagerError):
     """Raised when authored chart-manager configuration is missing or invalid."""
 
 
+class WorkspaceNotFoundError(ChartManagerError):
+    """Raised when no `.chart-manager/workspace.yaml` marks the repository.
+
+    Not a `SpecError`: nothing authored is wrong, the command was run from
+    (or pointed at) somewhere that is not a chart repository checkout. The
+    surface maps it to the environment outcome, exit 5.
+    """
+
+
 class CapabilityUnavailableError(ChartManagerError):
     """Raised when a requested chart-manager capability is not enabled."""
 

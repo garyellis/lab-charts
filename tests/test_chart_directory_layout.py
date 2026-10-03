@@ -1,11 +1,17 @@
-"""The managed chart root is one configuration value across every subsystem."""
+"""The managed chart root is one workspace value across every subsystem.
+
+`spec.chartsDir` in `.chart-manager/workspace.yaml` is the only place the
+chart root is configured. A nested value (`deploy/helm`) is the case that
+catches a subsystem quietly assuming `charts/`, so every consumer is
+asserted against one here: change mapping, git, the planner, upgrade path
+resolution, dashboard discovery, and the services the container builds.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from chart_manager.composition import Container
 from chart_manager.domain.charts import ChartRepository
@@ -14,7 +20,7 @@ from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.settings import Settings
-from tests.conftest import LOCAL_CONFIG, FakeCommandRunner, workspace_for
+from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
 
@@ -27,19 +33,6 @@ def _write_chart(root: Path, name: str) -> Path:
         encoding="utf-8",
     )
     return chart
-
-
-def test_settings_default_and_environment_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("CHART_MANAGER_CHARTS_DIR", raising=False)
-    assert Settings().charts_dir == Path("charts")
-
-    monkeypatch.setenv("CHART_MANAGER_CHARTS_DIR", "deploy/helm")
-    assert Settings().charts_dir == CUSTOM_CHARTS_DIR
-    assert Settings(charts_dir=Path("explicit/charts")).charts_dir == Path(
-        "explicit/charts"
-    )
 
 
 def test_log_level_has_case_insensitive_environment_override(
@@ -70,34 +63,6 @@ def test_offline_environment_variable_has_no_settings_surface(
     assert not hasattr(Settings(), "offline")
 
 
-def test_local_resource_file_has_default_and_environment_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("CHART_MANAGER_LOCAL_CONFIG", raising=False)
-    assert Settings().local_config == LOCAL_CONFIG
-
-    monkeypatch.setenv("CHART_MANAGER_LOCAL_CONFIG", "ops/local-dev.yaml")
-    assert Settings().local_config == Path("ops/local-dev.yaml")
-
-
-@pytest.mark.parametrize(
-    "value",
-    [Path("."), Path("../charts"), Path("deploy/../charts"), Path("/tmp/charts")],
-)
-def test_settings_rejects_unsafe_chart_directories(value: Path) -> None:
-    with pytest.raises(ValidationError):
-        Settings(charts_dir=value)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [Path("."), Path("../local.yaml"), Path("ops/../local.yaml"), Path("/tmp/local.yaml")],
-)
-def test_settings_rejects_unsafe_local_config_paths(value: Path) -> None:
-    with pytest.raises(ValidationError):
-        Settings(local_config=value)
-
-
 def test_workspace_parses_nested_chart_prefix(tmp_path: Path) -> None:
     workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
 
@@ -121,7 +86,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     dashboard.write_text("{}", encoding="utf-8")
 
     workspace = workspace_for(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
-    repository = ChartRepository(tmp_path, charts_dir=CUSTOM_CHARTS_DIR)
+    repository = ChartRepository(tmp_path, charts_dir=workspace.charts_dir)
     assert repository.list_names() == ["demo"]
     assert repository.get("demo").path == chart
 
@@ -139,7 +104,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     _, resolved, _ = resolve_chart_path(
         tmp_path,
         Path("demo"),
-        charts_dir=CUSTOM_CHARTS_DIR,
+        charts_dir=workspace.charts_dir,
     )
     assert resolved == chart.resolve()
     assert discover_dashboards(workspace=workspace) == [dashboard]
@@ -176,20 +141,17 @@ spec:
     assert result.spec_errors == ()
 
 
-def test_an_injected_settings_reaches_the_services_the_cli_used_to_build(
-    tmp_path: Path,
-) -> None:
-    """`Container(settings=...)` is the seam the CLI bypass made unreachable.
+def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path) -> None:
+    """One container's workspace answers for every service it builds.
 
-    Each of these four was constructed at the surface from a `Settings()` of
+    Each of these four was once constructed at the surface from a layout of
     its own, so the container's configuration was not what answered the
-    question -- the surface's was, and nothing could change it. The point of
-    the check is that one injected value now decides all of them: pass a
-    chart directory here and `chart list`, `plan`, `local up` and
-    `chart cache clean` all address it.
+    question. Write a nested `chartsDir` once and `chart list`, `plan`,
+    `local up` and `chart cache clean` all address it.
     """
     _write_chart(tmp_path, "demo")
-    container = Container(Settings(charts_dir=CUSTOM_CHARTS_DIR))
+    write_workspace(tmp_path, charts_dir=CUSTOM_CHARTS_DIR.as_posix())
+    container = Container(Settings())
 
     catalog = container.chart_catalog_service(tmp_path).list_entries()
     assert [entry.name for entry in catalog] == ["demo"]

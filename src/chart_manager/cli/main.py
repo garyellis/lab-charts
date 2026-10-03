@@ -39,12 +39,12 @@ from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
-from chart_manager.composition import Settings
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
     MissingToolError,
     SpecError,
+    WorkspaceNotFoundError,
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
@@ -56,7 +56,7 @@ from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaSourceError,
 )
-from chart_manager.settings import DEFAULT_CONFIG_FILE, set_config_file
+from chart_manager.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
 
 # --- the command tree ------------------------------------------------------
 
@@ -274,7 +274,9 @@ app.add_typer(schemas_app, name="schemas")
 #: before this every one of them exited 1 (except the absent binary, which
 #: already had its own clause). A `CapabilityUnavailableError` deliberately
 #: falls through to `FAILED`: asking a chart for a capability it has switched
-#: off is not invalid configuration, so it is not a spec error.
+#: off is not invalid configuration, so it is not a spec error. Nor is a
+#: missing `workspace.yaml`: the command ran outside a chart repository, which
+#: is the environment's fault (5), not the configuration's.
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
@@ -284,6 +286,7 @@ _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (KubeconformSchemaLockError, Outcome.SPEC),
     (KubeconformSchemaError, Outcome.TOOL),
     (SpecError, Outcome.SPEC),
+    (WorkspaceNotFoundError, Outcome.ENVIRONMENT),
     (ChartManagerError, Outcome.FAILED),
 )
 
@@ -329,7 +332,7 @@ def main() -> None:
         # Bootstrap logging before argv is parsed, so `--config` is not known
         # yet. The invocation's own Settings come from its Container, built
         # by the root callback.
-        settings = Settings()
+        settings = load_settings()
         setup_logging(settings.log_level, fmt=settings.log_format)
         app()
     except ChartManagerError as exc:

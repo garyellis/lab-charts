@@ -66,11 +66,6 @@ def load_kubeconform_schema_runtime(
         raise KubeconformSchemaConfigurationError(
             f"{workspace.marker} has no spec.validation schema policy"
         )
-    if not workspace.name:
-        raise KubeconformSchemaConfigurationError(
-            f"{workspace.marker} must declare metadata.name before schemas can be loaded"
-        )
-    workspace_name = workspace.name
     path = workspace.root / SCHEMA_LOCK_FILE
     if not path.is_file():
         raise KubeconformSchemaLockError(
@@ -85,7 +80,7 @@ def load_kubeconform_schema_runtime(
             catalog_track=authored.schemas.catalog.track,
         ),
         lock,
-        workspace=workspace_name,
+        workspace=workspace.name,
     )
     if mismatches:
         raise KubeconformSchemaLockError(

@@ -418,12 +418,12 @@ class ManifestValidationService:
         needs_schema_runtime = "schema" in request.phases and any(
             build.targets[row.chart].spec.validators.kubeconform for row in rows
         )
-        if needs_schema_runtime and workspace.authored and workspace.validation is None:
-            raise KubeconformSchemaConfigurationError(
-                f"{workspace.marker} has no spec.validation schema policy; "
-                "configure it before running schema validation"
-            )
-        if needs_schema_runtime and workspace.authored:
+        if needs_schema_runtime:
+            if workspace.validation is None:
+                raise KubeconformSchemaConfigurationError(
+                    f"{workspace.marker} has no spec.validation schema policy; "
+                    "configure it before running schema validation"
+                )
             schema_runtime = self._schema_runtime_factory(workspace)
 
         compiled_by_case: dict[tuple[str, str], ResolvedManifestValidation] = {}
