@@ -12,13 +12,7 @@ from typer.testing import CliRunner
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.services.upgrader import FinalizeResult, UpgradeResult
 
-from .conftest import write_workspace
-
-
-@pytest.fixture(autouse=True)
-def _workspace(tmp_path: Path) -> None:
-    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
-    write_workspace(tmp_path)
+pytestmark = pytest.mark.usefixtures("tmp_workspace")
 
 
 class _Upgrade:

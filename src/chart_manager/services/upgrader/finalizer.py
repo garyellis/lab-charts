@@ -130,7 +130,7 @@ class UpgradeFinalizer:
         workspace: RepositoryWorkspace,
     ) -> None:
         self._baseline = baseline or GitBaselineReader()
-        self._charts_dir = workspace.charts_dir
+        self._charts_dir = workspace.spec.charts_dir
 
     def finalize(self, request: FinalizeRequest) -> FinalizeResult:
         root, chart_path, _ = resolve_chart_path(

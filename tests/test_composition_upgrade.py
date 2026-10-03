@@ -9,13 +9,9 @@ import pytest
 from chart_manager.composition import Container
 from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.services.upgrader import FinalizeRequest, UpgradeRequest
-from tests.conftest import FakeCommandRunner, Reply, write_workspace
+from tests.conftest import FakeCommandRunner, Reply
 
-
-@pytest.fixture(autouse=True)
-def _workspace(tmp_path: Path) -> None:
-    """Every test here addresses tmp_path as a chart repository, which needs a marker."""
-    write_workspace(tmp_path)
+pytestmark = pytest.mark.usefixtures("tmp_workspace")
 
 
 class _Container(Container):

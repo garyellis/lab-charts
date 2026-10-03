@@ -5,12 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from chart_manager.domain.workspace import (
-    SCHEMA_LOCK_FILE,
-    WORKSPACE_FILE,
-    RepositoryWorkspace,
-)
-from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
+from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.services.kubeconform_schemas.errors import (
@@ -39,47 +34,21 @@ class KubeconformSchemaDoctor:
         self,
         workspace: RepositoryWorkspace | None,
         *,
-        workspace_error: ChartManagerError | None = None,
+        skip_reason: str = "no workspace",
         cache_root: Path | None = None,
     ) -> None:
         self.workspace = workspace
-        self.workspace_error = workspace_error
+        self.skip_reason = skip_reason
         self.cache_root = cache_root
 
     def preflight(self) -> tuple[Check, ...]:
         """Report policy, lock, and immutable generation readiness from disk only.
 
-        `workspace=None` is `doctor` run outside a chart repository: the
-        schema policy lives in workspace.yaml, so there is nothing to check
-        and nothing wrong -- every check is skipped, naming how to get one.
-        `workspace_error` is the workspace that could not be loaded -- an
-        explicit root with no marker, or an invalid workspace.yaml. That *is*
-        wrong, so schema-policy fails with it and the rest are skipped.
+        Without a workspace every check is skipped with `skip_reason`.
         """
-        if self.workspace_error is not None:
-            missing = isinstance(self.workspace_error, WorkspaceNotFoundError)
-            return (
-                Check.failed(
-                    "schema-policy",
-                    str(self.workspace_error),
-                    remediation=(
-                        "point CHART_MANAGER_ROOT or config `root:` at a chart repository checkout"
-                        if missing
-                        else f"fix {WORKSPACE_FILE.as_posix()}"
-                    ),
-                    outcome=Outcome.ENVIRONMENT if missing else Outcome.SPEC,
-                    data={"configured": False},
-                ),
-                Check.skipped("schema-lock", "workspace is unavailable"),
-                Check.skipped("schema-store", "workspace is unavailable"),
-            )
         if self.workspace is None:
             return tuple(
-                Check.skipped(
-                    name,
-                    f"no {WORKSPACE_FILE.as_posix()} found; run from a chart repository "
-                    "checkout or set CHART_MANAGER_ROOT",
-                )
+                Check.skipped(name, self.skip_reason)
                 for name in ("schema-policy", "schema-lock", "schema-store")
             )
         policy_check, policy = self._policy_check(self.workspace)
@@ -132,7 +101,7 @@ class KubeconformSchemaDoctor:
     def _policy_check(
         workspace: RepositoryWorkspace,
     ) -> tuple[Check, AuthoredSchemaPolicy | None]:
-        validation = workspace.validation
+        validation = workspace.spec.validation
         if validation is None:
             return (
                 Check.failed(

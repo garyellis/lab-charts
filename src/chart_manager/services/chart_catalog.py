@@ -38,7 +38,7 @@ class ChartCatalogService:
 
     def __init__(self, *, workspace: RepositoryWorkspace) -> None:
         """Build the Helm repository from the workspace's chart root."""
-        self.repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
+        self.repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
 
     def list_entries(self) -> list[ChartCatalogEntry]:
         """Return every chart, retaining malformed metadata/intent diagnostics."""

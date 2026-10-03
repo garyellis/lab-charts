@@ -61,7 +61,7 @@ def load_kubeconform_schema_runtime(
     cache_root: Path | None = None,
 ) -> KubeconformSchemaRuntime:
     """Verify policy, lock and cache without network access or filesystem writes."""
-    authored = workspace.validation
+    authored = workspace.spec.validation
     if authored is None:
         raise KubeconformSchemaConfigurationError(
             f"{workspace.marker} has no spec.validation schema policy"

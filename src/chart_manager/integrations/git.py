@@ -114,14 +114,8 @@ class Git:
         Uses `...HEAD` (merge-base diff) so feature branches see only their
         own deltas. Uncommitted changes are NOT included — surface them by
         committing or by an explicit override at the CLI layer. Empty lines
-        are filtered; output is sorted.
-
-        `--relative` (run from `root`) makes the paths relative to `root`
-        rather than to the git top level, and drops changes outside it. The
-        two differ when the repository root is a subdirectory of the checkout;
-        without it every path would carry the subdirectory prefix and no
-        chart or fanout pattern would match. Callers map a path to its chart
-        with `RepositoryWorkspace.chart_name_from_repo_path`.
+        are filtered; output is sorted. `--relative` drops changes outside
+        `root` when it is a subdirectory of the checkout.
         """
         if not self.is_repository():
             raise ExternalCommandError(

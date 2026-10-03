@@ -108,13 +108,7 @@ def hermetic_logging() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def fresh_cli_invocation() -> Iterator[None]:
-    """Drop the CLI's per-invocation `Container` when a test ends.
-
-    `cli/_container.py` keeps the current invocation's container in module
-    state. Each `cli()` call replaces it, but a test that drives a helper
-    directly after another test's invocation must not inherit that one's
-    settings or workspace memo.
-    """
+    """Drop the CLI's per-invocation `Container` when a test ends."""
     try:
         yield
     finally:
@@ -123,81 +117,38 @@ def fresh_cli_invocation() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep a developer's repository-root and removed layout variables out.
-
-    `CHART_MANAGER_ROOT` would point every CLI test at the developer's
-    checkout instead of the test's `tmp_path`, and the two removed layout
-    variables make `Settings()` refuse to build at all.
-    """
-    for var in ("CHART_MANAGER_ROOT", "CHART_MANAGER_CHARTS_DIR", "CHART_MANAGER_LOCAL_CONFIG"):
-        monkeypatch.delenv(var, raising=False)
+    """Keep a developer's `CHART_MANAGER_ROOT` from redirecting CLI tests."""
+    monkeypatch.delenv("CHART_MANAGER_ROOT", raising=False)
 
 
-def _spec_body(
-    charts_dir: str | Path,
-    validation: Mapping[str, Any] | None,
-    spec: Mapping[str, Any],
-) -> dict[str, Any]:
-    """The raw `spec` mapping `workspace_for` and `write_workspace` share.
+@pytest.fixture
+def tmp_workspace(tmp_path: Path) -> None:
+    """Mark `tmp_path` as a chart repository (use via `pytest.mark.usefixtures`)."""
+    write_workspace(tmp_path)
 
-    The conventional layout this repository also uses, unless ``spec``
-    overrides a camelCase key. ``chartsDir`` is spelled ``charts_dir`` here;
-    passing both would leave one silently ignored, so it is an error.
-    """
-    if "chartsDir" in spec:
-        raise TypeError("pass charts_dir=, not chartsDir=")
-    body: dict[str, Any] = {
-        "chartsDir": charts_dir,
+
+def _spec_body(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """The conventional layout, with camelCase ``spec`` keys overriding it."""
+    return {
+        "chartsDir": CHARTS_DIR.as_posix(),
         "localCluster": LOCAL_CONFIG.as_posix(),
         "renderDir": RENDER_DIR.as_posix(),
         "policiesDir": POLICIES_DIR.as_posix(),
         **spec,
     }
-    if validation is not None:
-        body["validation"] = dict(validation)
-    return body
 
 
-def workspace_for(
-    root: Path,
-    *,
-    name: str = "test-workspace",
-    charts_dir: str | Path = "charts",
-    validation: Mapping[str, Any] | None = None,
-    **spec: Any,
-) -> RepositoryWorkspace:
-    """A `RepositoryWorkspace` over ``root`` without reading workspace.yaml.
-
-    Services take a required workspace. Tests that do not exercise loading
-    build one here instead of writing the file; the arguments mean what they
-    mean to `write_workspace` (``fanout={"validation": [...]}``, ...). The
-    spec is validated exactly as the loader validates it, so a test cannot
-    hand a service a layout no workspace.yaml could express. The loader's
-    filesystem checks are skipped: ``root`` need not exist.
-    """
+def workspace_for(root: Path, *, name: str = "test-workspace", **spec: Any) -> RepositoryWorkspace:
+    """A validated `RepositoryWorkspace` over ``root``, without touching disk."""
     return RepositoryWorkspace(
         root=root.resolve(),
         name=name,
-        spec=ChartWorkspaceSpec.model_validate(_spec_body(charts_dir, validation, spec)),
+        spec=ChartWorkspaceSpec.model_validate(_spec_body(spec)),
     )
 
 
-def write_workspace(
-    root: Path,
-    *,
-    charts_dir: str = "charts",
-    validation: Mapping[str, Any] | None = None,
-    **spec: Any,
-) -> Path:
-    """Write a minimal valid `.chart-manager/workspace.yaml` under ``root``.
-
-    Repository-bound commands require the marker, so a test that drives one
-    against a synthetic tree writes it here. ``validation`` is the raw
-    `spec.validation` mapping and is left out by default: a test that runs
-    the kubeconform schema phase has to opt into a schema policy (and a
-    lock) deliberately. ``spec`` adds or overrides other camelCase spec keys
-    (``fanout={...}``, ``localCluster="..."``). Returns the marker path.
-    """
+def write_workspace(root: Path, **spec: Any) -> Path:
+    """Write a minimal `.chart-manager/workspace.yaml` under ``root``; return its path."""
     marker = root / ".chart-manager" / "workspace.yaml"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
@@ -206,7 +157,7 @@ def write_workspace(
                 "apiVersion": "chartmanager.io/v1alpha1",
                 "kind": "ChartWorkspace",
                 "metadata": {"name": "test-workspace"},
-                "spec": _spec_body(charts_dir, validation, spec),
+                "spec": _spec_body(spec),
             }
         ),
         encoding="utf-8",
@@ -472,8 +423,6 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
             env=env,
         )
     finally:
-        # The invocation's Container outlives `invoke`; drop it so a helper
-        # the test calls next builds its own instead of reusing this one's.
         reset_invocation()
 
 

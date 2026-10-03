@@ -157,7 +157,7 @@ class DevelopmentClusterService:
         self.expose = expose
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
         self.local_resources = LocalResourceLoader(
-            self.root, local_config=workspace.local_cluster
+            self.root, local_config=workspace.spec.local_cluster
         )
         self._client_factory = client_factory
         self._hooks = ProvisioningHookRunner(

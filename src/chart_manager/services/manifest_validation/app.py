@@ -384,7 +384,7 @@ class ManifestValidationService:
                 load_manifest_validation_target(
                     repo_root,
                     chart_name,
-                    charts_dir=workspace.charts_dir,
+                    charts_dir=workspace.spec.charts_dir,
                 )
             except SpecError as exc:
                 # Repository discovery already records malformed present
@@ -419,7 +419,7 @@ class ManifestValidationService:
             build.targets[row.chart].spec.validators.kubeconform for row in rows
         )
         if needs_schema_runtime:
-            if workspace.validation is None:
+            if workspace.spec.validation is None:
                 raise KubeconformSchemaConfigurationError(
                     f"{workspace.marker} has no spec.validation schema policy; "
                     "configure it before running schema validation"
@@ -451,7 +451,7 @@ class ManifestValidationService:
                     target,
                     repo_root,
                     providers=self._validator_providers,
-                    policies_dir=workspace.policies_dir,
+                    policies_dir=workspace.spec.policies_dir,
                     kubeconform=runtime_inputs,
                 )
                 compiled_by_case[case] = compiled
@@ -659,7 +659,7 @@ class ManifestValidationService:
         if out is not None:
             return out.resolve(), True
         run_id = self._run_id_factory()
-        return (repo_root / self.workspace.render_dir / run_id).resolve(), keep
+        return (repo_root / self.workspace.spec.render_dir / run_id).resolve(), keep
 
     def _resolve_changed_files(self, repo_root: Path, request: RunRequest) -> list[str] | None:
         """Resolve the changed-files list; None means "validate everything".

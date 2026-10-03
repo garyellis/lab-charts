@@ -89,7 +89,7 @@ def build_worklist(
     catalog = build_catalog(
         root,
         chart_names=selected_charts or None,
-        charts_dir=workspace.charts_dir,
+        charts_dir=workspace.spec.charts_dir,
     )
     targets = catalog.by_name()
     specs = {name: target.spec for name, target in targets.items()}
@@ -108,7 +108,7 @@ def build_worklist(
     accumulated: set[tuple[str, str]] = set()
     ignored_changes: set[Path] = set()
     unmatched_changes: set[Path] = set()
-    dependency_index = build_helm_dependency_index(root, charts_dir=workspace.charts_dir)
+    dependency_index = build_helm_dependency_index(root, charts_dir=workspace.spec.charts_dir)
     for raw in changed_files:
         if not raw:
             continue
@@ -120,7 +120,7 @@ def build_worklist(
         if chart_name is None:
             continue
 
-        prefix_length = len(workspace.charts_dir.parts)
+        prefix_length = len(workspace.spec.charts_dir.parts)
         if len(parts) == prefix_length + 1:
             _add_all_envs(accumulated, specs, chart_name)
             _fanout_dependents(accumulated, specs, dependency_index, chart_name)

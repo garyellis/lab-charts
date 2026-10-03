@@ -252,7 +252,8 @@ def prepare_generated_schemas(
     *,
     cache_root: Path | None = None,
 ) -> tuple[str, ...]:
-    if workspace.validation is None or not workspace.validation.schemas.generate_from_crds:
+    policy = workspace.spec.validation
+    if policy is None or not policy.schemas.generate_from_crds:
         return ()
     root = (cache_root or default_schema_cache_root()) / "v3" / "derived"
     try:
@@ -279,15 +280,18 @@ def _prepare_generated_schemas(
     results; a new chart or modified CRD is rendered without a schema-sync step.
     These files are disposable build outputs and never enter schemas.lock.yaml.
     """
-    if workspace.validation is None or not workspace.validation.schemas.generate_from_crds:
+    policy = workspace.spec.validation
+    if policy is None or not policy.schemas.generate_from_crds:
         return ()
-    repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
+    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
     providers = [
         name
         for name in repository.list_names()
         if _possible_crd_provider(repository.charts_dir / name)
     ]
-    catalog = build_catalog(workspace.root, chart_names=providers, charts_dir=workspace.charts_dir)
+    catalog = build_catalog(
+        workspace.root, chart_names=providers, charts_dir=workspace.spec.charts_dir
+    )
     if catalog.errors:
         raise KubeconformSchemaConfigurationError(
             "cannot discover CRD providers: " + "; ".join(catalog.errors)

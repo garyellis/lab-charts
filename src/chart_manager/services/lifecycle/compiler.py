@@ -45,7 +45,7 @@ class ClusterTestCompiler:
         """
         self.root = workspace.root
         self.cluster_tests = cluster_tests or ClusterTestCatalog(
-            self.root, charts_dir=workspace.charts_dir
+            self.root, charts_dir=workspace.spec.charts_dir
         )
         self.resolver = resolver or DependencyResolver(self.cluster_tests.get)
 

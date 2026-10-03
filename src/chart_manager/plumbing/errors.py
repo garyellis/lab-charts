@@ -14,12 +14,7 @@ class SpecError(ChartManagerError):
 
 
 class WorkspaceNotFoundError(ChartManagerError):
-    """Raised when no `.chart-manager/workspace.yaml` marks the repository.
-
-    Not a `SpecError`: nothing authored is wrong, the command was run from
-    (or pointed at) somewhere that is not a chart repository checkout. The
-    surface maps it to the environment outcome, exit 5.
-    """
+    """Raised when no `.chart-manager/workspace.yaml` marks the repository."""
 
 
 class CapabilityUnavailableError(ChartManagerError):

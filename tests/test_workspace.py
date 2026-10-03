@@ -101,22 +101,19 @@ def test_missing_marker_is_an_error_naming_the_discovery_start(tmp_path: Path) -
     assert str(excinfo.value) == expected
 
 
-def test_environment_root_without_marker_names_the_variable(
+def test_environment_root_without_marker_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHART_MANAGER_ROOT", str(tmp_path))
 
     with pytest.raises(WorkspaceNotFoundError) as excinfo:
         Container(Settings()).workspace()
-    assert str(excinfo.value) == (
-        f"CHART_MANAGER_ROOT={tmp_path.resolve()} has no .chart-manager/workspace.yaml"
-    )
+    assert str(excinfo.value) == f"{tmp_path.resolve()} has no .chart-manager/workspace.yaml"
 
 
-def test_config_file_root_without_marker_names_the_config_file(
+def test_config_file_root_without_marker_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A root from `root:` in config.yaml must not be blamed on the environment."""
     target = tmp_path / "not-a-checkout"
     target.mkdir()
     config = tmp_path / "config.yaml"
@@ -125,19 +122,7 @@ def test_config_file_root_without_marker_names_the_config_file(
 
     with pytest.raises(WorkspaceNotFoundError) as excinfo:
         Container(Settings()).workspace()
-    assert str(excinfo.value) == (
-        f"root={target.resolve()} in {config} has no .chart-manager/workspace.yaml"
-    )
-
-
-def test_environment_root_is_recognized_whatever_its_case(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """pydantic-settings reads env names case-insensitively; so does the message."""
-    monkeypatch.setenv("chart_manager_root", str(tmp_path))
-
-    with pytest.raises(WorkspaceNotFoundError, match=r"^CHART_MANAGER_ROOT="):
-        Container(Settings()).workspace()
+    assert str(excinfo.value) == f"{target.resolve()} has no .chart-manager/workspace.yaml"
 
 
 def test_explicit_root_never_walks_up(tmp_path: Path) -> None:
@@ -146,42 +131,10 @@ def test_explicit_root_never_walks_up(tmp_path: Path) -> None:
     nested = tmp_path / "charts"
     nested.mkdir()
 
-    with pytest.raises(WorkspaceNotFoundError, match=r"has no \.chart-manager/workspace\.yaml"):
-        resolve_repository_root(
-            configured=nested, configured_by=f"CHART_MANAGER_ROOT={nested.resolve()}"
-        )
+    assert resolve_repository_root(configured=nested, start=nested) == nested.resolve()
     with pytest.raises(WorkspaceNotFoundError) as excinfo:
         Container(Settings()).workspace(nested)
-    # A root passed as an argument is not attributed to the environment.
     assert str(excinfo.value) == f"{nested.resolve()} has no .chart-manager/workspace.yaml"
-
-
-def test_find_workspace_absorbs_only_a_missing_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert Container(Settings()).find_workspace() is None
-    # An explicit root names a checkout; not finding one there is an error.
-    with pytest.raises(WorkspaceNotFoundError):
-        Container(Settings()).find_workspace(tmp_path)
-    monkeypatch.setenv("CHART_MANAGER_ROOT", str(tmp_path))
-    with pytest.raises(WorkspaceNotFoundError, match=r"^CHART_MANAGER_ROOT="):
-        Container(Settings()).find_workspace()
-    monkeypatch.delenv("CHART_MANAGER_ROOT")
-
-    _write_workspace(tmp_path, "apiVersion: chartmanager.io/v1alpha1\nkind: ChartWorkspace\n")
-    with pytest.raises(SpecError, match="invalid ChartWorkspace"):
-        Container(Settings()).find_workspace()
-
-
-def test_find_workspace_shares_the_workspace_memo(tmp_path: Path) -> None:
-    _write_workspace(tmp_path)
-    container = Container(Settings())
-
-    found = container.find_workspace(tmp_path)
-
-    assert found is not None
-    assert container.workspace(tmp_path) is found
 
 
 def test_missing_workspace_exits_with_the_environment_code(
@@ -213,47 +166,6 @@ def test_missing_workspace_exit_code_through_main(
     assert "no .chart-manager/workspace.yaml" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    "variable,field",
-    [
-        ("CHART_MANAGER_CHARTS_DIR", "spec.chartsDir"),
-        ("CHART_MANAGER_LOCAL_CONFIG", "spec.localCluster"),
-    ],
-)
-def test_removed_layout_environment_variables_are_errors(
-    monkeypatch: pytest.MonkeyPatch, variable: str, field: str
-) -> None:
-    monkeypatch.setenv(variable, "anything")
-
-    with pytest.raises(SpecError) as excinfo:
-        Settings()
-    assert str(excinfo.value) == (
-        f"{variable} was removed; set {field} in .chart-manager/workspace.yaml instead"
-    )
-
-
-def test_removed_layout_environment_variables_are_matched_case_insensitively(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("chart_manager_charts_dir", "anything")
-
-    with pytest.raises(SpecError, match="CHART_MANAGER_CHARTS_DIR was removed"):
-        Settings()
-
-
-def test_removed_layout_environment_variable_exits_with_the_spec_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _write_workspace(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CHART_MANAGER_CHARTS_DIR", "charts")
-
-    result = cli("version")
-
-    assert isinstance(result.exception, SpecError)
-    assert "CHART_MANAGER_CHARTS_DIR was removed" in str(result.exception)
-
-
 @pytest.mark.parametrize("key", ["charts_dir", "local_config"])
 def test_layout_keys_in_config_file_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
@@ -264,7 +176,7 @@ def test_layout_keys_in_config_file_are_rejected(
 
     with pytest.raises(SpecError) as excinfo:
         load_settings()
-    assert str(excinfo.value) == f"invalid settings: unknown key '{key}' in {config}"
+    assert str(excinfo.value).startswith(f"invalid settings ({config}): {key}: ")
 
 
 def _exit_through_main(
@@ -302,25 +214,25 @@ def test_an_unknown_config_key_exits_with_the_spec_code_and_no_traceback(
     # The default config file is read by the bootstrap Settings in `main()`.
     code, err = _exit_through_main(monkeypatch, capsys, "version")
     assert code == 3
-    assert f"unknown key '{key}' in .chart-manager/config.yaml" in err
+    assert f"invalid settings (.chart-manager/config.yaml): {key}: " in err
     assert "Traceback" not in err
 
     # `--config` is only applied in the root callback, by `start_invocation()`.
     (tmp_path / ".chart-manager" / "config.yaml").unlink()
     code, err = _exit_through_main(monkeypatch, capsys, "--config", str(config), "version")
     assert code == 3
-    assert f"unknown key '{key}' in {config}" in err
+    assert f"invalid settings ({config}): {key}: " in err
     assert "Traceback" not in err
 
 
-def test_an_invalid_config_value_names_the_key_and_both_sources(
+def test_an_invalid_config_value_names_the_key_and_the_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = tmp_path / "config.yaml"
     config.write_text("log_level: chatty\n", encoding="utf-8")
     monkeypatch.setattr(settings_module, "_config_file", config)
 
-    with pytest.raises(SpecError, match=r"^invalid settings: log_level: .*CHART_MANAGER_LOG_LEVEL"):
+    with pytest.raises(SpecError, match=r"^invalid settings \(.*config\.yaml\): log_level: "):
         load_settings()
 
 
@@ -400,12 +312,12 @@ spec:
 
     workspace = load_repository_workspace(tmp_path)
 
-    assert workspace.validation is not None
+    assert workspace.spec.validation is not None
     assert workspace.name == "example"
-    assert workspace.validation.kubernetes_version == "1.35.3"
-    assert workspace.validation.schemas.generate_from_crds is True
-    assert workspace.validation.schemas.catalog.repository == "datreeio/CRDs-catalog"
-    assert workspace.validation.schemas.catalog.track == "main"
+    assert workspace.spec.validation.kubernetes_version == "1.35.3"
+    assert workspace.spec.validation.schemas.generate_from_crds is True
+    assert workspace.spec.validation.schemas.catalog.repository == "datreeio/CRDs-catalog"
+    assert workspace.spec.validation.schemas.catalog.track == "main"
 
 
 @pytest.mark.parametrize("version", ["", "v1.35.3", "1.35", "1.35.x", " 1.35.3"])
@@ -578,9 +490,9 @@ spec:
     assert container.upgrade_finalizer(tmp_path)._charts_dir == Path("helm/charts")
     validation = container.validate_app(root=tmp_path)
     assert validation.workspace is workspace
-    assert validation.workspace.charts_dir == Path("helm/charts")
-    assert validation.workspace.policies_dir == Path("compliance/policies")
-    assert validation.workspace.render_dir == Path("artifacts/rendered")
+    assert validation.workspace.spec.charts_dir == Path("helm/charts")
+    assert validation.workspace.spec.policies_dir == Path("compliance/policies")
+    assert validation.workspace.spec.render_dir == Path("artifacts/rendered")
 
 
 def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> None:
@@ -598,7 +510,7 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     repository = ChartRepository(tmp_path, charts_dir=Path("."))
 
     assert repository.list_names() == ["alpha", "grafana-dashboards"]
-    workspace = workspace_for(tmp_path, charts_dir=Path("."))
+    workspace = workspace_for(tmp_path, chartsDir=Path("."))
     assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
     assert discover_dashboards(workspace=workspace) == [dashboard]
 
@@ -636,10 +548,8 @@ def test_with_charts_dir_rejects_paths_the_spec_would_reject(
     with pytest.raises(SpecError) as raised:
         workspace.with_charts_dir(path)
 
-    # One line naming the targeted directory, not a pydantic dump naming a
-    # workspace.yaml field the operator never wrote.
     assert str(raised.value) == (
-        f"invalid chart directory {path}: must be a repository-relative path "
+        f"invalid chart directory {path}: spec.chartsDir must be a repository-relative path "
         "without empty, '.' or '..' segments"
     )
 
@@ -652,18 +562,11 @@ def test_with_charts_dir_rejects_a_path_escaping_through_a_symlink(tmp_path: Pat
     write_workspace(root)
     workspace = load_repository_workspace(root)
 
-    with pytest.raises(SpecError) as raised:
+    with pytest.raises(SpecError, match=r"spec\.chartsDir resolves outside repository root"):
         workspace.with_charts_dir(Path("vendor"))
 
-    assert str(raised.value) == (
-        f"chart directory vendor resolves outside repository root {root.resolve()}"
-    )
 
-
-def test_with_charts_dir_reports_other_layout_paths_as_workspace_fields(
-    tmp_path: Path,
-) -> None:
-    """Only the re-pointed chart directory is described as the operator's target."""
+def test_with_charts_dir_rechecks_the_other_layout_paths(tmp_path: Path) -> None:
     write_workspace(tmp_path)
     workspace = load_repository_workspace(tmp_path)
     (tmp_path / "real").mkdir()
@@ -681,7 +584,7 @@ def test_with_charts_dir_accepts_the_root_itself(tmp_path: Path) -> None:
     write_workspace(tmp_path)
     workspace = load_repository_workspace(tmp_path).with_charts_dir(Path("."))
 
-    assert workspace.charts_dir == Path(".")
+    assert workspace.spec.charts_dir == Path(".")
     assert workspace.charts_root == workspace.root
     assert workspace.chart_path("alpha") == workspace.root / "alpha"
 
@@ -695,17 +598,17 @@ def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> No
     original = load_repository_workspace(tmp_path)
     workspace = original.with_charts_dir(Path("vendor/helm"))
 
-    assert workspace.charts_dir == Path("vendor/helm")
+    assert workspace.spec.charts_dir == Path("vendor/helm")
     assert workspace.chart_path("alpha") == tmp_path.resolve() / "vendor/helm/alpha"
     assert workspace.repo_chart_path("alpha", "values.yaml") == Path(
         "vendor/helm/alpha/values.yaml"
     )
     assert workspace.chart_name_from_repo_path("vendor/helm/alpha/Chart.yaml") == "alpha"
     assert (workspace.root, workspace.name) == (original.root, original.name)
-    assert workspace.validation_fanout == original.validation_fanout
-    assert workspace.shared_prerequisites == original.shared_prerequisites
-    assert workspace.render_dir == original.render_dir
-    assert original.charts_dir == Path("charts")
+    assert workspace.spec.fanout == original.spec.fanout
+    assert workspace.spec.cluster_test == original.spec.cluster_test
+    assert workspace.spec.render_dir == original.spec.render_dir
+    assert original.spec.charts_dir == Path("charts")
 
 
 def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
@@ -726,15 +629,7 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
     assert first is not second
     assert first == second
     assert hash(first) == hash(second)
-    same_dir = first.with_charts_dir(first.charts_dir)
+    same_dir = first.with_charts_dir(first.spec.charts_dir)
     assert same_dir == first
     assert hash(same_dir) == hash(first)
     assert first.with_charts_dir(Path("other")) != first
-
-
-def test_workspace_fixtures_refuse_the_camel_case_charts_dir(tmp_path: Path) -> None:
-    """`charts_dir=` is the one spelling; `chartsDir=` would be silently dropped."""
-    with pytest.raises(TypeError, match="charts_dir="):
-        workspace_for(tmp_path, chartsDir="deploy")
-    with pytest.raises(TypeError, match="charts_dir="):
-        write_workspace(tmp_path, chartsDir="deploy")

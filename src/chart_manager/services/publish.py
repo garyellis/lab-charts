@@ -97,7 +97,7 @@ class PublishService:
         helm: Helm,
         events: EventWriter | None = None,
     ) -> None:
-        self.repository = ChartRepository(workspace.root, charts_dir=workspace.charts_dir)
+        self.repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
         self.helm = helm
         self.events = events
 

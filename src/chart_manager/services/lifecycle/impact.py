@@ -72,7 +72,7 @@ class LifecycleImpactService:
     def __init__(self, *, workspace: RepositoryWorkspace) -> None:
         self.workspace = workspace
         self.root = workspace.root
-        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=workspace.charts_dir)
+        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -209,11 +209,11 @@ class LifecycleImpactService:
         return selected, errors
 
     def _cluster_fanout_detail(self, pattern: str) -> str:
-        for chart in self.workspace.shared_prerequisites:
+        for chart in self.workspace.spec.cluster_test.shared_prerequisites:
             if pattern == self.workspace.repo_chart_path(chart).as_posix():
                 return f"{chart} is a shared runtime prerequisite across cluster tests"
-        if pattern not in self.workspace.cluster_test_fanout and pattern not in {
-            self.workspace.local_cluster.as_posix(),
+        if pattern not in self.workspace.spec.fanout.cluster_test and pattern not in {
+            self.workspace.spec.local_cluster.as_posix(),
             self.workspace.marker.relative_to(self.workspace.root).as_posix(),
         }:
             return f"{pattern} is a LocalCluster bootstrap prerequisite used by every cluster test"
@@ -235,7 +235,7 @@ def _validation_reason(
 ) -> ImpactReason:
     """Classify the existing validation worklist rule that selected a row."""
     if changed_file == workspace.marker.relative_to(workspace.root) or _path_is_within(
-        changed_file, workspace.policies_dir
+        changed_file, workspace.spec.policies_dir
     ):
         return ImpactReason(
             ImpactReasonCode.REPOSITORY_POLICY,

@@ -362,18 +362,13 @@ holds the marker, since an explicit root is never walked up. There is no CLI
 repository-bound command exits `5` and says to run from a chart repository
 checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `helmrelease`,
 `grafana dashboard export`, and `grafana dashboard lint --path` work anywhere.
-`doctor` runs anywhere and always reports every check: outside a workspace it
-skips the schema checks (it still fails git-repository outside a git
-checkout), an explicit root without a workspace fails `schema-policy` (exit
-`5`), and an invalid `workspace.yaml` fails `schema-policy` (exit `3`).
+`doctor` runs anywhere: without a workspace it skips the schema checks and
+says why; an invalid `workspace.yaml` exits `3`.
 
-Layout lives only in the workspace. The former `CHART_MANAGER_CHARTS_DIR` and
-`CHART_MANAGER_LOCAL_CONFIG` variables are an error (set `spec.chartsDir` and
-`spec.localCluster` instead), and so is any key `Settings` does not know in
-`.chart-manager/config.yaml`, such as `charts_dir`; both exit `3` and name the
-variable or key. That config file is read
-relative to the working directory, not the discovered workspace, so from a
-nested directory pass `--config` explicitly.
+Layout lives only in the workspace. An unknown key in
+`.chart-manager/config.yaml`, such as `charts_dir`, exits `3`. That config
+file is read relative to the working directory, not the discovered workspace,
+so from a nested directory pass `--config` explicitly.
 
 Logs go to stderr; stdout stays safe for JSON. `CHART_MANAGER_LOG_LEVEL`
 (default `INFO`) and `CHART_MANAGER_LOG_FORMAT=json` control detail and
