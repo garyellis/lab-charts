@@ -1,6 +1,6 @@
 # chart-manager
 
-The CLI that renders, validates and tests the Helm wrapper charts in `charts/`. Package
+The CLI that renders, validates, tests, publishes, and promotes the Helm charts in `charts/`. Package
 layout is set by [ADR-0001](docs/adr/0001-feature-packages.md).
 
 ## Language
