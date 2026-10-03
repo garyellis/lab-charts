@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Helm wrapper charts in `charts/` and `chart-manager`, a Python CLI in `src/chart_manager/` that
-renders, validates and tests them on kind clusters. CI runs the same commands. The owner and
-this repo are its only users. Don't restate these docs here or in code:
+Helm charts in `charts/` and `chart-manager`, a Python CLI in `src/chart_manager/` that
+renders, validates and tests them on kind clusters, and promotes them to k8s environments. CI runs the same commands.
+Don't restate these docs here or in code:
 
 - `README.md`: CLI usage.
 - `CODING_STANDARDS.md`: how code and tests should be written. Review your diff against it
