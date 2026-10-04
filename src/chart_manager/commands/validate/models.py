@@ -40,6 +40,7 @@ class Row:
 
 @dataclass(frozen=True)
 class ValidateOutcome:
-    """Every row of one validate run."""
+    """Every row of one validate run, and the charts whose configuration kept them out."""
 
     rows: tuple[Row, ...]
+    spec_errors: tuple[str, ...] = ()

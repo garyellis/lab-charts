@@ -17,38 +17,12 @@ from chart_manager.commands.validate.schemas.store import (
     default_schema_cache_root,
 )
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from tests import schema_fixtures
-from tests.conftest import FakeCommandRunner, workspace_for
+from tests.conftest import FakeCommandRunner, workspace_for, write_validation_chart
 
 RENDER: frozenset[CheckName] = frozenset({"render"})
 CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
-
-
-def write_chart(root: Path, name: str, **validation: Any) -> Path:
-    """Write a chart whose `spec.validation` is `validation` over a `dev` default."""
-    chart = root / "charts" / name
-    chart.mkdir(parents=True)
-    (chart / "Chart.yaml").write_text(dump_yaml({"apiVersion": "v2", "name": name, "version": "0.1.0"}))
-    (chart / "values.yaml").write_text("")
-    spec = {
-        "releaseName": name,
-        "namespaceTemplate": "lab-${env}",
-        "environments": {"dev": {"values": ["values.yaml"]}},
-        **validation,
-    }
-    (chart / "chart-lifecycle.yaml").write_text(
-        dump_yaml(
-            {
-                "apiVersion": "chartmanager.io/v1alpha1",
-                "kind": "ChartLifecycle",
-                "metadata": {"name": name},
-                "spec": {"validation": spec},
-            }
-        )
-    )
-    return chart
 
 
 @pytest.fixture
@@ -76,7 +50,7 @@ def renders(manifest: str):
 
 
 def test_one_chart_in_one_environment_renders_into_one_passed_row(tmp_path: Path) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner()
 
     outcome = validate.run(
@@ -94,7 +68,7 @@ def test_one_chart_in_one_environment_renders_into_one_passed_row(tmp_path: Path
 
 
 def test_a_helm_template_failure_fails_the_row_with_helms_error(tmp_path: Path) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=1, stderr="bad values")
 
     outcome = validate.run(
@@ -108,20 +82,13 @@ def test_a_helm_template_failure_fails_the_row_with_helms_error(tmp_path: Path) 
     assert "bad values" in row.checks["render"].detail
 
 
-@pytest.mark.parametrize(
-    ("envs", "values"),
-    [(("prod",), ["values.yaml"]), (("dev",), ["values.yaml", "missing.yaml"])],
-    ids=["unknown-environment", "missing-values-file"],
-)
-def test_a_request_the_chart_cannot_satisfy_is_a_spec_error(
-    tmp_path: Path, envs: tuple[str, ...], values: list[str]
-) -> None:
-    write_chart(tmp_path, "demo", environments={"dev": {"values": values}})
+def test_an_unknown_environment_in_the_request_raises_before_any_work(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner()
 
-    with pytest.raises(SpecError):
+    with pytest.raises(SpecError, match="prod"):
         validate.run(
-            validate.ValidateRequest(charts=("demo",), envs=envs, checks=RENDER),
+            validate.ValidateRequest(charts=("demo",), envs=("prod",), checks=RENDER),
             workspace=workspace_for(tmp_path),
             runner=runner,
         )
@@ -129,7 +96,7 @@ def test_a_request_the_chart_cannot_satisfy_is_a_spec_error(
 
 
 def test_rendering_into_a_reused_out_dir_drops_the_previous_manifests(tmp_path: Path) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     stale = tmp_path / "out" / "demo" / "dev" / "stale.yaml"
     stale.parent.mkdir(parents=True)
     stale.write_text("kind: ConfigMap\n")
@@ -165,7 +132,7 @@ def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests
     status: str,
     detail: str,
 ) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     runner = (
         FakeCommandRunner()
         .respond(renders(CONFIG_MAP))
@@ -200,7 +167,7 @@ def test_the_schema_check_is_skipped_without_running_kubeconform(
     validation: dict[str, Any],
     helm: dict[str, Any],
 ) -> None:
-    write_chart(tmp_path, "demo", **validation)
+    write_validation_chart(tmp_path, "demo", **validation)
     runner = FakeCommandRunner().respond(**helm)
 
     outcome = validate.run(
@@ -215,7 +182,7 @@ def test_the_schema_check_is_skipped_without_running_kubeconform(
 def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
-    write_chart(
+    write_validation_chart(
         tmp_path,
         "demo",
         schemaLocations=["schemas/{{.ResourceKind}}.json"],
@@ -238,7 +205,7 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
 
 
 def test_a_chart_that_disables_kubeconform_needs_no_schema_lock(tmp_path: Path) -> None:
-    write_chart(tmp_path, "demo", validators={"kubeconform": False})
+    write_validation_chart(tmp_path, "demo", validators={"kubeconform": False})
 
     outcome = validate.run(
         validate.ValidateRequest(charts=("demo",)),
@@ -252,13 +219,15 @@ def test_a_chart_that_disables_kubeconform_needs_no_schema_lock(tmp_path: Path) 
 def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
-    write_chart(tmp_path, "demo", schemaLocations=["schemas/{{.ResourceKind}}.json"])
+    write_validation_chart(tmp_path, "demo", schemaLocations=["schemas/{{.ResourceKind}}.json"])
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
 
-    with pytest.raises(SpecError, match="schemas"):
-        validate.run(
-            validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
-        )
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+    )
+
+    assert (outcome.rows, len(outcome.spec_errors)) == ((), 1)
+    assert "schemas" in outcome.spec_errors[0]
 
 
 def kyverno_report(result: str, message: str = "") -> str:
@@ -280,7 +249,7 @@ def kyverno_report(result: str, message: str = "") -> str:
 def test_the_policy_check_reports_kyvernos_verdict_on_the_rendered_manifests(
     tmp_path: Path, returncode: int, stdout: str, status: str, detail: str
 ) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
         FakeCommandRunner()
@@ -309,7 +278,7 @@ def test_the_policy_check_reports_kyvernos_verdict_on_the_rendered_manifests(
 def test_the_policy_check_is_skipped_without_running_kyverno(
     tmp_path: Path, validation: dict[str, Any], policies_dir: bool
 ) -> None:
-    write_chart(tmp_path, "demo", **validation)
+    write_validation_chart(tmp_path, "demo", **validation)
     if policies_dir:
         (tmp_path / "policies").mkdir()
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
@@ -325,12 +294,12 @@ def test_the_policy_check_is_skipped_without_running_kyverno(
 
 
 def test_the_charts_extra_policies_reach_kyverno_and_must_exist(tmp_path: Path) -> None:
-    chart = write_chart(tmp_path, "demo", policies={"extra": ["extra-policies"]})
+    chart = write_validation_chart(tmp_path, "demo", policies={"extra": ["extra-policies"]})
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
     request = validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"}))
 
-    with pytest.raises(SpecError, match="extra-policies"):
-        validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
+    missing = validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
+    assert "extra-policies" in missing.spec_errors[0]
     (chart / "extra-policies").mkdir()
     validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
 
@@ -341,7 +310,7 @@ def test_the_charts_extra_policies_reach_kyverno_and_must_exist(tmp_path: Path) 
 def test_a_failed_schema_check_skips_the_policy_check(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
-    write_chart(tmp_path, "demo")
+    write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
         FakeCommandRunner()
@@ -355,3 +324,45 @@ def test_a_failed_schema_check_skips_the_policy_check(
 
     assert outcome.rows[0].checks["policy"] == validate.CheckResult("skipped", "schema failed")
     assert not [call for call in runner.calls if call[0] == "kyverno"]
+
+
+def test_a_chart_whose_render_fails_skips_its_checks_while_the_others_run(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    for name in ("one", "two", "three"):
+        write_validation_chart(tmp_path, name)
+    (tmp_path / "policies").mkdir()
+    runner = (
+        FakeCommandRunner()
+        .respond(lambda argv: argv[1:3] == ("template", "one"), returncode=1, stderr="bad")
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+        .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
+    )
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("one", "two", "three")),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert {row.chart: {c: r.status for c, r in row.checks.items()} for row in outcome.rows} == {
+        "one": {"render": "failed", "schema": "skipped", "policy": "skipped"},
+        "two": {"render": "passed", "schema": "passed", "policy": "passed"},
+        "three": {"render": "passed", "schema": "passed", "policy": "passed"},
+    }
+
+
+def test_a_charts_config_error_is_collected_while_the_other_charts_run(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "broken", environments={"dev": {"values": ["missing.yaml"]}})
+    write_validation_chart(tmp_path, "fine")
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("broken", "fine"), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [row.chart for row in outcome.rows] == ["fine"]
+    (error,) = outcome.spec_errors
+    assert "broken" in error and "missing.yaml" in error
