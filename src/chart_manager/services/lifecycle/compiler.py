@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.paths import validate_hook_executable
 from chart_manager.services.lifecycle.models import (
@@ -16,7 +15,8 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.lifecycle.plan_projection import cleanup_tail
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import DependencyResolver
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -312,3 +312,23 @@ def _resolve_digest_input(path: Path, root: Path) -> Path:
     if not resolved.is_relative_to(root):
         raise SpecError(f"digest input escapes repository root: {path} resolves to {resolved}")
     return resolved
+
+
+def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:
+    """Move hook-cleanup actions to the end, in reverse install order.
+
+    Dependents clean up before their dependencies; other actions keep their order.
+    """
+    ordered = tuple(actions)
+    first_seen: dict[tuple[str, str | None], int] = {}
+    for action in ordered:
+        first_seen.setdefault((action.target.chart, action.target.profile), len(first_seen))
+    cleanups = sorted(
+        (action for action in ordered if action.kind is ActionKind.HOOK_CLEANUP),
+        key=lambda action: first_seen[(action.target.chart, action.target.profile)],
+        reverse=True,
+    )
+    return (
+        *(action for action in ordered if action.kind is not ActionKind.HOOK_CLEANUP),
+        *cleanups,
+    )

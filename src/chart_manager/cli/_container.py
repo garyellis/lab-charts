@@ -45,8 +45,8 @@ from pathlib import Path
 import typer
 
 from chart_manager.composition import Container, Settings
-from chart_manager.domain.local_resources import ResolvedChartTarget, resolve_chart_target
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.shared.charts.chart import ResolvedChartTarget, resolve_chart_target
 
 #: The current invocation's composition root; see the module docstring.
 _invocation: Container | None = None
@@ -116,21 +116,12 @@ def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
     it is the point where a chart name means the same thing to all of them,
     and design commitment 6 says no command module carries a path heuristic
     of its own.
-
-    `resolve_chart_target` is a free function over two settings, not a
-    constructible object, so there is nothing for the container to build --
-    but the *configuration* still comes from `container().settings`, so a
-    caller that injected a `Settings` resolves chart names against it too.
-    That is the whole reason this reads the container instead of calling
-    `Settings()`, which is what the three former copies of these five lines
-    each did independently.
     """
     workspace = container().workspace(root)
     return resolve_chart_target(
         workspace.root,
         chart,
         charts_dir=workspace.spec.charts_dir,
-        local_config=workspace.spec.local_cluster,
     )
 
 

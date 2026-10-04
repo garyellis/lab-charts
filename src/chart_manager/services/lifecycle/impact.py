@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from chart_manager.commands import validate
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -270,3 +271,49 @@ def _append_reason(
     reasons = sink.setdefault(key, [])
     if reason not in reasons:
         reasons.append(reason)
+
+
+def impact_to_dict(impact: LifecycleImpact) -> dict[str, Any]:
+    """Project a `LifecycleImpact` onto the wire payload.
+
+    `spec_errors` is carried in the document rather than replacing it: the
+    selection derived from the files that *did* parse is still the answer to
+    the question asked, and the CLI exits non-zero off the same list -- see
+    `cli/plan.py` for why that is a spec exit rather than a generic failure.
+    """
+    return {
+        "changed_files": [path.as_posix() for path in impact.changed_files],
+        "validation_selection": [_validation_case(case) for case in impact.validation],
+        "cluster_test_matrix": [_cluster_test_case(case) for case in impact.cluster_tests],
+        "spec_errors": list(impact.spec_errors),
+        "warnings": list(impact.warnings),
+    }
+
+
+def _validation_case(case: ValidationImpact) -> dict[str, Any]:
+    """JSON-serialize one selected chart/environment validation case."""
+    return {
+        "chart": case.chart,
+        "environment": case.environment,
+        "release": case.release,
+        "namespace": case.namespace,
+        "reasons": [_reason(reason) for reason in case.reasons],
+    }
+
+
+def _cluster_test_case(case: ClusterTestImpact) -> dict[str, Any]:
+    """JSON-serialize one selected chart/profile live-cluster matrix entry."""
+    return {
+        "chart": case.chart,
+        "profile": case.profile,
+        "reasons": [_reason(reason) for reason in case.reasons],
+    }
+
+
+def _reason(reason: ImpactReason) -> dict[str, Any]:
+    """JSON-serialize one changed file and the rule that selected a case."""
+    return {
+        "code": reason.code.value,
+        "changed_file": reason.changed_file.as_posix(),
+        "detail": reason.detail,
+    }

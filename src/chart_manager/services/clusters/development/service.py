@@ -21,11 +21,8 @@ from chart_manager.api.v1alpha1.releases import (
     OciChartRelease,
     RepoChartRelease,
 )
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.domain.local_resources import (
     LocalResourceLoader,
-    ResolvedChartTarget,
     ResolvedLocalTarget,
 )
 from chart_manager.integrations.helm import Helm
@@ -69,7 +66,6 @@ from chart_manager.services.clusters.environment import (
 )
 from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
 from chart_manager.services.expose import ExposeService
-from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.services.progress import (
     ProgressCallback,
     detail,
@@ -78,7 +74,11 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
+from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel, parallel to `self._progress`. Every `failure(...)` /

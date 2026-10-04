@@ -9,7 +9,6 @@ import pytest
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec as _TestSpec
-from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.integrations.helm import UpgradeResult
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
@@ -25,6 +24,7 @@ from chart_manager.shared.charts.chart import (
     ClusterTestChart,
     HelmChart,
 )
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from tests.conftest import workspace_for
 
 

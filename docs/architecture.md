@@ -27,8 +27,8 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
-| `domain/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
-| `domain/install_plan.py` | Dependency resolution and install order |
+| `shared/charts/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
+| `shared/charts/install_plan.py` | Dependency resolution and install order |
 | `domain/local_resources.py` | Loading `LocalCluster`/`LocalStack`; resolving a CLI target |
 | `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
 

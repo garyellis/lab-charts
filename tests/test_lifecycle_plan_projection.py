@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.services.lifecycle.compiler import cleanup_tail
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     ActionTarget,
@@ -11,11 +12,10 @@ from chart_manager.services.lifecycle.models import (
 from chart_manager.services.lifecycle.plan_projection import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
     SKIPPED_REQUIRES_WARNING_PREFIX,
-    ExternallySatisfiedLifecycle,
-    cleanup_tail,
     exclude_bootstrap_owned_charts,
     exclude_required_lifecycles,
 )
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 
 def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:

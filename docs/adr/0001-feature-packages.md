@@ -43,9 +43,11 @@ chart_manager/
   - `cluster/`: `provision`, `attach`, `bootstrap`, `converge`, `teardown`. `provision` and
     `attach` return a fixed session (handle plus bound helm and kubectl). `bootstrap` reports
     what it installed. `converge` is the one release install: dependency update, install, wait,
-    per-chart checks (cert-manager webhook), diagnostics on failure. It waits on the
-    Deployments, StatefulSets and DaemonSets in the release's own manifest, and on CRDs in it
-    becoming `Established`; a chart with only CRs or policies has nothing else to wait on.
+    diagnostics on failure. It waits on the Deployments, StatefulSets and DaemonSets in the
+    release's own manifest or labelled with its instance, and on CRDs in it becoming
+    `Established`; a chart with only CRs or policies has nothing else to wait on. No chart
+    gets its own code: the cert-manager webhook is a Deployment in its manifest. Anything
+    more is the chart's `helmTest` or hooks.
   - `events/`: write and query events; the backend is chosen from settings.
   - `workspace.py` and `settings.py`: read once per run by the `Container`.
 - **Integrations** are deep adapters: few methods, each returning an answer rather than raw
@@ -78,25 +80,26 @@ Where today's code goes:
 
 | Today | Goes to |
 |---|---|
-| `domain/charts.py`, `chart_deps.py`, `lifecycle_policy.py`, `install_plan.py`, `_shared.lifecycle_install_plan` | `shared/charts` |
+| `domain/charts.py`, `chart_deps.py`, `lifecycle_policy.py`, `install_plan.py`, `cluster_tests.py`, `_shared.lifecycle_install_plan`, chart-target resolution from `local_resources.py` | `shared/charts` |
 | `domain/workspace.py` | `shared/workspace.py` |
 | `clusters/environment.py`, `provisioning_hooks.py`, `bootstrap.py`, the 3 install loops, `_shared` OCI and kind helpers, `ExternallySatisfiedLifecycle` | `shared/cluster` |
-| `lifecycle/compiler.py`, `cluster_executor.py`, `hooks.py`, `models.py`, the rest of `plan_projection.py`, `domain/cluster_tests.py`, `clusters/ephemeral.py` | `commands/test` |
+| `lifecycle/compiler.py`, `cluster_executor.py`, `hooks.py`, `models.py`, the rest of `plan_projection.py`, `clusters/ephemeral.py` | `commands/test` |
 | `lifecycle/impact.py`, `services/ci.py` | `commands/plan` |
-| `domain/local_resources.py`, `clusters/development/`, `expose.py` | `commands/local` |
+| `LocalCluster` loading from `local_resources.py` | `shared/cluster` |
+| `LocalStack` and target resolution from `local_resources.py`, `clusters/development/` | `commands/local` |
 | `manifest_validation/`, `kubeconform_schemas/` | `commands/validate` |
 | `helmrelease/` | `commands/promote` |
 | `services/events/` writer and query | `shared/events`; adapters to `integrations/` |
-| `ClusterHelm`, `ClusterKubectl`, `_ExecutorHelmAdapter`, `test_layering.py`, TID251 tables, `domain/.ruff.toml` | deleted |
+| `ClusterHelm`, `ClusterKubectl`, `_ExecutorHelmAdapter`, `expose.py`, `test_layering.py`, TID251 tables, `domain/.ruff.toml` | deleted |
 
 ## Consequences
 
-- A bug lands in one obvious package: a missing cert-manager webhook gate in chart test is in
+- A bug lands in one obvious package: a wrong readiness wait in chart test is in
   `shared/cluster` and the fix covers `local up`; a wrong exit code for missing helm during
   validate is in `commands/validate`; a wrong CI matrix is in `commands/plan`. The weak spot is
   `shared/` ("cluster or test?"), so keep it small and lean on the concept map (#122).
-- Chart test changes behaviour on purpose: it gains the cert-manager check, and all three
-  install paths share one wait.
+- Chart test and `local up` change behaviour on purpose: all three install paths share one
+  wait and collect diagnostics on any failure.
 - The owner is the only user, so CLI flags, `-o json` shapes, exit codes and `api/` YAML may
   change when CI, the charts and the integration tests change in the same PR, with no shims.
   The contract-freeze tests become one test that loads every resource file in the repo (#127).

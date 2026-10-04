@@ -33,7 +33,11 @@ from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.shared.charts.chart import load_chart_metadata, load_chart_name
+from chart_manager.shared.charts.chart import (
+    ResolvedChartTarget,
+    chart_target,
+    load_chart_metadata,
+)
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     load_chart_lifecycle,
@@ -64,16 +68,6 @@ def load_local_cluster(path: Path) -> LocalCluster:
 def load_local_stack(path: Path) -> LocalStack:
     """Strictly load one ``LocalStack`` resource."""
     return _load_resource(path, LocalStack)
-
-
-class ResolvedChartTarget(BaseModel):
-    """An explicit chart directory selected as a local target."""
-
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-    kind: Literal["chart"] = "chart"
-    name: str
-    path: Path
 
 
 class ResolvedStackTarget(BaseModel):
@@ -221,15 +215,7 @@ class LocalTargetResolver(LocalResourceLoader):
     def _resolve_explicit(self, path: Path) -> ResolvedLocalTarget:
         absolute = self._inside_root(path)
         if absolute.is_dir():
-            chart_yaml = absolute / "Chart.yaml"
-            if not chart_yaml.is_file():
-                raise SpecError(f"local target directory has no Chart.yaml: {path}")
-            name = load_chart_name(chart_yaml)
-            try:
-                dns_label(name, field="Chart.yaml name")
-            except ValueError as exc:
-                raise SpecError(f"invalid chart target {path}: {exc}") from exc
-            return ResolvedChartTarget(name=name, path=absolute)
+            return chart_target(self.root, absolute)
         if absolute.is_file():
             return self._resolve_stack(absolute)
         raise SpecError(f"local target is neither a chart directory nor LocalStack file: {path}")
@@ -241,36 +227,12 @@ class LocalTargetResolver(LocalResourceLoader):
         return ResolvedStackTarget(name=stack.metadata.name, path=path.resolve(), stack=stack)
 
 
-def resolve_chart_target(
-    root: Path,
-    chart: str,
-    *,
-    charts_dir: Path,
-    local_config: Path,
-) -> ResolvedChartTarget:
-    """Resolve a configured chart name or an explicit chart directory."""
-    root = root.resolve()
-    candidate = Path(chart)
-    if len(candidate.parts) == 1 and not candidate.is_absolute():
-        explicit = root / candidate
-        if not explicit.exists():
-            configured = root / charts_dir / candidate
-            if configured.exists():
-                candidate = configured
-    resolved = LocalTargetResolver(root, local_config=local_config).resolve(candidate)
-    if not isinstance(resolved, ResolvedChartTarget):
-        raise SpecError(f"--chart must select a chart directory, not {resolved.kind}")
-    return resolved
-
-
 __all__ = [
     "DEFAULT_STACKS_DIR",
     "LocalResourceLoader",
     "LocalTargetResolver",
-    "ResolvedChartTarget",
     "ResolvedLocalTarget",
     "ResolvedStackTarget",
     "load_local_cluster",
     "load_local_stack",
-    "resolve_chart_target",
 ]

@@ -20,7 +20,6 @@ import pytest
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec as _TestSpec
-from chart_manager.domain.install_plan import InstallPlanEntry
 from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
 from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
@@ -37,6 +36,7 @@ from chart_manager.shared.charts.chart import (
     ClusterTestChart,
     HelmChart,
 )
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from tests.conftest import workspace_for
 
 # Re-use the same shape of fakes the existing converge tests use; new

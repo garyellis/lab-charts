@@ -13,7 +13,7 @@ from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import EnvironmentHandle
-from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 
 def _cluster(releases: list[dict[str, object]]) -> LocalCluster:

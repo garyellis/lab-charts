@@ -27,12 +27,12 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
 from chart_manager.shared.charts.lifecycle import (
     load_chart_lifecycle,
     require_cluster_test,
     require_cluster_test_profile,
 )
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from tests.conftest import workspace_for
 
 from .conftest import MakeChart, cli

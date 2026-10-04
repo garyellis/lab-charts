@@ -16,11 +16,11 @@ from chart_manager.api.v1alpha1.releases import (
 from chart_manager.domain.local_resources import (
     LocalResourceLoader,
     LocalTargetResolver,
-    ResolvedChartTarget,
     ResolvedStackTarget,
     load_local_stack,
 )
 from chart_manager.plumbing.errors import SpecError
+from chart_manager.shared.charts.chart import ResolvedChartTarget
 from tests.conftest import LOCAL_CONFIG
 
 from .conftest import REPO_ROOT

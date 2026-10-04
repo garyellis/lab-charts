@@ -8,6 +8,7 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpact,
     LifecycleImpactService,
     ValidationImpact,
+    impact_to_dict,
 )
 from chart_manager.services.lifecycle.models import (
     ActionKind,
@@ -15,10 +16,7 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.lifecycle.wire import (
-    impact_to_dict,
-    plan_to_dict,
-)
+from chart_manager.services.lifecycle.wire import plan_to_dict
 
 __all__ = [
     "ActionKind",

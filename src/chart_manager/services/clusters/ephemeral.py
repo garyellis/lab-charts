@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import cast
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
@@ -37,7 +35,7 @@ from chart_manager.services.lifecycle.cluster_executor import (
     ClusterActionOutcome,
     HelmTestResult,
 )
-from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
+from chart_manager.services.lifecycle.compiler import ClusterTestCompiler, cleanup_tail
 from chart_manager.services.lifecycle.hooks import ClusterTestHookRunner
 from chart_manager.services.lifecycle.models import (
     ActionKind,
@@ -45,14 +43,15 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.plan_projection import (
-    ExternallySatisfiedLifecycle,
     RequiredLifecycleProjection,
     SkippedRequiredLifecycle,
-    cleanup_tail,
     exclude_bootstrap_owned_charts,
     exclude_required_lifecycles,
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import DependencyResolver
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel. This service is the CI-shaped one, where the process

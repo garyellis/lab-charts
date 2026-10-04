@@ -174,11 +174,7 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
 
     # Chart loading, dependencies and lifecycle policy moved to `shared/charts`
     # (ADR-0001); the rest leave `domain/` as their command packages are built.
-    expected = {
-        "cluster_tests.py",
-        "install_plan.py",
-        "local_resources.py",
-    }
+    expected = {"local_resources.py"}
     actual = {path.name for path in _DOMAIN.glob("*.py") if path.name != "__init__.py"}
     assert expected <= actual, (
         f"missing from domain: {sorted(expected - actual)} -- these are "
@@ -204,8 +200,7 @@ def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
 def test_domain_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
     paths = sorted(_DOMAIN.rglob("*.py"))
-    assert len(paths) > 3, f"suspiciously few domain modules found: {paths}"
-    assert _DOMAIN / "install_plan.py" in paths
+    assert len(paths) > 1, f"suspiciously few domain modules found: {paths}"
     assert _DOMAIN / "local_resources.py" in paths
 
 

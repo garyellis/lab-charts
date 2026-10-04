@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ClusterTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
+from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
@@ -177,6 +178,47 @@ class ChartRepository:
     def get(self, name: str) -> HelmChart:
         """Load Helm metadata; no cluster-test configuration is required."""
         return load_helm_chart(self.charts_dir / name)
+
+
+@dataclass(frozen=True)
+class ResolvedChartTarget:
+    """A chart directory selected on the command line."""
+
+    name: str
+    path: Path
+    kind: Literal["chart"] = "chart"
+
+
+def resolve_chart_target(root: Path, chart: str, *, charts_dir: Path) -> ResolvedChartTarget:
+    """Resolve a chart name under `charts_dir`, or a chart directory inside `root`.
+
+    A bare name that is not a path under `root` is looked up in `charts_dir`.
+    """
+    if not chart or chart != chart.strip():
+        raise SpecError("chart must be a non-empty chart name or directory")
+    root = root.resolve()
+    candidate = Path(chart)
+    path = candidate if candidate.is_absolute() else root / candidate
+    if not path.exists() and len(candidate.parts) == 1 and not candidate.is_absolute():
+        path = root / charts_dir / candidate
+    return chart_target(root, path)
+
+
+def chart_target(root: Path, path: Path) -> ResolvedChartTarget:
+    """Describe the chart directory at `path`, which must sit inside `root`."""
+    absolute = path.resolve()
+    if not absolute.is_relative_to(root.resolve()):
+        raise SpecError(f"path escapes repository root {root}: {path}")
+    chart_yaml = absolute / "Chart.yaml"
+    if not chart_yaml.is_file():
+        raise SpecError(f"chart directory has no Chart.yaml: {path}")
+    name = load_chart_name(chart_yaml)
+    try:
+        dns_label(name, field="Chart.yaml name")
+    except ValueError as exc:
+        raise SpecError(f"invalid chart target {path}: {exc}") from exc
+    return ResolvedChartTarget(name=name, path=absolute)
+
 
 def _required_string(
     data: dict[str, Any],

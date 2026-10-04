@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
     DependencyCycleError,
 )
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
 from tests.conftest import CHARTS_DIR
 
 from .conftest import REPO_ROOT, MakeChart

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from pathlib import Path
 
 from chart_manager.services.lifecycle.models import (
     ActionKind,
     LifecycleAction,
     LifecyclePlan,
 )
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
 SKIPPED_REQUIRES_WARNING_PREFIX = "requires assumed installed (--skip-requires): "
@@ -18,16 +18,6 @@ SKIPPED_REQUIRES_WARNING_PREFIX = "requires assumed installed (--skip-requires):
 
 class PlanProjectionError(ValueError):
     """The requested environment projection is invalid for the supplied plan."""
-
-
-@dataclass(frozen=True)
-class ExternallySatisfiedLifecycle:
-    """Exact managed lifecycle identity already converged by an environment."""
-
-    chart_path: Path
-    chart: str
-    profile: str
-    namespace: str
 
 
 @dataclass(frozen=True)
@@ -46,26 +36,6 @@ class RequiredLifecycleProjection:
 
     plan: LifecyclePlan
     skipped: tuple[SkippedRequiredLifecycle, ...]
-
-
-def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:
-    """Move hook-cleanup actions to the end, in reverse install order.
-
-    Dependents clean up before their dependencies; other actions keep their order.
-    """
-    ordered = tuple(actions)
-    first_seen: dict[tuple[str, str | None], int] = {}
-    for action in ordered:
-        first_seen.setdefault((action.target.chart, action.target.profile), len(first_seen))
-    cleanups = sorted(
-        (action for action in ordered if action.kind is ActionKind.HOOK_CLEANUP),
-        key=lambda action: first_seen[(action.target.chart, action.target.profile)],
-        reverse=True,
-    )
-    return (
-        *(action for action in ordered if action.kind is not ActionKind.HOOK_CLEANUP),
-        *cleanups,
-    )
 
 
 def exclude_bootstrap_owned_charts(

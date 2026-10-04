@@ -17,7 +17,6 @@ from typing import Any
 
 import pytest
 
-from chart_manager.domain.local_resources import ResolvedChartTarget
 from chart_manager.integrations.helm import ReleaseInfo
 from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
@@ -28,6 +27,7 @@ from chart_manager.services.clusters.development import (
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.expose import ExposeStatus
 from chart_manager.services.progress import ProgressEvent
+from chart_manager.shared.charts.chart import ResolvedChartTarget
 from tests.conftest import workspace_for
 
 
