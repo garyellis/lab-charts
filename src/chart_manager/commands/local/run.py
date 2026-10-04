@@ -45,15 +45,15 @@ from chart_manager.shared.cluster.local_cluster import load_cluster
 from chart_manager.shared.cluster.progress import (
     ProgressCallback,
     detail,
+    emit,
     failure,
     info,
     step,
     warn,
 )
 from chart_manager.shared.cluster.releases import (
+    helm_release,
     lifecycle_install_plan,
-    oci_chart_ref,
-    oci_identity,
 )
 from chart_manager.shared.cluster.session import (
     DEFAULT_CLUSTER_NAME,
@@ -68,10 +68,6 @@ from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 _LOG = logging.getLogger(__name__)
-
-
-def _silent(_event: object) -> None:
-    pass
 
 
 @dataclass(frozen=True)
@@ -106,8 +102,7 @@ def up(
 
     `skip_installed` skips releases `helm list` shows as deployed or failed.
     """
-    report = progress or _silent
-    prepared = _prepare(target, profile, workspace, report)
+    prepared = _prepare(target, profile, workspace, progress)
     session = provision(
         prepared.cluster,
         root=workspace.root,
@@ -118,7 +113,7 @@ def up(
         progress=progress,
     )
     return _converge(
-        session, prepared, workspace.root, skip_installed=skip_installed, report=report
+        session, prepared, workspace.root, skip_installed=skip_installed, progress=progress
     )
 
 
@@ -136,8 +131,7 @@ def reset(
 
     Everything authored is resolved before the healthy cluster is deleted.
     """
-    report = progress or _silent
-    prepared = _prepare(target, profile, workspace, report)
+    prepared = _prepare(target, profile, workspace, progress)
     session = provision(
         prepared.cluster,
         root=workspace.root,
@@ -148,14 +142,14 @@ def reset(
         replace=True,
         progress=progress,
     )
-    return _converge(session, prepared, workspace.root, skip_installed=False, report=report)
+    return _converge(session, prepared, workspace.root, skip_installed=False, progress=progress)
 
 
 def down(
     *, runner: CommandRunner, settings: Settings, progress: ProgressCallback | None = None
 ) -> DevClusterActionResult:
     """Stop the cluster's nodes, keeping etcd, Helm releases, PVCs and the image cache."""
-    (progress or _silent)(step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
+    emit(progress, step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
     stopped = stop(attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings))
     _LOG.info("dev cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
     return DevClusterActionResult(cluster_name=DEFAULT_CLUSTER_NAME, changed=stopped)
@@ -194,7 +188,7 @@ def plan(
         _target_releases(target, profile, workspace.root),
         owned,
         workspace.root,
-        progress or _silent,
+        progress,
     )
     entries = [
         DevClusterPlanEntry(i.chart, i.profile, i.namespace, "bootstrap")
@@ -207,7 +201,7 @@ def plan(
                 namespace = require_chart_test_profile(chart.spec, entry.profile).namespace
                 entries.append(DevClusterPlanEntry(entry.chart, entry.profile, namespace, "target"))
             continue
-        _release, label = _stack_release(target_step, workspace.root)
+        _release, label = helm_release(target_step, workspace.root)
         entries.append(
             DevClusterPlanEntry(target_step.name, label, target_step.namespace, "target")
         )
@@ -244,12 +238,12 @@ def _prepare(
     target: ResolvedLocalTarget,
     profile: str | None,
     workspace: RepositoryWorkspace,
-    report: ProgressCallback,
+    progress: ProgressCallback | None,
 ) -> _Prepared:
     cluster = load_cluster(workspace)
     owned = bootstrap.preflight(cluster, root=workspace.root)
     releases = _target_releases(target, profile, workspace.root)
-    return _Prepared(cluster, _preflight(releases, owned, workspace.root, report))
+    return _Prepared(cluster, _preflight(releases, owned, workspace.root, progress))
 
 
 def _converge(
@@ -258,16 +252,16 @@ def _converge(
     root: Path,
     *,
     skip_installed: bool,
-    report: ProgressCallback,
+    progress: ProgressCallback | None,
 ) -> DevClusterResult:
     started = time.monotonic()
     summary = RunSummary()
-    installed_keys = _installed_keys(session, report)
+    installed_keys = _installed_keys(session, progress)
     try:
-        outcomes = bootstrap.bootstrap(session, prepared.cluster, root=root, progress=report)
+        outcomes = bootstrap.bootstrap(session, prepared.cluster, root=root, progress=progress)
     except ReleaseFailed as exc:
         if exc.diagnostics.strip():
-            report(info(exc.diagnostics))
+            emit(progress, info(exc.diagnostics))
         raise
     for outcome in outcomes:
         bucket = summary.applied if outcome.status == "applied" else summary.no_change
@@ -275,17 +269,19 @@ def _converge(
         installed_keys.add((outcome.namespace, outcome.name))
     for target_step in prepared.steps:
         if isinstance(target_step, _LifecycleStep):
-            releases = _lifecycle_releases(target_step, summary, report)
+            releases = _lifecycle_releases(target_step, summary, progress)
         else:
-            releases = [_stack_release(target_step, root)]
+            releases = [helm_release(target_step, root)]
         for release, label in releases:
-            _converge_one(session, release, label, installed_keys, summary, skip_installed, report)
-    wait_apps_wildcard_ready(summary, kubectl=session.kubectl, progress=report)
+            _converge_one(
+                session, release, label, installed_keys, summary, skip_installed, progress
+            )
+    wait_apps_wildcard_ready(summary, kubectl=session.kubectl, progress=progress)
     warn_on_port_mapping_drift(
         session.name,
         kind=session.kind,
         root=root,
-        progress=report,
+        progress=progress,
         config=kind_config_path(root, prepared.cluster),
     )
     _LOG.info(
@@ -299,7 +295,7 @@ def _converge(
     return summary.freeze(access_hints(summary, kubectl=session.kubectl))
 
 
-def _installed_keys(session: Session, report: ProgressCallback) -> set[tuple[str, str]]:
+def _installed_keys(session: Session, progress: ProgressCallback | None) -> set[tuple[str, str]]:
     """Releases `--skip-installed` skips: deployed or failed, as `helm list` shows them.
 
     A failed listing falls back to "nothing installed" rather than aborting.
@@ -308,13 +304,16 @@ def _installed_keys(session: Session, report: ProgressCallback) -> set[tuple[str
         releases = installed(session)
     except ChartManagerError as exc:
         _LOG.warning("helm release listing failed; treating every release as uninstalled: %s", exc)
-        report(warn(f"could not list helm releases ({exc}); proceeding as if no releases exist"))
+        emit(
+            progress,
+            warn(f"could not list helm releases ({exc}); proceeding as if no releases exist"),
+        )
         return set()
     return {key for key, state in releases.items() if state in {"deployed", "failed"}}
 
 
 def _lifecycle_releases(
-    target_step: _LifecycleStep, summary: RunSummary, report: ProgressCallback
+    target_step: _LifecycleStep, summary: RunSummary, progress: ProgressCallback | None
 ) -> list[tuple[Release, str]]:
     """Each plan entry as a release; an entry that does not resolve is a failed row."""
     releases = []
@@ -327,7 +326,7 @@ def _lifecycle_releases(
             _LOG.error(
                 "chart resolution failed: chart=%s profile=%s: %s", entry.chart, entry.profile, exc
             )
-            report(failure("chart resolution failed:", f"{entry.chart}: {exc}"))
+            emit(progress, failure("chart resolution failed:", f"{entry.chart}: {exc}"))
             summary.failed.append(DevClusterEntryFailure(entry.chart, entry.profile, "?", str(exc)))
             continue
         release = Release(
@@ -348,19 +347,19 @@ def _converge_one(
     installed_keys: set[tuple[str, str]],
     summary: RunSummary,
     skip_installed: bool,
-    report: ProgressCallback,
+    progress: ProgressCallback | None,
 ) -> None:
     key = (release.namespace, release.name)
     if skip_installed and key in installed_keys:
-        report(detail("skip", f"{release.name} (already installed in {release.namespace})"))
+        emit(progress, detail("skip", f"{release.name} (already installed in {release.namespace})"))
         summary.no_change.append(DevClusterEntryOutcome(release.name, label, release.namespace))
         return
-    report(step("Applying", f"{release.name}:{label} -> {release.namespace}"))
+    emit(progress, step("Applying", f"{release.name}:{label} -> {release.namespace}"))
     try:
         state = converge(session, release)
     except ChartManagerError as exc:
         if isinstance(exc, ReleaseFailed) and exc.diagnostics.strip():
-            report(info(exc.diagnostics))
+            emit(progress, info(exc.diagnostics))
         _LOG.error(
             "release failed; converge continues: release=%s profile=%s namespace=%s: %s",
             release.name,
@@ -368,7 +367,7 @@ def _converge_one(
             release.namespace,
             exc,
         )
-        report(failure("apply failed:", f"{release.name}:{label} -> {exc}"))
+        emit(progress, failure("apply failed:", f"{release.name}:{label} -> {exc}"))
         summary.failed.append(
             DevClusterEntryFailure(release.name, label, release.namespace, str(exc))
         )
@@ -376,31 +375,6 @@ def _converge_one(
     bucket = summary.applied if state == "applied" else summary.no_change
     bucket.append(DevClusterEntryOutcome(release.name, label, release.namespace))
     installed_keys.add(key)
-
-
-def _stack_release(source: OciChartRelease | RepoChartRelease, root: Path) -> tuple[Release, str]:
-    """The Helm release behind a stack's OCI or HTTPS repository entry, and its label."""
-    values = tuple(root / path for path in source.values)
-    if isinstance(source, OciChartRelease):
-        release = Release(
-            name=source.name,
-            chart=oci_chart_ref(source),
-            namespace=source.namespace,
-            values=values,
-            timeout=source.timeout,
-            version=source.version,
-        )
-        return release, oci_identity(source)
-    release = Release(
-        name=source.name,
-        chart=source.chart,
-        namespace=source.namespace,
-        values=values,
-        timeout=source.timeout,
-        version=source.version,
-        repo=source.repo,
-    )
-    return release, source.version
 
 
 def _target_releases(
@@ -425,7 +399,7 @@ def _preflight(
     releases: tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...],
     owned: frozenset[ExternallySatisfiedLifecycle],
     root: Path,
-    report: ProgressCallback,
+    progress: ProgressCallback | None,
 ) -> tuple[_Step, ...]:
     """Resolve every release before anything is installed, in authored order.
 
@@ -466,7 +440,7 @@ def _preflight(
                     f"{entry.chart}:{entry.profile}"
                 )
                 _LOG.warning("%s", message)
-                report(warn(message))
+                emit(progress, warn(message))
             kept.append(entry)
         steps.append(_LifecycleStep(catalog, tuple(kept)))
     return tuple(steps)

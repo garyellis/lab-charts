@@ -9,6 +9,7 @@ from chart_manager.commands.test.models import LifecycleAction
 from chart_manager.plumbing.commands import CommandRunner, redact
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
+from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT
 
 _LOG = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class ChartTestHookRunner:
             "CHART_MANAGER_KUBE_CONTEXT": self.kube_context,
             "CHART_MANAGER_CLUSTER_NAME": self.cluster_name,
         }
-        timeout = action.timeout or "10m"
+        timeout = action.timeout or DEFAULT_TIMEOUT
         command = redact(action.command)
         _LOG.info("running %s hook for %s/%s: %s", phase, target.chart, target.profile, command)
         try:

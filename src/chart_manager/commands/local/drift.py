@@ -10,7 +10,7 @@ from chart_manager.commands.local.models import PortMappingDrift
 from chart_manager.integrations.kind import Kind
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.shared.cluster.progress import ProgressCallback, warn
+from chart_manager.shared.cluster.progress import ProgressCallback, emit, warn
 
 _LOG = logging.getLogger(__name__)
 
@@ -78,8 +78,7 @@ def port_mapping_drift(
         # difference survives is here. A typo'd `spec.cluster.config` disables
         # this check permanently and looks exactly like passing it.
         _LOG.warning(
-            "port-mapping drift check skipped, no host ports to compare: "
-            "cluster=%s baseline=%s",
+            "port-mapping drift check skipped, no host ports to compare: cluster=%s baseline=%s",
             cluster_name,
             baseline,
         )
@@ -110,23 +109,27 @@ def warn_on_port_mapping_drift(
     *,
     kind: Kind,
     root: Path,
-    progress: ProgressCallback,
+    progress: ProgressCallback | None,
     config: Path | None = None,
 ) -> None:
     """Narrate `port_mapping_drift` so the dev knows a `local reset` is required."""
     drift = port_mapping_drift(cluster_name, kind=kind, root=root, config=config)
     if drift.error is not None:
-        progress(
-            warn(f"could not inspect container port mappings ({drift.error}); skipping drift check")
+        emit(
+            progress,
+            warn(
+                f"could not inspect container port mappings ({drift.error}); skipping drift check"
+            ),
         )
         return
     if not drift.drifted:
         return
-    progress(
+    emit(
+        progress,
         warn(
             f"kind cluster port mappings do not match kind-config.yaml "
             f"(missing host ports: {list(drift.missing)}); run "
             "'chart-manager local reset <same-target>' to apply "
             f"(current cluster: {cluster_name})."
-        )
+        ),
     )

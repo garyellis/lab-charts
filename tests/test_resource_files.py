@@ -7,16 +7,17 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.commands.validate.schemas.lock import load_schema_lock
 from chart_manager.shared.charts.lifecycle import LIFECYCLE_FILENAME, load_chart_lifecycle
-from chart_manager.shared.cluster.local_cluster import load_local_cluster
+from chart_manager.shared.cluster.local_cluster import load_resource
 from chart_manager.shared.workspace import load_repository_workspace
 
 from .conftest import REPO_ROOT
 
 _LOADERS: dict[str, Callable[[Path], object]] = {
     LIFECYCLE_FILENAME: load_chart_lifecycle,
-    "local-cluster.yaml": load_local_cluster,
+    "local-cluster.yaml": lambda path: load_resource(path, LocalCluster),
     "schemas.lock.yaml": load_schema_lock,
     "workspace.yaml": lambda path: load_repository_workspace(path.parents[1]),
 }

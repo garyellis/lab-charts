@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import (
     BootstrapRelease,
@@ -18,7 +20,7 @@ from chart_manager.api.v1alpha1.releases import (
     StackRelease,
 )
 from chart_manager.plumbing.errors import SpecError, YamlError
-from chart_manager.plumbing.paths import validate_hook_executable
+from chart_manager.plumbing.paths import inside_root, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.shared.charts.chart import load_chart_metadata
 from chart_manager.shared.charts.lifecycle import (
@@ -32,7 +34,7 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 def load_cluster(workspace: RepositoryWorkspace) -> LocalCluster:
     """Load the workspace's `LocalCluster` and check the files and charts it names."""
     root = workspace.root.resolve()
-    cluster = load_local_cluster(workspace.local_cluster_path)
+    cluster = load_resource(workspace.local_cluster_path, LocalCluster)
     require_file(root, cluster.spec.cluster.config, field="spec.cluster.config")
     hooks = cluster.spec.cluster.hooks
     if hooks is not None:
@@ -47,12 +49,12 @@ def load_cluster(workspace: RepositoryWorkspace) -> LocalCluster:
     return cluster
 
 
-def load_local_cluster(path: Path) -> LocalCluster:
-    """Strictly load one `LocalCluster` document."""
+def load_resource[M: BaseModel](path: Path, model: type[M]) -> M:
+    """Strictly load one `LocalCluster` or `LocalStack` document."""
     if not path.is_file():
         raise SpecError(f"local resource file does not exist: {path}")
     try:
-        return LocalCluster.model_validate(load_yaml_file(path))
+        return model.model_validate(load_yaml_file(path))
     except (YamlError, ValueError) as exc:
         raise SpecError(f"invalid local resource {path}: {exc}") from exc
 
@@ -89,14 +91,6 @@ def validate_release(root: Path, release: BootstrapRelease | StackRelease) -> No
     if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):
         for path in release.values:
             require_file(root, path, field="release.values[]")
-
-
-def inside_root(root: Path, path: Path) -> Path:
-    """`path` resolved against `root`; raise if it escapes the root."""
-    resolved = (path if path.is_absolute() else root / path).resolve()
-    if not resolved.is_relative_to(root.resolve()):
-        raise SpecError(f"path escapes repository root {root}: {path}")
-    return resolved
 
 
 def require_file(root: Path, path: Path, *, field: str) -> Path:

@@ -7,7 +7,7 @@ from pathlib import Path, PureWindowsPath
 
 from chart_manager.plumbing.errors import SpecError
 
-__all__ = ["ensure_relative", "relative_path", "validate_hook_executable"]
+__all__ = ["ensure_relative", "inside_root", "relative_path", "validate_hook_executable"]
 
 
 def ensure_relative(
@@ -89,4 +89,12 @@ def validate_hook_executable(
         raise SpecError(f"path escapes repository root {root}: {relative}")
     if not resolved.is_file():
         raise SpecError(f"{field} file does not exist: {relative}")
+    return resolved
+
+
+def inside_root(root: Path, path: Path) -> Path:
+    """`path` resolved against `root`; raise if it escapes the root."""
+    resolved = (path if path.is_absolute() else root / path).resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise SpecError(f"path escapes repository root {root}: {path}")
     return resolved

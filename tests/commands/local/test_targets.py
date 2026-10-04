@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.api.v1alpha1.local_stack import LocalStack
 from chart_manager.api.v1alpha1.releases import (
     BootstrapLifecycleRelease,
     BootstrapLocalChartRelease,
@@ -16,11 +17,10 @@ from chart_manager.api.v1alpha1.releases import (
 from chart_manager.commands.local.targets import (
     LocalTargetResolver,
     ResolvedStackTarget,
-    load_local_stack,
 )
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.chart import ResolvedChartTarget
-from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.local_cluster import load_cluster, load_resource
 from tests.conftest import LOCAL_CONFIG, REPO_ROOT, workspace_for
 
 
@@ -198,7 +198,7 @@ spec:
 """,
     )
 
-    resource = load_local_stack(stack)
+    resource = load_resource(stack, LocalStack)
 
     assert isinstance(resource.spec.releases[0], LifecycleRelease)
     assert isinstance(resource.spec.releases[1], OciChartRelease)
@@ -211,7 +211,7 @@ spec:
     )
     stack.write_text(bad, encoding="utf-8")
     with pytest.raises(SpecError, match="union_tag_invalid"):
-        load_local_stack(stack)
+        load_resource(stack, LocalStack)
 
 
 @pytest.mark.parametrize(
@@ -285,7 +285,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match="extra_forbidden"):
-        load_local_stack(stack)
+        load_resource(stack, LocalStack)
 
 
 @pytest.mark.parametrize(
@@ -323,7 +323,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match=r"exactly one|exact SemVer|sha256"):
-        load_local_stack(stack)
+        load_resource(stack, LocalStack)
 
 
 @pytest.mark.parametrize(
@@ -363,7 +363,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match=r"HTTPS|bare chart|exact SemVer"):
-        load_local_stack(stack)
+        load_resource(stack, LocalStack)
 
 
 def test_raw_release_requires_explicit_helm_settings_and_safe_paths(tmp_path: Path) -> None:
@@ -386,7 +386,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match=r"release\.values.*repository-relative|timeout"):
-        load_local_stack(stack)
+        load_resource(stack, LocalStack)
 
 
 def test_resolver_distinguishes_chart_named_stack_and_explicit_stack(tmp_path: Path) -> None:

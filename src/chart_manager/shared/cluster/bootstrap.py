@@ -13,25 +13,19 @@ from pathlib import Path
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import (
     BootstrapLifecycleRelease,
-    BootstrapLocalChartRelease,
-    BootstrapOciChartRelease,
     BootstrapRelease,
-    BootstrapRepoChartRelease,
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
-from chart_manager.shared.cluster.converge import Release, converge
+from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 from chart_manager.shared.cluster.releases import (
     chart_name,
+    helm_release,
     lifecycle_install_plan,
-    oci_chart_ref,
-    oci_identity,
 )
 from chart_manager.shared.cluster.session import Session
-
-DEFAULT_TIMEOUT = "10m"
 
 
 @dataclass(frozen=True)
@@ -74,9 +68,7 @@ def bootstrap(
     return tuple(outcomes)
 
 
-def verify(
-    cluster: LocalCluster, *, root: Path, releases: Mapping[tuple[str, str], str]
-) -> None:
+def verify(cluster: LocalCluster, *, root: Path, releases: Mapping[tuple[str, str], str]) -> None:
     """Require every bootstrap release among `releases` (any state), without installing."""
     for authored in cluster.spec.bootstrap.releases:
         for release, _profile in _releases(root.resolve(), authored, {}):
@@ -131,8 +123,7 @@ def preflight(
 def _releases(
     root: Path, authored: BootstrapRelease, sets: dict[str, str]
 ) -> list[tuple[Release, str]]:
-    """The Helm releases one authored bootstrap release installs, with their profile label."""
-    values = tuple(root / path for path in getattr(authored, "values", ()))
+    """The Helm releases one authored bootstrap release installs, with their row label."""
     if isinstance(authored, BootstrapLifecycleRelease):
         catalog, plan = lifecycle_install_plan(root, authored, source="bootstrap chart")
         root_chart = chart_name(root, authored.chart)
@@ -155,40 +146,7 @@ def _releases(
                 )
             )
         return releases
-    if isinstance(authored, BootstrapLocalChartRelease):
-        release = Release(
-            name=authored.name,
-            chart=(root / authored.chart).resolve(),
-            namespace=authored.namespace,
-            values=values,
-            sets=sets,
-            timeout=authored.timeout,
-        )
-        return [(release, "local")]
-    if isinstance(authored, BootstrapOciChartRelease):
-        release = Release(
-            name=authored.name,
-            chart=oci_chart_ref(authored),
-            namespace=authored.namespace,
-            values=values,
-            sets=sets,
-            timeout=authored.timeout,
-            version=authored.version,
-        )
-        return [(release, oci_identity(authored))]
-    if isinstance(authored, BootstrapRepoChartRelease):
-        release = Release(
-            name=authored.name,
-            chart=authored.chart,
-            namespace=authored.namespace,
-            values=values,
-            sets=sets,
-            timeout=authored.timeout,
-            version=authored.version,
-            repo=authored.repo,
-        )
-        return [(release, authored.version)]
-    raise ChartManagerError(f"unsupported bootstrap release: {authored!r}")  # pragma: no cover
+    return [helm_release(authored, root, sets=sets)]
 
 
 def _runtime_values(session: Session, release: BootstrapRelease) -> dict[str, str]:

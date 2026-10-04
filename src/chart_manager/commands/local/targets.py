@@ -8,24 +8,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from chart_manager.api.v1alpha1.local_stack import LocalStack
-from chart_manager.plumbing.errors import SpecError, YamlError
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.names import dns_label
-from chart_manager.plumbing.paths import relative_path
-from chart_manager.plumbing.yaml_files import load_yaml_file
+from chart_manager.plumbing.paths import inside_root, relative_path
 from chart_manager.shared.charts.chart import ResolvedChartTarget, chart_target
-from chart_manager.shared.cluster.local_cluster import inside_root, validate_release
+from chart_manager.shared.cluster.local_cluster import load_resource, validate_release
 
 DEFAULT_STACKS_DIR = Path("stacks")
-
-
-def load_local_stack(path: Path) -> LocalStack:
-    """Strictly load one ``LocalStack`` resource."""
-    if not path.is_file():
-        raise SpecError(f"local resource file does not exist: {path}")
-    try:
-        return LocalStack.model_validate(load_yaml_file(path))
-    except (YamlError, ValueError) as exc:
-        raise SpecError(f"invalid local resource {path}: {exc}") from exc
 
 
 class ResolvedStackTarget(BaseModel):
@@ -61,7 +50,7 @@ class LocalTargetResolver:
         return self.root / self.local_config.parent / self.stacks_dir
 
     def load_stack(self, path: Path) -> LocalStack:
-        stack = load_local_stack(inside_root(self.root, path))
+        stack = load_resource(inside_root(self.root, path), LocalStack)
         for release in stack.spec.releases:
             validate_release(self.root, release)
         return stack
@@ -111,5 +100,4 @@ __all__ = [
     "LocalTargetResolver",
     "ResolvedLocalTarget",
     "ResolvedStackTarget",
-    "load_local_stack",
 ]

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
-from chart_manager.api.v1alpha1.releases import LifecycleRelease, OciChartRelease
+from chart_manager.api.v1alpha1.releases import (
+    LifecycleRelease,
+    LocalChartRelease,
+    OciChartRelease,
+    RepoChartRelease,
+)
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import load_chart_name
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
+from chart_manager.shared.cluster.converge import Release
 
 
 def chart_name(root: Path, chart_relative: Path) -> str:
@@ -42,6 +50,30 @@ def lifecycle_install_plan(
             f"{release.chart} resolved to {chart.path}"
         )
     return catalog, DependencyResolver(catalog.get).install_plan(name, release.profile)
+
+
+def helm_release(
+    authored: LocalChartRelease | OciChartRelease | RepoChartRelease,
+    root: Path,
+    *,
+    sets: Mapping[str, str] | None = None,
+) -> tuple[Release, str]:
+    """The Helm release a local, OCI or repository entry installs, and its row label."""
+    base = Release(
+        name=authored.name,
+        chart="",
+        namespace=authored.namespace,
+        values=tuple(root / path for path in authored.values),
+        sets=dict(sets or {}),
+        timeout=authored.timeout,
+    )
+    if isinstance(authored, OciChartRelease):
+        release = replace(base, chart=oci_chart_ref(authored), version=authored.version)
+        return release, oci_identity(authored)
+    if isinstance(authored, RepoChartRelease):
+        release = replace(base, chart=authored.chart, version=authored.version, repo=authored.repo)
+        return release, authored.version
+    return replace(base, chart=(root / authored.chart).resolve()), "local"
 
 
 def oci_identity(release: OciChartRelease) -> str:

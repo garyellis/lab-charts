@@ -32,7 +32,14 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.cluster import bootstrap
-from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed, wait
+from chart_manager.shared.cluster.converge import (
+    DEFAULT_TIMEOUT,
+    Release,
+    ReleaseFailed,
+    converge,
+    installed,
+    wait,
+)
 from chart_manager.shared.cluster.local_cluster import load_cluster
 from chart_manager.shared.cluster.progress import (
     ProgressCallback,
@@ -325,14 +332,16 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
             chart=action.chart_path,
             namespace=namespace,
             values=action.values,
-            timeout=action.timeout or "10m",
+            timeout=action.timeout or DEFAULT_TIMEOUT,
         )
         if action.kind is ActionKind.INSTALL:
             converge(session, target)
         else:
             wait(session, target)
     elif action.kind is ActionKind.HELM_TEST:
-        result = session.helm.test(release, namespace=namespace, timeout=action.timeout or "10m")
+        result = session.helm.test(
+            release, namespace=namespace, timeout=action.timeout or DEFAULT_TIMEOUT
+        )
         if result.returncode != 0:
             output = (result.stderr or result.stdout).strip()
             raise ChartManagerError(

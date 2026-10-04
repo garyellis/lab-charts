@@ -8,6 +8,7 @@ from typing import Any, Literal
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ClusterTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
+from chart_manager.plumbing.paths import inside_root
 from chart_manager.plumbing.yaml_files import load_yaml_file
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
@@ -207,9 +208,7 @@ def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> Resolved
 
 def chart_target(root: Path, path: Path) -> ResolvedChartTarget:
     """Describe the chart directory at `path`, which must sit inside `root`."""
-    absolute = path.resolve()
-    if not absolute.is_relative_to(root.resolve()):
-        raise SpecError(f"path escapes repository root {root}: {path}")
+    absolute = inside_root(root, path)
     chart_yaml = absolute / "Chart.yaml"
     if not chart_yaml.is_file():
         raise SpecError(f"chart directory has no Chart.yaml: {path}")

@@ -23,6 +23,8 @@ from chart_manager.plumbing.yaml_files import parse_yaml_documents
 from chart_manager.shared.cluster.session import Session
 
 WORKLOAD_KINDS = ("deployment", "statefulset", "daemonset")
+#: The install and wait budget when a release names none.
+DEFAULT_TIMEOUT = "10m"
 
 Step = Literal["dependency update", "install", "wait"]
 
@@ -36,7 +38,7 @@ class Release:
     namespace: str
     values: tuple[Path, ...] = ()
     sets: Mapping[str, str] = field(default_factory=dict)
-    timeout: str = "10m"
+    timeout: str = DEFAULT_TIMEOUT
     version: str | None = None
     repo: str | None = None
 
