@@ -103,8 +103,8 @@ Repository-bound commands resolve `CHART_MANAGER_ROOT`/operator config first
 `.chart-manager/workspace.yaml`. There is no fallback: with no marker,
 `Container.workspace()` raises `WorkspaceNotFoundError` (exit 5). The
 composition boundary compiles one `RepositoryWorkspace` per invocation for
-chart discovery, local resources, validation policy and render locations, CI
-impact, publishing, upgrades/finalization, and Grafana discovery.
+chart discovery, local resources, validation policy and render locations, `plan`,
+publishing, upgrades/finalization, and Grafana discovery.
 
 `RepositoryWorkspace` is the resolved root, `metadata.name`, and the validated
 `ChartWorkspaceSpec` (`workspace.spec`), plus derived path and fanout helpers.
