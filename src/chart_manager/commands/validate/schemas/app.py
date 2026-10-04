@@ -1,8 +1,6 @@
-"""Repository policy adapter for upstream schema snapshot synchronization."""
+"""`schemas sync`: cache the upstream schema repositories the workspace pins."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from chart_manager.commands.validate.schemas.errors import KubeconformSchemaConfigurationError
 from chart_manager.commands.validate.schemas.models import AuthoredSchemaPolicy
@@ -16,44 +14,29 @@ from chart_manager.commands.validate.schemas.sync import (
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
 
-class RepositoryKubeconformSchemaService:
-    def __init__(
-        self, *, workspace: RepositoryWorkspace, sync: KubeconformSchemaSyncService
-    ) -> None:
-        self.workspace = workspace
-        self.sync_service = sync
-
-    def sync(self, *, update: bool = False) -> KubeconformSchemaSyncResult:
-        policy = self.workspace.spec.validation
-        if policy is None:
-            raise KubeconformSchemaConfigurationError(
-                f"{self.workspace.marker} must declare spec.validation "
-                "before schemas can be synchronized"
-            )
-        return self.sync_service.sync(
-            KubeconformSchemaSyncRequest(
-                workspace=self.workspace.name,
-                policy=AuthoredSchemaPolicy(
-                    kubernetes_version=policy.kubernetes_version,
-                    generate_from_crds=policy.schemas.generate_from_crds,
-                    catalog_repository=policy.schemas.catalog.repository,
-                    catalog_track=policy.schemas.catalog.track,
-                ),
-                lock_path=self.workspace.root / SCHEMA_LOCK_FILE,
-                update=update,
-            )
-        )
-
-
-def build_repository_kubeconform_schema_service(
-    *,
+def sync(
     workspace: RepositoryWorkspace,
+    *,
+    store: KubeconformSchemaStore,
     source: KubeconformSchemaSource,
-    cache_root: Path | None = None,
-) -> RepositoryKubeconformSchemaService:
-    return RepositoryKubeconformSchemaService(
-        workspace=workspace,
-        sync=KubeconformSchemaSyncService(
-            KubeconformSchemaStore(cache_root=cache_root), source
-        ),
+    update: bool = False,
+) -> KubeconformSchemaSyncResult:
+    """Cache the upstream schema repositories at the workspace's pins; `update` moves the pins."""
+    policy = workspace.spec.validation
+    if policy is None:
+        raise KubeconformSchemaConfigurationError(
+            f"{workspace.marker} must declare spec.validation before schemas can be synchronized"
+        )
+    return KubeconformSchemaSyncService(store, source).sync(
+        KubeconformSchemaSyncRequest(
+            workspace=workspace.name,
+            policy=AuthoredSchemaPolicy(
+                kubernetes_version=policy.kubernetes_version,
+                generate_from_crds=policy.schemas.generate_from_crds,
+                catalog_repository=policy.schemas.catalog.repository,
+                catalog_track=policy.schemas.catalog.track,
+            ),
+            lock_path=workspace.root / SCHEMA_LOCK_FILE,
+            update=update,
+        )
     )

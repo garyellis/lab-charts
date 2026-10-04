@@ -42,15 +42,16 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
 )
-from chart_manager.commands.validate.schemas.generated import prepare_generated_schemas
 from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
 )
+from chart_manager.commands.validate.schemas.store import default_schema_cache_root
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
@@ -61,7 +62,10 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
+from chart_manager.services.manifest_validation.catalog import (
+    build_catalog,
+    load_manifest_validation_target,
+)
 from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (
     ALL_PHASES,
@@ -98,6 +102,7 @@ from chart_manager.services.manifest_validation.validators import (
 )
 from chart_manager.services.manifest_validation.wire import to_json
 from chart_manager.shared.charts import dependencies as chart_deps
+from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 # Re-exports, so a surface needs one import for "drive the validate
@@ -275,8 +280,35 @@ class ManifestValidationService:
             validator_providers=self._validator_providers,
             run_log_level=logging.DEBUG,
         )
-        generated = prepare_generated_schemas(workspace, renderer)
-        return replace(runtime, generated_schema_locations=generated)
+
+        def render(charts: Sequence[Chart], out: Path) -> list[str]:
+            outcome = renderer.run(
+                RunRequest(
+                    root=workspace.root,
+                    charts=tuple(chart.name for chart in charts),
+                    phases=frozenset({"render"}),
+                    out=out,
+                    keep=True,
+                    include_crds=True,
+                )
+            )
+            return [
+                f"{row.row.chart}/{row.row.env}: {row.phases['render'].detail}"
+                for row in outcome.result.rows
+                if row.phases["render"].status != "PASS"
+            ] + list(outcome.result.spec_errors)
+
+        self.prepare_schema_dependencies(
+            build_catalog(
+                workspace.root,
+                chart_names=[chart.name for chart in generated.providers(workspace)],
+                charts_dir=workspace.spec.charts_dir,
+            ).targets
+        )
+        locations = generated.prepare(
+            workspace, render=render, cache_root=default_schema_cache_root()
+        )
+        return replace(runtime, generated_schema_locations=locations)
 
     def prepare_schema_dependencies(self, targets: Sequence[ManifestValidationTarget]) -> None:
         """Materialize dependencies before deciding which charts provide CRDs.
