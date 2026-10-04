@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.plumbing.yaml_files import dump_yaml
-from chart_manager.services.kubeconform_schemas import generated
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
 )
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.services.kubeconform_schemas import generated
 from chart_manager.services.manifest_validation.models import (
     PhaseResult,
     RowResult,

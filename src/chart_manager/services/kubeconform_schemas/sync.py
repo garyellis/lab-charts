@@ -5,18 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.integrations.kubeconform.github_schema_source import (
-    GitHubKubeconformSchemaSourceError,
-)
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaLockError,
     KubeconformSchemaSourceEnvironmentError,
 )
-from chart_manager.services.kubeconform_schemas.lock import (
+from chart_manager.commands.validate.schemas.lock import (
     load_schema_lock,
     write_schema_lock_atomic,
 )
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.models import (
     AuthoredSchemaPolicy,
     LockedSchemaPolicy,
     RepositoryPin,
@@ -24,8 +21,11 @@ from chart_manager.services.kubeconform_schemas.models import (
     build_lock,
     lock_policy_mismatches,
 )
+from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
+from chart_manager.integrations.kubeconform.github_schema_source import (
+    GitHubKubeconformSchemaSourceError,
+)
 from chart_manager.services.kubeconform_schemas.source import KubeconformSchemaSource
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
 
 
 @dataclass(frozen=True)

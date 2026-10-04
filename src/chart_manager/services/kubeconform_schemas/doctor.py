@@ -5,22 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.plumbing.preflight import Check
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaLockError,
     KubeconformSchemaStoreError,
 )
-from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.lock import load_schema_lock
+from chart_manager.commands.validate.schemas.models import (
     AuthoredSchemaPolicy,
     SchemaLock,
     lock_policy_mismatches,
 )
-from chart_manager.services.kubeconform_schemas.store import (
+from chart_manager.commands.validate.schemas.store import (
     KubeconformSchemaStore,
     StoreStatus,
 )
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
 _UPDATE = "run chart-manager schemas sync --update"

@@ -7,15 +7,15 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
 )
-from chart_manager.services.kubeconform_schemas.inventory import RenderedResource
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.models import (
     GroupVersionKind,
     MaterializedSchema,
 )
+from chart_manager.services.kubeconform_schemas.inventory import RenderedResource
 
 _SCHEMA_DRAFT = "http://json-schema.org/draft-07/schema#"
 

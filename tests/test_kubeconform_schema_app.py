@@ -1,5 +1,5 @@
+from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
 from chart_manager.services.kubeconform_schemas.app import RepositoryKubeconformSchemaService
-from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
 from chart_manager.services.kubeconform_schemas.sync import KubeconformSchemaSyncService
 
 from .schema_fixtures import schema_store, workspace

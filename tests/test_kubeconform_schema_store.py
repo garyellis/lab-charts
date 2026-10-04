@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaStoreError
 from chart_manager.plumbing.schema_locations import expand_schema_location
-from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaStoreError
 
 from .schema_fixtures import git, schema_store
 
@@ -146,11 +146,11 @@ def test_unwritable_cache_reports_a_store_error(tmp_path):
 
 
 def test_missing_upstream_version_is_a_configuration_error(tmp_path, monkeypatch):
+    from chart_manager.commands.validate.schemas.errors import (
+        KubeconformSchemaConfigurationError,
+    )
     from chart_manager.integrations.kubeconform.repository_snapshot import (
         RepositorySnapshotDirectoryNotFoundError,
-    )
-    from chart_manager.services.kubeconform_schemas.errors import (
-        KubeconformSchemaConfigurationError,
     )
 
     lock, store, snapshots = schema_store(tmp_path)

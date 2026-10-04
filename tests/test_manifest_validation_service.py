@@ -15,12 +15,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaLocations
+from chart_manager.commands.validate.schemas.store import KubeconformSchemaLocations
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation.app import (
     ManifestValidationService,
     RunnerSpec,

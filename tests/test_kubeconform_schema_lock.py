@@ -1,12 +1,12 @@
 import pytest
 
-from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaLockError
-from chart_manager.services.kubeconform_schemas.lock import (
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaLockError
+from chart_manager.commands.validate.schemas.lock import (
     load_schema_lock,
     serialize_schema_lock,
     write_schema_lock_atomic,
 )
-from chart_manager.services.kubeconform_schemas.models import RepositoryPin, build_lock
+from chart_manager.commands.validate.schemas.models import RepositoryPin, build_lock
 
 from .schema_fixtures import schema_store
 

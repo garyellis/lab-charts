@@ -8,10 +8,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaLockError
+from chart_manager.commands.validate.schemas.models import SchemaLock
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.yaml_files import dump_yaml, load_yaml_file
-from chart_manager.services.kubeconform_schemas.errors import KubeconformSchemaLockError
-from chart_manager.services.kubeconform_schemas.models import SchemaLock
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 
 
