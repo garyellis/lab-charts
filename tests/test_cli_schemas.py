@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from chart_manager.cli import schemas as schemas_cli
+from chart_manager.commands.validate import cli as validate_cli
 
 from .conftest import cli
 
@@ -9,19 +9,22 @@ from .conftest import cli
 def test_sync_forwards_only_explicit_pin_update(monkeypatch):
     calls = []
 
-    def sync(**kwargs):
-        calls.append(kwargs)
+    def sync(workspace, **kwargs):
+        calls.append(kwargs["update"])
         return SimpleNamespace(
             generation_published=True,
             lock=SimpleNamespace(generation="sha256:" + "a" * 64),
             generation_path=Path("/cache/repos"),
         )
 
-    monkeypatch.setattr(schemas_cli, "_make_service", lambda: SimpleNamespace(sync=sync))
+    monkeypatch.setattr(validate_cli, "sync_schemas", sync)
+    monkeypatch.setattr(validate_cli, "_container", lambda: SimpleNamespace(
+        workspace=lambda: None, settings=SimpleNamespace(command_timeout=None)
+    ))
     assert cli("schemas", "sync").exit_code == 0
     result = cli("schemas", "sync", "--update")
     assert result.exit_code == 0
-    assert calls == [{"update": False}, {"update": True}]
+    assert calls == [False, True]
     assert "schema generation" in result.stdout
 
 

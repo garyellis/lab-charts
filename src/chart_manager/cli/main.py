@@ -34,11 +34,11 @@ from chart_manager.cli import local as local_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli import plan as plan_cli
 from chart_manager.cli import publish as publish_cli
-from chart_manager.cli import schemas as schemas_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.commands.validate import cli as validate_commands
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaError,
@@ -236,7 +236,7 @@ upgrade_cli.register_finalize(app)
 app.command("version")(version_command)
 # Root-level: `plan` is asked about the repository, not about one chart.
 plan_cli.register(app)
-schemas_cli.register(schemas_app)
+validate_commands.register_schemas(schemas_app)
 
 validate_cli.register_validate(chart_app)
 validate_cli.register_cache(chart_cache_app)

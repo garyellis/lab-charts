@@ -136,9 +136,9 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
     from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
     from chart_manager.services.manifest_validation.app import ManifestValidationService
     from chart_manager.services.manifest_validation.models import RunRequest
+    from tests.conftest import crd_manifest
     from tests.schema_fixtures import schema_store, workspace
     from tests.test_kubeconform_schema_generated import chart
-    from tests.test_kubeconform_schema_inventory_crd import _crd
 
     _skip_if_missing("helm", "kubeconform", "git")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
@@ -148,7 +148,7 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
     lock_path = tmp_path / ".chart-manager/schemas.lock.yaml"
     write_schema_lock_atomic(lock_path, lock)
     before = lock_path.read_bytes()
-    provider = chart(tmp_path, "provider", _crd())
+    provider = chart(tmp_path, "provider", crd_manifest())
     consumer = chart(
         tmp_path,
         "consumer",
@@ -198,7 +198,7 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_pa
     )
     assert validate().outcome() is Outcome.SUCCESS
     # Current generated CRDs override the permissive catalog schema immediately.
-    (provider / "templates/resources.yaml").write_text(_crd(nested_type="integer"))
+    (provider / "templates/resources.yaml").write_text(crd_manifest(nested_type="integer"))
     result = validate()
     assert result.outcome() is Outcome.FAILED
     assert "want integer" in result.rows[0].phases["schema"].detail

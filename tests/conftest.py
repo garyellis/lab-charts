@@ -16,7 +16,9 @@ docstring for why there is exactly one of it.
 """
 from __future__ import annotations
 
+import io
 import logging
+import tarfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -258,6 +260,86 @@ def write_validation_chart(root: Path, name: str, **validation: Any) -> Path:
         )
     )
     return chart
+
+
+def crd_manifest(*, nested_type: str = "string") -> str:
+    """A CustomResourceDefinition for example.io/v1 Widget."""
+    return f"""apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.io
+spec:
+  group: example.io
+  names:
+    kind: Widget
+    plural: widgets
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                name:
+                  type: {nested_type}
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                arbitrary:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+    - name: v1beta1
+      served: false
+      storage: false
+      schema:
+        openAPIV3Schema:
+          type: object
+"""
+
+
+#: Chart.lock for one `foo 1.0.0` dependency on https://example.test/charts.
+ONE_DEPENDENCY_LOCK = (
+    "dependencies:\n"
+    "  - name: foo\n"
+    "    version: 1.0.0\n"
+    "    repository: https://example.test/charts\n"
+    "digest: sha256:ac904eb48ba9649a9d5261dfc887cd08080cdddfd2e7bca3217ff88cfaadb27b\n"
+)
+
+
+def materialize_dependency(
+    chart: Path,
+    name: str = "foo",
+    version: str = "1.0.0",
+    *,
+    helm_gzip_extra: bool = False,
+) -> None:
+    """Create a minimal real Helm package under ``charts/``."""
+    chart_yaml = (
+        f"apiVersion: v2\nname: {name}\nversion: {version}\n"
+    ).encode()
+    info = tarfile.TarInfo(f"{name}/Chart.yaml")
+    info.size = len(chart_yaml)
+    package = chart / "charts" / f"{name}-{version}.tgz"
+    with tarfile.open(package, "w:gz") as archive:
+        archive.addfile(info, io.BytesIO(chart_yaml))
+    if helm_gzip_extra:
+        compressed = package.read_bytes()
+        # Helm's Go gzip writer includes FEXTRA. Insert a minimal valid extra
+        # field into Python's otherwise equivalent gzip header.
+        package.write_bytes(
+            compressed[:3]
+            + bytes([compressed[3] | 0x04])
+            + compressed[4:10]
+            + b"\x04\x00HELM"
+            + compressed[10:]
+        )
 
 
 # --- the CLI argv seam -------------------------------------------------------

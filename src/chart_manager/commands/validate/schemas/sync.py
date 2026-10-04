@@ -21,11 +21,11 @@ from chart_manager.commands.validate.schemas.models import (
     build_lock,
     lock_policy_mismatches,
 )
+from chart_manager.commands.validate.schemas.source import KubeconformSchemaSource
 from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
 from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaSourceError,
 )
-from chart_manager.services.kubeconform_schemas.source import KubeconformSchemaSource
 
 
 @dataclass(frozen=True)

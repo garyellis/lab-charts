@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.validate.schemas.crd import _strict_schema
 from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.services.kubeconform_schemas.crd import _strict_schema
 
 pytestmark = pytest.mark.integration
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,10 +18,12 @@ from chart_manager.commands.validate.models import (
     ValidateOutcome,
     ValidateRequest,
 )
+from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
 )
+from chart_manager.commands.validate.schemas.store import default_schema_cache_root
 from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
@@ -123,22 +127,22 @@ class _Checker:
     def check(
         self, chart: Chart, spec: ManifestValidationSpec, row: Row, rendered: Path
     ) -> dict[CheckName, CheckResult]:
-        helm = Helm(
-            self.runner,
-            version=spec.helm_version,
-            binary=spec.helm_binary,
-            verbose=False,
-            deps_are_fresh=dependencies.deps_are_fresh,
-            chart_has_dependencies=dependencies.chart_has_dependencies,
-        )
-        checks: dict[CheckName, CheckResult] = {"render": _render(helm, chart, spec, row, rendered)}
+        render = _render(_helm(self.runner, spec), chart, spec, row, rendered)
+        checks: dict[CheckName, CheckResult] = {"render": render}
         if "schema" in self.checks:
             skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
             if skip:
                 checks["schema"] = CheckResult("skipped", skip)
             else:
                 if self.schemas is None:
-                    self.schemas = load_kubeconform_schema_runtime(self.workspace)
+                    runtime = load_kubeconform_schema_runtime(self.workspace)
+                    _update_dependencies(self.runner, generated.providers(self.workspace))
+                    crds = generated.prepare(
+                        self.workspace,
+                        render=self._render_crds,
+                        cache_root=default_schema_cache_root(),
+                    )
+                    self.schemas = replace(runtime, generated_schema_locations=crds)
                 locations = _schema_locations(self.workspace.root, chart.name, spec)
                 checks["schema"] = _schema(
                     self.kubeconform, self.schemas, spec, locations, rendered
@@ -152,9 +156,58 @@ class _Checker:
                 checks["policy"] = _policy(self.kyverno, policies, rendered)
         return checks
 
+    def _render_crds(self, charts: Sequence[Chart], out: Path) -> list[str]:
+        """Render each chart in every environment with its CRDs; one line per failure."""
+        failures = []
+        for chart in charts:
+            spec = require_validation(chart.lifecycle, chart_name=chart.name)
+            helm = _helm(self.runner, spec)
+            for env in spec.environments:
+                row = selected_row(chart.name, spec, env)
+                try:
+                    result = _render(helm, chart, spec, row, out / chart.name / env, crds=True)
+                except SpecError as exc:
+                    result = CheckResult("failed", str(exc))
+                if result.status == "failed":
+                    failures.append(f"{chart.name}/{env}: {result.detail}")
+        return failures
+
+
+def _update_dependencies(runner: CommandRunner, charts: Sequence[Chart]) -> None:
+    """Bring stale chart dependencies up to date, eight charts at a time."""
+    stale = [
+        chart
+        for chart in charts
+        if chart.metadata.dependencies and not dependencies.deps_are_fresh(chart.path)
+    ]
+
+    def update(chart: Chart) -> None:
+        spec = require_validation(chart.lifecycle, chart_name=chart.name)
+        _helm(runner, spec).dependency_update_if_stale(chart.path, timeout=300.0)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(update, stale))
+
+
+def _helm(runner: CommandRunner, spec: ManifestValidationSpec) -> Helm:
+    return Helm(
+        runner,
+        version=spec.helm_version,
+        binary=spec.helm_binary,
+        verbose=False,
+        deps_are_fresh=dependencies.deps_are_fresh,
+        chart_has_dependencies=dependencies.chart_has_dependencies,
+    )
+
 
 def _render(
-    helm: Helm, chart: Chart, spec: ManifestValidationSpec, row: Row, out: Path
+    helm: Helm,
+    chart: Chart,
+    spec: ManifestValidationSpec,
+    row: Row,
+    out: Path,
+    *,
+    crds: bool = False,
 ) -> CheckResult:
     values = _values(chart, spec, row.env)
     if out.exists():
@@ -166,6 +219,7 @@ def _render(
             namespace=row.namespace,
             output_dir=out,
             values=values,
+            include_crds=crds,
         )
     except ExternalCommandError as exc:
         return CheckResult(status="failed", detail=str(exc))

@@ -12,33 +12,41 @@ import re
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from chart_manager.commands.validate.schemas.crd import generate_crd_schemas
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
     KubeconformSchemaStoreError,
 )
+from chart_manager.commands.validate.schemas.inventory import scan_rendered_directory
 from chart_manager.commands.validate.schemas.models import (
     GroupVersionKind,
     MaterializedSchema,
     SchemaScope,
     content_digest,
 )
-from chart_manager.commands.validate.schemas.store import default_schema_cache_root
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
-from chart_manager.services.kubeconform_schemas.inventory import scan_rendered_directory
-from chart_manager.services.manifest_validation.catalog import build_catalog
-from chart_manager.services.manifest_validation.models import ManifestValidationTarget, RunRequest
-from chart_manager.shared.charts.chart import ChartRepository, load_chart_metadata
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.shared.charts.chart import (
+    Chart,
+    ChartRepository,
+    load_chart,
+    load_chart_metadata,
+)
 from chart_manager.shared.charts.dependencies import deps_are_fresh
+from chart_manager.shared.charts.lifecycle import (
+    CapabilityStatus,
+    require_validation,
+    validation_status,
+)
 from chart_manager.shared.workspace import RepositoryWorkspace
 
-if TYPE_CHECKING:
-    from chart_manager.services.manifest_validation.app import ManifestValidationService
-
+#: Render each chart in every environment, CRDs included, into ``<out>/<chart>/<env>``;
+#: return one line per failed render.
+RenderCrds = Callable[[Sequence[Chart], Path], Sequence[str]]
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,7 +57,7 @@ class _Fingerprints:
     def __init__(self) -> None:
         self.binaries: dict[tuple[str, int, int, int], bytes] = {}
         self.implementation: bytes | None = None
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parents[3]
         digest = hashlib.sha256()
         try:
             for path in sorted(root.rglob("*.py")):
@@ -61,16 +69,17 @@ class _Fingerprints:
         except OSError:
             pass
 
-    def chart(self, target: ManifestValidationTarget) -> str | None:
-        dependencies = target.chart.metadata.dependencies
-        if self.implementation is None or target.spec.helm_version:
+    def chart(self, chart: Chart) -> str | None:
+        spec = require_validation(chart.lifecycle, chart_name=chart.name)
+        dependencies = chart.metadata.dependencies
+        if self.implementation is None or spec.helm_version:
             return None
         if dependencies and (
-            not deps_are_fresh(target.path)
+            not deps_are_fresh(chart.path)
             or any((dependency.repository or "").startswith("file:") for dependency in dependencies)
         ):
             return None
-        binary = shutil.which(target.spec.helm_binary or "helm")
+        binary = shutil.which(spec.helm_binary or "helm")
         if binary is None:
             return None
         digest = hashlib.sha256(b"derived-crd-cache-v2")
@@ -81,12 +90,12 @@ class _Fingerprints:
             if key not in self.binaries:
                 self.binaries[key] = hashlib.sha256(Path(binary).read_bytes()).digest()
             digest.update(self.binaries[key])
-            for path in sorted(target.path.rglob("*")):
+            for path in sorted(chart.path.rglob("*")):
                 if path.is_symlink():
                     return None
                 if not path.is_file() or "__pycache__" in path.parts:
                     continue
-                digest.update(str(path.relative_to(target.path)).encode() + b"\0")
+                digest.update(str(path.relative_to(chart.path)).encode() + b"\0")
                 digest.update(hashlib.sha256(path.read_bytes()).digest())
         except OSError:
             return None
@@ -246,59 +255,73 @@ def _write_cached(path: Path, items: tuple[MaterializedSchema, ...]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-def prepare_generated_schemas(
+def providers(workspace: RepositoryWorkspace) -> list[Chart]:
+    """Charts with validation enabled that may render CRDs; one that fails to load raises.
+
+    A chart whose dependencies are stale always counts; update them first to narrow this.
+    """
+    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
+    charts: list[Chart] = []
+    errors: list[str] = []
+    for name in repository.list_names():
+        if not _possible_crd_provider(repository.charts_dir / name):
+            continue
+        try:
+            chart = load_chart(workspace.chart_path(name))
+        except ChartManagerError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+        if validation_status(chart.lifecycle) is CapabilityStatus.ENABLED:
+            charts.append(chart)
+    if errors:
+        raise KubeconformSchemaConfigurationError(
+            "cannot discover CRD providers: " + "; ".join(errors)
+        )
+    return charts
+
+
+def prepare(
     workspace: RepositoryWorkspace,
-    validation: ManifestValidationService,
     *,
-    cache_root: Path | None = None,
+    render: RenderCrds,
+    cache_root: Path,
 ) -> tuple[str, ...]:
+    """Schema locations generated from the CRDs the repository's charts render.
+
+    Charts whose cached schemas are current are not rendered again; `render` renders the rest.
+    Two charts defining one CRD differently, or a failed render, raise.
+    """
     policy = workspace.spec.validation
     if policy is None or not policy.schemas.generate_from_crds:
         return ()
-    root = (cache_root or default_schema_cache_root()) / "v3" / "derived"
+    root = cache_root / "v3" / "derived"
     try:
         root.mkdir(parents=True, exist_ok=True)
         with (root / ".prepare.lock").open("a+b") as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
             try:
-                return _prepare_generated_schemas(workspace, validation, cache_root=cache_root)
+                return _prepare(workspace, render, cache_root=cache_root)
             finally:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     except OSError as exc:
         raise KubeconformSchemaStoreError(f"cannot prepare derived schemas: {exc}") from exc
 
 
-def _prepare_generated_schemas(
+def _prepare(
     workspace: RepositoryWorkspace,
-    validation: ManifestValidationService,
+    render: RenderCrds,
     *,
-    cache_root: Path | None = None,
+    cache_root: Path,
 ) -> tuple[str, ...]:
-    """Automatically refresh changed chart providers before loading generated schemas.
+    """Refresh changed CRD providers, reuse the rest, and publish one schema generation.
 
-    Repository-wide sharing is preserved. Unchanged charts reuse their derived
-    results; a new chart or modified CRD is rendered without a schema-sync step.
-    These files are disposable build outputs and never enter schemas.lock.yaml.
+    Generated schemas are disposable build outputs and never enter schemas.lock.yaml.
     """
     policy = workspace.spec.validation
     if policy is None or not policy.schemas.generate_from_crds:
         return ()
-    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
-    providers = [
-        name
-        for name in repository.list_names()
-        if _possible_crd_provider(repository.charts_dir / name)
-    ]
-    catalog = build_catalog(
-        workspace.root, chart_names=providers, charts_dir=workspace.spec.charts_dir
-    )
-    if catalog.errors:
-        raise KubeconformSchemaConfigurationError(
-            "cannot discover CRD providers: " + "; ".join(catalog.errors)
-        )
-    validation.prepare_schema_dependencies(catalog.targets)
-    targets = [target for target in catalog.targets if _possible_crd_provider(target.path)]
-    root = (cache_root or default_schema_cache_root()) / "v3" / "derived"
+    targets = providers(workspace)
+    root = cache_root / "v3" / "derived"
     by_gvk: dict[str, tuple[str, MaterializedSchema]] = {}
     fingerprints = _Fingerprints()
     prepared = []
@@ -319,35 +342,18 @@ def _prepare_generated_schemas(
         authored = {target.name: _authored_fingerprint(target.path) for target in uncached}
         with tempfile.TemporaryDirectory(prefix="chart-manager-crds-") as temporary:
             output = Path(temporary)
-            outcome = validation.run(
-                RunRequest(
-                    root=workspace.root,
-                    charts=tuple(target.name for target in uncached),
-                    phases=frozenset({"render"}),
-                    out=output,
-                    keep=True,
-                    include_crds=True,
-                )
-            )
-            failures = [
-                f"{row.row.chart}/{row.row.env}: {row.phases['render'].detail}"
-                for row in outcome.result.rows
-                if row.phases["render"].status != "PASS"
-            ]
-            if failures or outcome.result.spec_errors:
+            failures = render(uncached, output)
+            if failures:
                 raise KubeconformSchemaRenderError(
-                    "CRD provider render failed:\n"
-                    + "\n".join((*failures, *outcome.result.spec_errors)),
-                    outcome=outcome.result.outcome(),
+                    "CRD provider render failed:\n" + "\n".join(failures),
+                    outcome=Outcome.FAILED,
                 )
             for target in uncached:
                 crds = [
                     crd
-                    for row in outcome.result.rows
-                    if row.row.chart == target.name
+                    for rendered in sorted((output / target.name).iterdir())
                     for crd in scan_rendered_directory(
-                        output / row.row.chart / row.row.env,
-                        scope=SchemaScope(chart=row.row.chart, environment=row.row.env),
+                        rendered, scope=SchemaScope(chart=target.name, environment=rendered.name)
                     )
                 ]
                 rendered[target.name] = generate_crd_schemas(crds)

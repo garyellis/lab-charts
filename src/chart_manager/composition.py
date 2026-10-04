@@ -56,6 +56,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
+from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.domain.local_resources import LocalTargetResolver
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
@@ -63,7 +64,6 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.helmrelease import HelmReleaseClient
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubeconform import (
-    GitHubKubeconformSchemaSource,
     Kubeconform,
 )
 from chart_manager.integrations.kubectl import Kubectl
@@ -93,11 +93,6 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.kubeconform_schemas.app import (
-    RepositoryKubeconformSchemaService,
-    build_repository_kubeconform_schema_service,
-)
-from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.manifest_validation.app import ManifestValidationService
 from chart_manager.services.manifest_validation.paths import RenderOutputService
@@ -463,20 +458,6 @@ class Container:
             on_warn=on_warn,
             command_runner=self.command_runner(),
             workspace=workspace,
-        )
-
-    def kubeconform_schema_service(
-        self,
-        root: Path | None = None,
-    ) -> RepositoryKubeconformSchemaService:
-        """Build kubeconform schema synchronization for one workspace."""
-        workspace = self.workspace(root)
-        timeout = self._settings.command_timeout
-        return build_repository_kubeconform_schema_service(
-            workspace=workspace,
-            source=GitHubKubeconformSchemaSource(
-                timeout=timeout if timeout is not None and timeout > 0 else 15.0,
-            ),
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:

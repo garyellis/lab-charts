@@ -19,7 +19,14 @@ from chart_manager.commands.validate.schemas.store import (
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from tests import schema_fixtures
-from tests.conftest import FakeCommandRunner, workspace_for, write_validation_chart
+from tests.conftest import (
+    ONE_DEPENDENCY_LOCK,
+    FakeCommandRunner,
+    crd_manifest,
+    materialize_dependency,
+    workspace_for,
+    write_validation_chart,
+)
 
 RENDER: frozenset[CheckName] = frozenset({"render"})
 CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
@@ -433,3 +440,65 @@ def test_a_malformed_named_chart_is_collected_while_the_other_named_chart_runs(
 
     assert [row.chart for row in outcome.rows] == ["fine"]
     assert [error.split(":")[0] for error in outcome.spec_errors] == ["broken"]
+
+
+def test_a_charts_crds_become_the_first_schema_location(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    provider = write_validation_chart(tmp_path, "provider")
+    (provider / "templates").mkdir()
+    (provider / "templates" / "crd.yaml").write_text(crd_manifest())
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(crd_manifest()))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+    )
+
+    validate.run(
+        validate.ValidateRequest(charts=("provider",), checks=frozenset({"render", "schema"})),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    (kubeconform,) = [call for call in runner.calls if call[0] == "kubeconform"]
+    first = next(value for flag, value in pairwise(kubeconform) if flag == "-schema-location")
+    assert "/derived/schemas/" in first
+    assert ("helm", "template", "provider") in [
+        call[:3] for call in runner.calls if "--include-crds" in call
+    ]
+
+
+def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_chosen(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    app = write_validation_chart(tmp_path, "app")
+    (app / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
+        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
+    )
+
+    def updates(argv: tuple[str, ...]) -> bool:
+        if argv[1:3] != ("dependency", "update"):
+            return False
+        chart = Path(argv[3])
+        (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
+        (chart / "charts").mkdir(exist_ok=True)
+        materialize_dependency(chart)
+        return True
+
+    runner = (
+        FakeCommandRunner()
+        .respond(updates)
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+    )
+
+    validate.run(
+        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "schema"})),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert ("helm", "dependency", "update", str(app)) in runner.calls
+    assert not [call for call in runner.calls if "--include-crds" in call]

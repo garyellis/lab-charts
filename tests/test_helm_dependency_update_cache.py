@@ -8,9 +8,7 @@ The per-instance cache then dedupes within a single process.
 """
 from __future__ import annotations
 
-import io
 import os
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -18,7 +16,7 @@ import pytest
 from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
 from chart_manager.shared.charts import dependencies as chart_deps
-from tests.conftest import FakeCommandRunner
+from tests.conftest import ONE_DEPENDENCY_LOCK, FakeCommandRunner, materialize_dependency
 
 
 @pytest.fixture(autouse=True)
@@ -63,50 +61,12 @@ def _mtime(path: Path, seconds_ago: float) -> None:
     os.utime(path, (target, target))
 
 
-_LOCK_ONE_DEP = (
-    "dependencies:\n"
-    "  - name: foo\n"
-    "    version: 1.0.0\n"
-    "    repository: https://example.test/charts\n"
-    "digest: sha256:ac904eb48ba9649a9d5261dfc887cd08080cdddfd2e7bca3217ff88cfaadb27b\n"
-)
-
-
-def _materialize_dep(
-    chart: Path,
-    name: str = "foo",
-    version: str = "1.0.0",
-    *,
-    helm_gzip_extra: bool = False,
-) -> None:
-    """Create a minimal real Helm package under ``charts/``."""
-    chart_yaml = (
-        f"apiVersion: v2\nname: {name}\nversion: {version}\n"
-    ).encode()
-    info = tarfile.TarInfo(f"{name}/Chart.yaml")
-    info.size = len(chart_yaml)
-    package = chart / "charts" / f"{name}-{version}.tgz"
-    with tarfile.open(package, "w:gz") as archive:
-        archive.addfile(info, io.BytesIO(chart_yaml))
-    if helm_gzip_extra:
-        compressed = package.read_bytes()
-        # Helm's Go gzip writer includes FEXTRA. Insert a minimal valid extra
-        # field into Python's otherwise equivalent gzip header.
-        package.write_bytes(
-            compressed[:3]
-            + bytes([compressed[3] | 0x04])
-            + compressed[4:10]
-            + b"\x04\x00HELM"
-            + compressed[10:]
-        )
-
-
 def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
     # Force Chart.yaml to be older than Chart.lock.
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
@@ -122,9 +82,9 @@ def test_dependency_update_if_stale_skips_when_lock_is_fresh(tmp_path: Path) -> 
 def test_dependency_update_if_stale_ignores_filesystem_mtime(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
     # Unrelated metadata edits and filesystem timestamps do not change the
     # dependency content Helm hashes.
     chart_yaml = chart / "Chart.yaml"
@@ -167,7 +127,7 @@ def test_dependency_digest_covers_all_helm_dependency_fields(tmp_path: Path) -> 
         "digest: sha256:e812ebf3588e27c5c0c9bea509cfbd610ffc6311e12fe8766ae4039677b7b44a\n"
     )
     (chart / "charts").mkdir()
-    _materialize_dep(chart, version="1.2.3")
+    materialize_dependency(chart, version="1.2.3")
 
     assert chart_deps.deps_are_fresh(chart) is True
 
@@ -179,9 +139,9 @@ def test_dependency_digest_covers_all_helm_dependency_fields(tmp_path: Path) -> 
 def test_deps_are_fresh_reads_helm_gzip_extra_header(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart, helm_gzip_extra=True)
+    materialize_dependency(chart, helm_gzip_extra=True)
 
     assert chart_deps.deps_are_fresh(chart) is True
 
@@ -212,7 +172,7 @@ def test_dependency_update_if_stale_runs_when_lock_missing(tmp_path: Path) -> No
 def test_dependency_update_if_stale_runs_when_charts_dir_missing(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     # Lock fresh but no `charts/` -> deps were never materialized; must run.
 
     runner = FakeCommandRunner()
@@ -253,7 +213,7 @@ def test_dependency_update_if_stale_runs_when_charts_dir_partial(tmp_path: Path)
     )
     (chart / "charts").mkdir()
     # Only one of two declared deps materialized.
-    _materialize_dep(chart, name="foo")
+    materialize_dependency(chart, name="foo")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
@@ -288,7 +248,7 @@ def test_deps_are_fresh_returns_false_on_malformed_lock_yaml(tmp_path: Path) -> 
     _write_chart(chart)
     (chart / "Chart.lock").write_text("not: valid: yaml: :::\n")
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     assert chart_deps.deps_are_fresh(chart) is False
@@ -301,9 +261,9 @@ def test_deps_are_fresh_fails_closed_on_unsupported_dependency_field(
     _write_chart(chart)
     chart_yaml = chart / "Chart.yaml"
     chart_yaml.write_text(chart_yaml.read_text() + "    unsupported: value\n")
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
 
     assert chart_deps.deps_are_fresh(chart) is False
 
@@ -313,9 +273,9 @@ def test_dependency_update_runs_for_wrong_artifact_with_matching_count(
 ) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart, name="wrong")
+    materialize_dependency(chart, name="wrong")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()
@@ -328,9 +288,9 @@ def test_dependency_update_runs_for_wrong_artifact_with_matching_count(
 def test_dependency_update_runs_for_wrong_artifact_version(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart, version="0.9.0")
+    materialize_dependency(chart, version="0.9.0")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     assert _helm(FakeCommandRunner()).dependency_update_if_stale(chart) is True
@@ -339,7 +299,7 @@ def test_dependency_update_runs_for_wrong_artifact_version(tmp_path: Path) -> No
 def test_dependency_update_skips_for_expanded_matching_chart(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     expanded = chart / "charts" / "foo"
     expanded.mkdir(parents=True)
     (expanded / "Chart.yaml").write_text(
@@ -357,9 +317,9 @@ def test_dependency_update_ignores_unrelated_non_chart_files_and_dirs(
 ) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
     (chart / "charts" / "README.txt").write_text("not a chart")
     (chart / "charts" / "cache").mkdir()
     _mtime(chart / "Chart.yaml", seconds_ago=60)
@@ -372,7 +332,7 @@ def test_dependency_update_ignores_unrelated_non_chart_files_and_dirs(
 def test_dependency_update_runs_for_malformed_chart_package(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
-    (chart / "Chart.lock").write_text(_LOCK_ONE_DEP)
+    (chart / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
     (chart / "charts").mkdir()
     (chart / "charts" / "foo-1.0.0.tgz").write_text("not a tar archive")
     _mtime(chart / "Chart.yaml", seconds_ago=60)
@@ -411,7 +371,7 @@ def test_dependency_update_accounts_for_two_aliases_of_one_package(
         "digest: sha256:2c7dc475034b0488d48755633c791fdb114835bd3797bbf26e67d12d05f4bba3\n"
     )
     (chart / "charts").mkdir()
-    _materialize_dep(chart)
+    materialize_dependency(chart)
     _mtime(chart / "Chart.yaml", seconds_ago=60)
 
     runner = FakeCommandRunner()

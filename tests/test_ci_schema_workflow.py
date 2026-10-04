@@ -35,7 +35,7 @@ def test_real_schema_contracts_are_required_by_ci() -> None:
     ("diff", "tests/test_something.py\nrenovate.json", False),
     ("diff", "charts/demo/values.yaml", True),
     ("diff", ".chart-manager/workspace.yaml", True),
-    ("diff", "src/chart_manager/services/kubeconform_schemas/crd.py", True),
+    ("diff", "src/chart_manager/commands/validate/schemas/crd.py", True),
     ("diff", ".mise.toml", True),
     ("diff", ".github/workflows/ci.yaml", True),
     ("diff", "custom-schema/widget.json", True),
