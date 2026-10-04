@@ -19,9 +19,9 @@ from typing import Any
 import pytest
 
 from chart_manager.cli import plan as plan_cli
+from chart_manager.commands import test
 from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
-    ClusterTestImpact,
     ImpactReason,
     ImpactReasonCode,
     LifecycleImpact,
@@ -30,13 +30,7 @@ from chart_manager.services.lifecycle import (
 
 from .conftest import cli
 
-
-def _reason(code: ImpactReasonCode = ImpactReasonCode.CHART_CHANGE) -> ImpactReason:
-    return ImpactReason(
-        code=code,
-        changed_file=Path("charts/grafana/values-dev.yaml"),
-        detail="changed file belongs to grafana",
-    )
+CHANGED = Path("charts/grafana/values-dev.yaml")
 
 
 def _impact(
@@ -53,10 +47,18 @@ def _impact(
                 environment="dev",
                 release="grafana",
                 namespace="lab-dev",
-                reasons=(_reason(ImpactReasonCode.VALIDATION_TRIGGER),),
+                reasons=(
+                    ImpactReason(ImpactReasonCode.VALIDATION_TRIGGER, CHANGED, "triggered"),
+                ),
             ),
         ),
-        cluster_tests=(ClusterTestImpact("grafana", "minimal", (_reason(),)),),
+        cluster_tests=(
+            test.SelectedTest(
+                "grafana",
+                "minimal",
+                (test.Reason(test.ReasonCode.CHART_CHANGE, CHANGED, "grafana changed"),),
+            ),
+        ),
         spec_errors=spec_errors,
         warnings=warnings,
     )
@@ -77,9 +79,9 @@ class _CiService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
 
-    def matrix(self, selection: Any) -> tuple[ClusterTestImpact, ...]:
+    def matrix(self, selection: Any) -> tuple[test.SelectedTest, ...]:
         self.calls.append(("matrix", selection))
-        return (ClusterTestImpact("from-git", "minimal", ()),)
+        return (test.SelectedTest("from-git", "minimal"),)
 
     def directly_changed_charts(self, changed_files: Path) -> list[str]:
         self.calls.append(("publish", changed_files))

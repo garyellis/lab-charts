@@ -1,7 +1,6 @@
 """Change-impact analysis for `plan` and CI."""
 
 from chart_manager.services.lifecycle.impact import (
-    ClusterTestImpact,
     ImpactReason,
     ImpactReasonCode,
     LifecycleImpact,
@@ -11,7 +10,6 @@ from chart_manager.services.lifecycle.impact import (
 )
 
 __all__ = [
-    "ClusterTestImpact",
     "ImpactReason",
     "ImpactReasonCode",
     "LifecycleImpact",

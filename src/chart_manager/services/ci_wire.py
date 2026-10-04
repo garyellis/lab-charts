@@ -18,21 +18,20 @@ separators, YAML, an HTTP response body -- and performing the write is the
 surface's job.
 
 The *selection* of which entries belong in the matrix is a separate concern
-and lives in `services/ci.py` (`MatrixSelection`, `CiService.matrix`). This
-module only shapes what selection returned.
+and lives in `test.select()`. This module only shapes what selection returned.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from chart_manager.services.lifecycle.impact import ClusterTestImpact
+from chart_manager.commands import test
 
 __all__ = ["cluster_test_matrix_to_dict"]
 
 
 def cluster_test_matrix_to_dict(
-    entries: Sequence[ClusterTestImpact],
+    entries: Sequence[test.SelectedTest],
 ) -> dict[str, list[dict[str, str]]]:
     """Project selected matrix entries onto the GitHub Actions matrix payload.
 

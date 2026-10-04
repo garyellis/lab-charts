@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from chart_manager.commands import test
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.lifecycle import (
     ImpactReasonCode,
@@ -101,9 +102,9 @@ def test_ordinary_chart_change_selects_validation_cluster_and_declared_dependent
         ("source", "minimal"),
     ]
     assert impact.cluster_tests[0].reasons[0].code is (
-        ImpactReasonCode.DECLARED_DEPENDENT_TEST
+        test.ReasonCode.DECLARED_DEPENDENT_TEST
     )
-    assert impact.cluster_tests[1].reasons[0].code is ImpactReasonCode.CHART_CHANGE
+    assert impact.cluster_tests[1].reasons[0].code is test.ReasonCode.CHART_CHANGE
 
 
 def test_chart_lifecycle_change_selects_all_validation_environments_and_cluster_test(
@@ -142,7 +143,7 @@ def test_shared_runtime_change_fans_out_every_enabled_cluster_test_with_reasons(
         ("beta", "minimal"),
     ]
     assert all(
-        case.reasons[0].code is ImpactReasonCode.CLUSTER_SAFETY_FANOUT
+        case.reasons[0].code is test.ReasonCode.CLUSTER_SAFETY_FANOUT
         for case in impact.cluster_tests
     )
     assert all("istio-base" in case.reasons[0].detail for case in impact.cluster_tests)
@@ -218,12 +219,12 @@ def test_safety_fanout_unions_declared_dependent_profiles_from_chart_changes(
     ]
     full = impact.cluster_tests[0]
     assert [reason.code for reason in full.reasons] == [
-        ImpactReasonCode.DECLARED_DEPENDENT_TEST
+        test.ReasonCode.DECLARED_DEPENDENT_TEST
     ]
     source_default = impact.cluster_tests[-1]
     assert {reason.code for reason in source_default.reasons} == {
-        ImpactReasonCode.CHART_CHANGE,
-        ImpactReasonCode.CLUSTER_SAFETY_FANOUT,
+        test.ReasonCode.CHART_CHANGE,
+        test.ReasonCode.CLUSTER_SAFETY_FANOUT,
     }
 
 
@@ -247,7 +248,7 @@ def test_tool_workflow_and_chart_manager_rules_are_typed_safety_fanout(
             ("app", "minimal")
         ]
         reason = impact.cluster_tests[0].reasons[0]
-        assert reason.code is ImpactReasonCode.CLUSTER_SAFETY_FANOUT
+        assert reason.code is test.ReasonCode.CLUSTER_SAFETY_FANOUT
         assert reason.changed_file == Path(changed_file)
 
 

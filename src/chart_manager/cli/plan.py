@@ -154,12 +154,12 @@ def _plan_cluster_tests(
 
       * explicit paths (`--changed-files`/`--changed-file`) are what the
         lifecycle impact service analyses, and its `cluster_tests` are the
-        same `ClusterTestImpact` values the matrix is built from;
+        same `test.SelectedTest` values the matrix is built from;
       * `--base`/`--all`/`--chart` is a `MatrixSelection`, and
         `CiService.matrix` owns the `all` > `--chart` > diff precedence.
 
-    Neither branch decides *which charts* anything -- that stays in
-    `services/`. This function only decides which service was asked.
+    Neither branch decides *which charts* anything -- that is
+    `test.select()`. This function only decides which service was asked.
     """
     if changed_files is not None or changed_file:
         paths = _changed_paths(changed_files, changed_file)

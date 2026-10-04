@@ -1,11 +1,10 @@
-"""CI selection delegates Git diffs to the typed lifecycle impact service."""
+"""`CiService`: publish selection and the Git diff it hands to lifecycle impact."""
 
 from pathlib import Path
 
 import pytest
 
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
-from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.ci import CiService
 from chart_manager.services.lifecycle import LifecycleImpact
 
@@ -16,20 +15,6 @@ def _service(root: Path) -> CiService:
     return CiService(
         workspace=workspace_for(root, fanout={"chartTest": ["kind-config.yaml"]})
     )
-
-
-def _dependent_test(
-    chart: Path,
-    *,
-    target: str,
-    profile: str,
-) -> None:
-    path = chart / "chart-lifecycle.yaml"
-    config = parse_yaml(path.read_text())
-    config["spec"]["chartTest"]["dependentTests"] = [
-        {"chart": target, "profile": profile}
-    ]
-    path.write_text(dump_yaml(config))
 
 
 def test_directly_changed_charts_uses_only_explicit_file_ownership(
@@ -66,56 +51,6 @@ def test_directly_changed_charts_reports_unreadable_input(chart_root: Path) -> N
         _service(chart_root).directly_changed_charts(chart_root / "missing.txt")
 
 
-def test_cluster_test_matrix_preserves_declared_dependent_profile_and_reasons(
-    chart_root: Path,
-    make_chart: MakeChart,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = make_chart("source")
-    make_chart("consumer", profiles={"minimal": {}, "full": {}})
-    _dependent_test(source, target="consumer", profile="full")
-    service = _service(chart_root)
-    monkeypatch.setattr(
-        service.git,
-        "changed_files",
-        lambda _base: ["charts/source/values.yaml"],
-    )
-
-    matrix = service.cluster_test_matrix("main")
-
-    assert [(entry.chart, entry.profile) for entry in matrix] == [
-        ("consumer", "full"),
-        ("source", "minimal"),
-    ]
-    assert matrix[0].reasons[0].code.value == "declared-dependent-test"
-
-
-def test_cluster_test_matrix_applies_repository_safety_fanout(
-    chart_root: Path,
-    make_chart: MakeChart,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    make_chart("alpha")
-    make_chart("beta")
-    service = _service(chart_root)
-    monkeypatch.setattr(
-        service.git,
-        "changed_files",
-        lambda _base: ["kind-config.yaml"],
-    )
-
-    matrix = service.cluster_test_matrix()
-
-    assert [(entry.chart, entry.profile) for entry in matrix] == [
-        ("alpha", "minimal"),
-        ("beta", "minimal"),
-    ]
-    assert all(
-        entry.reasons[0].code.value == "cluster-safety-fanout"
-        for entry in matrix
-    )
-
-
 def test_lifecycle_impact_propagates_git_failure(
     chart_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -150,38 +85,3 @@ def test_lifecycle_impact_fails_loudly_on_structured_spec_errors(
 
     with pytest.raises(SpecError, match="invalid ChartLifecycle resource"):
         service.lifecycle_impact("main")
-
-
-def test_all_matrix_uses_minimal_or_deterministic_profile_fallback(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("alpha", profiles={"smoke": {}, "full": {}})
-    make_chart("beta", profiles={"minimal": {}, "full": {}})
-
-    matrix = _service(chart_root).all_cluster_test_matrix()
-
-    assert [(entry.chart, entry.profile) for entry in matrix] == [
-        ("alpha", "full"),
-        ("beta", "minimal"),
-    ]
-
-
-def test_explicit_matrix_rejects_unknown_and_unavailable_charts_together(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("enabled")
-    disabled = make_chart("disabled")
-    path = disabled / "chart-lifecycle.yaml"
-    config = parse_yaml(path.read_text())
-    config["spec"]["chartTest"]["enabled"] = False
-    path.write_text(dump_yaml(config))
-
-    with pytest.raises(SpecError) as caught:
-        _service(chart_root).explicit_cluster_test_matrix(
-            ["missing", "disabled", "enabled"]
-        )
-
-    assert "unknown chart(s): missing" in str(caught.value)
-    assert "without enabled cluster tests: disabled" in str(caught.value)

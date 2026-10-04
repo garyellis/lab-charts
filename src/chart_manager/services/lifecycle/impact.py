@@ -2,30 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
-from chart_manager.commands import validate
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.lifecycle import require_chart_test_profile
+from chart_manager.commands import test, validate
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 class ImpactReasonCode(StrEnum):
-    """Stable machine vocabulary explaining a selected lifecycle case."""
+    """Stable machine vocabulary explaining a selected validation case."""
 
-    CHART_CHANGE = "chart-change"
     VALIDATION_TRIGGER = "validation-trigger"
     HELM_DEPENDENT = "helm-dependent"
     REPOSITORY_POLICY = "repository-policy"
     VALIDATION_ENGINE = "validation-engine"
-    DECLARED_DEPENDENT_TEST = "declared-dependent-test"
-    CLUSTER_SAFETY_FANOUT = "cluster-safety-fanout"
 
 
 @dataclass(frozen=True)
@@ -49,21 +41,12 @@ class ValidationImpact:
 
 
 @dataclass(frozen=True)
-class ClusterTestImpact:
-    """One selected chart/profile live-cluster matrix entry."""
-
-    chart: str
-    profile: str
-    reasons: tuple[ImpactReason, ...]
-
-
-@dataclass(frozen=True)
 class LifecycleImpact:
     """Machine-readable lifecycle selection derived from explicit changes."""
 
     changed_files: tuple[Path, ...]
     validation: tuple[ValidationImpact, ...]
-    cluster_tests: tuple[ClusterTestImpact, ...]
+    cluster_tests: tuple[test.SelectedTest, ...]
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -73,8 +56,6 @@ class LifecycleImpactService:
 
     def __init__(self, *, workspace: RepositoryWorkspace) -> None:
         self.workspace = workspace
-        self.root = workspace.root
-        self.cluster_catalog = ChartTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -99,126 +80,14 @@ class LifecycleImpactService:
             for row in combined.rows
         )
 
-        cluster_reasons, cluster_errors = self._cluster_test_impact(changes)
-        cluster_tests = tuple(
-            ClusterTestImpact(chart, profile, tuple(reasons))
-            for (chart, profile), reasons in sorted(cluster_reasons.items())
-        )
+        tests = test.select([path.as_posix() for path in changes], workspace=self.workspace)
         return LifecycleImpact(
             changed_files=changes,
             validation=validation,
-            cluster_tests=cluster_tests,
-            spec_errors=(*combined.spec_errors, *cluster_errors),
+            cluster_tests=tests.tests,
+            spec_errors=(*combined.spec_errors, *tests.spec_errors),
             warnings=combined.warnings,
         )
-
-    def default_cluster_test_profile(self, chart: str) -> str:
-        """Resolve the shared CI default from one chart's authored profiles."""
-        profiles = self.cluster_catalog.get(chart).spec.profiles
-        if not profiles:
-            raise SpecError(
-                f"chart '{chart}' has enabled cluster tests but declares no profiles"
-            )
-        return _default_profile(profiles)
-
-    def _cluster_test_impact(
-        self,
-        changes: tuple[Path, ...],
-    ) -> tuple[dict[tuple[str, str], list[ImpactReason]], list[str]]:
-        """Select cluster cases using typed safety and authored fanout rules."""
-        enabled = self.cluster_catalog.enabled_names()
-        profiles: dict[str, str] = {}
-        for chart in enabled:
-            profiles[chart] = self.default_cluster_test_profile(chart)
-
-        selected: dict[tuple[str, str], list[ImpactReason]] = {}
-        errors: list[str] = []
-        fanout_matches = [
-            (path, pattern)
-            for path in changes
-            for pattern in self.workspace.matching_chart_test_patterns(path)
-        ]
-        if fanout_matches:
-            for chart in enabled:
-                for path, pattern in fanout_matches:
-                    _append_reason(
-                        selected,
-                        (chart, profiles[chart]),
-                        ImpactReason(
-                            ImpactReasonCode.CLUSTER_SAFETY_FANOUT,
-                            path,
-                            self._cluster_fanout_detail(pattern),
-                        ),
-                    )
-
-        enabled_set = set(enabled)
-        for path in changes:
-            changed_chart = self.workspace.chart_name_from_repo_path(path)
-            if changed_chart is None:
-                continue
-            if changed_chart not in enabled_set:
-                continue
-            own_profile = profiles[changed_chart]
-            _append_reason(
-                selected,
-                (changed_chart, own_profile),
-                ImpactReason(
-                    ImpactReasonCode.CHART_CHANGE,
-                    path,
-                    f"changed file belongs to enabled cluster-test chart {changed_chart}",
-                ),
-            )
-            spec = self.cluster_catalog.get(changed_chart).spec
-            for reference in spec.dependent_tests:
-                try:
-                    target = self.cluster_catalog.get(reference.chart)
-                    require_chart_test_profile(target.spec, reference.profile)
-                except ChartManagerError as exc:
-                    errors.append(
-                        f"{changed_chart} dependentTests "
-                        f"{reference.chart}:{reference.profile}: {exc}"
-                    )
-                    continue
-                _append_reason(
-                    selected,
-                    (reference.chart, reference.profile),
-                    ImpactReason(
-                        ImpactReasonCode.DECLARED_DEPENDENT_TEST,
-                        path,
-                        f"{changed_chart} declares dependent test "
-                        f"{reference.chart}:{reference.profile}",
-                    ),
-                )
-        return selected, errors
-
-    def _cluster_fanout_detail(self, pattern: str) -> str:
-        for chart in self.workspace.spec.chart_test.shared_charts:
-            if pattern == self.workspace.repo_chart_path(chart).as_posix():
-                return f"{chart} is a shared runtime prerequisite across cluster tests"
-        if pattern not in self.workspace.spec.fanout.chart_test and pattern not in {
-            self.workspace.spec.local_cluster.as_posix(),
-            self.workspace.marker.relative_to(self.workspace.root).as_posix(),
-        }:
-            return f"{pattern} is a LocalCluster bootstrap prerequisite used by every cluster test"
-        return f"workspace cluster-test fanout matched {pattern}"
-
-
-def _default_profile(profiles: Mapping[str, object]) -> str:
-    """Preserve CI's minimal convention with a deterministic safe fallback."""
-    if DEFAULT_PROFILE in profiles:
-        return DEFAULT_PROFILE
-    return sorted(profiles)[0]
-
-
-def _append_reason(
-    sink: dict[tuple[str, str], list[ImpactReason]],
-    key: tuple[str, str],
-    reason: ImpactReason,
-) -> None:
-    """Append a reason once while retaining deterministic encounter order."""
-    reasons = sink.setdefault(key, [])
-    if reason not in reasons:
-        reasons.append(reason)
 
 
 def impact_to_dict(impact: LifecycleImpact) -> dict[str, Any]:
@@ -249,7 +118,7 @@ def _validation_case(case: ValidationImpact) -> dict[str, Any]:
     }
 
 
-def _cluster_test_case(case: ClusterTestImpact) -> dict[str, Any]:
+def _cluster_test_case(case: test.SelectedTest) -> dict[str, Any]:
     """JSON-serialize one selected chart/profile live-cluster matrix entry."""
     return {
         "chart": case.chart,
@@ -258,7 +127,7 @@ def _cluster_test_case(case: ClusterTestImpact) -> dict[str, Any]:
     }
 
 
-def _reason(reason: ImpactReason) -> dict[str, Any]:
+def _reason(reason: ImpactReason | test.Reason) -> dict[str, Any]:
     """JSON-serialize one changed file and the rule that selected a case."""
     return {
         "code": reason.code.value,

@@ -18,10 +18,10 @@ from types import SimpleNamespace
 import pytest
 
 from chart_manager.cli import plan as plan_cli
+from chart_manager.commands import test
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.services.lifecycle import (
-    ClusterTestImpact,
     ImpactReason,
     ImpactReasonCode,
     LifecycleImpact,
@@ -58,12 +58,12 @@ def _impact_result(
             ),
         ),
         cluster_tests=(
-            ClusterTestImpact(
+            test.SelectedTest(
                 chart="grafana",
                 profile="minimal",
                 reasons=(
-                    ImpactReason(
-                        code=ImpactReasonCode.CHART_CHANGE,
+                    test.Reason(
+                        code=test.ReasonCode.CHART_CHANGE,
                         changed_file=Path("charts/grafana/values-dev.yaml"),
                         detail="changed file belongs to grafana",
                     ),
