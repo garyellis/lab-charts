@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from chart_manager.commands import test
+from chart_manager.commands.test import cli as test_cli
 from chart_manager.commands.test.models import (
     ActionKind,
     ActionOutcome,
@@ -82,9 +83,9 @@ def calls(chart_root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
 
         return stub
 
-    monkeypatch.setattr(test, "plan", record("plan", _plan))
-    monkeypatch.setattr(test, "run", record("run", lambda: recorded.outcome))
-    monkeypatch.setattr(test, "teardown", record("teardown", lambda: recorded.teardown_outcome))
+    monkeypatch.setattr(test_cli, "plan", record("plan", _plan))
+    monkeypatch.setattr(test_cli, "run", record("run", lambda: recorded.outcome))
+    monkeypatch.setattr(test_cli, "teardown", record("teardown", lambda: recorded.teardown_outcome))
     return recorded
 
 

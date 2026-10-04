@@ -20,6 +20,7 @@ from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands import test
 from chart_manager.commands.test.models import LifecyclePlan
+from chart_manager.commands.test.run import plan, run, teardown, teardown_plan
 from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError
@@ -156,10 +157,10 @@ def chart_test(
         run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
     )
     if dry_run:
-        _render_test_plan(test.plan(request, workspace=workspace), ctx=ctx, output=output)
+        _render_test_plan(plan(request, workspace=workspace), ctx=ctx, output=output)
         return
     container = _container()
-    outcome = test.run(
+    outcome = run(
         request,
         workspace=workspace,
         runner=container.command_runner(),
@@ -204,14 +205,14 @@ def chart_teardown(
         keep_cluster=keep_cluster,
     )
     if dry_run:
-        console.print(_plan_table(test.teardown_plan(request, workspace=workspace)))
+        console.print(_plan_table(teardown_plan(request, workspace=workspace)))
         verb = "keep" if keep_cluster else "delete"
         narration.print(
             f"[yellow]dry run[/yellow]: ran no hook; would {verb} cluster {escape(cluster_name)}"
         )
         return
     container = _container()
-    result = test.teardown(
+    result = teardown(
         request,
         workspace=workspace,
         runner=container.command_runner(),

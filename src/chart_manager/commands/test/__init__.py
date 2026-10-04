@@ -1,4 +1,8 @@
-"""`chart test` and `chart teardown`: one chart and its requirements on a kind cluster."""
+"""`chart test` and `chart teardown`: one chart and its requirements on a kind cluster.
+
+The package exports the request, outcome and selection types. The entry points that
+provision clusters live in `commands.test.run`, so importing the package stays cheap.
+"""
 
 from chart_manager.commands.test.models import (
     ChartTestOutcome,
@@ -6,7 +10,6 @@ from chart_manager.commands.test.models import (
     TeardownOutcome,
     TeardownRequest,
 )
-from chart_manager.commands.test.run import plan, run, teardown, teardown_plan
 from chart_manager.commands.test.select import (
     Reason,
     ReasonCode,
@@ -24,9 +27,5 @@ __all__ = [
     "Selection",
     "TeardownOutcome",
     "TeardownRequest",
-    "plan",
-    "run",
     "select",
-    "teardown",
-    "teardown_plan",
 ]

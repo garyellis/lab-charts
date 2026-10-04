@@ -1,4 +1,4 @@
-"""`test.run()`: provision, bootstrap, then each chart's plan, fail-fast with diagnostics."""
+"""`run()`: provision, bootstrap, then each chart's plan, fail-fast with diagnostics."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import test
+from chart_manager.commands.test.run import plan, run, teardown
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, MissingToolError
 from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.settings import Settings
@@ -62,7 +63,7 @@ def _runner(*clusters: str) -> FakeCommandRunner:
 
 
 def _run(repo: Path, runner: FakeCommandRunner, **request: object) -> test.ChartTestOutcome:
-    return test.run(
+    return run(
         test.ChartTestRequest(chart="app", cluster_name="lab", **request),  # type: ignore[arg-type]
         workspace=load_workspace(repo),
         runner=runner,
@@ -232,7 +233,7 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
     )
     runner = _runner("lab")
 
-    outcome = test.teardown(
+    outcome = teardown(
         test.TeardownRequest(chart="app", cluster_name="lab"),
         workspace=load_workspace(repo),
         runner=runner,
@@ -247,9 +248,9 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
 
 
 def test_plan_lists_namespace_install_and_helm_test_per_chart_requires_first(repo: Path) -> None:
-    plan = test.plan(test.ChartTestRequest(chart="app"), workspace=load_workspace(repo))
+    lifecycle_plan = plan(test.ChartTestRequest(chart="app"), workspace=load_workspace(repo))
 
-    assert [(a.target.chart, a.kind.value) for a in plan.actions] == [
+    assert [(a.target.chart, a.kind.value) for a in lifecycle_plan.actions] == [
         ("db", "namespace-ensure"),
         ("db", "install"),
         ("db", "helm-test"),
@@ -324,7 +325,7 @@ def test_cleanup_hooks_are_left_for_teardown(repo: Path, make_chart: MakeChart) 
 
 
 def _teardown(repo: Path, runner: FakeCommandRunner, **request: object) -> test.TeardownOutcome:
-    return test.teardown(
+    return teardown(
         test.TeardownRequest(chart="app", cluster_name="lab", **request),  # type: ignore[arg-type]
         workspace=load_workspace(repo),
         runner=runner,
@@ -402,7 +403,7 @@ def test_a_failed_bootstrap_release_is_raised_as_a_tool_error_after_its_diagnost
     events: list[ProgressEvent] = []
 
     with pytest.raises(ExternalCommandError, match="no cni"):
-        test.run(
+        run(
             test.ChartTestRequest(chart="app", cluster_name="lab"),
             workspace=load_workspace(repo),
             runner=runner,
