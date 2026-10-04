@@ -16,11 +16,7 @@ class PublishKind(StrEnum):
 
 @dataclass(frozen=True)
 class PublishRequest:
-    """The charts to publish and where.
-
-    `kind` None is inferred: preview with `version_suffix`, release otherwise. `dry_run`
-    prepares every chart the same way but pushes nothing and emits no lifecycle event.
-    """
+    """The charts to publish and where; `kind` None is inferred from `version_suffix`."""
 
     charts: tuple[str, ...]
     repository: str
@@ -70,7 +66,6 @@ class PublishOutcome:
     charts: tuple[PublishedChart, ...]
     kind: PublishKind
     telemetry_failures: tuple[PublishTelemetryFailure, ...] = ()
-    dry_run: bool = False
 
     @property
     def ok(self) -> bool:

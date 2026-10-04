@@ -80,7 +80,13 @@ FAILED_EVENT = publish.PublishTelemetryFailure("grafana", "1.2.3-pr.4", "cosmos 
 @pytest.mark.parametrize(
     ("charts", "failures", "strict", "exit_code", "line"),
     [
-        ((GRAFANA,), (), [], 0, "published grafana oci://harbor/library/grafana:1.2.3-pr.4 (sha256:abc)"),
+        (
+            (GRAFANA,),
+            (),
+            [],
+            0,
+            "published grafana oci://harbor/library/grafana:1.2.3-pr.4 (sha256:abc)",
+        ),
         ((GRAFANA, FAILED_PUSH), (), [], 1, "failed loki: registry rejected upload"),
         ((GRAFANA,), (FAILED_EVENT,), [], 0, "event failed grafana 1.2.3-pr.4: cosmos unavailable"),
         ((GRAFANA,), (FAILED_EVENT,), ["--strict-events"], 1, "event failed grafana"),
@@ -106,7 +112,7 @@ def test_each_row_is_a_stderr_line_and_a_failure_exits_1(
 
 def test_a_dry_run_prints_the_plan_on_stdout(fake_run: FakeRun) -> None:
     planned = publish.PublishedChart("grafana", "1.2.3-pr.4", GRAFANA.reference)
-    fake_run.result = publish.PublishOutcome((planned,), publish.PublishKind.PREVIEW, dry_run=True)
+    fake_run.result = publish.PublishOutcome((planned,), publish.PublishKind.PREVIEW)
 
     result = cli("chart", "publish", "grafana", "--repository", "oci://h/l", "--dry-run")
 

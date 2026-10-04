@@ -14,6 +14,7 @@ docstring for why there is exactly one of it.
 `_COMMAND_PATHS` for why the suite never writes a group name into an
 `invoke()` call directly.
 """
+
 from __future__ import annotations
 
 import io
@@ -72,6 +73,8 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_TOKEN",
         "RENOVATE_TOKEN",
         "FORCE_COLOR",
+        "CHART_MANAGER_OCI_REPOSITORY",
+        "CHART_MANAGER_OCI_CA_FILE",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")
@@ -241,7 +244,9 @@ def write_validation_chart(root: Path, name: str, **validation: Any) -> Path:
     """Write a chart whose `spec.validation` is `validation` over a `dev` default."""
     chart = root / "charts" / name
     chart.mkdir(parents=True)
-    (chart / "Chart.yaml").write_text(dump_yaml({"apiVersion": "v2", "name": name, "version": "0.1.0"}))
+    (chart / "Chart.yaml").write_text(
+        dump_yaml({"apiVersion": "v2", "name": name, "version": "0.1.0"})
+    )
     (chart / "values.yaml").write_text("")
     spec = {
         "releaseName": name,
@@ -321,9 +326,7 @@ def materialize_dependency(
     helm_gzip_extra: bool = False,
 ) -> None:
     """Create a minimal real Helm package under ``charts/``."""
-    chart_yaml = (
-        f"apiVersion: v2\nname: {name}\nversion: {version}\n"
-    ).encode()
+    chart_yaml = (f"apiVersion: v2\nname: {name}\nversion: {version}\n").encode()
     info = tarfile.TarInfo(f"{name}/Chart.yaml")
     info.size = len(chart_yaml)
     package = chart / "charts" / f"{name}-{version}.tgz"

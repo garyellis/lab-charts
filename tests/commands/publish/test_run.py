@@ -79,7 +79,9 @@ def test_every_chart_is_prepared_before_any_push(chart_root: Path, make_chart: M
 
     outcome = _run(
         chart_root,
-        PublishRequest(("alpha", "beta"), REPOSITORY, version_suffix="pr.8", ca_file=Path("ca.crt")),
+        PublishRequest(
+            ("alpha", "beta"), REPOSITORY, version_suffix="pr.8", ca_file=Path("ca.crt")
+        ),
         runner,
     )
 
@@ -227,7 +229,7 @@ def test_a_dry_run_prepares_like_a_real_publish_then_pushes_nothing_and_emits_no
         ("push", "alpha"),
         ("push", "beta"),
     ]
-    assert (planned.dry_run, planned.kind, store.events) == (True, PublishKind.PREVIEW, [])
+    assert (planned.kind, store.events) == (PublishKind.PREVIEW, [])
     assert [(row.chart, row.version, row.reference, row.digest) for row in planned.charts] == [
         ("alpha", "1.0.0-pr.8", f"{REPOSITORY}/alpha:1.0.0-pr.8", None),
         ("beta", "2.0.0-pr.8", f"{REPOSITORY}/beta:2.0.0-pr.8", None),
@@ -239,6 +241,7 @@ def test_a_dry_run_prepares_like_a_real_publish_then_pushes_nothing_and_emits_no
     [
         ("1.2.3", {}, "1.2.3", PublishKind.RELEASE),
         ("1.2.3", {"version": "1.0.0+001"}, "1.0.0+001", PublishKind.RELEASE),
+        ("6.2.1", {"version_suffix": "pr.318"}, "6.2.1-pr.318", PublishKind.PREVIEW),
         (
             "6.2.1-rc.1+build.7",
             {"version_suffix": "pr.318"},
@@ -246,7 +249,7 @@ def test_a_dry_run_prepares_like_a_real_publish_then_pushes_nothing_and_emits_no
             PublishKind.PREVIEW,
         ),
     ],
-    ids=["chart-version", "exact-version", "suffix-keeps-prerelease-and-build"],
+    ids=["chart-version", "exact-version", "suffix", "suffix-keeps-prerelease-and-build"],
 )
 def test_the_published_version_and_kind(
     chart_root: Path,
@@ -274,6 +277,7 @@ def test_the_published_version_and_kind(
         (("alpha", "beta"), {"version": "2.0.0"}, "exactly one"),
         (("alpha",), {"version_suffix": "pr.1", "kind": PublishKind.RELEASE}, "release publishing"),
         (("alpha",), {"version": "1.0.0-01"}, "invalid SemVer version"),
+        (("alpha",), {"version_suffix": ""}, "suffix"),
         (("alpha",), {"version_suffix": "-pr.1"}, "suffix"),
         (("alpha",), {"version_suffix": "pr..1"}, "suffix"),
         (("alpha",), {"version_suffix": "pr.01"}, "suffix"),

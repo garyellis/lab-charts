@@ -64,15 +64,14 @@ def run(
     if request.version is not None and len(charts) != 1:
         raise SpecError("--version is only valid when publishing exactly one chart")
     if request.version is not None:
-        validate_semver(request.version, label="version")
+        _validate_semver(request.version, label="version")
     kind = request.kind or (
         PublishKind.PREVIEW if request.version_suffix is not None else PublishKind.RELEASE
     )
     if kind is PublishKind.RELEASE and request.version_suffix is not None:
         raise SpecError("release publishing cannot use --version-suffix")
 
-    # `operation_id` reaches the lifecycle event's `detail`, so it joins this line to the
-    # events store. No token or registry credential is in scope here.
+    # `operation_id` joins this line to the lifecycle event's `detail` in the events store.
     _LOG.info(
         "publish started: charts=%s repository=%s kind=%s version=%s "
         "version_suffix=%s dry_run=%s operation_id=%s",
@@ -106,7 +105,7 @@ def run(
             kind.value,
             request.repository,
         )
-        return PublishOutcome(rows, kind, dry_run=True)
+        return PublishOutcome(rows, kind)
     failures = _emit_events(rows, request, kind, events)
     # Event failures are not counted here: `emit_non_fatal` already logs each one.
     _LOG.info(
@@ -129,15 +128,13 @@ def _prepare(
     if base_version is None:
         raise SpecError(f"chart '{name}' has no version in Chart.yaml")
     version = request.version or (
-        with_version_suffix(base_version, request.version_suffix)
+        _with_version_suffix(base_version, request.version_suffix)
         if request.version_suffix is not None
-        else validate_semver(base_version, label=f"chart '{name}' version")
+        else _validate_semver(base_version, label=f"chart '{name}' version")
     )
     helm.dependency_update(chart.path)
-    package = helm.package(
-        chart.path, output, version=version if version != base_version else None
-    )
-    row = PublishedChart(name, version, target_reference(request.repository, name, version))
+    package = helm.package(chart.path, output, version=version if version != base_version else None)
+    row = PublishedChart(name, version, _target_reference(request.repository, name, version))
     return row, package
 
 
@@ -212,22 +209,18 @@ def _emit_events(
     return tuple(failures)
 
 
-def target_reference(repository: str, chart: str, version: str) -> str:
-    """The OCI reference a push of `chart@version` is expected to produce.
-
-    One definition for both the push (its retry-safe `expected_reference`) and the dry-run
-    plan, so the plan cannot drift from where the artifact lands.
-    """
+def _target_reference(repository: str, chart: str, version: str) -> str:
+    """The OCI reference a push of `chart@version` is expected to produce."""
     return f"{repository.rstrip('/')}/{chart}:{version}"
 
 
-def validate_semver(version: str, *, label: str = "version") -> str:
+def _validate_semver(version: str, *, label: str = "version") -> str:
     """Validate strict SemVer 2.0, including numeric identifier rules."""
     _parse(version, label=label)
     return version
 
 
-def with_version_suffix(base: str, suffix: str) -> str:
+def _with_version_suffix(base: str, suffix: str) -> str:
     """Append prerelease identifiers while preserving existing metadata."""
     version = _parse(base, label="chart version")
     if _SUFFIX.fullmatch(suffix) is None:
