@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
-CheckName = Literal["render", "schema"]
+CheckName = Literal["render", "schema", "policy"]
 Status = Literal["passed", "failed", "skipped"]
 
 
