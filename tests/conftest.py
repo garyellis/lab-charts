@@ -235,6 +235,31 @@ def make_chart(chart_root: Path) -> MakeChart:
     return build
 
 
+def write_validation_chart(root: Path, name: str, **validation: Any) -> Path:
+    """Write a chart whose `spec.validation` is `validation` over a `dev` default."""
+    chart = root / "charts" / name
+    chart.mkdir(parents=True)
+    (chart / "Chart.yaml").write_text(dump_yaml({"apiVersion": "v2", "name": name, "version": "0.1.0"}))
+    (chart / "values.yaml").write_text("")
+    spec = {
+        "releaseName": name,
+        "namespaceTemplate": "lab-${env}",
+        "environments": {"dev": {"values": ["values.yaml"]}},
+        **validation,
+    }
+    (chart / "chart-lifecycle.yaml").write_text(
+        dump_yaml(
+            {
+                "apiVersion": "chartmanager.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": name},
+                "spec": {"validation": spec},
+            }
+        )
+    )
+    return chart
+
+
 # --- the CLI argv seam -------------------------------------------------------
 #
 # Every test that drives the CLI names a command as a sequence of argv

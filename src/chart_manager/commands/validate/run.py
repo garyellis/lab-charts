@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from string import Template
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.commands.validate.models import (
@@ -20,6 +20,7 @@ from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
 )
+from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
@@ -37,58 +38,132 @@ def run(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
 ) -> ValidateOutcome:
-    """Render every requested chart in every requested environment, then check it."""
+    """Render each requested chart in each environment, then run its validation checks.
+
+    - An unknown chart or environment in the request raises before any work.
+    - A missing run-wide prerequisite (tool binary, schema lock or cache) raises.
+    - A chart's configuration error goes to `spec_errors`, and its row is left out.
+    - A failed check is recorded on its row, and the row's later checks are skipped.
+    """
+    selection = _selection(request, workspace)
+    specs = {
+        name: require_validation(chart.lifecycle, chart_name=name)
+        for name, chart in selection.charts.items()
+    }
+    declared = {env for spec in specs.values() for env in spec.environments}
+    unknown = sorted(set(request.envs) - declared)
+    if unknown:
+        raise SpecError(
+            f"unknown environment(s): {', '.join(unknown)}; declared: {', '.join(sorted(declared))}"
+        )
     out = request.out or workspace.render_root / _run_id()
-    schemas: KubeconformSchemaRuntime | None = None
-    kubeconform = Kubeconform(runner)
-    kyverno = Kyverno(runner)
-    rows = []
-    for name in request.charts:
-        chart = load_chart(workspace.chart_path(name))
+    checker = _Checker(request.checks, workspace, runner)
+    rows: list[Row] = []
+    spec_errors = list(selection.spec_errors)
+    for row in selection.rows:
+        if request.envs and row.env not in request.envs:
+            continue
+        chart = selection.charts[row.chart]
+        try:
+            checks = checker.check(chart, specs[row.chart], row, out / row.chart / row.env)
+        except SpecError as exc:
+            spec_errors.append(f"{row.chart}: {exc}")
+            continue
+        rows.append(replace(row, checks=checks))
+    return ValidateOutcome(
+        rows=tuple(rows), spec_errors=tuple(spec_errors), warnings=selection.warnings
+    )
+
+
+def _selection(request: ValidateRequest, workspace: RepositoryWorkspace) -> Selection:
+    """Each named chart in every environment, or only in those `changes` select; else `select()`."""
+    if not request.charts:
+        return select(request.changes, workspace=workspace)
+    named = _named(request.charts, workspace)
+    if request.changes is None:
+        return named
+    changed = select(request.changes, workspace=workspace)
+    rows = tuple(row for row in changed.rows if row.chart in named.charts)
+    return replace(named, rows=rows, warnings=changed.warnings)
+
+
+def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
+    """Every environment of each named chart.
+
+    A chart that does not exist or has no validation raises; a malformed one is collected.
+    """
+    charts: dict[str, Chart] = {}
+    rows: list[Row] = []
+    errors: list[str] = []
+    for name in names:
+        try:
+            chart = load_chart(workspace.chart_path(name))
+        except SpecError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
         spec = require_validation(chart.lifecycle, chart_name=chart.name)
+        charts[name] = chart
+        rows += [selected_row(name, spec, env) for env in spec.environments]
+    return Selection(rows=tuple(rows), charts=charts, spec_errors=tuple(errors))
+
+
+class _Checker:
+    """Runs the requested validation checks on one row; holds the schema lock once loaded."""
+
+    def __init__(
+        self, checks: frozenset[CheckName], workspace: RepositoryWorkspace, runner: CommandRunner
+    ) -> None:
+        self.checks = checks
+        self.workspace = workspace
+        self.runner = runner
+        self.kubeconform = Kubeconform(runner)
+        self.kyverno = Kyverno(runner)
+        self.schemas: KubeconformSchemaRuntime | None = None
+
+    def check(
+        self, chart: Chart, spec: ManifestValidationSpec, row: Row, rendered: Path
+    ) -> dict[CheckName, CheckResult]:
         helm = Helm(
-            runner,
+            self.runner,
             version=spec.helm_version,
             binary=spec.helm_binary,
             verbose=False,
             deps_are_fresh=dependencies.deps_are_fresh,
             chart_has_dependencies=dependencies.chart_has_dependencies,
         )
-        for env in request.envs or tuple(spec.environments):
-            rendered = out / chart.name / env
-            render = _render(helm, chart, spec, env, rendered)
-            checks: dict[CheckName, CheckResult] = {"render": render}
-            if "schema" in request.checks:
-                skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
-                if skip:
-                    checks["schema"] = CheckResult("skipped", skip)
-                else:
-                    if schemas is None:
-                        schemas = load_kubeconform_schema_runtime(workspace)
-                    locations = _schema_locations(workspace.root, chart.name, spec)
-                    checks["schema"] = _schema(kubeconform, schemas, spec, locations, rendered)
-            if "policy" in request.checks:
-                skip = _skip_reason(spec.validators.policy, checks, rendered)
-                if skip:
-                    checks["policy"] = CheckResult("skipped", skip)
-                else:
-                    policies = _policy_paths(workspace, chart, spec)
-                    checks["policy"] = _policy(kyverno, policies, rendered)
-            rows.append(Row(chart=chart.name, env=env, checks=checks))
-    return ValidateOutcome(rows=tuple(rows))
+        checks: dict[CheckName, CheckResult] = {"render": _render(helm, chart, spec, row, rendered)}
+        if "schema" in self.checks:
+            skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
+            if skip:
+                checks["schema"] = CheckResult("skipped", skip)
+            else:
+                if self.schemas is None:
+                    self.schemas = load_kubeconform_schema_runtime(self.workspace)
+                locations = _schema_locations(self.workspace.root, chart.name, spec)
+                checks["schema"] = _schema(
+                    self.kubeconform, self.schemas, spec, locations, rendered
+                )
+        if "policy" in self.checks:
+            skip = _skip_reason(spec.validators.policy, checks, rendered)
+            if skip:
+                checks["policy"] = CheckResult("skipped", skip)
+            else:
+                policies = _policy_paths(self.workspace, chart, spec)
+                checks["policy"] = _policy(self.kyverno, policies, rendered)
+        return checks
 
 
 def _render(
-    helm: Helm, chart: Chart, spec: ManifestValidationSpec, env: str, out: Path
+    helm: Helm, chart: Chart, spec: ManifestValidationSpec, row: Row, out: Path
 ) -> CheckResult:
-    values = _values(chart, spec, env)
+    values = _values(chart, spec, row.env)
     if out.exists():
         shutil.rmtree(out)
     try:
         helm.template(
-            spec.release_name,
+            row.release,
             chart.path,
-            namespace=_namespace(spec, env),
+            namespace=row.namespace,
             output_dir=out,
             values=values,
         )
@@ -199,15 +274,6 @@ def _values(chart: Chart, spec: ManifestValidationSpec, env: str) -> list[Path]:
             f"chart {chart.name!r} env {env!r}: values file not found: {', '.join(missing)}"
         )
     return values
-
-
-def _namespace(spec: ManifestValidationSpec, env: str) -> str:
-    """The environment's own namespace, else `namespaceTemplate` with `${env}` filled in."""
-    explicit = spec.environments[env].namespace
-    if explicit:
-        return explicit
-    assert spec.namespace_template is not None  # the API model requires one or the other
-    return Template(spec.namespace_template).safe_substitute(env=env)
 
 
 def _run_id() -> str:
