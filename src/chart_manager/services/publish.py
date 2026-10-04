@@ -6,6 +6,7 @@ import hashlib
 import logging
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -363,6 +364,25 @@ def target_reference(repository: str, chart: str, version: str) -> str:
     return f"{repository.rstrip('/')}/{chart}:{version}"
 
 
+def directly_changed_charts(workspace: RepositoryWorkspace, changes: Iterable[str]) -> list[str]:
+    """The current charts that own a changed path, sorted.
+
+    Ownership only: publishing does not follow chart-test fanout, `dependentTests` or Helm
+    dependents. Paths are relative to the workspace root, not the git top level.
+    """
+    charts = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
+    current = set(charts.list_names())
+    return sorted(
+        {
+            name
+            for raw in changes
+            if raw.strip()
+            if (name := workspace.chart_name_from_repo_path(raw.strip())) is not None
+            if name in current
+        }
+    )
+
+
 def validate_semver(version: str, *, label: str = "version") -> str:
     """Validate strict SemVer 2.0, including numeric identifier rules."""
     _parse(version, label=label)
@@ -390,6 +410,7 @@ __all__ = [
     "PublishService",
     "PublishTelemetryFailure",
     "PublishedChart",
+    "directly_changed_charts",
     "target_reference",
     "validate_semver",
     "with_version_suffix",
