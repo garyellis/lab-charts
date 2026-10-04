@@ -46,6 +46,7 @@ from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
 )
+from chart_manager.commands.validate.schemas.generated import prepare_generated_schemas
 from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
@@ -60,7 +61,6 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.kubeconform_schemas.generated import prepare_generated_schemas
 from chart_manager.services.manifest_validation.catalog import load_manifest_validation_target
 from chart_manager.services.manifest_validation.markdown import to_markdown
 from chart_manager.services.manifest_validation.models import (

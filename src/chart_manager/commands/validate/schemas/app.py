@@ -6,9 +6,9 @@ from pathlib import Path
 
 from chart_manager.commands.validate.schemas.errors import KubeconformSchemaConfigurationError
 from chart_manager.commands.validate.schemas.models import AuthoredSchemaPolicy
+from chart_manager.commands.validate.schemas.source import KubeconformSchemaSource
 from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
-from chart_manager.services.kubeconform_schemas.source import KubeconformSchemaSource
-from chart_manager.services.kubeconform_schemas.sync import (
+from chart_manager.commands.validate.schemas.sync import (
     KubeconformSchemaSyncRequest,
     KubeconformSchemaSyncResult,
     KubeconformSchemaSyncService,

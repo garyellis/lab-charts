@@ -56,6 +56,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
+from chart_manager.commands.validate.schemas.app import (
+    RepositoryKubeconformSchemaService,
+    build_repository_kubeconform_schema_service,
+)
+from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.domain.local_resources import LocalTargetResolver
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
@@ -93,11 +98,6 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.kubeconform_schemas.app import (
-    RepositoryKubeconformSchemaService,
-    build_repository_kubeconform_schema_service,
-)
-from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.manifest_validation.app import ManifestValidationService
 from chart_manager.services.manifest_validation.paths import RenderOutputService
