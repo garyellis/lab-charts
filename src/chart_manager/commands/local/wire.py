@@ -1,23 +1,7 @@
-"""Wire contract for the `chart-manager local` command group.
+"""The JSON/YAML shape of `local up`, `down`, `reset`, `status` and their `--dry-run` plans.
 
-Single source of truth for the machine-readable shape of `up`, `down`,
-`reset`, `status`, and the `--dry-run` plan any of the three mutating
-commands prints. Every surface -- the CLI's `-o json`/`-o yaml`, a REST
-endpoint, a CI step -- projects through these functions, so they cannot
-diverge.
-
-Deliberately I/O-free and format-free, like `services/helmrelease/wire.py`:
-these return plain dicts and take no `file`, no `format=`, no `console=`.
-Picking an encoder and writing it is the surface's job.
-
-One thing is deliberately *absent* from `converge_to_dict`: the access hints
-(`urls`, the CA-trust advice, the Grafana credentials). They are advice for
-an operator about how to reach what was just installed, they are printed on
-stderr for exactly that reason (`cli/local._render_access_hints`), and a
-credential does not belong in a document a caller pipes into a file. The
-document version of "what can I reach" is `status_to_dict`, where it is the
-answer to the question rather than a footnote on a mutation -- and where it
-carries URLs only.
+Access hints are left out of `converge_to_dict` on purpose: they can carry credentials,
+which do not belong in a document piped to a file. `status_to_dict` carries URLs only.
 """
 
 from __future__ import annotations
@@ -25,11 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from .models import (
-    DevelopmentClusterActionResult,
-    DevelopmentClusterEntryOutcome,
-    DevelopmentClusterPlan,
-    DevelopmentClusterResult,
-    DevelopmentClusterStatus,
+    DevClusterActionResult,
+    DevClusterEntryOutcome,
+    DevClusterPlan,
+    DevClusterResult,
+    DevClusterStatus,
 )
 
 __all__ = [
@@ -41,7 +25,7 @@ __all__ = [
 
 
 def converge_to_dict(
-    result: DevelopmentClusterResult,
+    result: DevClusterResult,
     *,
     command: str,
     cluster_name: str,
@@ -53,7 +37,7 @@ def converge_to_dict(
     and a caller reading this off stdout has no other handle on either.
 
     The three buckets stay separate rather than collapsing into one list
-    with a `status` key. They are the vocabulary the service reports in and
+    with a `status` key. They are the vocabulary `local` reports in and
     the table renders, and flattening them here would make the payload and
     the table two different accounts of one run.
     """
@@ -76,7 +60,7 @@ def converge_to_dict(
 
 
 def action_to_dict(
-    result: DevelopmentClusterActionResult,
+    result: DevClusterActionResult,
     *,
     command: str,
 ) -> dict[str, Any]:
@@ -94,7 +78,7 @@ def action_to_dict(
     }
 
 
-def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
+def status_to_dict(status: DevClusterStatus) -> dict[str, Any]:
     """Project a cluster snapshot onto the wire payload.
 
     `ok` is `exists`, not "everything is healthy". `local status` reports;
@@ -134,7 +118,7 @@ def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
     }
 
 
-def plan_to_dict(plan: DevelopmentClusterPlan) -> dict[str, Any]:
+def plan_to_dict(plan: DevClusterPlan) -> dict[str, Any]:
     """Project a `--dry-run` plan onto the wire payload.
 
     `dry_run: true` is a key rather than an inference from `command`,
@@ -166,7 +150,7 @@ def plan_to_dict(plan: DevelopmentClusterPlan) -> dict[str, Any]:
     }
 
 
-def _entry(entry: DevelopmentClusterEntryOutcome) -> dict[str, Any]:
+def _entry(entry: DevClusterEntryOutcome) -> dict[str, Any]:
     """JSON-serialize one converged plan entry."""
     return {
         "chart": entry.chart,

@@ -1,4 +1,4 @@
-"""Host-side execution of compiled cluster-test profile hooks."""
+"""Run a chart test's preInstall, postInstall and cleanup hooks from the repository root."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ _LOG = logging.getLogger(__name__)
 _STDERR_TAIL_LINES = 20
 
 
-class ClusterTestHookRunner:
+class ChartTestHookRunner:
     """Run hook actions from the repository root against one cluster."""
 
     def __init__(
@@ -84,4 +84,4 @@ def _tail(stderr: str) -> str:
     return "".join(f"\n{line}" for line in lines)
 
 
-__all__ = ["ClusterTestHookRunner"]
+__all__ = ["ChartTestHookRunner"]

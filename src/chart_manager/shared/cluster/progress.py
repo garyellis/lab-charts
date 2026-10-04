@@ -1,19 +1,8 @@
-"""Structured progress narration for cluster work: provision, bootstrap, install, test.
+"""Progress narration for cluster work: one frozen event, one callback, no return value.
 
-`DevelopmentClusterService`, `EphemeralTestClusterService`, and cluster
-bootstrap all take minutes to run and have to say what they are doing. None may
-know *how* that narration is displayed -- the same run has to be renderable
-by a Rich console, a Slack thread, or an SSE stream.
-
-The contract is deliberately the same shape as the two callbacks that
-already exist in this codebase (`ManifestValidationRunner(on_event=...)`,
-`MonitorService(progress=...)`): one frozen event object, one callable, no
-return value, exceptions from the callback are the surface's problem.
-
-`severity` is the only rendering hint a surface gets. `label` is the short
-prefix that carries the severity's emphasis ("Applying", "warn:"); the
-surface styles the label and leaves `message` alone. A `label` of None
-means the whole line carries the emphasis.
+Provision, bootstrap, install and test say what they are doing through these events and
+never decide how they are shown. `severity` is the only rendering hint; `label` carries
+its emphasis and `message` is left alone.
 """
 
 from __future__ import annotations
@@ -38,7 +27,7 @@ ProgressCallback = Callable[[ProgressEvent], None]
 
 
 def step(label: str, message: str = "") -> ProgressEvent:
-    """A headline: the service is starting a named unit of work."""
+    """A headline: a named unit of work is starting."""
     return ProgressEvent("step", message, label)
 
 
@@ -53,7 +42,7 @@ def warn(message: str, *, label: str | None = "warn:") -> ProgressEvent:
 
 
 def failure(label: str, message: str) -> ProgressEvent:
-    """A failed unit of work. Whether the run aborts is the service's policy, not this event's."""
+    """A failed unit of work. Whether the run stops is the caller's decision."""
     return ProgressEvent("error", message, label)
 
 

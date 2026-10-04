@@ -278,7 +278,7 @@ def test_domain_imports_only_api_plumbing_and_the_standard_library() -> None:
         "and the standard library:\n  "
         + "\n  ".join(offenders)
         + "\n\nTake what the algorithm needs as a parameter instead -- "
-        "DependencyResolver's ClusterTestLoader callable is the pattern."
+        "DependencyResolver's ChartTestLoader callable is the pattern."
     )
 
 

@@ -7,27 +7,27 @@ from pathlib import Path
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.chart import (
     ChartRepository,
-    ClusterTestChart,
+    ChartUnderTest,
 )
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_test_status,
+    chart_test_status,
     load_optional_chart_lifecycle,
-    require_cluster_test,
-    require_cluster_test_profile,
+    require_chart_test,
+    require_chart_test_profile,
     validate_chart_lifecycle_identity,
 )
 
 
-class ClusterTestCatalog:
+class ChartTestCatalog:
     """Load cluster-test capabilities without coupling Helm discovery to them."""
 
     def __init__(self, root: Path, *, charts_dir: Path) -> None:
         """Anchor Helm and lifecycle-intent lookup at ``root``."""
         self.repository = ChartRepository(root, charts_dir=charts_dir)
 
-    def get(self, name: str) -> ClusterTestChart:
+    def get(self, name: str) -> ChartUnderTest:
         """Return ``name`` composed with its required, enabled cluster tests."""
         chart = self.repository.get(name)
         lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
@@ -37,9 +37,9 @@ class ClusterTestCatalog:
                 chart_name=chart.name,
                 chart_directory=chart.path,
             )
-        return ClusterTestChart(
+        return ChartUnderTest(
             chart=chart,
-            spec=require_cluster_test(lifecycle, chart_name=chart.name),
+            spec=require_chart_test(lifecycle, chart_name=chart.name),
         )
 
     def enabled_names(self) -> list[str]:
@@ -58,13 +58,13 @@ class ClusterTestCatalog:
                     chart_name=chart.name,
                     chart_directory=chart.path,
                 )
-            if cluster_test_status(lifecycle) is CapabilityStatus.ENABLED:
+            if chart_test_status(lifecycle) is CapabilityStatus.ENABLED:
                 enabled.append(name)
         return enabled
 
-    def value_paths(self, chart: ClusterTestChart, profile: str) -> list[Path]:
+    def value_paths(self, chart: ChartUnderTest, profile: str) -> list[Path]:
         """Resolve a profile's values files; every path must exist."""
-        profile_spec = require_cluster_test_profile(chart.spec, profile)
+        profile_spec = require_chart_test_profile(chart.spec, profile)
         paths = [chart.path / value for value in profile_spec.values]
         missing = [path for path in paths if not path.exists()]
         if missing:

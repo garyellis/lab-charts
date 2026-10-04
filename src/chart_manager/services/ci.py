@@ -16,7 +16,7 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpactService,
 )
 from chart_manager.shared.charts.chart import ChartRepository
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
@@ -97,7 +97,7 @@ class CiService:
         """Wire repository/git against the workspace root."""
         self.workspace = workspace
         self.root = workspace.root
-        self.cluster_tests = ClusterTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
+        self.cluster_tests = ChartTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
         self.charts = ChartRepository(self.root, charts_dir=workspace.spec.charts_dir)
         self.impact = LifecycleImpactService(workspace=workspace)
         self.git = Git(self.root)

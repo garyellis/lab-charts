@@ -16,7 +16,7 @@ from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.shared.charts.chart import ChartRepository
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from tests.conftest import CHARTS_DIR, workspace_for
 
 from .conftest import REPO_ROOT, MakeChart, cli
@@ -52,7 +52,7 @@ def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart)
         "prometheus-operator",
         profiles={"minimal": {"values": ["values.yaml", "values-ci.yaml"]}},
     )
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     chart = catalog.get("prometheus-operator")
 
     paths = catalog.value_paths(chart, "minimal")
@@ -90,7 +90,7 @@ def test_cluster_test_catalog_requires_chart_manager_configuration(
         CapabilityUnavailableError,
         match=r"no clusterTest configuration in chart-lifecycle\.yaml",
     ):
-        ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get("common")
+        ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get("common")
 
 
 def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
@@ -130,7 +130,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
         encoding="utf-8",
     )
 
-    assert ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).enabled_names() == ["enabled"]
+    assert ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).enabled_names() == ["enabled"]
 
 
 def test_chart_catalog_retains_invalid_config_for_operator_visibility(

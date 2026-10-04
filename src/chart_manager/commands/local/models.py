@@ -1,12 +1,6 @@
-"""Result vocabulary for persistent sandbox lifecycle operations.
+"""What `local` commands return about the dev cluster. Pure data.
 
-Pure data: no integrations, no IO, no progress. Everything here is either
-frozen (what crosses the service boundary) or an explicitly-named mutable
-accumulator (`RunSummary`, which never leaves the converge engine).
-
-Kept in its own module because `cli/local.py` renders these and the drift /
-access helpers read them — three importers, none of which need the
-converge engine.
+All frozen except `RunSummary`, the accumulator `up` and `reset` fill in before freezing it.
 """
 
 from __future__ import annotations
@@ -15,7 +9,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterEntryOutcome:
+class DevClusterEntryOutcome:
     """One converged plan entry: which chart:profile landed in which namespace."""
 
     chart: str
@@ -24,7 +18,7 @@ class DevelopmentClusterEntryOutcome:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterEntryFailure:
+class DevClusterEntryFailure:
     """One failed plan entry, with the error text the surface should surface."""
 
     chart: str
@@ -34,7 +28,7 @@ class DevelopmentClusterEntryFailure:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterCredentials:
+class DevClusterCredentials:
     """Login for one URL, read from the Secret its VirtualService names.
 
     Exactly one of `(username, password)` or `error` is set: `error` carries
@@ -49,24 +43,24 @@ class DevelopmentClusterCredentials:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterAccessHints:
-    """Post-converge advisory data: what the operator needs to reach the lab.
+class DevClusterAccessHints:
+    """Post-converge advisory data: what the operator needs to reach the dev cluster.
 
     Data only -- the wording of the CA-trust instructions is a surface
     concern. `ca_trust_hint` is the *decision* (did the chart that owns the
     lab CA sync this run?), not the text. `urls_error` and each
     `credentials[].error` carry best-effort lookup failures so the surface
-    can render them in place rather than the service printing them mid-run.
+    can render them in place rather than printing them mid-run.
     """
 
     ca_trust_hint: bool = False
     urls: tuple[str, ...] = ()
-    credentials: tuple[DevelopmentClusterCredentials, ...] = ()
+    credentials: tuple[DevClusterCredentials, ...] = ()
     urls_error: str | None = None
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterResult:
+class DevClusterResult:
     """Per-run accounting returned by target convergence and reset.
 
     Buckets mirror helmfile/Argo terminology:
@@ -75,10 +69,10 @@ class DevelopmentClusterResult:
       * failed:    subprocess error; release may or may not be in a good state
     """
 
-    applied: tuple[DevelopmentClusterEntryOutcome, ...] = ()
-    no_change: tuple[DevelopmentClusterEntryOutcome, ...] = ()
-    failed: tuple[DevelopmentClusterEntryFailure, ...] = ()
-    hints: DevelopmentClusterAccessHints = field(default_factory=DevelopmentClusterAccessHints)
+    applied: tuple[DevClusterEntryOutcome, ...] = ()
+    no_change: tuple[DevClusterEntryOutcome, ...] = ()
+    failed: tuple[DevClusterEntryFailure, ...] = ()
+    hints: DevClusterAccessHints = field(default_factory=DevClusterAccessHints)
 
     @property
     def ok(self) -> bool:
@@ -110,12 +104,8 @@ class PortMappingDrift:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterRelease:
-    """One Helm release installed on the development cluster.
-
-    A projection of `integrations.helm.ReleaseInfo` so the status result
-    crosses the service boundary without an adapter type on it.
-    """
+class DevClusterRelease:
+    """One Helm release installed on the dev cluster."""
 
     name: str
     namespace: str
@@ -124,7 +114,7 @@ class DevelopmentClusterRelease:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterStatus:
+class DevClusterStatus:
     """What exists right now: the cluster, its releases, and how to reach it.
 
     Every field is a lookup that already had a home in the converge path --
@@ -142,7 +132,7 @@ class DevelopmentClusterStatus:
     exists: bool
     context: str | None = None
     provider: str | None = None
-    releases: tuple[DevelopmentClusterRelease, ...] = ()
+    releases: tuple[DevClusterRelease, ...] = ()
     releases_error: str | None = None
     urls: tuple[str, ...] = ()
     urls_error: str | None = None
@@ -150,7 +140,7 @@ class DevelopmentClusterStatus:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterPlanEntry:
+class DevClusterPlanEntry:
     """One release a converge would install, and where it came from.
 
     `source` is `bootstrap` for a release the LocalCluster owns and
@@ -164,7 +154,7 @@ class DevelopmentClusterPlanEntry:
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterPlan:
+class DevClusterPlan:
     """What a mutating `local` command would do, resolved but not executed.
 
     Produced by the same preflight the mutating path runs first, so a
@@ -178,13 +168,13 @@ class DevelopmentClusterPlan:
     target: str | None = None
     target_kind: str | None = None
     destroys: bool = False
-    entries: tuple[DevelopmentClusterPlanEntry, ...] = ()
+    entries: tuple[DevClusterPlanEntry, ...] = ()
     provisioning_hooks_enabled: bool = True
     provisioning_hooks: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
-class DevelopmentClusterActionResult:
+class DevClusterActionResult:
     """Outcome of a stop or destroy operation.
 
     `changed` is False when the cluster was already stopped / already absent
@@ -202,19 +192,15 @@ class DevelopmentClusterActionResult:
 
 @dataclass
 class RunSummary:
-    """Mutable accumulator threaded through the install loop.
+    """What `up` and `reset` have converged so far; frozen into `DevClusterResult`."""
 
-    Frozen `DevelopmentClusterResult` is what leaves the service; this is the in-flight
-    scratch buffer the loop appends to.
-    """
+    applied: list[DevClusterEntryOutcome] = field(default_factory=list)
+    no_change: list[DevClusterEntryOutcome] = field(default_factory=list)
+    failed: list[DevClusterEntryFailure] = field(default_factory=list)
 
-    applied: list[DevelopmentClusterEntryOutcome] = field(default_factory=list)
-    no_change: list[DevelopmentClusterEntryOutcome] = field(default_factory=list)
-    failed: list[DevelopmentClusterEntryFailure] = field(default_factory=list)
-
-    def freeze(self, hints: DevelopmentClusterAccessHints) -> DevelopmentClusterResult:
+    def freeze(self, hints: DevClusterAccessHints) -> DevClusterResult:
         """Snapshot the accumulator into the frozen result the caller gets."""
-        return DevelopmentClusterResult(
+        return DevClusterResult(
             applied=tuple(self.applied),
             no_change=tuple(self.no_change),
             failed=tuple(self.failed),

@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands.test.models import ActionKind, LifecycleAction, LifecyclePlan
-from chart_manager.commands.test.plan import compile_cluster_test
+from chart_manager.commands.test.plan import compile_chart_test
 from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     DependencyCycleError,
     SpecError,
 )
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver
 from tests.conftest import MakeChart
 
@@ -23,8 +23,8 @@ CHARTS_DIR = Path("charts")
 
 
 def _compile(root: Path, chart: str, profile: str, **options: object) -> LifecyclePlan:
-    catalog = ClusterTestCatalog(root, charts_dir=CHARTS_DIR)
-    return compile_cluster_test(
+    catalog = ChartTestCatalog(root, charts_dir=CHARTS_DIR)
+    return compile_chart_test(
         chart,
         profile,
         root=root.resolve(),

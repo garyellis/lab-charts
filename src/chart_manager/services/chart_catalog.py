@@ -10,7 +10,7 @@ from chart_manager.shared.charts.chart import ChartDependency, ChartRepository
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_test_status,
+    chart_test_status,
     load_optional_chart_lifecycle,
     validate_chart_lifecycle_identity,
     validation_status,
@@ -85,7 +85,7 @@ class ChartCatalogService:
             )
 
         manifest_status = validation_status(lifecycle)
-        cluster_status = cluster_test_status(lifecycle)
+        cluster_status = chart_test_status(lifecycle)
         profiles = (
             tuple(sorted(lifecycle.spec.cluster_test.profiles))
             if cluster_status is CapabilityStatus.ENABLED

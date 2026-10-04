@@ -20,7 +20,7 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.converge import Release, converge
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 from chart_manager.shared.cluster.releases import (
@@ -55,7 +55,7 @@ class BootstrapOutcome:
 
 
 def bootstrap(
-    lab: Session,
+    session: Session,
     cluster: LocalCluster,
     *,
     root: Path,
@@ -65,12 +65,12 @@ def bootstrap(
     root = root.resolve()
     outcomes: list[BootstrapOutcome] = []
     for authored in cluster.spec.bootstrap.releases:
-        sets = _runtime_values(lab, authored)
+        sets = _runtime_values(session, authored)
         for release, profile in _releases(root, authored, sets):
             emit(progress, step("Bootstrapping", f"{release.name} -> {release.namespace}"))
-            status = converge(lab, release)
+            status = converge(session, release)
             outcomes.append(BootstrapOutcome(release.name, profile, release.namespace, status))
-        _wait_ready(lab, authored, progress)
+        _wait_ready(session, authored, progress)
     return tuple(outcomes)
 
 
@@ -105,7 +105,7 @@ def preflight(
         catalog, plan = lifecycle_install_plan(root, release, source="bootstrap chart")
         for entry in plan:
             chart = catalog.get(entry.chart)
-            profile = require_cluster_test_profile(chart.spec, entry.profile)
+            profile = require_chart_test_profile(chart.spec, entry.profile)
             # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
             if profile.hooks is not None:
                 raise SpecError(
@@ -139,7 +139,7 @@ def _releases(
         releases = []
         for entry in plan:
             chart = catalog.get(entry.chart)
-            profile = require_cluster_test_profile(chart.spec, entry.profile)
+            profile = require_chart_test_profile(chart.spec, entry.profile)
             is_root = entry.chart == root_chart and entry.profile == authored.profile
             releases.append(
                 (
@@ -191,21 +191,21 @@ def _releases(
     raise ChartManagerError(f"unsupported bootstrap release: {authored!r}")  # pragma: no cover
 
 
-def _runtime_values(lab: Session, release: BootstrapRelease) -> dict[str, str]:
+def _runtime_values(session: Session, release: BootstrapRelease) -> dict[str, str]:
     if not release.runtime_values:
         return {}
     facts = {
         "${kind.controlPlanePort}": "6443",
-        "${kind.clusterName}": lab.name,
-        "${kind.context}": lab.context,
+        "${kind.clusterName}": session.name,
+        "${kind.context}": session.context,
     }
     if "${kind.controlPlaneHost}" in release.runtime_values.values():
-        facts["${kind.controlPlaneHost}"] = lab.kind.control_plane_ip(lab.name)
+        facts["${kind.controlPlaneHost}"] = session.kind.control_plane_ip(session.name)
     return {key: facts[value] for key, value in release.runtime_values.items()}
 
 
 def _wait_ready(
-    lab: Session, release: BootstrapRelease, progress: ProgressCallback | None
+    session: Session, release: BootstrapRelease, progress: ProgressCallback | None
 ) -> None:
     readiness = release.readiness
     if readiness is None:
@@ -213,8 +213,8 @@ def _wait_ready(
     gate = readiness.workloads_ready
     timeout = gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
     if readiness.nodes_ready:
-        emit(progress, step("Waiting for local cluster nodes"))
-        lab.kubectl.wait_nodes_ready(timeout=timeout)
+        emit(progress, step("Waiting for cluster nodes"))
+        session.kubectl.wait_nodes_ready(timeout=timeout)
     if gate is not None:
         emit(progress, step("Waiting for bootstrap workloads", gate.namespace))
-        lab.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)
+        session.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)

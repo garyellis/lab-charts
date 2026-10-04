@@ -98,7 +98,7 @@ def validation_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
     return CapabilityStatus.ENABLED
 
 
-def cluster_test_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
+def chart_test_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
     """Return effective live-cluster-test availability."""
     if lifecycle is None or lifecycle.spec.cluster_test is None:
         return CapabilityStatus.ABSENT
@@ -127,7 +127,7 @@ def require_validation(
     return lifecycle.spec.validation
 
 
-def require_cluster_test(
+def require_chart_test(
     lifecycle: ChartLifecycle | None,
     *,
     chart_name: str,
@@ -145,7 +145,7 @@ def require_cluster_test(
     return lifecycle.spec.cluster_test
 
 
-def require_cluster_test_profile(spec: ClusterTestSpec, name: str) -> ClusterTestProfile:
+def require_chart_test_profile(spec: ClusterTestSpec, name: str) -> ClusterTestProfile:
     """Look up a profile by name; SpecError lists available names."""
     try:
         return spec.profiles[name]

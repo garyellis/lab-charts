@@ -41,7 +41,7 @@ def _runner(*clusters: str) -> FakeCommandRunner:
 def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_path: Path) -> None:
     runner = _runner()
 
-    lab = session.provision(
+    dev = session.provision(
         _cluster(tmp_path),
         root=tmp_path,
         name="lab",
@@ -55,7 +55,7 @@ def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_pat
         ("kind", "create", "cluster", "--name", "lab", "--config", str(tmp_path / "kind.yaml")),
         READYZ,
     ]
-    assert (lab.name, lab.context) == ("lab", "kind-lab")
+    assert (dev.name, dev.context) == ("lab", "kind-lab")
 
 
 def test_provision_runs_hooks_around_the_cluster_and_rewaits_after_the_post_hook(
@@ -142,10 +142,10 @@ def test_find_returns_a_session_only_for_an_existing_cluster() -> None:
 
 def test_teardown_deletes_an_existing_cluster_and_reports_an_absent_one() -> None:
     runner = _runner("lab")
-    lab = session.attach("lab", runner=runner, settings=Settings())
+    dev = session.attach("lab", runner=runner, settings=Settings())
     gone = session.attach("gone", runner=runner, settings=Settings())
 
-    assert session.teardown(lab) is True
+    assert session.teardown(dev) is True
     assert session.teardown(gone) is False
     assert ("kind", "delete", "cluster", "--name", "lab") in runner.calls
     assert ("kind", "delete", "cluster", "--name", "gone") not in runner.calls

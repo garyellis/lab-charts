@@ -1,17 +1,7 @@
-"""Read-only snapshot of the development cluster: what exists, and where.
+"""Read-only snapshot of the dev cluster: whether it exists, its releases, URLs and drift.
 
-Every lookup here already existed inside the converge path -- `helm list -A`
-is the install-skip snapshot, the URL list
-is `access.virtualservice_urls`, the port diff is `drift.port_mapping_drift`.
-`status` asks the same questions and keeps the answers instead of consuming
-them, which is why this module composes those helpers rather than reaching
-for the adapters a second time.
-
-Best-effort in the same sense as `access.py`: a stopped cluster or an
-unreachable apiserver is *the answer*, so a failed lookup is captured as an
-error string on the result rather than raised. The one thing that would make
-the report meaningless -- not knowing whether the cluster exists -- is
-established first, and everything cluster-facing is skipped when it does not.
+A failed lookup is recorded on the result, never raised; nothing is asked of a cluster
+that does not exist.
 """
 
 from __future__ import annotations
@@ -21,8 +11,8 @@ from pathlib import Path
 from chart_manager.commands.local.access import virtualservice_urls
 from chart_manager.commands.local.drift import port_mapping_drift
 from chart_manager.commands.local.models import (
-    DevelopmentClusterRelease,
-    DevelopmentClusterStatus,
+    DevClusterRelease,
+    DevClusterStatus,
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
@@ -32,26 +22,26 @@ from chart_manager.shared.cluster.session import Session
 
 
 def cluster_status(
-    lab: Session | None,
+    session: Session | None,
     *,
     name: str,
     kind: Kind,
     root: Path,
     config: Path | None = None,
-) -> DevelopmentClusterStatus:
+) -> DevClusterStatus:
     """Collect the current state of the cluster, or report that it does not exist.
 
     Existence gates the rest: asking Helm about an absent cluster only produces a
     kubeconfig error that says nothing `exists: false` did not.
     """
-    if lab is None:
-        return DevelopmentClusterStatus(cluster_name=name, exists=False)
-    releases, releases_error = _releases(lab.helm)
-    urls, urls_error = _urls(lab.kubectl)
-    return DevelopmentClusterStatus(
+    if session is None:
+        return DevClusterStatus(cluster_name=name, exists=False)
+    releases, releases_error = _releases(session.helm)
+    urls, urls_error = _urls(session.kubectl)
+    return DevClusterStatus(
         cluster_name=name,
         exists=True,
-        context=lab.context,
+        context=session.context,
         provider="kind",
         releases=releases,
         releases_error=releases_error,
@@ -61,7 +51,7 @@ def cluster_status(
     )
 
 
-def _releases(helm: Helm) -> tuple[tuple[DevelopmentClusterRelease, ...], str | None]:
+def _releases(helm: Helm) -> tuple[tuple[DevClusterRelease, ...], str | None]:
     """Every Helm release on the cluster, ordered for a stable report.
 
     Sorted by (namespace, name) rather than left in Helm's order: this is a
@@ -74,7 +64,7 @@ def _releases(helm: Helm) -> tuple[tuple[DevelopmentClusterRelease, ...], str | 
         return (), f"could not list helm releases ({exc})"
     return (
         tuple(
-            DevelopmentClusterRelease(
+            DevClusterRelease(
                 name=release.name,
                 namespace=release.namespace,
                 revision=release.revision,

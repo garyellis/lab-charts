@@ -13,11 +13,11 @@ from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_test_status,
+    chart_test_status,
     load_chart_lifecycle,
     load_optional_chart_lifecycle,
-    require_cluster_test,
-    require_cluster_test_profile,
+    require_chart_test,
+    require_chart_test_profile,
     require_validation,
     validate_chart_lifecycle_identity,
     validation_status,
@@ -75,8 +75,8 @@ def test_loads_each_capability_from_chart_lifecycle(tmp_path: Path) -> None:
     assert cluster.kind == "ChartLifecycle"
     assert cluster.metadata.name == "demo"
     assert cluster.spec.cluster_test is not None
-    assert require_cluster_test_profile(cluster.spec.cluster_test, "minimal").helm_test is True
-    assert cluster_test_status(cluster) is CapabilityStatus.ENABLED
+    assert require_chart_test_profile(cluster.spec.cluster_test, "minimal").helm_test is True
+    assert chart_test_status(cluster) is CapabilityStatus.ENABLED
 
     validation = load_chart_lifecycle(_write_lifecycle(tmp_path, _validation_spec()))
     assert validation.spec.validation is not None
@@ -98,7 +98,7 @@ def test_both_capabilities_can_share_one_spec(tmp_path: Path) -> None:
     )
 
     assert validation_status(lifecycle) is CapabilityStatus.ENABLED
-    assert cluster_test_status(lifecycle) is CapabilityStatus.ENABLED
+    assert chart_test_status(lifecycle) is CapabilityStatus.ENABLED
 
 
 def test_enabled_defaults_true_and_capabilities_are_optional(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_enabled_defaults_true_and_capabilities_are_optional(tmp_path: Path) -> 
 
     assert lifecycle.spec.enabled is True
     assert validation_status(lifecycle) is CapabilityStatus.ABSENT
-    assert cluster_test_status(lifecycle) is CapabilityStatus.ABSENT
+    assert chart_test_status(lifecycle) is CapabilityStatus.ABSENT
 
 
 @pytest.mark.parametrize(
@@ -222,10 +222,10 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
         }
     )
 
-    assert cluster_test_status(None) is CapabilityStatus.ABSENT
-    assert cluster_test_status(absent) is CapabilityStatus.ABSENT
-    assert cluster_test_status(disabled) is CapabilityStatus.DISABLED
-    assert cluster_test_status(enabled) is CapabilityStatus.ENABLED
+    assert chart_test_status(None) is CapabilityStatus.ABSENT
+    assert chart_test_status(absent) is CapabilityStatus.ABSENT
+    assert chart_test_status(disabled) is CapabilityStatus.DISABLED
+    assert chart_test_status(enabled) is CapabilityStatus.ENABLED
 
 
 @pytest.mark.parametrize(
@@ -250,7 +250,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
         ),
         (
             None,
-            require_cluster_test,
+            require_chart_test,
             "chart 'demo' has no clusterTest configuration in chart-lifecycle.yaml",
         ),
         (
@@ -267,7 +267,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
                     },
                 }
             ),
-            require_cluster_test,
+            require_chart_test,
             "cluster tests are disabled for chart 'demo'",
         ),
     ],

@@ -10,8 +10,8 @@ from typing import Any
 
 from chart_manager.commands import validate
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
+from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
@@ -73,7 +73,7 @@ class LifecycleImpactService:
     def __init__(self, *, workspace: RepositoryWorkspace) -> None:
         self.workspace = workspace
         self.root = workspace.root
-        self.cluster_catalog = ClusterTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
+        self.cluster_catalog = ChartTestCatalog(self.root, charts_dir=workspace.spec.charts_dir)
 
     def analyze(self, changed_files: list[str] | tuple[str, ...]) -> LifecycleImpact:
         """Return deterministic validation selection and cluster-test matrix."""
@@ -184,7 +184,7 @@ class LifecycleImpactService:
             for reference in spec.dependent_tests:
                 try:
                     target = self.cluster_catalog.get(reference.chart)
-                    require_cluster_test_profile(target.spec, reference.profile)
+                    require_chart_test_profile(target.spec, reference.profile)
                 except ChartManagerError as exc:
                     errors.append(
                         f"{changed_chart} dependentTests "

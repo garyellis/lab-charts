@@ -79,7 +79,7 @@ def load_helm_chart(path: Path) -> HelmChart:
 
 
 @dataclass(frozen=True)
-class ClusterTestChart:
+class ChartUnderTest:
     """A Helm chart paired with its live-cluster test configuration."""
 
     chart: HelmChart

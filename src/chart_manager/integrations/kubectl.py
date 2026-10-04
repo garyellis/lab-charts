@@ -226,9 +226,7 @@ class Kubectl:
         stderr is merged into stdout; the child runs in a new session so it
         survives the CLI process exiting.
 
-        `context` stays a per-call argument (it defaults to the instance pin)
-        because one `ExposeService` fronts every cluster the operator has:
-        the cluster is named by the request, not by the adapter's lifetime.
+        `context` defaults to the instance pin.
         """
         args = self._with_context(
             [
@@ -265,7 +263,7 @@ class Kubectl:
         Picks a free local port via the kernel, starts kubectl, waits until
         the local side is accepting connections, yields the port number, and
         always SIGTERMs the child on exit. Use for inline API calls (e.g.,
-        Grafana export); persistent forwards belong in ExposeService.
+        Grafana export).
         """
         local_port = _pick_free_port()
         proc = self.port_forward(

@@ -17,9 +17,9 @@ import pytest
 from chart_manager.commands.local.access import access_hints, wait_apps_wildcard_ready
 from chart_manager.commands.local.drift import kind_config_host_ports, warn_on_port_mapping_drift
 from chart_manager.commands.local.models import (
-    DevelopmentClusterAccessHints,
-    DevelopmentClusterCredentials,
-    DevelopmentClusterEntryOutcome,
+    DevClusterAccessHints,
+    DevClusterCredentials,
+    DevClusterEntryOutcome,
     RunSummary,
 )
 from chart_manager.integrations.kubectl import VirtualService
@@ -110,7 +110,7 @@ class _Recorder:
         return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
 
 
-_GATEWAY_SYNCED = (DevelopmentClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
+_GATEWAY_SYNCED = (DevClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
 _CREDENTIAL_ANNOTATIONS = {
     "chartmanager.io/credentials-secret": "app-admin",
     "chartmanager.io/credentials-username": "admin",
@@ -124,7 +124,7 @@ def _vs(
     return VirtualService(namespace=namespace, hosts=hosts, annotations=annotations or {})
 
 
-def _hints(tmp_path: Path, kubectl: _RecordingKubectl) -> DevelopmentClusterAccessHints:
+def _hints(tmp_path: Path, kubectl: _RecordingKubectl) -> DevClusterAccessHints:
     return access_hints(RunSummary(applied=list(_GATEWAY_SYNCED)), kubectl=kubectl)  # type: ignore[arg-type]
 
 
@@ -177,7 +177,7 @@ def test_annotated_virtualservices_read_credentials_from_their_own_namespace(
         ("app-admin", "password", "ns-b"),
     ]
     assert hints.credentials == tuple(
-        DevelopmentClusterCredentials(url=url, username="admin", password="fake-password")
+        DevClusterCredentials(url=url, username="admin", password="fake-password")
         for url in hints.urls[:3]
     )
 
@@ -195,7 +195,7 @@ def test_a_host_claimed_twice_keeps_the_first_virtualservices_credentials(
     hints = _hints(tmp_path, kubectl)
 
     assert hints.credentials == (
-        DevelopmentClusterCredentials(
+        DevClusterCredentials(
             url="https://app.localhost/", username="admin", password="fake-password"
         ),
     )
@@ -238,7 +238,7 @@ def test_secret_read_failure_is_captured_not_raised(tmp_path: Path) -> None:
 
     assert hints.urls == ("https://app.localhost/",)
     assert hints.credentials == (
-        DevelopmentClusterCredentials(url="https://app.localhost/", error="secret not found"),
+        DevClusterCredentials(url="https://app.localhost/", error="secret not found"),
     )
 
 
@@ -247,7 +247,7 @@ def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     # list still resolves (a sync that touched only some app chart).
     kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost")])
     hints = access_hints(
-        RunSummary(applied=[DevelopmentClusterEntryOutcome("app", "minimal", "apps")]),
+        RunSummary(applied=[DevClusterEntryOutcome("app", "minimal", "apps")]),
         kubectl=kubectl,  # type: ignore[arg-type]
     )
 
@@ -287,7 +287,7 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
     kubectl = _RecordingKubectl()
     progress = _Recorder()
     summary = RunSummary(
-        applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
+        applied=[DevClusterEntryOutcome("grafana", "minimal", "observability")]
     )
     wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
     assert kubectl.cert_waits == []

@@ -7,8 +7,8 @@ from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, Clust
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.lifecycle import (
     load_chart_lifecycle,
-    require_cluster_test,
-    require_cluster_test_profile,
+    require_chart_test,
+    require_chart_test_profile,
 )
 
 from .conftest import cli
@@ -16,13 +16,13 @@ from .conftest import cli
 
 def _alloy_spec() -> ClusterTestSpec:
     lifecycle = load_chart_lifecycle(Path("charts/alloy/chart-lifecycle.yaml"))
-    return require_cluster_test(lifecycle, chart_name="alloy")
+    return require_chart_test(lifecycle, chart_name="alloy")
 
 
 def test_load_test_spec_accepts_chart_refs() -> None:
     spec = _alloy_spec()
 
-    minimal = require_cluster_test_profile(spec, "minimal")
+    minimal = require_chart_test_profile(spec, "minimal")
 
     assert minimal.requires[0].chart == "prometheus-operator"
     assert minimal.requires[0].profile == "minimal"
@@ -33,7 +33,7 @@ def test_unknown_profile_raises_spec_error() -> None:
     spec = _alloy_spec()
 
     with pytest.raises(SpecError):
-        require_cluster_test_profile(spec, "missing")
+        require_chart_test_profile(spec, "missing")
 
 
 def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:

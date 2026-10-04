@@ -185,7 +185,7 @@ def make_chart(chart_root: Path) -> MakeChart:
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
 
     Every values file any profile references is created empty, since
-    `ClusterTestCatalog.value_paths` requires them to exist. A profile that
+    `ChartTestCatalog.value_paths` requires them to exist. A profile that
     names no `namespace` is written with `default`, because the lifecycle
     API requires one and most tests have no opinion about it.
     """

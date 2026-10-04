@@ -1,9 +1,6 @@
-"""Post-converge access advice: is the lab CA in place, and what can I reach?
+"""After a converge: is the lab CA trusted, and which URLs (and logins) can be reached?
 
-Collaborators are `(kubectl, progress)` only -- nothing here needs helm,
-kind, the chart repository, or the install plan. Everything is best-effort
-by design: these functions produce advisory data printed *after* the run
-summary, so a lookup failure is captured as text rather than raised.
+Best-effort: a failed lookup is recorded as text on the result, never raised.
 """
 
 from __future__ import annotations
@@ -12,8 +9,8 @@ from collections.abc import Sequence
 from itertools import chain
 
 from chart_manager.commands.local.models import (
-    DevelopmentClusterAccessHints,
-    DevelopmentClusterCredentials,
+    DevClusterAccessHints,
+    DevClusterCredentials,
     RunSummary,
 )
 from chart_manager.integrations.kubectl import Kubectl, VirtualService
@@ -111,7 +108,7 @@ def virtualservice_urls(virtualservices: Sequence[VirtualService]) -> tuple[str,
 
 def _credentials(
     vs: VirtualService, *, kubectl: Kubectl
-) -> tuple[DevelopmentClusterCredentials, ...]:
+) -> tuple[DevClusterCredentials, ...]:
     """The login for each URL of one VirtualService, if its annotations opt in.
 
     An incomplete annotation set or a failed Secret read becomes the
@@ -141,9 +138,9 @@ def _credentials(
         except ChartManagerError as exc:
             error = str(exc)
     if error is not None:
-        return tuple(DevelopmentClusterCredentials(url=url, error=error) for url in urls)
+        return tuple(DevClusterCredentials(url=url, error=error) for url in urls)
     return tuple(
-        DevelopmentClusterCredentials(url=url, username=username, password=password) for url in urls
+        DevClusterCredentials(url=url, username=username, password=password) for url in urls
     )
 
 
@@ -151,7 +148,7 @@ def access_hints(
     summary: RunSummary,
     *,
     kubectl: Kubectl,
-) -> DevelopmentClusterAccessHints:
+) -> DevClusterAccessHints:
     """Resolve the post-converge advisory data for this run.
 
     Two halves, both best-effort: the CA-trust decision (did the chart that
@@ -172,13 +169,13 @@ def access_hints(
 
     # One Secret read per VirtualService, attached to each of its URLs. A
     # host claimed by two VirtualServices keeps the first one's login.
-    by_url: dict[str, DevelopmentClusterCredentials] = {}
+    by_url: dict[str, DevClusterCredentials] = {}
     for vs in virtualservices:
         for credentials in _credentials(vs, kubectl=kubectl):
             by_url.setdefault(credentials.url, credentials)
 
     urls = virtualservice_urls(virtualservices)
-    return DevelopmentClusterAccessHints(
+    return DevClusterAccessHints(
         ca_trust_hint=lab_ca_present(summary),
         urls=urls,
         credentials=tuple(by_url[url] for url in urls if url in by_url),

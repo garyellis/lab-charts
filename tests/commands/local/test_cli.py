@@ -10,12 +10,12 @@ import pytest
 from chart_manager.cli import _container
 from chart_manager.commands import local
 from chart_manager.commands.local.models import (
-    DevelopmentClusterActionResult,
-    DevelopmentClusterPlan,
-    DevelopmentClusterPlanEntry,
-    DevelopmentClusterRelease,
-    DevelopmentClusterResult,
-    DevelopmentClusterStatus,
+    DevClusterActionResult,
+    DevClusterPlan,
+    DevClusterPlanEntry,
+    DevClusterRelease,
+    DevClusterResult,
+    DevClusterStatus,
 )
 from chart_manager.commands.local.targets import ResolvedStackTarget
 from chart_manager.plumbing.yaml_files import parse_yaml
@@ -189,29 +189,29 @@ class _RecordingService:
         self.calls: list[str] = []
         self.requests: list[tuple[object, dict[str, object]]] = []
 
-    def up(self, target: object, **options: object) -> DevelopmentClusterResult:
+    def up(self, target: object, **options: object) -> DevClusterResult:
         self.calls.append("up")
         self.requests.append((target, options))
-        return DevelopmentClusterResult()
+        return DevClusterResult()
 
-    def reset(self, target: object, **options: object) -> DevelopmentClusterResult:
+    def reset(self, target: object, **options: object) -> DevClusterResult:
         self.calls.append("reset")
         self.requests.append((target, options))
-        return DevelopmentClusterResult()
+        return DevClusterResult()
 
-    def down(self, **_options: object) -> DevelopmentClusterActionResult:
+    def down(self, **_options: object) -> DevClusterActionResult:
         self.calls.append("down")
-        return DevelopmentClusterActionResult("chart-manager", changed=True)
+        return DevClusterActionResult("chart-manager", changed=True)
 
-    def status(self, **_options: object) -> DevelopmentClusterStatus:
+    def status(self, **_options: object) -> DevClusterStatus:
         self.calls.append("status")
-        return DevelopmentClusterStatus(
+        return DevClusterStatus(
             cluster_name="chart-manager",
             exists=True,
             context="kind-chart-manager",
             provider="kind",
             releases=(
-                DevelopmentClusterRelease(
+                DevClusterRelease(
                     name="loki", namespace="observability", revision=2, status="deployed"
                 ),
             ),
@@ -220,24 +220,24 @@ class _RecordingService:
 
     def plan(
         self, target: object, *, profile: str | None, destroys: bool = False, **_options: object
-    ) -> DevelopmentClusterPlan:
+    ) -> DevClusterPlan:
         self.calls.append("plan")
-        return DevelopmentClusterPlan(
+        return DevClusterPlan(
             command="reset" if destroys else "up",
             cluster_name="chart-manager",
             target=getattr(target, "name", None),
             target_kind=getattr(target, "kind", None),
             destroys=destroys,
             entries=(
-                DevelopmentClusterPlanEntry(
+                DevClusterPlanEntry(
                     chart="alloy", profile=profile or "minimal", namespace="obs", source="target"
                 ),
             ),
         )
 
-    def plan_down(self) -> DevelopmentClusterPlan:
+    def plan_down(self) -> DevClusterPlan:
         self.calls.append("plan_down")
-        return DevelopmentClusterPlan(command="down", cluster_name="chart-manager")
+        return DevClusterPlan(command="down", cluster_name="chart-manager")
 
 
 @pytest.fixture
@@ -344,7 +344,7 @@ def test_status_exits_zero_for_an_absent_cluster(
     monkeypatch.setattr(
         local,
         "status",
-        lambda **_options: DevelopmentClusterStatus(cluster_name="chart-manager", exists=False),
+        lambda **_options: DevClusterStatus(cluster_name="chart-manager", exists=False),
     )
     result = cli("local", "status", "--root", str(tmp_path), "-o", "json")
 

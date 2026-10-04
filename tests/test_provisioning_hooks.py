@@ -8,7 +8,7 @@ import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.cli._options import provision_hooks_enabled
-from chart_manager.commands.local.models import DevelopmentClusterPlan
+from chart_manager.commands.local.models import DevClusterPlan
 from chart_manager.commands.local.wire import plan_to_dict
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.cluster.local_cluster import load_cluster
@@ -80,7 +80,7 @@ def test_non_ci_default_enables_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_local_machine_plan_reports_hook_argv_and_activation() -> None:
     payload = plan_to_dict(
-        DevelopmentClusterPlan(
+        DevClusterPlan(
             command="up",
             cluster_name="lab",
             provisioning_hooks_enabled=False,

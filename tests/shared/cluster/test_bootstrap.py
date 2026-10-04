@@ -89,9 +89,9 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
     tmp_path: Path,
 ) -> None:
     runner = _runner()
-    lab = session.attach("dev", runner=runner, settings=Settings())
+    dev = session.attach("dev", runner=runner, settings=Settings())
 
-    outcomes = bootstrap.bootstrap(lab, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
+    outcomes = bootstrap.bootstrap(dev, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
 
     steps = _steps(runner)
     network, rollout, nodes, metrics = steps
@@ -111,10 +111,10 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
 
 def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
     runner = _runner().respond(_is("helm", "upgrade", "--install", "network"), returncode=1)
-    lab = session.attach("dev", runner=runner, settings=Settings())
+    dev = session.attach("dev", runner=runner, settings=Settings())
 
     with pytest.raises(ReleaseFailed, match="network"):
-        bootstrap.bootstrap(lab, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
+        bootstrap.bootstrap(dev, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
 
     assert not any(_cmd(argv)[:4] == ("helm", "upgrade", "--install", "metrics") for argv in runner.calls)
 

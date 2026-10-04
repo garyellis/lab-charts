@@ -24,9 +24,9 @@ from chart_manager.commands.test.models import (
 )
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.paths import validate_hook_executable
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 #: Changing this string changes every `action_id` and therefore every `input_digest`.
@@ -58,7 +58,7 @@ def compile_plan(
     request: ChartTestRequest,
     *,
     root: Path,
-    catalog: ClusterTestCatalog,
+    catalog: ChartTestCatalog,
     bootstrap_owned: Iterable[ExternallySatisfiedLifecycle],
 ) -> CompiledPlan:
     """The plan for `request`: its chart and any dependent tests, minus what bootstrap owns."""
@@ -71,7 +71,7 @@ def compile_plan(
     owned = frozenset(bootstrap_owned)
     plans = [
         exclude_bootstrap_owned_charts(
-            compile_cluster_test(
+            compile_chart_test(
                 chart,
                 profile,
                 root=root,
@@ -91,12 +91,12 @@ def compile_plan(
     return exclude_required_lifecycles(plan, requested)
 
 
-def compile_cluster_test(
+def compile_chart_test(
     chart: str,
     profile: str,
     *,
     root: Path,
-    catalog: ClusterTestCatalog,
+    catalog: ChartTestCatalog,
     resolver: DependencyResolver,
     namespace_override: str | None = None,
     lint: bool = False,
@@ -105,7 +105,7 @@ def compile_cluster_test(
     actions: list[LifecycleAction] = []
     for entry in resolver.install_plan(chart, profile):
         cluster_chart = catalog.get(entry.chart)
-        profile_spec = require_cluster_test_profile(cluster_chart.spec, entry.profile)
+        profile_spec = require_chart_test_profile(cluster_chart.spec, entry.profile)
         values = tuple(path.resolve() for path in catalog.value_paths(cluster_chart, entry.profile))
         is_requested_target = entry.chart == chart and entry.profile == profile
         namespace = (

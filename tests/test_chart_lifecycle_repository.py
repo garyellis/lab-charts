@@ -8,7 +8,7 @@ from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_test_status,
+    chart_test_status,
     load_chart_lifecycle,
     validation_status,
 )
@@ -67,7 +67,7 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
             if chart_dir.name in CLUSTER_TEST_OPT_OUTS
             else CapabilityStatus.ENABLED
         )
-        assert cluster_test_status(lifecycle) is expected_cluster_test, chart_dir.name
+        assert chart_test_status(lifecycle) is expected_cluster_test, chart_dir.name
 
 
 def test_no_helmignore_excludes_chart_lifecycle_configuration() -> None:

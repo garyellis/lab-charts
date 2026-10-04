@@ -7,7 +7,7 @@ from pathlib import Path
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, OciChartRelease
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import load_chart_name
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
 
 
@@ -21,7 +21,7 @@ def lifecycle_install_plan(
     release: LifecycleRelease,
     *,
     source: str,
-) -> tuple[ClusterTestCatalog, list[InstallPlanEntry]]:
+) -> tuple[ChartTestCatalog, list[InstallPlanEntry]]:
     """Resolve one lifecycle release to its catalog and ordered install plan.
 
     The catalog is anchored at the release's own parent directory rather than
@@ -34,7 +34,7 @@ def lifecycle_install_plan(
     message is the only thing the two copies of this function differed by.
     """
     name = chart_name(root, release.chart)
-    catalog = ClusterTestCatalog(root, charts_dir=release.chart.parent)
+    catalog = ChartTestCatalog(root, charts_dir=release.chart.parent)
     chart = catalog.get(name)
     if chart.path.resolve() != (root / release.chart).resolve():
         raise ChartManagerError(

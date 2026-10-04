@@ -21,13 +21,13 @@ from chart_manager.api.v1alpha1.releases import (
 from chart_manager.commands.local.access import access_hints, wait_apps_wildcard_ready
 from chart_manager.commands.local.drift import warn_on_port_mapping_drift
 from chart_manager.commands.local.models import (
-    DevelopmentClusterActionResult,
-    DevelopmentClusterEntryFailure,
-    DevelopmentClusterEntryOutcome,
-    DevelopmentClusterPlan,
-    DevelopmentClusterPlanEntry,
-    DevelopmentClusterResult,
-    DevelopmentClusterStatus,
+    DevClusterActionResult,
+    DevClusterEntryFailure,
+    DevClusterEntryOutcome,
+    DevClusterPlan,
+    DevClusterPlanEntry,
+    DevClusterResult,
+    DevClusterStatus,
     RunSummary,
 )
 from chart_manager.commands.local.status import cluster_status
@@ -35,9 +35,9 @@ from chart_manager.commands.local.targets import ResolvedLocalTarget
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import ResolvedChartTarget
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
@@ -78,7 +78,7 @@ def _silent(_event: object) -> None:
 class _LifecycleStep:
     """A lifecycle release resolved to its install plan."""
 
-    catalog: ClusterTestCatalog
+    catalog: ChartTestCatalog
     plan: tuple[InstallPlanEntry, ...]
 
 
@@ -101,14 +101,14 @@ def up(
     skip_installed: bool = False,
     run_hooks: bool = True,
     progress: ProgressCallback | None = None,
-) -> DevelopmentClusterResult:
+) -> DevClusterResult:
     """Create or start the cluster, bootstrap it, then converge the chart or stack.
 
     `skip_installed` skips releases `helm list` shows as deployed or failed.
     """
     report = progress or _silent
     prepared = _prepare(target, profile, workspace, report)
-    lab = provision(
+    session = provision(
         prepared.cluster,
         root=workspace.root,
         name=DEFAULT_CLUSTER_NAME,
@@ -117,7 +117,9 @@ def up(
         settings=settings,
         progress=progress,
     )
-    return _converge(lab, prepared, workspace.root, skip_installed=skip_installed, report=report)
+    return _converge(
+        session, prepared, workspace.root, skip_installed=skip_installed, report=report
+    )
 
 
 def reset(
@@ -129,14 +131,14 @@ def reset(
     profile: str | None = None,
     run_hooks: bool = True,
     progress: ProgressCallback | None = None,
-) -> DevelopmentClusterResult:
+) -> DevClusterResult:
     """Delete the cluster and converge the chart or stack onto a new one.
 
     Everything authored is resolved before the healthy cluster is deleted.
     """
     report = progress or _silent
     prepared = _prepare(target, profile, workspace, report)
-    lab = provision(
+    session = provision(
         prepared.cluster,
         root=workspace.root,
         name=DEFAULT_CLUSTER_NAME,
@@ -146,22 +148,22 @@ def reset(
         replace=True,
         progress=progress,
     )
-    return _converge(lab, prepared, workspace.root, skip_installed=False, report=report)
+    return _converge(session, prepared, workspace.root, skip_installed=False, report=report)
 
 
 def down(
     *, runner: CommandRunner, settings: Settings, progress: ProgressCallback | None = None
-) -> DevelopmentClusterActionResult:
+) -> DevClusterActionResult:
     """Stop the cluster's nodes, keeping etcd, Helm releases, PVCs and the image cache."""
-    (progress or _silent)(step("Stopping local cluster", DEFAULT_CLUSTER_NAME))
+    (progress or _silent)(step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
     stopped = stop(attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings))
-    _LOG.info("local cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
-    return DevelopmentClusterActionResult(cluster_name=DEFAULT_CLUSTER_NAME, changed=stopped)
+    _LOG.info("dev cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
+    return DevClusterActionResult(cluster_name=DEFAULT_CLUSTER_NAME, changed=stopped)
 
 
 def status(
     *, workspace: RepositoryWorkspace, runner: CommandRunner, settings: Settings
-) -> DevelopmentClusterStatus:
+) -> DevClusterStatus:
     """Whether the cluster exists, its releases, URLs and port-mapping drift; never raises."""
     return cluster_status(
         find(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings),
@@ -180,7 +182,7 @@ def plan(
     destroys: bool = False,
     run_hooks: bool = True,
     progress: ProgressCallback | None = None,
-) -> DevelopmentClusterPlan:
+) -> DevClusterPlan:
     """What `up` (or `reset`, with `destroys`) would install; asks no cluster anything.
 
     Runs the same preflight as the real command, so a plan that cannot resolve fails
@@ -195,24 +197,22 @@ def plan(
         progress or _silent,
     )
     entries = [
-        DevelopmentClusterPlanEntry(i.chart, i.profile, i.namespace, "bootstrap")
+        DevClusterPlanEntry(i.chart, i.profile, i.namespace, "bootstrap")
         for i in sorted(owned, key=lambda i: (i.chart, i.profile, i.namespace))
     ]
     for target_step in steps:
         if isinstance(target_step, _LifecycleStep):
             for entry in target_step.plan:
                 chart = target_step.catalog.get(entry.chart)
-                namespace = require_cluster_test_profile(chart.spec, entry.profile).namespace
-                entries.append(
-                    DevelopmentClusterPlanEntry(entry.chart, entry.profile, namespace, "target")
-                )
+                namespace = require_chart_test_profile(chart.spec, entry.profile).namespace
+                entries.append(DevClusterPlanEntry(entry.chart, entry.profile, namespace, "target"))
             continue
         _release, label = _stack_release(target_step, workspace.root)
         entries.append(
-            DevelopmentClusterPlanEntry(target_step.name, label, target_step.namespace, "target")
+            DevClusterPlanEntry(target_step.name, label, target_step.namespace, "target")
         )
     hooks = cluster.spec.cluster.hooks
-    return DevelopmentClusterPlan(
+    return DevClusterPlan(
         command="reset" if destroys else "up",
         cluster_name=DEFAULT_CLUSTER_NAME,
         target=target.name,
@@ -235,9 +235,9 @@ def plan(
     )
 
 
-def plan_down() -> DevelopmentClusterPlan:
+def plan_down() -> DevClusterPlan:
     """The plan for `down`: stop this cluster, install nothing."""
-    return DevelopmentClusterPlan(command="down", cluster_name=DEFAULT_CLUSTER_NAME)
+    return DevClusterPlan(command="down", cluster_name=DEFAULT_CLUSTER_NAME)
 
 
 def _prepare(
@@ -253,27 +253,25 @@ def _prepare(
 
 
 def _converge(
-    lab: Session,
+    session: Session,
     prepared: _Prepared,
     root: Path,
     *,
     skip_installed: bool,
     report: ProgressCallback,
-) -> DevelopmentClusterResult:
+) -> DevClusterResult:
     started = time.monotonic()
     summary = RunSummary()
-    installed_keys = _installed_keys(lab, report)
+    installed_keys = _installed_keys(session, report)
     try:
-        outcomes = bootstrap.bootstrap(lab, prepared.cluster, root=root, progress=report)
+        outcomes = bootstrap.bootstrap(session, prepared.cluster, root=root, progress=report)
     except ReleaseFailed as exc:
         if exc.diagnostics.strip():
             report(info(exc.diagnostics))
         raise
     for outcome in outcomes:
         bucket = summary.applied if outcome.status == "applied" else summary.no_change
-        bucket.append(
-            DevelopmentClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace)
-        )
+        bucket.append(DevClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace))
         installed_keys.add((outcome.namespace, outcome.name))
     for target_step in prepared.steps:
         if isinstance(target_step, _LifecycleStep):
@@ -281,33 +279,33 @@ def _converge(
         else:
             releases = [_stack_release(target_step, root)]
         for release, label in releases:
-            _converge_one(lab, release, label, installed_keys, summary, skip_installed, report)
-    wait_apps_wildcard_ready(summary, kubectl=lab.kubectl, progress=report)
+            _converge_one(session, release, label, installed_keys, summary, skip_installed, report)
+    wait_apps_wildcard_ready(summary, kubectl=session.kubectl, progress=report)
     warn_on_port_mapping_drift(
-        lab.name,
-        kind=lab.kind,
+        session.name,
+        kind=session.kind,
         root=root,
         progress=report,
         config=kind_config_path(root, prepared.cluster),
     )
     _LOG.info(
         "local converge finished: cluster=%s applied=%d no_change=%d failed=%d elapsed=%.1fs",
-        lab.name,
+        session.name,
         len(summary.applied),
         len(summary.no_change),
         len(summary.failed),
         time.monotonic() - started,
     )
-    return summary.freeze(access_hints(summary, kubectl=lab.kubectl))
+    return summary.freeze(access_hints(summary, kubectl=session.kubectl))
 
 
-def _installed_keys(lab: Session, report: ProgressCallback) -> set[tuple[str, str]]:
+def _installed_keys(session: Session, report: ProgressCallback) -> set[tuple[str, str]]:
     """Releases `--skip-installed` skips: deployed or failed, as `helm list` shows them.
 
     A failed listing falls back to "nothing installed" rather than aborting.
     """
     try:
-        releases = installed(lab)
+        releases = installed(session)
     except ChartManagerError as exc:
         _LOG.warning("helm release listing failed; treating every release as uninstalled: %s", exc)
         report(warn(f"could not list helm releases ({exc}); proceeding as if no releases exist"))
@@ -323,16 +321,14 @@ def _lifecycle_releases(
     for entry in target_step.plan:
         try:
             chart = target_step.catalog.get(entry.chart)
-            profile = require_cluster_test_profile(chart.spec, entry.profile)
+            profile = require_chart_test_profile(chart.spec, entry.profile)
             values = target_step.catalog.value_paths(chart, entry.profile)
         except ChartManagerError as exc:
             _LOG.error(
                 "chart resolution failed: chart=%s profile=%s: %s", entry.chart, entry.profile, exc
             )
             report(failure("chart resolution failed:", f"{entry.chart}: {exc}"))
-            summary.failed.append(
-                DevelopmentClusterEntryFailure(entry.chart, entry.profile, "?", str(exc))
-            )
+            summary.failed.append(DevClusterEntryFailure(entry.chart, entry.profile, "?", str(exc)))
             continue
         release = Release(
             name=entry.chart,
@@ -346,7 +342,7 @@ def _lifecycle_releases(
 
 
 def _converge_one(
-    lab: Session,
+    session: Session,
     release: Release,
     label: str,
     installed_keys: set[tuple[str, str]],
@@ -357,13 +353,11 @@ def _converge_one(
     key = (release.namespace, release.name)
     if skip_installed and key in installed_keys:
         report(detail("skip", f"{release.name} (already installed in {release.namespace})"))
-        summary.no_change.append(
-            DevelopmentClusterEntryOutcome(release.name, label, release.namespace)
-        )
+        summary.no_change.append(DevClusterEntryOutcome(release.name, label, release.namespace))
         return
     report(step("Applying", f"{release.name}:{label} -> {release.namespace}"))
     try:
-        state = converge(lab, release)
+        state = converge(session, release)
     except ChartManagerError as exc:
         if isinstance(exc, ReleaseFailed) and exc.diagnostics.strip():
             report(info(exc.diagnostics))
@@ -376,11 +370,11 @@ def _converge_one(
         )
         report(failure("apply failed:", f"{release.name}:{label} -> {exc}"))
         summary.failed.append(
-            DevelopmentClusterEntryFailure(release.name, label, release.namespace, str(exc))
+            DevClusterEntryFailure(release.name, label, release.namespace, str(exc))
         )
         return
     bucket = summary.applied if state == "applied" else summary.no_change
-    bucket.append(DevelopmentClusterEntryOutcome(release.name, label, release.namespace))
+    bucket.append(DevClusterEntryOutcome(release.name, label, release.namespace))
     installed_keys.add(key)
 
 
@@ -449,7 +443,7 @@ def _preflight(
         for entry in install_plan:
             chart = catalog.get(entry.chart)
             chart_path = chart.path.resolve()
-            entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
+            entry_profile = require_chart_test_profile(chart.spec, entry.profile)
             namespace = entry_profile.namespace
             if (
                 ExternallySatisfiedLifecycle(chart_path, entry.chart, entry.profile, namespace)

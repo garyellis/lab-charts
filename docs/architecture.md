@@ -26,7 +26,7 @@ and the package goes when the empty layers are deleted. The policy and algorithm
 | `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
-| `shared/charts/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
+| `shared/charts/chart_tests.py` | `ChartTestCatalog`: charts composed with their enabled cluster tests |
 | `shared/charts/install_plan.py` | Dependency resolution and install order |
 | `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |

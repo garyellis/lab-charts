@@ -49,7 +49,7 @@ def provision(
     runs once the apiserver answers; the apiserver is then waited on again. With `replace`,
     an existing cluster is deleted after the preProvision hook.
     """
-    lab = attach(name, runner=runner, settings=settings)
+    session = attach(name, runner=runner, settings=settings)
     hooks = cluster.spec.cluster.hooks if run_hooks else None
     env = {
         "CHART_MANAGER_ROOT": str(root.resolve()),
@@ -65,23 +65,23 @@ def provision(
             settings=settings,
         )
     if replace:
-        emit(progress, step("Deleting local cluster", name))
-        teardown(lab)
-    emit(progress, step("Ensuring local cluster", name))
-    lab.kind.ensure_cluster(name, config=kind_config_path(root, cluster))
+        emit(progress, step("Deleting cluster", name))
+        teardown(session)
+    emit(progress, step("Ensuring cluster", name))
+    session.kind.ensure_cluster(name, config=kind_config_path(root, cluster))
     emit(progress, step("Waiting for kube-apiserver"))
-    lab.kubectl.wait_apiserver_ready()
+    session.kubectl.wait_apiserver_ready()
     if hooks is not None and hooks.post_provision is not None:
         post = {
             **env,
             "CHART_MANAGER_HOOK_PHASE": "postProvision",
-            "CHART_MANAGER_KUBE_CONTEXT": lab.context,
+            "CHART_MANAGER_KUBE_CONTEXT": session.context,
             "CHART_MANAGER_PROVIDER_TYPE": "kind",
         }
         _hook(hooks.post_provision, root, post, runner=runner, settings=settings)
         emit(progress, step("Waiting for kube-apiserver after post-provision hook"))
-        lab.kubectl.wait_apiserver_ready()
-    return lab
+        session.kubectl.wait_apiserver_ready()
+    return session
 
 
 def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
@@ -103,18 +103,18 @@ def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
 
 def find(name: str, *, runner: CommandRunner, settings: Settings) -> Session | None:
     """The session for `name` if that cluster exists, else None."""
-    lab = attach(name, runner=runner, settings=settings)
-    return lab if name in lab.kind.clusters() else None
+    session = attach(name, runner=runner, settings=settings)
+    return session if name in session.kind.clusters() else None
 
 
-def stop(lab: Session) -> bool:
+def stop(session: Session) -> bool:
     """Stop the cluster's node containers, keeping its state; False if none were running."""
-    return lab.kind.stop_cluster(lab.name)
+    return session.kind.stop_cluster(session.name)
 
 
-def teardown(lab: Session) -> bool:
+def teardown(session: Session) -> bool:
     """Delete the cluster; False if it did not exist."""
-    return lab.kind.delete_cluster(lab.name)
+    return session.kind.delete_cluster(session.name)
 
 
 def _hook(

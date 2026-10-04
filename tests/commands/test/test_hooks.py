@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.commands.test.hooks import ClusterTestHookRunner
+from chart_manager.commands.test.hooks import ChartTestHookRunner
 from chart_manager.commands.test.models import ActionKind, ActionTarget, LifecycleAction
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import (
@@ -43,8 +43,8 @@ def _action(
     )
 
 
-def _runner(root: Path, runner: object | None = None) -> ClusterTestHookRunner:
-    return ClusterTestHookRunner(
+def _runner(root: Path, runner: object | None = None) -> ChartTestHookRunner:
+    return ChartTestHookRunner(
         root,
         runner=runner or SubprocessRunner(),  # type: ignore[arg-type]
         kube_context="kind-lab",

@@ -1,17 +1,7 @@
-"""`local up/down/reset/status` -- the persistent development cluster.
+"""`local up/down/reset/status`: flags, target selection and rendering for the dev cluster.
 
-Every decision this module could plausibly make has already been made by
-`commands/local/run.py` and arrives on the result object: which charts
-applied, which were unchanged, which failed, whether the CA hint applies,
-which URLs exist. What is left is four command signatures, the resolution of
-`--chart`/`--stack` into a target, and four renderers.
-
-That the renderers are hand-written rather than a single `Table` is why the
-machine projections here go through `output.emit(..., table=None)`: a cluster
-snapshot is a status line, a releases table and a URL block, not one grid.
-The stdout/stderr split is load-bearing throughout and is stated per
-renderer -- the plan and the status report are the projection, the access
-hints and the "nothing was changed" reassurance are narration.
+Plans and status reports are the projection (stdout); access hints and dry-run notes
+are narration (stderr).
 """
 
 from __future__ import annotations
@@ -37,11 +27,11 @@ from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands import local
 from chart_manager.commands.local.access import LAB_CA_SECRET_NAME, LAB_CA_SECRET_NAMESPACE
 from chart_manager.commands.local.models import (
-    DevelopmentClusterAccessHints,
-    DevelopmentClusterActionResult,
-    DevelopmentClusterPlan,
-    DevelopmentClusterResult,
-    DevelopmentClusterStatus,
+    DevClusterAccessHints,
+    DevClusterActionResult,
+    DevClusterPlan,
+    DevClusterResult,
+    DevClusterStatus,
 )
 from chart_manager.commands.local.targets import (
     LocalTargetResolver,
@@ -150,7 +140,7 @@ def local_up(
     run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
 ) -> None:
-    """Create or start a local cluster and converge the chart or stack.
+    """Create or start the dev cluster and converge the chart or stack.
 
     Works whether the environment is missing, stopped, or already running.
     Continue-on-error: a failing chart is reported in the summary but does
@@ -205,7 +195,7 @@ def local_down(
     dry_run: DryRunOption = False,
     output: LocalOutputOption = None,
 ) -> None:
-    """Stop the configured local cluster while preserving its state.
+    """Stop the dev cluster while preserving its state.
 
     Installed Helm releases, PVCs, and provider-owned caches survive. Use
     `local up` to bring it back.
@@ -248,7 +238,7 @@ def local_reset(
     run_provision_hooks: ProvisionHooksOption = None,
     output: LocalOutputOption = None,
 ) -> None:
-    """Destroy and recreate a local cluster, then converge the chart or stack.
+    """Destroy and recreate the dev cluster, then converge the chart or stack.
 
     `--dry-run` prints the same plan `local up --dry-run` would, marked as
     destructive: reset resolves everything first and only then deletes, so
@@ -292,7 +282,7 @@ def local_status(
     ctx: typer.Context,
     output: LocalOutputOption = None,
 ) -> None:
-    """Report the local cluster: whether it exists, its releases, and its URLs.
+    """Report the dev cluster: whether it exists, its releases, and its URLs.
 
     A read, not a grade. The cluster being absent, unreachable, or full of
     failed releases is *the answer* and still exits 0 -- the caller decides
@@ -315,7 +305,7 @@ def local_status(
     _render_status_table(status)
 
 
-def _render_status_table(status: DevelopmentClusterStatus) -> None:
+def _render_status_table(status: DevClusterStatus) -> None:
     """Print the human projection of a cluster snapshot.
 
     All of it lands on stdout, unlike the converge commands' access hints:
@@ -360,7 +350,7 @@ def _render_status_table(status: DevelopmentClusterStatus) -> None:
         )
 
 
-def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
+def _render_plan(plan: DevClusterPlan, output: str) -> None:
     """Print a resolved `--dry-run` plan and change nothing.
 
     The plan is the projection, so it lands on stdout in every mode; the
@@ -389,7 +379,7 @@ def _render_plan(plan: DevelopmentClusterPlan, output: str) -> None:
 
 
 def _render_development_cluster_result(
-    result: DevelopmentClusterResult,
+    result: DevClusterResult,
     output: str,
     *,
     command: str,
@@ -426,7 +416,7 @@ def _render_development_cluster_result(
     _render_access_hints(result.hints)
 
 
-def _render_access_hints(hints: DevelopmentClusterAccessHints) -> None:
+def _render_access_hints(hints: DevClusterAccessHints) -> None:
     """Print the CA-trust block and the URL block for a finished converge.
 
     All of this is narration: it is advice for the operator about how to
@@ -498,7 +488,7 @@ def _print_ca_import_hint() -> None:
 
 
 def _render_cluster_action(
-    result: DevelopmentClusterActionResult,
+    result: DevClusterActionResult,
     output: str,
     *,
     command: str,
@@ -517,7 +507,7 @@ def _render_cluster_action(
         output_mod.emit(action_to_dict(result, command=command), mode=output)
         return
     state = verb if result.changed else absent
-    narration.print(f"local cluster {state}: {result.cluster_name}")
+    narration.print(f"dev cluster {state}: {result.cluster_name}")
 
 
 __all__ = ["register"]

@@ -24,7 +24,7 @@ from chart_manager.shared.charts.chart import load_chart_metadata
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     load_chart_lifecycle,
-    require_cluster_test_profile,
+    require_chart_test_profile,
 )
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -85,7 +85,7 @@ def validate_release(root: Path, release: BootstrapRelease | StackRelease) -> No
                 raise SpecError(
                     f"lifecycle release chart {release.chart} has no enabled clusterTest"
                 )
-            require_cluster_test_profile(cluster_test, release.profile)
+            require_chart_test_profile(cluster_test, release.profile)
     if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):
         for path in release.values:
             require_file(root, path, field="release.values[]")

@@ -23,12 +23,12 @@ from rich.console import Console
 from chart_manager.cli import streams
 from chart_manager.commands.local import cli as cli_local
 from chart_manager.commands.local.models import (
-    DevelopmentClusterAccessHints,
-    DevelopmentClusterActionResult,
-    DevelopmentClusterCredentials,
-    DevelopmentClusterEntryFailure,
-    DevelopmentClusterEntryOutcome,
-    DevelopmentClusterResult,
+    DevClusterAccessHints,
+    DevClusterActionResult,
+    DevClusterCredentials,
+    DevClusterEntryFailure,
+    DevClusterEntryOutcome,
+    DevClusterResult,
 )
 from chart_manager.shared.cluster.progress import detail, failure, info, step, warn
 
@@ -94,10 +94,10 @@ def test_progress_events_render_label_then_message(
 
 def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -> None:
     """The table is the projection; the failure tally narrates alongside it."""
-    result = DevelopmentClusterResult(
-        applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),),
-        no_change=(DevelopmentClusterEntryOutcome("loki", "minimal", "observability"),),
-        failed=(DevelopmentClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
+    result = DevClusterResult(
+        applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),),
+        no_change=(DevClusterEntryOutcome("loki", "minimal", "observability"),),
+        failed=(DevClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
     cli_local._render_development_cluster_result(result, "table", command="up")
@@ -115,8 +115,8 @@ def test_lab_result_omits_the_failure_line_when_ok(
     captured: Console, narrated: Console
 ) -> None:
     cli_local._render_development_cluster_result(
-        DevelopmentClusterResult(
-            applied=(DevelopmentClusterEntryOutcome("grafana", "minimal", "observability"),)
+        DevClusterResult(
+            applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),)
         ),
         "table",
         command="up",
@@ -131,10 +131,10 @@ def test_lab_result_omits_the_failure_line_when_ok(
 
 def test_access_hints_render_credentials_under_their_url(narrated: Console) -> None:
     cli_local._render_access_hints(
-        DevelopmentClusterAccessHints(
+        DevClusterAccessHints(
             urls=("https://app.localhost/", "https://loki.localhost/"),
             credentials=(
-                DevelopmentClusterCredentials(
+                DevClusterCredentials(
                     url="https://app.localhost/", username="admin", password="s3cret"
                 ),
             ),
@@ -150,10 +150,10 @@ def test_access_hints_render_credentials_under_their_url(narrated: Console) -> N
 
 def test_access_hints_render_the_credential_failure_in_place(narrated: Console) -> None:
     cli_local._render_access_hints(
-        DevelopmentClusterAccessHints(
+        DevClusterAccessHints(
             urls=("https://app.localhost/", "https://loki.localhost/"),
             credentials=(
-                DevelopmentClusterCredentials(
+                DevClusterCredentials(
                     url="https://app.localhost/", error="secret not found"
                 ),
             ),
@@ -168,7 +168,7 @@ def test_access_hints_render_the_credential_failure_in_place(narrated: Console) 
 
 def test_access_hints_render_the_virtualservice_listing_failure(narrated: Console) -> None:
     cli_local._render_access_hints(
-        DevelopmentClusterAccessHints(
+        DevClusterAccessHints(
             urls_error="could not list VirtualServices (boom); skipping URL hints"
         )
     )
@@ -180,7 +180,7 @@ def test_access_hints_render_the_virtualservice_listing_failure(narrated: Consol
 
 
 def test_access_hints_are_silent_when_nothing_applies(narrated: Console) -> None:
-    cli_local._render_access_hints(DevelopmentClusterAccessHints())
+    cli_local._render_access_hints(DevClusterAccessHints())
 
     assert narrated.export_text().strip() == ""
 
@@ -192,7 +192,7 @@ def test_ca_hint_includes_macos_one_liner_on_darwin(
     # dev doesn't have to remember the keychain incantation.
     monkeypatch.setattr(cli_local.sys, "platform", "darwin")
 
-    cli_local._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
+    cli_local._render_access_hints(DevClusterAccessHints(ca_trust_hint=True))
     out = narrated.export_text()
 
     assert "Trust the lab CA" in out
@@ -208,7 +208,7 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
     # must still print so Linux devs aren't left without instruction.
     monkeypatch.setattr(cli_local.sys, "platform", "linux")
 
-    cli_local._render_access_hints(DevelopmentClusterAccessHints(ca_trust_hint=True))
+    cli_local._render_access_hints(DevClusterAccessHints(ca_trust_hint=True))
     out = narrated.export_text()
 
     assert "Trust the lab CA" in out
@@ -219,7 +219,7 @@ def test_ca_hint_omits_macos_one_liner_on_linux(
 
 def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -> None:
     cli_local._render_access_hints(
-        DevelopmentClusterAccessHints(ca_trust_hint=False, urls=("https://x/",))
+        DevClusterAccessHints(ca_trust_hint=False, urls=("https://x/",))
     )
 
     assert "Trust the lab CA" not in narrated.export_text()
@@ -230,7 +230,7 @@ def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -
 
 def test_cluster_action_reports_the_change(narrated: Console) -> None:
     cli_local._render_cluster_action(
-        DevelopmentClusterActionResult(cluster_name="chart-manager", changed=True),
+        DevClusterActionResult(cluster_name="chart-manager", changed=True),
         "table",
         command="down",
         verb="stopped",
@@ -238,12 +238,12 @@ def test_cluster_action_reports_the_change(narrated: Console) -> None:
     )
     out = narrated.export_text()
 
-    assert "local cluster stopped: chart-manager" in out
+    assert "dev cluster stopped: chart-manager" in out
 
 
 def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
     cli_local._render_cluster_action(
-        DevelopmentClusterActionResult(cluster_name="chart-manager", changed=False),
+        DevClusterActionResult(cluster_name="chart-manager", changed=False),
         "table",
         command="down",
         verb="deleted",
@@ -251,7 +251,7 @@ def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
     )
     out = narrated.export_text()
 
-    assert "local cluster not present: chart-manager" in out
+    assert "dev cluster not present: chart-manager" in out
 
 
 # ----- markup safety and exit codes ------------------------------------------
@@ -287,28 +287,28 @@ def test_progress_still_styles_the_label(narrated: Console) -> None:
     assert "Applying grafana:minimal" in narrated.export_text()
 
 
-def _result(*, failed: bool) -> DevelopmentClusterResult:
-    entry = DevelopmentClusterEntryOutcome(chart="grafana", profile="minimal", namespace="obs")
-    return DevelopmentClusterResult(
+def _result(*, failed: bool) -> DevClusterResult:
+    entry = DevClusterEntryOutcome(chart="grafana", profile="minimal", namespace="obs")
+    return DevClusterResult(
         applied=[entry],
         no_change=[],
         failed=(
             [
-                DevelopmentClusterEntryFailure(
+                DevClusterEntryFailure(
                     chart="loki", profile="minimal", namespace="obs", error="boom"
                 )
             ]
             if failed
             else []
         ),
-        hints=DevelopmentClusterAccessHints(),
+        hints=DevClusterAccessHints(),
     )
 
 
 def test_a_converge_with_failures_exits_non_zero(captured: Console) -> None:
     """`local up` rendered the failure line and then exited 0.
 
-    DevelopmentClusterResult.ok exists so a surface can branch on it; CI wrappers and
+    DevClusterResult.ok exists so a surface can branch on it; CI wrappers and
     `mise run lab-up` read success from a run in which charts failed.
     """
     with pytest.raises(typer.Exit) as exc:

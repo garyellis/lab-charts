@@ -24,10 +24,6 @@ def kind_config_host_ports(kind_config: Path) -> set[int]:
     case there's nothing to compare against, so the drift check is a
     no-op. Limited to control-plane node mapping which is the only one
     kind-config.yaml currently declares.
-
-    Takes the path rather than reading `self.root` so the parse is a pure
-    function of its argument: the only thing worth testing here is the
-    yaml walk, and it should not need a DevelopmentClusterService to reach.
     """
     if not kind_config.is_file():
         return set()

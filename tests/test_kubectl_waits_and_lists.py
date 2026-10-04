@@ -3,7 +3,7 @@
   * `wait_certificate_ready`: a thin wrapper around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservices` / `list_gateway_hosts`: best-effort
-    listings used by DevelopmentClusterService and access discovery. Empty list
+    listings used by DevClusterService and access discovery. Empty list
     on missing CRD / parse error is the contract -- callers treat that
     as "no VirtualServices / hosts yet" rather than as a hard error.
 """

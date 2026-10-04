@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestRef
 from chart_manager.plumbing.errors import DependencyCycleError
-from chart_manager.shared.charts.chart import ClusterTestChart
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.charts.chart import ChartUnderTest
+from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 
 
 @dataclass(frozen=True)
@@ -18,13 +18,13 @@ class InstallPlanEntry:
     profile: str
 
 
-ClusterTestLoader = Callable[[str], ClusterTestChart]
+ChartTestLoader = Callable[[str], ChartUnderTest]
 
 
 class DependencyResolver:
     """Resolve cluster-test requirements into ordered install plans."""
 
-    def __init__(self, load_chart: ClusterTestLoader) -> None:
+    def __init__(self, load_chart: ChartTestLoader) -> None:
         """Store the capability loader used during traversal."""
         self._load_chart = load_chart
 
@@ -48,7 +48,7 @@ class DependencyResolver:
 
             temporary.append(key)
             chart_model = self._load_chart(chart_name)
-            profile_model = require_cluster_test_profile(chart_model.spec, profile_name)
+            profile_model = require_chart_test_profile(chart_model.spec, profile_name)
             for required in profile_model.requires:
                 visit(required.chart, required.profile)
             temporary.pop()

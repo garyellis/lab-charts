@@ -57,7 +57,7 @@ class ReleaseFailed(ExternalCommandError):
         self.diagnostics = diagnostics
 
 
-def converge(lab: Session, release: Release) -> Literal["applied", "no-change"]:
+def converge(session: Session, release: Release) -> Literal["applied", "no-change"]:
     """Install `release` and wait for it; return whether Helm changed anything.
 
     Raises `ReleaseFailed` with diagnostics when a step fails. A missing tool or a
@@ -66,9 +66,9 @@ def converge(lab: Session, release: Release) -> Literal["applied", "no-change"]:
     step: Step = "dependency update"
     try:
         if isinstance(release.chart, Path):
-            lab.helm.dependency_update_if_stale(release.chart)
+            session.helm.dependency_update_if_stale(release.chart)
         step = "install"
-        result = lab.helm.upgrade_install(
+        result = session.helm.upgrade_install(
             release.name,
             release.chart,
             namespace=release.namespace,
@@ -80,28 +80,30 @@ def converge(lab: Session, release: Release) -> Literal["applied", "no-change"]:
             repo=release.repo,
         )
         step = "wait"
-        wait(lab, release)
+        wait(session, release)
     except (MissingToolError, SpecError):
         raise
     except ChartManagerError as exc:
-        raise ReleaseFailed(release, step, exc, lab.kubectl.diagnostics(release.namespace)) from exc
+        raise ReleaseFailed(
+            release, step, exc, session.kubectl.diagnostics(release.namespace)
+        ) from exc
     return result.status
 
 
-def installed(lab: Session) -> dict[tuple[str, str], str]:
+def installed(session: Session) -> dict[tuple[str, str], str]:
     """Every Helm release in the cluster, in any state: (namespace, name) -> status."""
     return {
         (info.namespace, info.name): info.status
-        for info in lab.helm.list_releases(all_namespaces=True, any_status=True)
+        for info in session.helm.list_releases(all_namespaces=True, any_status=True)
     }
 
 
-def wait(lab: Session, release: Release) -> None:
+def wait(session: Session, release: Release) -> None:
     """Wait for the release's workloads to roll out and its CRDs to be Established."""
     workloads: dict[tuple[str, str, str], None] = {}
     crds: list[str] = []
     for document in parse_yaml_documents(
-        lab.helm.manifest(release.name, namespace=release.namespace),
+        session.helm.manifest(release.name, namespace=release.namespace),
         source=f"helm get manifest {release.name}",
     ):
         if not isinstance(document, dict):
@@ -117,11 +119,11 @@ def wait(lab: Session, release: Release) -> None:
             crds.append(name)
     selector = f"app.kubernetes.io/instance={release.name}"
     for kind in WORKLOAD_KINDS:
-        for name in lab.kubectl.workload_names(
+        for name in session.kubectl.workload_names(
             kind, namespace=release.namespace, selector=selector
         ):
             workloads[(kind, release.namespace, name)] = None
     for kind, namespace, name in sorted(workloads, key=lambda w: WORKLOAD_KINDS.index(w[0])):
-        lab.kubectl.rollout_status(kind, name, namespace=namespace, timeout=release.timeout)
+        session.kubectl.rollout_status(kind, name, namespace=namespace, timeout=release.timeout)
     for crd in crds:
-        lab.kubectl.wait_established(crd, timeout=release.timeout)
+        session.kubectl.wait_established(crd, timeout=release.timeout)

@@ -68,7 +68,7 @@ def _installs(runner: FakeCommandRunner) -> list[str]:
     return [_cmd(a)[3] for a in runner.calls if _cmd(a)[:3] == ("helm", "upgrade", "--install")]
 
 
-def _up(repo: Path, runner: FakeCommandRunner, **options: object) -> local.DevelopmentClusterResult:
+def _up(repo: Path, runner: FakeCommandRunner, **options: object) -> local.DevClusterResult:
     return local.up(
         _target(repo),
         workspace=load_repository_workspace(repo),
