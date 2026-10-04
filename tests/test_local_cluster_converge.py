@@ -34,21 +34,26 @@ from chart_manager.shared.charts.chart import (
 )
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.session import Session
 from tests.conftest import workspace_for
 
 
 class _Helm:
     """A Helm bound to one kubecontext; every install records which one."""
 
-    def __init__(self, context: str, calls: list[tuple[str, str]]) -> None:
+    def __init__(
+        self, context: str, calls: list[tuple[str, str]], *, fail_on: str | None = None
+    ) -> None:
         self.context = context
         self.calls = calls
+        self.fail_on = fail_on
         self.namespaces: list[str] = []
 
-    def list_releases(
-        self, *, all_namespaces: bool = True, namespace: str | None = None
-    ) -> list[ReleaseInfo]:
+    def list_releases(self, **_kwargs: Any) -> list[ReleaseInfo]:
         return []
+
+    def manifest(self, _release: str, *, namespace: str) -> str:
+        return ""
 
     def dependency_update_if_stale(self, _path: Path) -> bool:
         return False
@@ -58,6 +63,8 @@ class _Helm:
     ) -> UpgradeResult:
         self.calls.append((self.context, release))
         self.namespaces.append(namespace)
+        if release == self.fail_on:
+            raise ExternalCommandError("timed out")
         return UpgradeResult(status="applied", revision_before=0, revision_after=1, output="")
 
 
@@ -72,9 +79,6 @@ class _Kubectl:
     def wait_workloads_ready(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
-    def wait_deployment_available(self, *_args: Any, **_kwargs: Any) -> None:
-        pass
-
     def create_namespace(self, namespace: str) -> None:
         self.namespaces.append(namespace)
         error = self._namespace_raises.get(namespace)
@@ -84,8 +88,21 @@ class _Kubectl:
     def diagnostics(self, _namespace: str) -> str:
         return ""
 
+    def workload_names(self, _kind: str, *, namespace: str, selector: str) -> list[str]:
+        return []
+
     def list_virtualservices(self) -> list[Any]:
         return []
+
+
+def _lab(helm: _Helm, kubectl: _Kubectl | None = None) -> Session:
+    return Session(
+        name="lab",
+        context=helm.context,
+        kind=_Kind(),  # type: ignore[arg-type]
+        helm=helm,  # type: ignore[arg-type]
+        kubectl=kubectl or _Kubectl(),  # type: ignore[arg-type]
+    )
 
 
 class _Kind:
@@ -241,41 +258,22 @@ def test_bootstrap_installs_through_the_context_bound_clients(tmp_path: Path) ->
     assert calls == [("kind-lab", "cni"), ("kind-lab", "grafana")]
 
 
-def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
-    tmp_path: Path,
-    monkeypatch: Any,
-) -> None:
-    """`kubectl create namespace` is a cluster call like any other in the loop.
-
-    It tolerates "already exists" via `check=False`, but a CommandTimeout or a
-    missing binary still raises, and it used to sit above the try -- so one
-    unreachable apiserver aborted an 18-chart converge instead of recording a
-    single failed row.
-    """
+def test_a_failed_release_fails_one_chart_and_the_converge_continues(tmp_path: Path) -> None:
     calls: list[tuple[str, str]] = []
-    kubectl = _Kubectl(
-        namespace_raises={"observability": ExternalCommandError("timed out")}
-    )
-    service = DevelopmentClusterService(
-        workspace=workspace_for(tmp_path),
-        helm=_Helm("kind-lab", calls),  # type: ignore[arg-type]
-        kind=_Kind(),  # type: ignore[arg-type]
-        kubectl=kubectl,  # type: ignore[arg-type]
-        expose=_Expose(),  # type: ignore[arg-type]
-    )
+    helm = _Helm("kind-lab", calls, fail_on="loki")
     charts = {
         "loki": _stub_chart("loki", namespace="observability"),
         "grafana": _stub_chart("grafana", namespace="monitoring"),
     }
 
     summary = RunSummary()
-    service._install_plan(
+    _service(tmp_path, helm=helm)._install_plan(
+        _lab(helm),
         [
             InstallPlanEntry(chart="loki", profile="minimal"),
             InstallPlanEntry(chart="grafana", profile="minimal"),
         ],
         installed_keys=set(),
-        namespaces_created=set(),
         summary=summary,
         skip_installed=False,
         cluster_tests=_Catalog(charts),  # type: ignore[arg-type]
@@ -283,9 +281,7 @@ def test_a_failed_namespace_create_fails_one_chart_and_the_converge_continues(
 
     assert [(f.chart, f.namespace) for f in summary.failed] == [("loki", "observability")]
     assert "timed out" in summary.failed[0].error
-    # The next chart still converged, on its own namespace.
     assert [(o.chart, o.namespace) for o in summary.applied] == [("grafana", "monitoring")]
-    assert calls == [("kind-lab", "grafana")]
 
 
 def test_a_continue_on_error_failure_names_the_chart_in_the_log(
@@ -299,24 +295,16 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
     unlevelled, and gone under `-o json`. An ERROR naming the chart is what
     makes the partial converge findable afterwards.
     """
-    kubectl = _Kubectl(
-        namespace_raises={"observability": ExternalCommandError("timed out")}
-    )
-    service = DevelopmentClusterService(
-        workspace=workspace_for(tmp_path),
-        helm=_Helm("kind-lab", []),  # type: ignore[arg-type]
-        kind=_Kind(),  # type: ignore[arg-type]
-        kubectl=kubectl,  # type: ignore[arg-type]
-        expose=_Expose(),  # type: ignore[arg-type]
-    )
+    helm = _Helm("kind-lab", [], fail_on="loki")
+    service = _service(tmp_path, helm=helm)
     charts = {"loki": _stub_chart("loki", namespace="observability")}
 
     summary = RunSummary()
     with caplog.at_level("ERROR"):
         service._install_plan(
+            _lab(helm),
             [InstallPlanEntry(chart="loki", profile="minimal")],
             installed_keys=set(),
-            namespaces_created=set(),
             summary=summary,
             skip_installed=False,
             cluster_tests=_Catalog(charts),  # type: ignore[arg-type]
@@ -325,8 +313,8 @@ def test_a_continue_on_error_failure_names_the_chart_in_the_log(
     assert [f.chart for f in summary.failed] == ["loki"]
     [record] = [r for r in caplog.records if r.levelname == "ERROR"]
     rendered = record.getMessage()
-    assert "chart apply failed" in rendered
-    assert "chart=loki" in rendered
+    assert "release failed" in rendered
+    assert "release=loki" in rendered
     assert "namespace=observability" in rendered
     # The exception detail, not just the fact of a failure.
     assert "timed out" in rendered
@@ -358,8 +346,9 @@ def test_https_repo_release_stays_out_of_lifecycle_and_preserves_result_semantic
     assert service._preflight_target((release,)) == (release,)
     summary = RunSummary()
     installed: set[tuple[str, str]] = set()
-    service._converge_repo_release(
-        release,
+    service._converge_release(
+        _lab(helm),
+        *service._stack_release(release),
         installed_keys=installed,
         summary=summary,
         skip_installed=False,
@@ -371,8 +360,9 @@ def test_https_repo_release_stays_out_of_lifecycle_and_preserves_result_semantic
     ]
     assert installed == {("monitoring", "metrics")}
 
-    service._converge_repo_release(
-        release,
+    service._converge_release(
+        _lab(helm),
+        *service._stack_release(release),
         installed_keys=installed,
         summary=summary,
         skip_installed=True,
@@ -387,9 +377,9 @@ def test_local_install_uses_the_chart_lifecycle_profile_namespace(tmp_path: Path
     helm = _Helm("kind-lab", [])
     summary = RunSummary()
     _service(tmp_path, helm=helm)._install_plan(
+        _lab(helm),
         [InstallPlanEntry(chart="grafana", profile="minimal")],
         installed_keys=set(),
-        namespaces_created=set(),
         summary=summary,
         skip_installed=False,
         cluster_tests=_Catalog(  # type: ignore[arg-type]

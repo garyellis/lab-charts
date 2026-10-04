@@ -19,7 +19,6 @@ from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import (
     ClientFactory,
     EnvironmentHandle,
@@ -48,10 +47,12 @@ from chart_manager.services.lifecycle.plan_projection import (
 )
 from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver
+from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.converge import installed as installed_releases
 from chart_manager.shared.cluster.local_cluster import load_cluster
 from chart_manager.shared.cluster.progress import ProgressCallback, info, step, warn
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME, kind_config_path
+from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME, Session, kind_config_path
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel. This service is the CI-shaped one, where the process
@@ -225,23 +226,6 @@ class EphemeralTestClusterService:
             self.helm, self.kubectl = bound.helm, bound.kubectl
         return handle
 
-    def _bootstrap_executor(self) -> LocalBootstrapExecutor:
-        """A bootstrap executor bound to the clients bound *right now*.
-
-        Built per phase and never stored, for the reason
-        `DevelopmentClusterService._bootstrap_executor` documents at length:
-        `_bind_clients` rebinds `self.helm` / `self.kubectl` to the resolved
-        kubecontext, and preflight has to run before the cluster is mutated
-        while converge has to run after.
-        """
-        return LocalBootstrapExecutor(
-            self.root,
-            helm=self.helm,
-            kind=self.kind,
-            kubectl=self.kubectl,
-            progress=self._progress,
-        )
-
     def plan(self, options: EphemeralTestRequest) -> LifecyclePlan:
         """Compile what ``run`` would execute, without touching a cluster.
 
@@ -286,9 +270,8 @@ class EphemeralTestClusterService:
         # Reload it for every run so a long-lived service cannot carry an
         # earlier run's externally-satisfied identities forward.
         local_cluster = load_cluster(self._workspace)
-        bootstrap_lifecycles = self._bootstrap_executor().preflight(
-            local_cluster,
-            lint=lint,
+        bootstrap_lifecycles = bootstrap.preflight(
+            local_cluster, root=self.root, helm=self.helm if lint else None
         )
         return local_cluster, self._compile_lifecycle_plan(
             options,
@@ -326,9 +309,10 @@ class EphemeralTestClusterService:
             if install_missing_prerequisites
             else options
         )
-        bootstrap_lifecycles = self._bootstrap_executor().preflight(
+        bootstrap_lifecycles = bootstrap.preflight(
             local_cluster,
-            lint=options.lint and bootstrap_mode == "converge",
+            root=self.root,
+            helm=self.helm if options.lint and bootstrap_mode == "converge" else None,
         )
         projection = self._compile_lifecycle_plan(
             effective_options,
@@ -402,14 +386,19 @@ class EphemeralTestClusterService:
         tested: list[str] = []
         namespaces_created: set[str] = set()
 
-        # Built here rather than reused from `_load_and_compile`: the clients
-        # were rebound above, and an executor from the preflight phase would
-        # converge bootstrap against the pre-rebind ones.
-        bootstrap = self._bootstrap_executor()
+        lab = Session(
+            name=options.cluster_name,
+            context=handle.context,
+            kind=self.kind,
+            helm=self.helm,
+            kubectl=self.kubectl,
+        )
         if bootstrap_mode == "verify":
-            bootstrap.verify(local_cluster)
+            bootstrap.verify(local_cluster, root=self.root, releases=installed_releases(lab))
         else:
-            for outcome in bootstrap.execute(local_cluster, environment=handle):
+            for outcome in bootstrap.bootstrap(
+                lab, local_cluster, root=self.root, progress=self._progress
+            ):
                 installed.add(outcome.name)
                 namespaces_created.add(outcome.namespace)
 

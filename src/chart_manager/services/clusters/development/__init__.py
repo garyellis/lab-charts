@@ -31,10 +31,6 @@ from chart_manager.services.clusters.development.models import (
     RunSummary,
 )
 from chart_manager.services.clusters.development.service import (
-    CERT_MANAGER_CHART,
-    CERT_MANAGER_WEBHOOK_DEPLOYMENT,
-    CERT_MANAGER_WEBHOOK_NAMESPACE,
-    CERT_MANAGER_WEBHOOK_TIMEOUT,
     DevelopmentClusterService,
 )
 from chart_manager.services.clusters.development.wire import (
@@ -48,10 +44,6 @@ __all__ = [
     "APPS_WILDCARD_CERT_NAME",
     "APPS_WILDCARD_CERT_NAMESPACE",
     "APPS_WILDCARD_CERT_TIMEOUT",
-    "CERT_MANAGER_CHART",
-    "CERT_MANAGER_WEBHOOK_DEPLOYMENT",
-    "CERT_MANAGER_WEBHOOK_NAMESPACE",
-    "CERT_MANAGER_WEBHOOK_TIMEOUT",
     "CREDENTIALS_PASSWORD_KEY_ANNOTATION",
     "CREDENTIALS_SECRET_ANNOTATION",
     "CREDENTIALS_USERNAME_ANNOTATION",

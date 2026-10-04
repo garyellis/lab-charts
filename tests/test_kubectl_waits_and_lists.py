@@ -1,7 +1,6 @@
 """Coverage for the M1c-added Kubectl helpers.
 
-  * `wait_certificate_ready` / `wait_deployment_available`: thin wrappers
-    around `kubectl wait`; we assert the argv shape and propagate the
+  * `wait_certificate_ready`: a thin wrapper around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservices` / `list_gateway_hosts`: best-effort
     listings used by DevelopmentClusterService and access discovery. Empty list
@@ -66,36 +65,6 @@ def test_wait_certificate_ready_surfaces_timeout_as_external_error() -> None:
             "apps-wildcard", namespace="istio-ingress", timeout="1s"
         )
     assert "timed out" in str(excinfo.value)
-
-
-# ----- wait_deployment_available --------------------------------------------
-
-
-def test_wait_deployment_available_invokes_kubectl_with_expected_argv() -> None:
-    runner = FakeCommandRunner()
-    Kubectl(runner=runner).wait_deployment_available(
-        "cert-manager-webhook", namespace="cert-manager", timeout="120s"
-    )
-
-    assert runner.calls == [
-        (
-            "kubectl",
-            "-n",
-            "cert-manager",
-            "wait",
-            "--for=condition=Available",
-            "deployment/cert-manager-webhook",
-            "--timeout=120s",
-        )
-    ]
-
-
-def test_wait_deployment_available_surfaces_failure() -> None:
-    runner = FakeCommandRunner(returncode=1, stderr="not found")
-    with pytest.raises(ExternalCommandError):
-        Kubectl(runner=runner).wait_deployment_available(
-            "cert-manager-webhook", namespace="cert-manager", timeout="1s"
-        )
 
 
 # ----- list_virtualservices -------------------------------------------------
@@ -295,7 +264,6 @@ def _kubectl_argvs(kubectl: Kubectl, runner: FakeCommandRunner) -> list[tuple[st
     """Exercise one call on every argv-building path and return what ran."""
     kubectl.create_namespace("obs")
     kubectl.wait_certificate_ready("apps-wildcard", namespace="istio-ingress")
-    kubectl.wait_deployment_available("webhook", namespace="cert-manager")
     kubectl.list_gateway_hosts()
     kubectl.list_virtualservices()
     kubectl.diagnostics("obs")

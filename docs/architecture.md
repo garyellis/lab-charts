@@ -32,6 +32,8 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | `domain/local_resources.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
 | `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
+| `shared/cluster/converge.py` | The one release install and its readiness wait; `installed()` |
+| `shared/cluster/bootstrap.py` | The LocalCluster's ordered bootstrap releases, through `converge` |
 | `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
 
 ## What `api/` is for

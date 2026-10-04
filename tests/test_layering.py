@@ -501,7 +501,6 @@ def test_non_surface_modules_are_discoverable() -> None:
     clusters = _PKG / "services" / "clusters"
     assert clusters / "development" / "service.py" in paths
     assert clusters / "ephemeral.py" in paths
-    assert clusters / "bootstrap.py" in paths
 
 
 def test_no_process_exit_outside_cli() -> None:

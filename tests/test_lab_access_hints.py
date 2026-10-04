@@ -1,4 +1,4 @@
-"""DevelopmentClusterService access-hint resolution + cert/webhook gates + port-mapping drift.
+"""DevelopmentClusterService access-hint resolution + cert gate + port-mapping drift.
 
 Three concerns covered here:
   * `_access_hints`: empty / one / many VS results, with credentials
@@ -6,7 +6,7 @@ Three concerns covered here:
     `chartmanager.io/credentials-*` annotations, read from that
     VirtualService's own namespace. The service resolves the data;
     `cli/local.py` renders it (see test_lab_cli_rendering.py).
-  * Cert + webhook waits: happy path (call recorded) and timeout path
+  * Cert wait: happy path (call recorded) and timeout path
     (warning surfaced, run continues).
   * Port-mapping drift: matching no-op, mismatch produces a warning event.
 """
@@ -52,15 +52,12 @@ class _RecordingKubectl:
         vs_raise: Exception | None = None,
         secret_raise: Exception | None = None,
         cert_raise: Exception | None = None,
-        webhook_raise: Exception | None = None,
     ) -> None:
         self._virtualservices = virtualservices or []
         self._vs_raise = vs_raise
         self._secret_raise = secret_raise
         self._cert_raise = cert_raise
-        self._webhook_raise = webhook_raise
         self.cert_waits: list[tuple[str, str, str]] = []
-        self.webhook_waits: list[tuple[str, str, str]] = []
         self.secret_calls: list[tuple[str, str, str]] = []
 
     def wait_apiserver_ready(self, *_args: Any, **_kwargs: Any) -> None:
@@ -73,13 +70,6 @@ class _RecordingKubectl:
         self.cert_waits.append((name, namespace, timeout))
         if self._cert_raise is not None:
             raise self._cert_raise
-
-    def wait_deployment_available(
-        self, name: str, *, namespace: str, timeout: str = "120s"
-    ) -> None:
-        self.webhook_waits.append((name, namespace, timeout))
-        if self._webhook_raise is not None:
-            raise self._webhook_raise
 
     def list_virtualservices(self) -> list[VirtualService]:
         if self._vs_raise is not None:
@@ -435,50 +425,6 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
     svc._wait_apps_wildcard_ready(summary)
     assert "warn:" in progress.text
     assert "apps-wildcard cert not Ready" in progress.text
-
-
-# ----- cert-manager webhook hook --------------------------------------------
-
-
-def test_webhook_wait_runs_after_cert_manager_apply(tmp_path: Path) -> None:
-    # cert-manager entry -> post-install hook -> wait_deployment_available
-    # fires for `cert-manager-webhook` in `cert-manager`.
-    kubectl = _RecordingKubectl()
-    helm = _Helm(status="applied")
-    svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl)
-
-    plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
-    charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _install_plan(svc, plan, charts)
-
-    assert kubectl.webhook_waits == [("cert-manager-webhook", "cert-manager", "120s")]
-
-
-def test_webhook_wait_skipped_for_other_charts(tmp_path: Path) -> None:
-    kubectl = _RecordingKubectl()
-    helm = _Helm(status="applied")
-    svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl)
-
-    plan = [InstallPlanEntry(chart="grafana", profile="minimal")]
-    charts = {"grafana": _stub_chart("grafana")}
-    _install_plan(svc, plan, charts)
-    assert kubectl.webhook_waits == []
-
-
-def test_webhook_wait_warning_does_not_abort_run(tmp_path: Path) -> None:
-    # A webhook timeout warns and continues -- subsequent charts will
-    # surface their own admission errors if the webhook truly isn't up.
-    kubectl = _RecordingKubectl(
-        webhook_raise=ExternalCommandError("timed out"),
-    )
-    helm = _Helm(status="applied")
-    progress = _Recorder()
-    svc = _service(tmp_path, helm=helm, kind=_Kind(), kubectl=kubectl, progress=progress)
-
-    plan = [InstallPlanEntry(chart="cert-manager", profile="minimal")]
-    charts = {"cert-manager": _stub_chart("cert-manager", namespace="cert-manager")}
-    _install_plan(svc, plan, charts)
-    assert "cert-manager webhook not Available" in progress.text
 
 
 # ----- port-mapping drift ---------------------------------------------------

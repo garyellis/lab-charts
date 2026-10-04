@@ -6,9 +6,9 @@ import pytest
 from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, ClusterTestSpec
+from chart_manager.integrations.helm import ReleaseInfo
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
-from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import (
     BoundClients,
     EnvironmentHandle,
@@ -32,6 +32,7 @@ from chart_manager.shared.charts.lifecycle import (
     require_cluster_test,
     require_cluster_test_profile,
 )
+from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from tests.conftest import workspace_for
 
@@ -150,6 +151,12 @@ class _MigrationKubectl:
         self.diagnostic_namespaces.append(namespace)
         return "pod diagnostics"
 
+    def workload_names(self, kind: str, *, namespace: str, selector: str) -> list[str]:
+        return []
+
+    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: str) -> None:
+        self.calls.append(f"rollout:{namespace}:{kind}/{name}")
+
 
 class _MigrationHelm:
     def __init__(
@@ -188,6 +195,19 @@ class _MigrationHelm:
         self.calls.append(f"lint:{chart_path.name}")
         if self.fail_lint:
             raise RuntimeError("lint found an invalid template")
+
+    def manifest(self, release: str, *, namespace: str) -> str:
+        return ""
+
+    def list_releases(self, **_kwargs: Any) -> list[ReleaseInfo]:
+        """Every release a test names is installed unless it is listed as missing."""
+        self.calls.append("list")
+        known = [("cni", "kube-system"), ("shared", "monitoring"), ("app", "monitoring")]
+        return [
+            ReleaseInfo(name=name, namespace=namespace, revision=1, status="deployed")
+            for name, namespace in known
+            if name not in self.missing_releases
+        ]
 
     def status(self, release: str, *, namespace: str) -> CommandResult:
         self.calls.append(f"status:{release}:{namespace}")
@@ -610,7 +630,7 @@ def test_ephemeral_bootstrap_target_only_runs_readiness_and_tests(
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        LocalBootstrapExecutor,
+        bootstrap,
         "preflight",
         lambda *_args, **_kwargs: frozenset(
             {
@@ -652,7 +672,7 @@ def test_ephemeral_bootstrap_transitive_dependency_is_not_reinstalled_or_reteste
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        LocalBootstrapExecutor,
+        bootstrap,
         "preflight",
         lambda *_args, **_kwargs: frozenset(
             {
@@ -704,6 +724,7 @@ def test_skip_requires_runs_only_target_and_never_tests_requirement(
     )
 
     assert calls == [
+        "list",
         "status:shared:monitoring",
         "namespace:monitoring",
         "dependency:app",
@@ -743,7 +764,7 @@ def test_skip_requires_missing_release_fails_before_any_install_or_test(
             EphemeralTestRequest(chart="app", skip_requires=True, ensure_cluster=False)
         )
 
-    assert calls == ["status:shared:monitoring"]
+    assert calls == ["list", "status:shared:monitoring"]
 
 
 def test_skip_requires_dry_run_lists_assumptions_without_status_check(
@@ -805,7 +826,7 @@ def test_skip_requires_retained_cluster_verifies_bootstrap_without_upgrading(
 
     ensure_action = "restart" if retained_state == "stopped" else "ensure"
     assert provider.calls == ["inspect:chart-manager", f"{ensure_action}:chart-manager"]
-    assert "status:cni:kube-system" in calls
+    assert "list" in calls
     assert "nodes:2m" not in calls
     assert "ready:kube-system:2m:None" not in calls
     assert "status:shared:monitoring" in calls
@@ -846,7 +867,7 @@ def test_skip_requires_no_ensure_uses_verify_only_mode(
     )
 
     assert provider.calls == ["handle:chart-manager"]
-    assert "status:cni:kube-system" in calls
+    assert "list" in calls
     assert "status:shared:monitoring" in calls
     assert not [call for call in calls if call.startswith("install:cni:")]
     assert "test:shared" not in calls
@@ -874,7 +895,7 @@ def test_skip_requires_missing_bootstrap_release_stops_before_chart_actions(
     with pytest.raises(ChartManagerError, match=r"bootstrap release 'cni'.*not installed"):
         service.run(EphemeralTestRequest(chart="app", skip_requires=True))
 
-    assert calls[-1] == "status:cni:kube-system"
+    assert calls[-1] == "list"
     assert not [call for call in calls if call.startswith(("dependency:", "install:", "test:"))]
 
 
@@ -993,7 +1014,7 @@ def test_without_skip_requires_retained_cluster_still_converges_bootstrap(
 
     assert provider.calls == ["ensure:chart-manager"]
     assert "install:cni:cni" in calls
-    assert "status:cni:kube-system" not in calls
+    assert "list" not in calls
 
 
 def test_skip_requires_does_not_preflight_bootstrap_owned_requirement(
@@ -1003,7 +1024,7 @@ def test_skip_requires_does_not_preflight_bootstrap_owned_requirement(
     calls: list[str] = []
     service, _kubectl = _migration_service(tmp_path, calls=calls)
     monkeypatch.setattr(
-        LocalBootstrapExecutor,
+        bootstrap,
         "preflight",
         lambda *_args, **_kwargs: frozenset(
             {
@@ -1052,7 +1073,7 @@ def test_ephemeral_recomputes_bootstrap_satisfaction_for_every_run(
         )
     )
     monkeypatch.setattr(
-        LocalBootstrapExecutor,
+        bootstrap,
         "preflight",
         lambda *_args, **_kwargs: next(identities),
     )

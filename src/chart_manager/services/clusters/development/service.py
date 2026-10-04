@@ -1,7 +1,7 @@
 """The target convergence engine and persistent-environment lifecycle.
 
-Target convergence and the install loop share three hand-threaded mutable
-accumulators (`RunSummary`, `installed_keys`, `namespaces_created`). Drift
+Target convergence and the install loop share two hand-threaded mutable
+accumulators (`RunSummary`, `installed_keys`). Drift
 detection and access hints, which need neither the accumulators nor the chart
 repository, live in `drift.py` / `access.py`.
 """
@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,13 +26,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.clusters._shared import (
-    lifecycle_install_plan,
-    oci_chart_ref,
-    oci_identity,
-)
-from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.clusters.development.access import (
     access_hints,
     wait_apps_wildcard_ready,
@@ -68,7 +60,9 @@ from chart_manager.shared.charts.chart import ResolvedChartTarget
 from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
 from chart_manager.shared.cluster.local_cluster import load_cluster
 from chart_manager.shared.cluster.progress import (
     ProgressCallback,
@@ -78,7 +72,12 @@ from chart_manager.shared.cluster.progress import (
     step,
     warn,
 )
-from chart_manager.shared.cluster.session import kind_config_path
+from chart_manager.shared.cluster.releases import (
+    lifecycle_install_plan,
+    oci_chart_ref,
+    oci_identity,
+)
+from chart_manager.shared.cluster.session import Session, kind_config_path
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel, parallel to `self._progress`. Every `failure(...)` /
@@ -87,13 +86,6 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 #: here for whoever reads the run afterwards.
 _LOG = logging.getLogger(__name__)
 
-# cert-manager webhook deployment. Must be Available before the
-# istio-gateway chart installs (its Certificate / ClusterIssuer CRs go
-# through the webhook). Subchart's default name is `cert-manager-webhook`.
-CERT_MANAGER_WEBHOOK_DEPLOYMENT = "cert-manager-webhook"
-CERT_MANAGER_WEBHOOK_NAMESPACE = "cert-manager"
-CERT_MANAGER_WEBHOOK_TIMEOUT = "120s"
-CERT_MANAGER_CHART = "cert-manager"
 
 
 @dataclass(frozen=True)
@@ -239,58 +231,43 @@ class DevelopmentClusterService:
             self.kubectl.wait_apiserver_ready()
 
         summary = RunSummary()
-        installed_keys = self._existing_release_keys()
-        namespaces_created: set[str] = set()
-        # Built here, after `_ensure_environment` rebound the clients: an
-        # executor constructed alongside the preflight one above carries the
-        # pre-rebind Helm and converges bootstrap against whatever
-        # kubecontext the workstation happens to hold.
-        bootstrap = self._bootstrap_executor()
-        for outcome in bootstrap.execute(local_cluster, environment=environment):
+        lab = Session(
+            name=cluster_name,
+            context=environment.context,
+            kind=self.kind,
+            helm=self.helm,
+            kubectl=self.kubectl,
+        )
+        installed_keys = self._existing_release_keys(lab)
+        for outcome in bootstrap.bootstrap(
+            lab, local_cluster, root=self.root, progress=self._progress
+        ):
             bucket = summary.applied if outcome.status == "applied" else summary.no_change
             bucket.append(
-                DevelopmentClusterEntryOutcome(
-                    outcome.name,
-                    outcome.profile,
-                    outcome.namespace,
-                )
+                DevelopmentClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace)
             )
             installed_keys.add((outcome.namespace, outcome.name))
-            namespaces_created.add(outcome.namespace)
 
         for target_step in steps:
             if isinstance(target_step, _TargetLocalExecution):
                 self._install_plan(
+                    lab,
                     list(target_step.plan),
                     installed_keys=installed_keys,
-                    namespaces_created=namespaces_created,
                     summary=summary,
                     skip_installed=skip_installed,
                     cluster_tests=target_step.catalog,
                 )
                 continue
-
-            if isinstance(target_step, OciChartRelease):
-                self._converge_oci_release(
-                    target_step.name,
-                    target_step,
-                    namespace=target_step.namespace,
-                    values=[self.root / path for path in target_step.values],
-                    timeout=target_step.timeout,
-                    installed_keys=installed_keys,
-                    summary=summary,
-                    skip_installed=skip_installed,
-                )
-                continue
-            if isinstance(target_step, RepoChartRelease):
-                self._converge_repo_release(
-                    target_step,
-                    installed_keys=installed_keys,
-                    summary=summary,
-                    skip_installed=skip_installed,
-                )
-                continue
-            raise ChartManagerError(f"unsupported local target step: {target_step!r}")
+            release, profile = self._stack_release(target_step)
+            self._converge_release(
+                lab,
+                release,
+                profile,
+                installed_keys=installed_keys,
+                summary=summary,
+                skip_installed=skip_installed,
+            )
 
         self._wait_apps_wildcard_ready(summary)
         self._warn_on_port_mapping_drift(cluster_name, config=config)
@@ -388,7 +365,7 @@ class DevelopmentClusterService:
         bootstrap ordering rule for a display detail.
         """
         local_cluster = load_cluster(self._workspace)
-        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
+        bootstrap_identities = bootstrap.preflight(local_cluster, root=self.root)
         steps = self._preflight_target(
             self._target_releases(target, profile=profile),
             excluded_lifecycle_identities=bootstrap_identities,
@@ -543,7 +520,7 @@ class DevelopmentClusterService:
     ) -> _PreparedConverge:
         """Complete every static check once, before hooks or provider mutation."""
         local_cluster = load_cluster(self._workspace)
-        bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
+        bootstrap_identities = bootstrap.preflight(local_cluster, root=self.root)
         steps = self._preflight_target(
             self._target_releases(target, profile=profile),
             excluded_lifecycle_identities=bootstrap_identities,
@@ -554,23 +531,29 @@ class DevelopmentClusterService:
             config=kind_config_path(self.root, local_cluster),
         )
 
-    def _bootstrap_executor(self) -> LocalBootstrapExecutor:
-        """A bootstrap executor bound to the clients bound *right now*.
-
-        Built per phase and never stored: `_ensure_environment` rebinds
-        `self.helm` / `self.kubectl` to the resolved kubecontext, so an
-        executor that outlives that call converges against the clients it
-        was constructed with. The preflight phase has to run before the
-        cluster is mutated and the converge phase has to run after, which is
-        exactly why one object cannot serve both.
-        """
-        return LocalBootstrapExecutor(
-            self.root,
-            helm=self.helm,
-            kind=self.kind,
-            kubectl=self.kubectl,
-            progress=self._progress,
+    def _stack_release(self, source: OciChartRelease | RepoChartRelease) -> tuple[Release, str]:
+        """The Helm release behind a stack's OCI or HTTPS repository entry, and its label."""
+        values = tuple(self.root / path for path in source.values)
+        if isinstance(source, OciChartRelease):
+            release = Release(
+                name=source.name,
+                chart=oci_chart_ref(source),
+                namespace=source.namespace,
+                values=values,
+                timeout=source.timeout,
+                version=source.version,
+            )
+            return release, oci_identity(source)
+        release = Release(
+            name=source.name,
+            chart=source.chart,
+            namespace=source.namespace,
+            values=values,
+            timeout=source.timeout,
+            version=source.version,
+            repo=source.repo,
         )
+        return release, source.version
 
     def _handle(self, cluster_name: str) -> EnvironmentHandle:
         """Build the provider-owned stable identity for a lifecycle operation."""
@@ -683,19 +666,14 @@ class DevelopmentClusterService:
 
     # ----- internals --------------------------------------------------------
 
-    def _existing_release_keys(self) -> set[tuple[str, str]]:
-        """Snapshot of (namespace, release-name) pairs already installed.
+    def _existing_release_keys(self, lab: Session) -> set[tuple[str, str]]:
+        """Releases `--skip-installed` skips: deployed or failed, as `helm list` shows them.
 
-        Used to skip charts on re-run. Best-effort: a failure to list (no
-        kubeconfig, cluster just created and apiserver still settling, etc.)
-        falls back to "nothing installed" rather than aborting.
-
-        Catches the base error rather than `ExternalCommandError` alone, so
-        this agrees with `status._releases`, which asks Helm the same
-        question about the same cluster.
+        Best-effort: a failure to list falls back to "nothing installed" rather than
+        aborting the converge.
         """
         try:
-            releases = self.helm.list_releases(all_namespaces=True)
+            releases = installed(lab)
         except ChartManagerError as exc:
             _LOG.warning(
                 "helm release listing failed; treating every release as uninstalled: %s",
@@ -705,31 +683,25 @@ class DevelopmentClusterService:
                 warn(f"could not list helm releases ({exc}); proceeding as if no releases exist")
             )
             return set()
-        return {(r.namespace, r.name) for r in releases}
+        return {key for key, status in releases.items() if status in {"deployed", "failed"}}
 
     def _install_plan(
         self,
+        lab: Session,
         plan: list[InstallPlanEntry],
         *,
         installed_keys: set[tuple[str, str]],
-        namespaces_created: set[str],
         summary: RunSummary,
         skip_installed: bool,
         cluster_tests: ClusterTestCatalog,
     ) -> None:
-        """Converge each plan entry, bucketing outcomes into `summary`.
-
-        The catalog is required and always derived from the release's own
-        chart path by the caller -- a repository-wide default here would
-        silently resolve charts against the wrong tree.
-
-        Continue-on-error: a failed entry is recorded and the loop moves
-        on. Mutates `installed_keys` / `namespaces_created` in place.
-        """
+        """Converge each plan entry; a failed entry is recorded and the loop moves on."""
         catalog = cluster_tests
         for entry in plan:
             try:
                 chart = catalog.get(entry.chart)
+                profile = require_cluster_test_profile(chart.spec, entry.profile)
+                values = catalog.value_paths(chart, entry.profile)
             except ChartManagerError as exc:
                 _LOG.error(
                     "chart resolution failed; recorded as a failed row: chart=%s profile=%s: %s",
@@ -747,336 +719,67 @@ class DevelopmentClusterService:
                     )
                 )
                 continue
+            self._converge_release(
+                lab,
+                Release(
+                    name=entry.chart,
+                    chart=chart.path,
+                    namespace=profile.namespace,
+                    values=tuple(values),
+                    timeout=profile.timeout,
+                ),
+                entry.profile,
+                installed_keys=installed_keys,
+                summary=summary,
+                skip_installed=skip_installed,
+            )
 
-            # Profile lookup is inside the guard too.
-            # `require_cluster_test_profile()` raises
-            # SpecError for an unknown name, and sitting outside every try it
-            # aborted the entire plan -- so one chart whose `requires:` named
-            # a renamed profile took down an 18-chart converge instead of
-            # being recorded as a single failed row, contradicting the
-            # continue-on-error contract this method documents.
-            try:
-                profile = require_cluster_test_profile(chart.spec, entry.profile)
-            except ChartManagerError as exc:
-                _LOG.error(
-                    "profile resolution failed; recorded as a failed row: chart=%s profile=%s: %s",
-                    entry.chart,
-                    entry.profile,
-                    exc,
-                )
-                self._progress(failure("profile resolution failed:", f"{entry.chart}: {exc}"))
-                summary.failed.append(
-                    DevelopmentClusterEntryFailure(
-                        chart=entry.chart,
-                        profile=entry.profile,
-                        namespace="?",
-                        error=str(exc),
-                    )
-                )
-                continue
-
-            release = entry.chart
-            namespace = profile.namespace
-            key = (namespace, release)
-
-            # Fast-skip path: opt-in only via `--skip-installed`. Default
-            # behavior is to converge so values-file edits are picked up
-            # on re-run (the helmfile/Argo workflow). Helm itself no-ops
-            # when nothing rendered differently -- the revision-compare
-            # in upgrade_install reports that as no-change without us
-            # needing to short-circuit.
-            if skip_installed and key in installed_keys:
-                self._progress(
-                    detail(
-                        "skip",
-                        f"{entry.chart}:{entry.profile} (already installed in {namespace})",
-                    )
-                )
-                summary.no_change.append(
-                    DevelopmentClusterEntryOutcome(
-                        entry.chart,
-                        entry.profile,
-                        namespace,
-                    )
-                )
-                namespaces_created.add(namespace)
-                continue
-
-            try:
-                # Namespace creation is inside the guard for the same reason
-                # profile resolution above is: `kubectl.create_namespace`
-                # tolerates an "already exists" exit, but a CommandTimeout or
-                # a missing binary still raises, and sitting outside the try
-                # that aborted the whole converge instead of recording one
-                # failed row.
-                if namespace not in namespaces_created:
-                    self.kubectl.create_namespace(namespace)
-                    namespaces_created.add(namespace)
-                values = catalog.value_paths(chart, entry.profile)
-                self._progress(step("Updating dependencies", entry.chart))
-                # Content-gated: skips the subprocess when Helm's lock digest
-                # and the materialized dependency identities agree.
-                # Per-chart per-process cache prevents repeat fetches.
-                self.helm.dependency_update_if_stale(chart.path)
-                self._progress(step("Applying", f"{entry.chart}:{entry.profile} -> {namespace}"))
-                with self._diagnostics_on_failure(namespace):
-                    # wait=False is load-bearing: see issues.md #2. Several
-                    # charts in the plan (loki, mimir) deadlock under --wait
-                    # because their post-install hooks bootstrap the very
-                    # buckets the main pods need to become Ready.
-                    result = self.helm.upgrade_install(
-                        release,
-                        chart.path,
-                        namespace=namespace,
-                        values=values,
-                        timeout=profile.timeout,
-                        wait=False,
-                    )
-                # Single source of truth for the "did helm produce a new
-                # revision?" decision. Used both for the rollout-wait gate
-                # and for the summary bucket classification below; binding
-                # once keeps the two callsites from drifting.
-                applied = result.status == "applied"
-                if applied:
-                    # New revision => something actually changed; wait for
-                    # rollouts so the dev sees the new state ready, and so
-                    # subsequent charts that may depend on these workloads
-                    # aren't racing against a still-rolling deployment.
-                    self._progress(step("Waiting for workloads", entry.chart))
-                    self.kubectl.wait_workloads_ready(namespace, timeout=profile.timeout)
-                    self._post_install_hook(entry.chart)
-                else:
-                    # No-change: nothing is rolling, so the rollout-status
-                    # wait would just be a no-op against the existing
-                    # generation. Skipping it is the biggest single time
-                    # savings on a converge-with-no-edits re-run. Print a
-                    # dim marker so the skip is observable in the run log.
-                    self._progress(detail("no change", f"{entry.chart} (rollout wait skipped)"))
-                bucket = summary.applied if applied else summary.no_change
-                bucket.append(DevelopmentClusterEntryOutcome(entry.chart, entry.profile, namespace))
-                installed_keys.add(key)
-            except ChartManagerError as exc:
-                _LOG.error(
-                    "chart apply failed; converge continues: chart=%s profile=%s namespace=%s: %s",
-                    entry.chart,
-                    entry.profile,
-                    namespace,
-                    exc,
-                )
-                self._progress(failure("apply failed:", f"{entry.chart}:{entry.profile} -> {exc}"))
-                summary.failed.append(
-                    DevelopmentClusterEntryFailure(
-                        chart=entry.chart,
-                        profile=entry.profile,
-                        namespace=namespace,
-                        error=str(exc),
-                    )
-                )
-                continue
-
-    def _converge_oci_release(
+    def _converge_release(
         self,
-        release: str,
-        source: OciChartRelease,
-        *,
-        namespace: str,
-        values: list[Path],
-        timeout: str,
-        installed_keys: set[tuple[str, str]],
-        summary: RunSummary,
-        skip_installed: bool,
-    ) -> None:
-        """Converge one immutable OCI Helm source with Helm-owned readiness."""
-        key = (namespace, release)
-        identity = oci_identity(source)
-        if key in installed_keys and skip_installed:
-            self._progress(detail("skip", f"{release} (already installed in {namespace})"))
-            summary.no_change.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
-            return
-
-        missing_values = [path for path in values if not path.is_file()]
-        if missing_values:
-            message = "OCI values file(s) not found: " + ", ".join(map(str, missing_values))
-            _LOG.error(
-                "OCI release skipped; converge continues: release=%s identity=%s namespace=%s: %s",
-                release,
-                identity,
-                namespace,
-                message,
-            )
-            self._progress(failure("apply failed:", f"{release} -> {message}"))
-            summary.failed.append(
-                DevelopmentClusterEntryFailure(
-                    chart=release,
-                    profile=identity,
-                    namespace=namespace,
-                    error=message,
-                )
-            )
-            return
-
-        try:
-            self._progress(step("Converging OCI release", f"{release}@{identity}"))
-            result = self.helm.upgrade_install(
-                release,
-                oci_chart_ref(source),
-                namespace=namespace,
-                values=values,
-                timeout=timeout,
-                wait=True,
-                version=source.version,
-            )
-            bucket = summary.applied if result.status == "applied" else summary.no_change
-            bucket.append(DevelopmentClusterEntryOutcome(release, identity, namespace))
-            installed_keys.add(key)
-        except ChartManagerError as exc:
-            _LOG.error(
-                "OCI release apply failed; converge continues: release=%s identity=%s "
-                "namespace=%s: %s",
-                release,
-                identity,
-                namespace,
-                exc,
-            )
-            self._progress(failure("apply failed:", f"{release}@{identity} -> {exc}"))
-            summary.failed.append(
-                DevelopmentClusterEntryFailure(
-                    chart=release,
-                    profile=identity,
-                    namespace=namespace,
-                    error=str(exc),
-                )
-            )
-
-    def _converge_repo_release(
-        self,
-        source: RepoChartRelease,
+        lab: Session,
+        release: Release,
+        profile: str,
         *,
         installed_keys: set[tuple[str, str]],
         summary: RunSummary,
         skip_installed: bool,
     ) -> None:
-        """Converge one exactly versioned HTTPS Helm repository release."""
-        key = (source.namespace, source.name)
-        if key in installed_keys and skip_installed:
+        """Converge one release into `summary`; record a failure and keep going."""
+        key = (release.namespace, release.name)
+        if skip_installed and key in installed_keys:
             self._progress(
-                detail(
-                    "skip",
-                    f"{source.name} (already installed in {source.namespace})",
-                )
+                detail("skip", f"{release.name} (already installed in {release.namespace})")
             )
             summary.no_change.append(
-                DevelopmentClusterEntryOutcome(
-                    source.name,
-                    source.version,
-                    source.namespace,
-                )
+                DevelopmentClusterEntryOutcome(release.name, profile, release.namespace)
             )
             return
-
+        self._progress(step("Applying", f"{release.name}:{profile} -> {release.namespace}"))
         try:
-            self._progress(step("Converging repository release", f"{source.name}@{source.version}"))
-            result = self.helm.upgrade_install(
-                source.name,
-                source.chart,
-                namespace=source.namespace,
-                values=[self.root / path for path in source.values],
-                timeout=source.timeout,
-                wait=True,
-                version=source.version,
-                repo=source.repo,
-            )
-            bucket = summary.applied if result.status == "applied" else summary.no_change
-            bucket.append(
-                DevelopmentClusterEntryOutcome(
-                    source.name,
-                    source.version,
-                    source.namespace,
-                )
-            )
-            installed_keys.add(key)
+            status = converge(lab, release)
         except ChartManagerError as exc:
+            if isinstance(exc, ReleaseFailed) and exc.diagnostics.strip():
+                self._progress(info(exc.diagnostics))
             _LOG.error(
-                "repository release apply failed; converge continues: release=%s "
-                "version=%s namespace=%s: %s",
-                source.name,
-                source.version,
-                source.namespace,
+                "release failed; converge continues: release=%s profile=%s namespace=%s: %s",
+                release.name,
+                profile,
+                release.namespace,
                 exc,
             )
-            self._progress(
-                failure(
-                    "apply failed:",
-                    f"{source.name}@{source.version} -> {exc}",
-                )
-            )
+            self._progress(failure("apply failed:", f"{release.name}:{profile} -> {exc}"))
             summary.failed.append(
                 DevelopmentClusterEntryFailure(
-                    chart=source.name,
-                    profile=source.version,
-                    namespace=source.namespace,
+                    chart=release.name,
+                    profile=profile,
+                    namespace=release.namespace,
                     error=str(exc),
                 )
             )
-
-    def _post_install_hook(self, chart: str) -> None:
-        """Best-effort follow-up wait after the chart's own rollout-ready.
-
-        Single hook today: after cert-manager applies, wait for the webhook
-        Deployment's Available condition before letting the loop advance to
-        istio-gateway (which submits Certificate / ClusterIssuer CRs through
-        that webhook). This is the place to add more per-chart hooks if a
-        second one is ever needed; while there's only one, keep it inline
-        rather than a dispatch table -- a `if chart == X` is grep-able and
-        the table indirection earns nothing for a single entry.
-
-        If the wait fails (e.g. webhook Deployment never becomes Available),
-        we warn and continue: it's better to surface the chart's downstream
-        admission failure on the next install than to block here on a
-        webhook race. The dev gate is best-effort by design.
-        """
-        if chart == CERT_MANAGER_CHART:
-            self._progress(
-                step(
-                    "Waiting for",
-                    f"Deployment/{CERT_MANAGER_WEBHOOK_DEPLOYMENT} "
-                    f"-n {CERT_MANAGER_WEBHOOK_NAMESPACE}",
-                )
-            )
-            try:
-                self.kubectl.wait_deployment_available(
-                    CERT_MANAGER_WEBHOOK_DEPLOYMENT,
-                    namespace=CERT_MANAGER_WEBHOOK_NAMESPACE,
-                    timeout=CERT_MANAGER_WEBHOOK_TIMEOUT,
-                )
-            except ChartManagerError as exc:
-                _LOG.warning(
-                    "cert-manager webhook not Available; later CR submissions may fail: "
-                    "deployment=%s namespace=%s: %s",
-                    CERT_MANAGER_WEBHOOK_DEPLOYMENT,
-                    CERT_MANAGER_WEBHOOK_NAMESPACE,
-                    exc,
-                )
-                self._progress(
-                    warn(
-                        f"cert-manager webhook not Available "
-                        f"({exc}); subsequent CR submissions may fail"
-                    )
-                )
-
-    @contextmanager
-    def _diagnostics_on_failure(self, namespace: str) -> Iterator[None]:
-        """Emit namespace diagnostics on subprocess failure, then re-raise."""
-        # Mirror EphemeralTestClusterService's pattern: dump pods+events on subprocess
-        # failure, then re-raise so the install loop's try/except records
-        # the failure and moves on.
-        try:
-            yield
-        except ExternalCommandError:
-            diagnostics = self.kubectl.diagnostics(namespace)
-            if diagnostics.strip():
-                self._progress(info(diagnostics))
-            raise
+            return
+        bucket = summary.applied if status == "applied" else summary.no_change
+        bucket.append(DevelopmentClusterEntryOutcome(release.name, profile, release.namespace))
+        installed_keys.add(key)
 
     # ----- bindings to the collaborator-scoped helpers -----------------------
     #

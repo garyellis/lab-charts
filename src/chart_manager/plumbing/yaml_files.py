@@ -88,11 +88,16 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
 
 def load_yaml_documents(path: Path) -> list[Any]:
     """Read all YAML documents from one UTF-8 file."""
-    text = _read_yaml_text(path)
+    return parse_yaml_documents(_read_yaml_text(path), source=str(path))
+
+
+def parse_yaml_documents(value: str | bytes, *, source: str = "input") -> list[Any]:
+    """Parse every YAML document in UTF-8 text or bytes."""
+    text = _decode_yaml(value, source=source)
     try:
         return list(_safe_yaml().load_all(text))
     except YAMLError as exc:
-        raise YamlError(f"failed to parse YAML from {path}: {exc}") from exc
+        raise YamlError(f"failed to parse YAML from {source}: {exc}") from exc
 
 
 def dump_yaml(document: Any) -> str:

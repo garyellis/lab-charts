@@ -1,16 +1,4 @@
-"""Authored-configuration resolution shared by the three converge paths.
-
-`bootstrap.py`, `development/service.py` and `ephemeral.py` each turn the same
-authored documents into the same four answers: the name a chart directory
-declares, the install plan behind a lifecycle release, the Helm reference
-behind a pinned OCI release, and the resolved Kind config path. Each carried
-its own copy, and the copies had already drifted -- two of them raised
-differently worded errors for the identical unresolvable state.
-
-Deliberately named for what it is rather than for a concept it does not have:
-this module holds exactly the duplication removed from those three modules,
-not a home for new cluster framework. Nothing here may import them back.
-"""
+"""Turn authored bootstrap and stack releases into what Helm installs."""
 
 from __future__ import annotations
 

@@ -393,35 +393,6 @@ class Kubectl:
             timeout=self.timeout,
         )
 
-    def wait_deployment_available(
-        self, name: str, *, namespace: str, timeout: str = "120s"
-    ) -> None:
-        """Block until Deployment/<name> reports Available=True.
-
-        Used as the cert-manager webhook gate before applying any
-        `cert-manager.io/v1` CRs (Certificate / ClusterIssuer). The
-        Deployment's Available condition is the only signal that the
-        webhook's TLS serving cert has been provisioned and the apiserver
-        can reach it; applying a Certificate too early returns an
-        admission "no endpoints available for service" error and the
-        install loop then has to retry.
-        """
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl",
-                    "-n",
-                    namespace,
-                    "wait",
-                    "--for=condition=Available",
-                    f"deployment/{name}",
-                    f"--timeout={timeout}",
-                ]
-            ),
-            capture=False,
-            timeout=self.timeout,
-        )
-
     def list_virtualservices(self) -> list[VirtualService]:
         """Return every VirtualService across the cluster: namespace, hosts, annotations.
 
@@ -485,6 +456,60 @@ class Kubectl:
             return []
         return [item for item in payload.get("items", []) or [] if isinstance(item, dict)]
 
+    def workload_names(
+        self, kind: str, *, namespace: str, selector: str | None = None
+    ) -> list[str]:
+        """Names of the `kind` workloads in `namespace`, optionally matching `selector`.
+
+        A failed listing raises rather than reading as "none here": a readiness gate
+        that passes when it cannot see the cluster is worse than no gate.
+        """
+        listing = self.runner.run(
+            self._with_context(
+                [
+                    "kubectl", "-n", namespace, "get", kind,
+                    *(("-l", selector) if selector is not None else ()),
+                    "-o", "jsonpath={.items[*].metadata.name}",
+                ]
+            ),
+            check=False,
+            timeout=self.timeout,
+        )
+        if listing.returncode != 0:
+            detail = (listing.stderr or listing.stdout).strip()
+            raise ExternalCommandError(
+                f"cannot list {kind} in namespace {namespace}: {detail}",
+                stderr=listing.stderr,
+                returncode=listing.returncode,
+            )
+        return listing.stdout.split()
+
+    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: str) -> None:
+        """Block until one Deployment, StatefulSet or DaemonSet has rolled out."""
+        self.runner.run(
+            self._with_context(
+                [
+                    "kubectl", "-n", namespace, "rollout", "status",
+                    f"{kind}/{name}", f"--timeout={timeout}",
+                ]
+            ),
+            capture=False,
+            timeout=self.timeout,
+        )
+
+    def wait_established(self, crd: str, *, timeout: str) -> None:
+        """Block until a CustomResourceDefinition is `Established`."""
+        self.runner.run(
+            self._with_context(
+                [
+                    "kubectl", "wait", "--for=condition=Established",
+                    f"customresourcedefinition/{crd}", f"--timeout={timeout}",
+                ]
+            ),
+            capture=False,
+            timeout=self.timeout,
+        )
+
     def wait_workloads_ready(
         self,
         namespace: str,
@@ -492,46 +517,10 @@ class Kubectl:
         *,
         selector: str | None = None,
     ) -> None:
-        """Run rollout status for matching workloads in a namespace, serially.
-
-        A failed listing raises instead of being read as "no workloads here".
-        The listing ran with check=False and the caller iterated its stdout,
-        so any failure -- expired credentials, an apiserver blip, the wrong
-        context -- produced an empty name list and the gate returned
-        immediately. A readiness gate that silently passes when it cannot
-        see the cluster is worse than no gate, and it did so precisely when
-        the cluster was unhealthy. ``selector`` scopes release-owned waits;
-        ``None`` preserves the namespace-wide behavior used by environment
-        bootstrap and the development converger.
-        """
+        """Run rollout status for every matching workload in a namespace, serially."""
         for kind in ("deployment", "statefulset", "daemonset"):
-            list_args = ["kubectl", "-n", namespace, "get", kind]
-            if selector is not None:
-                list_args.extend(("-l", selector))
-            list_args.extend(("-o", "jsonpath={.items[*].metadata.name}"))
-            listing = self.runner.run(
-                self._with_context(list_args),
-                check=False,
-                timeout=self.timeout,
-            )
-            if listing.returncode != 0:
-                detail = (listing.stderr or listing.stdout).strip()
-                raise ExternalCommandError(
-                    f"cannot list {kind} in namespace {namespace}: {detail}",
-                    stderr=listing.stderr,
-                    returncode=listing.returncode,
-                )
-            for name in listing.stdout.split():
-                self.runner.run(
-                    self._with_context(
-                        [
-                            "kubectl", "-n", namespace, "rollout", "status",
-                            f"{kind}/{name}", f"--timeout={timeout}",
-                        ]
-                    ),
-                    capture=False,
-                    timeout=self.timeout,
-                )
+            for name in self.workload_names(kind, namespace=namespace, selector=selector):
+                self.rollout_status(kind, name, namespace=namespace, timeout=timeout)
 
     # --- pods and events ---------------------------------------------------
 

@@ -552,19 +552,23 @@ class Helm:
         *,
         all_namespaces: bool = True,
         namespace: str | None = None,
+        any_status: bool = False,
     ) -> list[ReleaseInfo]:
         """Return the set of helm releases known to the cluster.
 
         `all_namespaces=True` (the default) runs `helm list -A`, which is
         what the lab installer needs to dedupe across observability +
         kube-system + cert-manager etc. Pass `all_namespaces=False` together
-        with `namespace=` to scope to a single namespace.
+        with `namespace=` to scope to a single namespace. Helm lists only deployed and
+        failed releases unless `any_status` adds `--all`.
         """
         args = [self._helm_bin, "list", "-o", "json"]
         if all_namespaces:
             args.append("-A")
         elif namespace is not None:
             args.extend(["-n", namespace])
+        if any_status:
+            args.append("--all")
         result = self.runner.run(self._with_context(args), capture=True, timeout=self.timeout)
         raw = result.stdout.strip()
         if not raw:
@@ -592,6 +596,11 @@ class Helm:
                 )
             )
         return releases
+
+    def manifest(self, release: str, *, namespace: str) -> str:
+        """Return the rendered manifest of an installed release (`helm get manifest`)."""
+        args = [self._helm_bin, "get", "manifest", release, "--namespace", namespace]
+        return self.runner.run(self._with_context(args), timeout=self.timeout).stdout
 
     def status(self, release: str, *, namespace: str) -> CommandResult:
         """Return the inspectable `helm status` result; never raise for its exit code."""
