@@ -472,8 +472,8 @@ jobs:
           # appending its markdown summary to $GITHUB_STEP_SUMMARY (which GHA
           # always sets for each step); without the flag the CLI ignores the
           # env var, so local invocations don't surprise-write to it.
-          # _emit_result writes the markdown summary BEFORE sys.exit(), so
-          # the PR Checks tab gets the failure detail regardless of exit code.
+          # The CLI writes the markdown summary before it exits, so the PR
+          # Checks tab gets the failure detail regardless of exit code.
           #
           # Mode dispatch mirrors prep:
           #   diff → --changed-files <tmp>   (existing default behavior)
@@ -496,7 +496,7 @@ jobs:
               ;;
           esac
           if [[ "$SCHEMAS_OUTCOME" != success ]]; then
-            args=(--all --phase render)
+            args=(--all --check render)
           fi
           mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 

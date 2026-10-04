@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import os
 import shutil
-import uuid
-from collections.abc import Sequence
+import threading
+import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.commands.validate.models import (
+    FAILING,
     CheckName,
     CheckResult,
+    Diagnostics,
+    RequestError,
     Row,
     ValidateOutcome,
     ValidateRequest,
 )
+from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
@@ -26,10 +32,16 @@ from chart_manager.commands.validate.schemas.runtime import (
 from chart_manager.commands.validate.schemas.store import default_schema_cache_root
 from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kubeconform import Kubeconform
+from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
 from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ChartNotFoundError,
+    ExternalCommandError,
+    MissingToolError,
+    SpecError,
+)
 from chart_manager.shared.charts import dependencies
 from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.charts.lifecycle import require_validation
@@ -41,6 +53,7 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
+    progress: Progress = NULL_PROGRESS,
 ) -> ValidateOutcome:
     """Render each requested chart in each environment, then run its validation checks.
 
@@ -48,6 +61,10 @@ def run(
     - A missing run-wide prerequisite (tool binary, schema lock or cache) raises.
     - A chart's configuration error goes to `spec_errors`, and its row is left out.
     - A failed check is recorded on its row, and the row's later checks are skipped.
+
+    Rows are checked on `request.workers` threads (0: min(cpu, 8), at least 2), or one at
+    a time with `verbose` or `fail_fast`; with `fail_fast` the rows after a failed one
+    are skipped.
     """
     selection = _selection(request, workspace)
     specs = {
@@ -57,26 +74,70 @@ def run(
     declared = {env for spec in specs.values() for env in spec.environments}
     unknown = sorted(set(request.envs) - declared)
     if unknown:
-        raise SpecError(
-            f"unknown environment(s): {', '.join(unknown)}; declared: {', '.join(sorted(declared))}"
+        raise RequestError(
+            f"unknown environment(s): {', '.join(unknown)}; "
+            f"declared: {', '.join(sorted(declared))}",
+            flag="--env",
         )
-    out = request.out or workspace.render_root / _run_id()
-    checker = _Checker(request.checks, workspace, runner)
-    rows: list[Row] = []
-    spec_errors = list(selection.spec_errors)
-    for row in selection.rows:
-        if request.envs and row.env not in request.envs:
-            continue
-        chart = selection.charts[row.chart]
+    out = request.out
+    rows = [row for row in selection.rows if not request.envs or row.env in request.envs]
+    checker = _Checker(request, workspace, runner, progress)
+
+    def check(row: Row) -> Row | str:
         try:
-            checks = checker.check(chart, specs[row.chart], row, out / row.chart / row.env)
+            checks = checker.check(
+                selection.charts[row.chart], specs[row.chart], row, out / row.chart / row.env
+            )
         except SpecError as exc:
-            spec_errors.append(f"{row.chart}: {exc}")
-            continue
-        rows.append(replace(row, checks=checks))
+            return f"{row.chart}: {exc}"
+        return replace(row, checks=checks)
+
+    progress.start(rows)
+    try:
+        if request.verbose or request.fail_fast:
+            results = _one_at_a_time(rows, check, checker, fail_fast=request.fail_fast)
+        else:
+            workers = request.workers if request.workers > 0 else _auto_workers()
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(check, rows))
+    finally:
+        progress.stop()
     return ValidateOutcome(
-        rows=tuple(rows), spec_errors=tuple(spec_errors), warnings=selection.warnings
+        rows=tuple(result for result in results if isinstance(result, Row)),
+        spec_errors=(
+            *selection.spec_errors,
+            *(result for result in results if isinstance(result, str)),
+        ),
+        warnings=selection.warnings,
+        diagnostics=Diagnostics(
+            requested_charts=request.charts,
+            requested_envs=request.envs,
+            ignored_changes=selection.ignored_changes,
+            unmatched_changes=selection.unmatched_changes,
+            rows_filtered_out=len(selection.rows) - len(rows),
+            charts_unvalidated=selection.charts_unvalidated,
+        ),
     )
+
+
+def _one_at_a_time(
+    rows: list[Row], check: Callable[[Row], Row | str], checker: _Checker, *, fail_fast: bool
+) -> list[Row | str]:
+    """Check rows in order; with `fail_fast`, skip every row after the first that fails."""
+    results: list[Row | str] = []
+    stopped = False
+    for row in rows:
+        result = checker.skip_all(row, "fail-fast") if stopped else check(row)
+        results.append(result)
+        statuses = {c.status for c in result.checks.values()} if isinstance(result, Row) else set()
+        if fail_fast and statuses & FAILING:
+            stopped = True
+    return results
+
+
+def _auto_workers() -> int:
+    cpus = os.cpu_count()
+    return 2 if cpus is None else max(2, min(cpus, 8))
 
 
 def _selection(request: ValidateRequest, workspace: RepositoryWorkspace) -> Selection:
@@ -88,7 +149,13 @@ def _selection(request: ValidateRequest, workspace: RepositoryWorkspace) -> Sele
         return named
     changed = select(request.changes, workspace=workspace)
     rows = tuple(row for row in changed.rows if row.chart in named.charts)
-    return replace(named, rows=rows, warnings=changed.warnings)
+    return replace(
+        named,
+        rows=rows,
+        warnings=changed.warnings,
+        ignored_changes=changed.ignored_changes,
+        unmatched_changes=changed.unmatched_changes,
+    )
 
 
 def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
@@ -102,6 +169,8 @@ def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
     for name in names:
         try:
             chart = load_chart(workspace.chart_path(name))
+        except ChartNotFoundError as exc:
+            raise RequestError(str(exc), flag="--chart") from exc
         except SpecError as exc:
             errors.append(f"{name}: {exc}")
             continue
@@ -112,63 +181,97 @@ def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
 
 
 class _Checker:
-    """Runs the requested validation checks on one row; holds the schema lock once loaded."""
+    """Runs the requested validation checks on one row; loads the schema runtime once."""
 
     def __init__(
-        self, checks: frozenset[CheckName], workspace: RepositoryWorkspace, runner: CommandRunner
+        self,
+        request: ValidateRequest,
+        workspace: RepositoryWorkspace,
+        runner: CommandRunner,
+        progress: Progress,
     ) -> None:
-        self.checks = checks
+        self.request = request
         self.workspace = workspace
         self.runner = runner
-        self.kubeconform = Kubeconform(runner)
-        self.kyverno = Kyverno(runner)
+        self.progress = progress
+        self.kubeconform = Kubeconform(runner, timeout=request.tool_timeout)
+        self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
         self.schemas: KubeconformSchemaRuntime | None = None
+        self.schemas_lock = threading.Lock()
 
     def check(
         self, chart: Chart, spec: ManifestValidationSpec, row: Row, rendered: Path
     ) -> dict[CheckName, CheckResult]:
-        render = _render(_helm(self.runner, spec), chart, spec, row, rendered)
-        checks: dict[CheckName, CheckResult] = {"render": render}
-        if "schema" in self.checks:
+        helm = _helm(
+            self.runner, spec, verbose=self.request.verbose, timeout=self.request.tool_timeout
+        )
+        checks: dict[CheckName, CheckResult] = {
+            "render": self._timed(row, "render", lambda: _render(helm, chart, spec, row, rendered))
+        }
+        if "schema" in self.request.checks:
             skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
             if skip:
-                checks["schema"] = CheckResult("skipped", skip)
+                checks["schema"] = self._skipped(row, "schema", skip)
             else:
-                if self.schemas is None:
-                    runtime = load_kubeconform_schema_runtime(self.workspace)
-                    _update_dependencies(self.runner, generated.providers(self.workspace))
-                    crds = generated.prepare(
-                        self.workspace,
-                        render=self._render_crds,
-                        cache_root=default_schema_cache_root(),
-                    )
-                    self.schemas = replace(runtime, generated_schema_locations=crds)
+                schemas = self._schemas()
                 locations = _schema_locations(self.workspace.root, chart.name, spec)
-                checks["schema"] = _schema(
-                    self.kubeconform, self.schemas, spec, locations, rendered
+                checks["schema"] = self._timed(
+                    row,
+                    "schema",
+                    lambda: _schema(self.kubeconform, schemas, spec, locations, rendered),
                 )
-        if "policy" in self.checks:
+        if "policy" in self.request.checks:
             skip = _skip_reason(spec.validators.policy, checks, rendered)
             if skip:
-                checks["policy"] = CheckResult("skipped", skip)
+                checks["policy"] = self._skipped(row, "policy", skip)
             else:
                 policies = _policy_paths(self.workspace, chart, spec)
-                checks["policy"] = _policy(self.kyverno, policies, rendered)
+                checks["policy"] = self._timed(
+                    row, "policy", lambda: _policy(self.kyverno, policies, rendered)
+                )
         return checks
+
+    def skip_all(self, row: Row, reason: str) -> Row:
+        """The row with every requested check skipped for `reason`."""
+        names = [name for name in get_args(CheckName) if name in self.request.checks]
+        return replace(row, checks={name: self._skipped(row, name, reason) for name in names})
+
+    def _timed(self, row: Row, name: CheckName, check: Callable[[], CheckResult]) -> CheckResult:
+        self.progress.on_event(row, name, "running")
+        started = time.monotonic()
+        result = replace(check(), elapsed_seconds=time.monotonic() - started)
+        self.progress.on_event(row, name, result.status, result.elapsed_seconds)
+        return result
+
+    def _skipped(self, row: Row, name: CheckName, reason: str) -> CheckResult:
+        self.progress.on_event(row, name, "skipped")
+        return CheckResult("skipped", reason)
+
+    def _schemas(self) -> KubeconformSchemaRuntime:
+        """The locked schema generation plus schemas generated from CRDs, loaded on first use."""
+        with self.schemas_lock:
+            if self.schemas is None:
+                runtime = load_kubeconform_schema_runtime(self.workspace)
+                _update_dependencies(self.runner, generated.providers(self.workspace))
+                crds = generated.prepare(
+                    self.workspace, render=self._render_crds, cache_root=default_schema_cache_root()
+                )
+                self.schemas = replace(runtime, generated_schema_locations=crds)
+            return self.schemas
 
     def _render_crds(self, charts: Sequence[Chart], out: Path) -> list[str]:
         """Render each chart in every environment with its CRDs; one line per failure."""
         failures = []
         for chart in charts:
             spec = require_validation(chart.lifecycle, chart_name=chart.name)
-            helm = _helm(self.runner, spec)
+            helm = _helm(self.runner, spec, verbose=False, timeout=self.request.tool_timeout)
             for env in spec.environments:
                 row = selected_row(chart.name, spec, env)
                 try:
                     result = _render(helm, chart, spec, row, out / chart.name / env, crds=True)
                 except SpecError as exc:
                     result = CheckResult("failed", str(exc))
-                if result.status == "failed":
+                if result.status != "passed":
                     failures.append(f"{chart.name}/{env}: {result.detail}")
         return failures
 
@@ -183,18 +286,23 @@ def _update_dependencies(runner: CommandRunner, charts: Sequence[Chart]) -> None
 
     def update(chart: Chart) -> None:
         spec = require_validation(chart.lifecycle, chart_name=chart.name)
-        _helm(runner, spec).dependency_update_if_stale(chart.path, timeout=300.0)
+        _helm(runner, spec, verbose=False, timeout=None).dependency_update_if_stale(
+            chart.path, timeout=300.0
+        )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(update, stale))
 
 
-def _helm(runner: CommandRunner, spec: ManifestValidationSpec) -> Helm:
+def _helm(
+    runner: CommandRunner, spec: ManifestValidationSpec, *, verbose: bool, timeout: float | None
+) -> Helm:
     return Helm(
         runner,
         version=spec.helm_version,
         binary=spec.helm_binary,
-        verbose=False,
+        verbose=verbose,
+        timeout=timeout,
         deps_are_fresh=dependencies.deps_are_fresh,
         chart_has_dependencies=dependencies.chart_has_dependencies,
     )
@@ -210,6 +318,8 @@ def _render(
     crds: bool = False,
 ) -> CheckResult:
     values = _values(chart, spec, row.env)
+    if out.is_symlink() or out.parent.is_symlink():
+        raise SpecError(f"render directory must not be a symlink: {out}")
     if out.exists():
         shutil.rmtree(out)
     try:
@@ -221,8 +331,11 @@ def _render(
             values=values,
             include_crds=crds,
         )
+    except MissingToolError:
+        raise
     except ExternalCommandError as exc:
-        return CheckResult(status="failed", detail=str(exc))
+        rejected = exc.returncode is not None and exc.returncode > 0
+        return CheckResult(status="failed" if rejected else "error", detail=str(exc))
     return CheckResult(status="passed")
 
 
@@ -259,14 +372,33 @@ def _schema(
             ],
             skip_kinds=[*schemas.ignored_missing_kinds(), *spec.ignore_missing_schemas],
         )
-    except (SpecError, ExternalCommandError) as exc:
-        return CheckResult(status="failed", detail=str(exc))
+    except MissingToolError:
+        raise
+    except ExternalCommandError as exc:
+        return CheckResult(status="error", detail=str(exc))
     if not report.has_failures():
         return CheckResult(status="passed")
-    findings = [
+    findings = "\n".join(
         f"{r.kind}/{r.name} ({r.filename}): {r.msg or ''}".rstrip(": ") for r in report.invalid()
-    ]
-    return CheckResult(status="failed", detail="\n".join(findings))
+    )
+    if any(_is_schema_unavailable(result) for result in report.errors()):
+        return CheckResult(status="error", detail=f"{findings}\n{_SCHEMA_UNAVAILABLE}")
+    return CheckResult(status="failed", detail=findings)
+
+
+_SCHEMA_UNAVAILABLE = (
+    "Schema unavailable or unreadable: check schema JSON and spec.validation.schemaLocations "
+    "in the chart's chart-lifecycle.yaml. Run `chart-manager schemas sync` for missing "
+    "upstream snapshots; if the kind is absent from those pins, check the current CRD "
+    "providers or add a chart-local schema."
+)
+
+
+def _is_schema_unavailable(result: ResourceResult) -> bool:
+    """A kubeconform error about loading a schema, not about the resource itself."""
+    return result.msg is None or not result.msg.lower().startswith(
+        ("error unmarshalling resource:", "error while parsing:", "prohibited resource kind ")
+    )
 
 
 def _schema_locations(root: Path, chart: str, spec: ManifestValidationSpec) -> list[str]:
@@ -284,8 +416,10 @@ def _policy(kyverno: Kyverno, policies: list[Path], rendered: Path) -> CheckResu
         return CheckResult(status="skipped", detail="no policies discovered")
     try:
         report = kyverno.apply(rendered, policy_paths=policies)
+    except MissingToolError:
+        raise
     except ChartManagerError as exc:
-        return CheckResult(status="failed", detail=str(exc))
+        return CheckResult(status="error", detail=str(exc))
     parts = [_policy_findings(report.failures())]
     if report.warnings():
         parts.append("warnings:\n" + _policy_findings(report.warnings()))
@@ -328,7 +462,3 @@ def _values(chart: Chart, spec: ManifestValidationSpec, env: str) -> list[Path]:
             f"chart {chart.name!r} env {env!r}: values file not found: {', '.join(missing)}"
         )
     return values
-
-
-def _run_id() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]

@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands import validate
+from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.composition import Container
 from chart_manager.integrations.git import Git
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
-from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.shared.charts.chart import ChartRepository
 from chart_manager.shared.settings import Settings
@@ -132,9 +133,9 @@ spec:
     )
     (chart / "values.yaml").write_text("", encoding="utf-8")
 
-    result = build_worklist(
+    result = validate.select(
+        ["deploy/helm/demo/values.yaml"],
         workspace=workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR),
-        changed_files=["deploy/helm/demo/values.yaml"],
     )
 
     assert [(row.chart, row.env) for row in result.rows] == [("demo", "dev")]
@@ -162,4 +163,4 @@ def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path
     resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()
 
-    assert container.render_output_service(tmp_path).state().path.is_relative_to(tmp_path)
+    assert render_dir_state(container.workspace(tmp_path)).path.is_relative_to(tmp_path)

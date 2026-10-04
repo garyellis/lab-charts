@@ -70,7 +70,7 @@ def test_failed_schema_preparation_runs_repository_render_diagnostics(tmp_path: 
              "SCHEMAS_OUTCOME": "failure"}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     args = result.stdout.splitlines()
-    assert args[:6] == ["run", "validate", "--", "--all", "--phase", "render"]
+    assert args[:6] == ["run", "validate", "--", "--all", "--check", "render"]
     assert "--keep" in args
     assert "--github-step-summary" in args
 

@@ -75,8 +75,8 @@ Worked examples where the halves look like one thing:
   catalog lookup raising the user-facing `SpecError`, so it lives in
   `shared/charts/lifecycle.py` with the other `require_*` gates. An API
   model that raised `SpecError` would know what a CLI exit code is.
-- **`spec.validation`** — shape is API; `resolve_namespace()` is in
-  `services/manifest_validation/namespaces.py` because choosing between an
+- **`spec.validation`** — shape is API; `selected_row()` resolves it in
+  `commands/validate/select.py` because choosing between an
   explicit namespace and a `${env}` substitution is interpretation of an
   already-valid document.
 - **`LifecyclePlan`** — looks like an API type, is not one. Nobody authors

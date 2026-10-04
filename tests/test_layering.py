@@ -186,35 +186,6 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
     )
 
 
-def test_validation_domain_modules_stay_out_of_plumbing() -> None:
-    """Keep validation models and schema parsing with the validation service."""
-    misplaced = sorted(
-        path.name
-        for path in (
-            _PLUMBING / "validate_models.py",
-            _PLUMBING / "validate_spec.py",
-        )
-        if path.exists()
-    )
-    assert not misplaced, (
-        "validation-domain modules belong in "
-        "chart_manager/services/manifest_validation, not plumbing: "
-        f"{', '.join(misplaced)}"
-    )
-
-    # `namespaces.py` holds `resolve_namespace`, split out of the authored
-    # validation spec when that moved to `api/v1alpha1/chart_lifecycle.py`.
-    # It is a leaf on purpose: putting it on the compiler would make `planner.py`
-    # drag in the helm/kubeconform/kyverno adapters.
-    validation_domain = _SERVICES / "manifest_validation"
-    expected = {"models.py", "namespaces.py", "paths.py"}
-    actual = {path.name for path in validation_domain.glob("*.py") if path.name != "__init__.py"}
-    assert expected <= actual, (
-        f"missing from services/manifest_validation: {sorted(expected - actual)} -- "
-        "these interpret the authored spec and stay on the service side of api/"
-    )
-
-
 def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
     """Generic plumbing may not depend on chart or validation policy."""
     offenders = _imports_matching(
@@ -449,7 +420,6 @@ def test_service_modules_are_discoverable() -> None:
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
-    assert "chart_manager.services.manifest_validation.app" in modules
     assert "chart_manager.domain.local_resources" in modules
 
 
@@ -651,7 +621,7 @@ def test_cli_modules_are_discoverable() -> None:
     # The four modules that used to construct services inline. If one is
     # renamed away, the scan must be updated deliberately rather than
     # quietly losing coverage of the exact files this rule was written for.
-    for name in ("chart.py", "local.py", "plan.py", "validate.py"):
+    for name in ("chart.py", "local.py", "plan.py"):
         assert _CLI / name in paths
 
 

@@ -158,7 +158,7 @@ services/helmrelease/__init__.py) rather than widening this rule."""
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
-"src/chart_manager/cli/*.py" = ["B006", "E501"]
+"src/chart_manager/{cli/*,commands/*/cli}.py" = ["B006", "E501"]
 # UP042 (str+Enum -> StrEnum) is correct advice that must not be taken here.
 # `BuildPhase`/`PromotionPhase` values are already persisted in DynamoDB and
 # Cosmos. Under `str, Enum`, `str(PromotionPhase.MERGED)` is

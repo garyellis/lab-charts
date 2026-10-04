@@ -2,6 +2,8 @@
 
 from chart_manager.commands.validate.models import (
     CheckResult,
+    Diagnostics,
+    RequestError,
     Row,
     ValidateOutcome,
     ValidateRequest,
@@ -11,6 +13,8 @@ from chart_manager.commands.validate.select import Selection, select
 
 __all__ = [
     "CheckResult",
+    "Diagnostics",
+    "RequestError",
     "Row",
     "Selection",
     "ValidateOutcome",

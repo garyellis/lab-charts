@@ -11,14 +11,9 @@ import pytest
 
 from chart_manager.commands import validate
 from chart_manager.commands.validate.models import CheckName
-from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
-from chart_manager.commands.validate.schemas.store import (
-    KubeconformSchemaStore,
-    default_schema_cache_root,
-)
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
-from tests import schema_fixtures
+from chart_manager.plumbing.errors import MissingToolError, SpecError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import (
     ONE_DEPENDENCY_LOCK,
     FakeCommandRunner,
@@ -30,16 +25,6 @@ from tests.conftest import (
 
 RENDER: frozenset[CheckName] = frozenset({"render"})
 CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
-
-
-@pytest.fixture
-def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryWorkspace:
-    """A workspace whose locked schema generation is synced into a tmp cache."""
-    lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots).sync(lock)
-    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
-    return schema_fixtures.workspace(tmp_path)
 
 
 def renders(manifest: str):
@@ -61,7 +46,9 @@ def test_one_chart_in_one_environment_renders_into_one_passed_row(tmp_path: Path
     runner = FakeCommandRunner()
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), envs=("dev",), checks=RENDER),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), envs=("dev",), checks=RENDER
+        ),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -79,7 +66,7 @@ def test_a_helm_template_failure_fails_the_row_with_helms_error(tmp_path: Path) 
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=1, stderr="bad values")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), checks=RENDER),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -95,7 +82,9 @@ def test_an_unknown_environment_in_the_request_raises_before_any_work(tmp_path: 
 
     with pytest.raises(SpecError, match="prod"):
         validate.run(
-            validate.ValidateRequest(charts=("demo",), envs=("prod",), checks=RENDER),
+            validate.ValidateRequest(
+                out=tmp_path / "out", charts=("demo",), envs=("prod",), checks=RENDER
+            ),
             workspace=workspace_for(tmp_path),
             runner=runner,
         )
@@ -127,9 +116,15 @@ def kubeconform_report(status: str, msg: str = "") -> str:
     [
         (0, kubeconform_report("statusValid"), "passed", ""),
         (1, kubeconform_report("statusInvalid", "missing properties: data"), "failed", "data"),
-        (2, "panic: schema cache", "failed", ""),
+        (2, "panic: schema cache", "error", ""),
+        (
+            1,
+            kubeconform_report("statusError", "could not find schema for Widget"),
+            "error",
+            "schemas sync",
+        ),
     ],
-    ids=["valid", "invalid", "kubeconform-broke"],
+    ids=["valid", "invalid", "kubeconform-broke", "schema-missing"],
 )
 def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests(
     tmp_path: Path,
@@ -147,7 +142,9 @@ def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests
     )
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
     )
 
     (row,) = outcome.rows
@@ -178,7 +175,9 @@ def test_the_schema_check_is_skipped_without_running_kubeconform(
     runner = FakeCommandRunner().respond(**helm)
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
     )
 
     (row,) = outcome.rows
@@ -204,7 +203,9 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
     )
 
     validate.run(
-        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
     )
 
     (kubeconform,) = [call for call in runner.calls if call[0] == "kubeconform"]
@@ -217,7 +218,7 @@ def test_a_chart_that_disables_kubeconform_needs_no_schema_lock(tmp_path: Path) 
     write_validation_chart(tmp_path, "demo", validators={"kubeconform": False})
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner().respond(renders(CONFIG_MAP)),
     )
@@ -232,7 +233,9 @@ def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
     )
 
     assert (outcome.rows, len(outcome.spec_errors)) == ((), 1)
@@ -251,7 +254,7 @@ def kyverno_report(result: str, message: str = "") -> str:
         (0, kyverno_report("pass"), "passed", ""),
         (1, kyverno_report("fail", "label team is required"), "failed", "team"),
         (0, kyverno_report("warn", "label owner is advised"), "passed", "owner"),
-        (2, "panic: policy cache", "failed", ""),
+        (2, "panic: policy cache", "error", ""),
     ],
     ids=["pass", "fail", "warn", "kyverno-broke"],
 )
@@ -267,7 +270,9 @@ def test_the_policy_check_reports_kyvernos_verdict_on_the_rendered_manifests(
     )
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"})),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
+        ),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -293,7 +298,9 @@ def test_the_policy_check_is_skipped_without_running_kyverno(
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"})),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
+        ),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -305,7 +312,9 @@ def test_the_policy_check_is_skipped_without_running_kyverno(
 def test_the_charts_extra_policies_reach_kyverno_and_must_exist(tmp_path: Path) -> None:
     chart = write_validation_chart(tmp_path, "demo", policies={"extra": ["extra-policies"]})
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
-    request = validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"}))
+    request = validate.ValidateRequest(
+        out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
+    )
 
     missing = validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
     assert "extra-policies" in missing.spec_errors[0]
@@ -328,7 +337,9 @@ def test_a_failed_schema_check_skips_the_policy_check(
     )
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
     )
 
     assert outcome.rows[0].checks["policy"] == validate.CheckResult("skipped", "schema failed")
@@ -350,7 +361,7 @@ def test_a_chart_whose_render_fails_skips_its_checks_while_the_others_run(
     )
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("one", "two", "three")),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("one", "two", "three")),
         workspace=schema_workspace,
         runner=runner,
     )
@@ -367,7 +378,7 @@ def test_a_charts_config_error_is_collected_while_the_other_charts_run(tmp_path:
     write_validation_chart(tmp_path, "fine")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("broken", "fine"), checks=RENDER),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("broken", "fine"), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
     )
@@ -387,7 +398,9 @@ def test_without_named_charts_the_changed_files_select_the_rows(tmp_path: Path) 
     (broken / "Chart.yaml").write_text("name: other\n")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=(), changes=("charts/demo/values-ci.yaml",), checks=RENDER),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=(), changes=("charts/demo/values-ci.yaml",), checks=RENDER
+        ),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
     )
@@ -405,7 +418,9 @@ def test_named_charts_narrow_the_changed_rows_and_warnings_reach_the_outcome(
     changes = ("charts/demo/values-ci.yaml", "charts/other/values-ci.yaml", "charts/demo/notes.txt")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), changes=changes, checks=RENDER),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), changes=changes, checks=RENDER
+        ),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
     )
@@ -419,7 +434,9 @@ def test_an_unknown_environment_raises_when_the_rows_come_from_changes(tmp_path:
 
     with pytest.raises(SpecError, match="prod"):
         validate.run(
-            validate.ValidateRequest(charts=(), changes=(), envs=("prod",), checks=RENDER),
+            validate.ValidateRequest(
+                out=tmp_path / "out", charts=(), changes=(), envs=("prod",), checks=RENDER
+            ),
             workspace=workspace_for(tmp_path),
             runner=FakeCommandRunner(),
         )
@@ -433,7 +450,7 @@ def test_a_malformed_named_chart_is_collected_while_the_other_named_chart_runs(
     (broken / "chart-lifecycle.yaml").write_text("kind: nonsense\n")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("broken", "fine"), checks=RENDER),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("broken", "fine"), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
     )
@@ -455,7 +472,9 @@ def test_a_charts_crds_become_the_first_schema_location(
     )
 
     validate.run(
-        validate.ValidateRequest(charts=("provider",), checks=frozenset({"render", "schema"})),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("provider",), checks=frozenset({"render", "schema"})
+        ),
         workspace=schema_workspace,
         runner=runner,
     )
@@ -495,10 +514,208 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
     )
 
     validate.run(
-        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "schema"})),
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "schema"})
+        ),
         workspace=schema_workspace,
         runner=runner,
     )
 
     assert ("helm", "dependency", "update", str(app)) in runner.calls
     assert not [call for call in runner.calls if "--include-crds" in call]
+
+
+def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+    runner = FakeCommandRunner().respond(("helm", "template"), returncode=-9)
+
+    outcome = validate.run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert outcome.rows[0].checks["render"].status == "error"
+
+
+class _NoHelm(FakeCommandRunner):
+    def run(self, args, **kwargs):  # type: ignore[no-untyped-def]
+        if args[0] == "helm":
+            raise MissingToolError("required tool not found on PATH: helm")
+        return super().run(args, **kwargs)
+
+
+def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+
+    with pytest.raises(MissingToolError):
+        validate.run(
+            validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
+            workspace=workspace_for(tmp_path),
+            runner=_NoHelm(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("statuses", "spec_errors", "expected"),
+    [
+        (["passed", "skipped"], (), Outcome.SUCCESS),
+        (["passed", "failed"], (), Outcome.FAILED),
+        (["failed", "error"], (), Outcome.TOOL),
+        (["error"], ("broken: bad",), Outcome.SPEC),
+    ],
+)
+def test_the_outcome_folds_rows_and_spec_errors_into_one_exit_reason(
+    statuses: list[str], spec_errors: tuple[str, ...], expected: Outcome
+) -> None:
+    checks = {
+        name: validate.CheckResult(status)
+        for name, status in zip(("render", "schema"), statuses, strict=False)
+    }
+    row = validate.Row("demo", "dev", "demo", "lab-dev", checks)
+
+    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome() is expected
+
+
+class RecordingProgress:
+    def __init__(self) -> None:
+        self.started: list[tuple[str, str]] = []
+        self.events: list[tuple[str, str, str, bool]] = []
+        self.stopped = False
+
+    def start(self, rows):  # type: ignore[no-untyped-def]
+        self.started = [(row.chart, row.env) for row in rows]
+
+    def on_event(self, row, check, status, elapsed_s=None):  # type: ignore[no-untyped-def]
+        self.events.append((row.chart, check, status, elapsed_s is not None))
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_progress_hears_each_check_start_and_finish_with_its_time(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+    progress = RecordingProgress()
+
+    outcome = validate.run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+        progress=progress,
+    )
+
+    assert progress.started == [("demo", "dev")]
+    assert progress.events == [
+        ("demo", "render", "running", False),
+        ("demo", "render", "passed", True),
+    ]
+    assert progress.stopped
+    assert outcome.rows[0].checks["render"].elapsed_seconds is not None
+
+
+def test_rows_checked_in_parallel_come_back_in_selection_order(tmp_path: Path) -> None:
+    names = ("a", "b", "c", "d")
+    for name in names:
+        write_validation_chart(tmp_path, name)
+
+    outcome = validate.run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=names, checks=RENDER, workers=4),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [row.chart for row in outcome.rows] == list(names)
+
+
+def test_fail_fast_skips_the_rows_after_the_first_failure(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "one")
+    write_validation_chart(tmp_path, "two")
+    runner = FakeCommandRunner().respond(("helm", "template", "one"), returncode=1)
+
+    outcome = validate.run(
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("one", "two"), checks=RENDER, fail_fast=True
+        ),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert [row.checks["render"].status for row in outcome.rows] == ["failed", "skipped"]
+    assert not [call for call in runner.calls if call[1:3] == ("template", "two")]
+
+
+def test_the_tool_timeout_and_verbose_reach_every_tool_call(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    (tmp_path / "policies").mkdir()
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+        .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
+    )
+
+    validate.run(
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("demo",), tool_timeout=30.0, verbose=True
+        ),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    tools = {record.args[0]: record for record in runner.records if record.args[1] != "dependency"}
+    assert {tool: record.timeout for tool, record in tools.items()} == {
+        "helm": 30.0,
+        "kubeconform": 30.0,
+        "kyverno": 30.0,
+    }
+    assert tools["helm"].capture is False
+
+
+def test_a_symlinked_row_directory_is_refused_rather_than_emptied(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.yaml").write_text("kind: ConfigMap\n")
+    (tmp_path / "out" / "demo").mkdir(parents=True)
+    (tmp_path / "out" / "demo" / "dev").symlink_to(elsewhere, target_is_directory=True)
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), out=tmp_path / "out", checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert "symlink" in outcome.spec_errors[0]
+    assert (elsewhere / "keep.yaml").exists()
+
+
+def test_the_outcome_records_what_shaped_the_selection(tmp_path: Path) -> None:
+    write_validation_chart(
+        tmp_path,
+        "demo",
+        environments={"dev": {"values": ["values.yaml"]}, "ci": {"values": ["values.yaml"]}},
+        triggerIgnores=["docs/**"],
+    )
+    (tmp_path / "charts" / "plain").mkdir()
+    (tmp_path / "charts" / "plain" / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: plain\nversion: 0.1.0\n"
+    )
+    changes = ("charts/demo/templates/cm.yaml", "charts/demo/docs/a.md", "charts/demo/notes.txt")
+
+    outcome = validate.run(
+        validate.ValidateRequest(
+            charts=(), out=tmp_path / "out", envs=("ci",), changes=changes, checks=RENDER
+        ),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert outcome.diagnostics == validate.Diagnostics(
+        requested_envs=("ci",),
+        ignored_changes=("charts/demo/docs/a.md",),
+        unmatched_changes=("charts/demo/notes.txt",),
+        rows_filtered_out=1,
+        charts_unvalidated=1,
+    )

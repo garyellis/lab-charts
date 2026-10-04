@@ -342,6 +342,24 @@ def materialize_dependency(
         )
 
 
+@pytest.fixture
+def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryWorkspace:
+    """A workspace whose locked schema generation is synced into a tmp cache."""
+    from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+    from chart_manager.commands.validate.schemas.store import (
+        KubeconformSchemaStore,
+        default_schema_cache_root,
+    )
+    from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
+    from tests import schema_fixtures  # imports this module
+
+    lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots).sync(lock)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    return schema_fixtures.workspace(tmp_path)
+
+
 # --- the CLI argv seam -------------------------------------------------------
 #
 # Every test that drives the CLI names a command as a sequence of argv

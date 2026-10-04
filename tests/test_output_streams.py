@@ -176,9 +176,9 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
 
 
 def _console_constructions() -> list[tuple[Path, ast.Call]]:
-    """Every `Console(...)` call site under cli/, as (path, node)."""
+    """Every `Console(...)` call site under cli/ and commands/, as (path, node)."""
     found: list[tuple[Path, ast.Call]] = []
-    for path in sorted(_CLI.rglob("*.py")):
+    for path in sorted([*_CLI.rglob("*.py"), *(_CLI.parent / "commands").rglob("*.py")]):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -203,7 +203,7 @@ def test_console_scan_finds_the_constructions_it_is_meant_to_check() -> None:
 
     files = {path.name for path, _ in found}
     assert "streams.py" in files, "the shared seam should construct consoles"
-    assert "validate_progress.py" in files, "the progress displays construct their own"
+    assert "display.py" in files, "the progress displays construct their own"
 
 
 def test_every_console_in_cli_names_its_stream() -> None:
