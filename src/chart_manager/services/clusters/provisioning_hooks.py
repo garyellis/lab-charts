@@ -7,8 +7,8 @@ from typing import Literal
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.clusters._shared import kind_config_path
 from chart_manager.services.clusters.environment import EnvironmentHandle
+from chart_manager.shared.cluster.session import kind_config_path
 
 HookPhase = Literal["preProvision", "postProvision"]
 

@@ -40,7 +40,6 @@ from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.chart_catalog import ChartCatalogEntry
 from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
 from chart_manager.services.clusters.ephemeral import (
-    DEFAULT_CLUSTER_NAME,
     DEFAULT_PROFILE,
     EphemeralTeardownRequest,
     EphemeralTeardownResult,
@@ -48,6 +47,7 @@ from chart_manager.services.clusters.ephemeral import (
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.lifecycle.wire import plan_to_dict
+from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
 NamespaceOverrideOption = Annotated[

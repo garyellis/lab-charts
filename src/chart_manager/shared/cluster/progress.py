@@ -1,4 +1,4 @@
-"""Structured progress narration for the long-running cluster services.
+"""Structured progress narration for cluster work: provision, bootstrap, install, test.
 
 `DevelopmentClusterService`, `EphemeralTestClusterService`, and cluster
 bootstrap all take minutes to run and have to say what they are doing. None may

@@ -9,13 +9,13 @@ import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.cli._options import provision_hooks_enabled
-from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from chart_manager.services.clusters.development.models import DevelopmentClusterPlan
 from chart_manager.services.clusters.development.wire import plan_to_dict
 from chart_manager.services.clusters.environment import EnvironmentHandle
 from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
-from tests.conftest import LOCAL_CONFIG, workspace_for
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from tests.conftest import workspace_for
 
 from .conftest import FakeCommandRunner
 
@@ -42,7 +42,7 @@ def _repository(tmp_path: Path, hooks: str) -> LocalCluster:
     config = tmp_path / ".chart-manager" / "local-cluster.yaml"
     config.parent.mkdir(exist_ok=True)
     config.write_text(_document(hooks), encoding="utf-8")
-    return LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
+    return load_cluster(workspace_for(tmp_path))
 
 
 def test_hook_contract_accepts_one_argv_per_phase_and_runner_scopes_metadata(
@@ -103,7 +103,7 @@ def test_hook_contract_rejects_shell_empty_and_unsafe_commands(
     config.write_text(_document(hooks), encoding="utf-8")
 
     with pytest.raises(SpecError, match=message):
-        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
+        load_cluster(workspace_for(tmp_path))
 
 
 @pytest.mark.parametrize("value", ["1", "TRUE", " yes ", "On"])

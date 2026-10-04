@@ -26,8 +26,8 @@ from chart_manager.services.clusters.development import (
 )
 from chart_manager.services.clusters.environment import BoundClients
 from chart_manager.services.expose import ExposeStatus
-from chart_manager.services.progress import ProgressEvent
 from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.cluster.progress import ProgressEvent
 from tests.conftest import workspace_for
 
 

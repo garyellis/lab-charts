@@ -52,7 +52,7 @@ from chart_manager.services.clusters.development import (
     plan_to_dict,
     status_to_dict,
 )
-from chart_manager.services.clusters.ephemeral import DEFAULT_CLUSTER_NAME
+from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
 #: projection, and offering one that silently rendered as a table would be

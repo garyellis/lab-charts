@@ -18,7 +18,7 @@ from chart_manager.services.clusters.development.models import (
     DevelopmentClusterCredentials,
     RunSummary,
 )
-from chart_manager.services.progress import ProgressCallback, step, warn
+from chart_manager.shared.cluster.progress import ProgressCallback, step, warn
 
 # A VirtualService opts in to a credential hint under its URLs with these
 # annotations. The Secret is read from the VirtualService's own namespace;

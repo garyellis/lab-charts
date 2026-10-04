@@ -29,7 +29,9 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
 | `shared/charts/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
 | `shared/charts/install_plan.py` | Dependency resolution and install order |
-| `domain/local_resources.py` | Loading `LocalCluster`/`LocalStack`; resolving a CLI target |
+| `domain/local_resources.py` | Loading `LocalStack`; resolving a `local` target |
+| `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
+| `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
 | `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
 
 ## What `api/` is for

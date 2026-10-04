@@ -18,7 +18,7 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.progress import (
+from chart_manager.shared.cluster.progress import (
     ProgressCallback,
     detail,
     emit,

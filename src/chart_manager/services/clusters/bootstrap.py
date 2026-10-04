@@ -30,11 +30,11 @@ from chart_manager.services.clusters._shared import (
     oci_identity,
 )
 from chart_manager.services.clusters.environment import EnvironmentHandle
-from chart_manager.services.progress import ProgressCallback, emit, step
 from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 
 DEFAULT_TIMEOUT = "10m"
 _RUNTIME_FACTS = {

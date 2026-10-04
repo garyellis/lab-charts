@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, OciChartRelease
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import load_chart_name
@@ -78,14 +77,8 @@ def oci_chart_ref(release: OciChartRelease) -> str:
     return f"{release.chart}@{release.digest}"
 
 
-def kind_config_path(root: Path, local_cluster: LocalCluster) -> Path:
-    """The LocalCluster's authored Kind config, resolved against the root."""
-    return (root / local_cluster.spec.cluster.config).resolve()
-
-
 __all__ = [
     "chart_name",
-    "kind_config_path",
     "lifecycle_install_plan",
     "oci_chart_ref",
     "oci_identity",

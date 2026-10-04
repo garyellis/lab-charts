@@ -14,14 +14,14 @@ from chart_manager.api.v1alpha1.releases import (
     RepoChartRelease,
 )
 from chart_manager.domain.local_resources import (
-    LocalResourceLoader,
     LocalTargetResolver,
     ResolvedStackTarget,
     load_local_stack,
 )
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.chart import ResolvedChartTarget
-from tests.conftest import LOCAL_CONFIG
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from tests.conftest import LOCAL_CONFIG, workspace_for
 
 from .conftest import REPO_ROOT
 
@@ -60,7 +60,7 @@ spec:
 
 
 def test_repository_default_local_cluster_is_available_to_fresh_checkouts() -> None:
-    cluster = LocalResourceLoader(REPO_ROOT, local_config=LOCAL_CONFIG).load_cluster()
+    cluster = load_cluster(workspace_for(REPO_ROOT))
 
     assert cluster.metadata.name == "default"
     assert (REPO_ROOT / cluster.spec.cluster.config).is_file()
@@ -116,8 +116,7 @@ spec:
 """,
     )
 
-    loader = LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG)
-    releases = loader.load_cluster().spec.bootstrap.releases
+    releases = load_cluster(workspace_for(tmp_path)).spec.bootstrap.releases
 
     assert [type(release) for release in releases] == [
         BootstrapLifecycleRelease,
@@ -169,7 +168,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match="field 'dependencies' must be a list"):
-        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
+        load_cluster(workspace_for(tmp_path))
 
 
 def test_stack_accepts_lifecycle_oci_and_https_repo_releases(tmp_path: Path) -> None:
@@ -262,7 +261,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match=message):
-        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
+        load_cluster(workspace_for(tmp_path))
 
 
 @pytest.mark.parametrize("field", ["runtimeValues: {}", "readiness: {nodesReady: true}"])
@@ -444,7 +443,7 @@ spec:
     )
 
     with pytest.raises(SpecError, match="escapes repository root"):
-        LocalResourceLoader(tmp_path, local_config=LOCAL_CONFIG).load_cluster()
+        load_cluster(workspace_for(tmp_path))
 
 
 def test_custom_config_and_stack_directories_are_supported(tmp_path: Path) -> None:

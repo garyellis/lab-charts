@@ -94,7 +94,6 @@ from chart_manager.services.helmrelease import (
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
-from chart_manager.services.progress import ProgressCallback
 from chart_manager.services.publish import PublishService
 from chart_manager.services.upgrader import (
     GitBaselineReader,
@@ -105,6 +104,7 @@ from chart_manager.services.upgrader import (
     UpgradeTelemetry,
 )
 from chart_manager.shared.charts import dependencies as chart_deps
+from chart_manager.shared.cluster.progress import ProgressCallback
 from chart_manager.shared.settings import Settings, load_settings
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,

@@ -14,13 +14,11 @@ from pathlib import Path
 from typing import cast
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
-from chart_manager.domain.local_resources import LocalResourceLoader
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters._shared import kind_config_path
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
 from chart_manager.services.clusters.environment import (
     ClientFactory,
@@ -48,10 +46,12 @@ from chart_manager.services.lifecycle.plan_projection import (
     exclude_bootstrap_owned_charts,
     exclude_required_lifecycles,
 )
-from chart_manager.services.progress import ProgressCallback, info, step, warn
 from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
 from chart_manager.shared.charts.install_plan import DependencyResolver
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.progress import ProgressCallback, info, step, warn
+from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME, kind_config_path
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel. This service is the CI-shaped one, where the process
@@ -59,7 +59,6 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 #: narration is gone with it.
 _LOG = logging.getLogger(__name__)
 
-DEFAULT_CLUSTER_NAME = "chart-manager"
 
 DEFAULT_PROFILE = "minimal"
 
@@ -170,9 +169,7 @@ class EphemeralTestClusterService:
         self.kind = kind
         self.kubectl = kubectl
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
-        self.local_resources = LocalResourceLoader(
-            self.root, local_config=workspace.spec.local_cluster
-        )
+        self._workspace = workspace
         self._client_factory = client_factory
         self._command_runner = command_runner or SubprocessRunner()
         self._hooks = ProvisioningHookRunner(
@@ -189,7 +186,7 @@ class EphemeralTestClusterService:
         ``LocalCluster`` owns the Kind config path and bootstrap sequence;
         callers only select the cluster identity.
         """
-        self._ensure_environment(cluster_name, self.local_resources.load_cluster())
+        self._ensure_environment(cluster_name, load_cluster(self._workspace))
         return cluster_name
 
     def _environment_spec(
@@ -288,7 +285,7 @@ class EphemeralTestClusterService:
         # Bootstrap ownership is authored configuration, not process state.
         # Reload it for every run so a long-lived service cannot carry an
         # earlier run's externally-satisfied identities forward.
-        local_cluster = self.local_resources.load_cluster()
+        local_cluster = load_cluster(self._workspace)
         bootstrap_lifecycles = self._bootstrap_executor().preflight(
             local_cluster,
             lint=lint,
@@ -309,7 +306,7 @@ class EphemeralTestClusterService:
         injected progress callback.
         """
         started = time.monotonic()
-        local_cluster = self.local_resources.load_cluster()
+        local_cluster = load_cluster(self._workspace)
         environment_spec = self._environment_spec(options.cluster_name, local_cluster)
         bootstrap_mode = "converge"
         install_missing_prerequisites = False

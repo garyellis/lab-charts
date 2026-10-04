@@ -22,7 +22,6 @@ from chart_manager.api.v1alpha1.releases import (
     RepoChartRelease,
 )
 from chart_manager.domain.local_resources import (
-    LocalResourceLoader,
     ResolvedLocalTarget,
 )
 from chart_manager.integrations.helm import Helm
@@ -31,7 +30,6 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.clusters._shared import (
-    kind_config_path,
     lifecycle_install_plan,
     oci_chart_ref,
     oci_identity,
@@ -66,7 +64,13 @@ from chart_manager.services.clusters.environment import (
 )
 from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
 from chart_manager.services.expose import ExposeService
-from chart_manager.services.progress import (
+from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
+from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.progress import (
     ProgressCallback,
     detail,
     failure,
@@ -74,11 +78,7 @@ from chart_manager.services.progress import (
     step,
     warn,
 )
-from chart_manager.shared.charts.chart import ResolvedChartTarget
-from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
-from chart_manager.shared.charts.install_plan import InstallPlanEntry
-from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
-from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.session import kind_config_path
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel, parallel to `self._progress`. Every `failure(...)` /
@@ -156,9 +156,7 @@ class DevelopmentClusterService:
         # the lifecycle across two layers.
         self.expose = expose
         self.environment_provider = environment_provider or KindEnvironmentProvider(kind)
-        self.local_resources = LocalResourceLoader(
-            self.root, local_config=workspace.spec.local_cluster
-        )
+        self._workspace = workspace
         self._client_factory = client_factory
         self._hooks = ProvisioningHookRunner(
             self.root,
@@ -349,7 +347,7 @@ class DevelopmentClusterService:
         from a report, where it only means the drift check has no baseline.
         """
         try:
-            local_cluster = self.local_resources.load_cluster()
+            local_cluster = load_cluster(self._workspace)
         except (ChartManagerError, OSError) as exc:
             # Swallowed on purpose (see above), but not silently: with no
             # authored config the drift check downstream compares against a
@@ -389,7 +387,7 @@ class DevelopmentClusterService:
         re-deriving the sequence here would be a second copy of the
         bootstrap ordering rule for a display detail.
         """
-        local_cluster = self.local_resources.load_cluster()
+        local_cluster = load_cluster(self._workspace)
         bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
         steps = self._preflight_target(
             self._target_releases(target, profile=profile),
@@ -544,7 +542,7 @@ class DevelopmentClusterService:
         self, target: ResolvedLocalTarget, *, profile: str | None
     ) -> _PreparedConverge:
         """Complete every static check once, before hooks or provider mutation."""
-        local_cluster = self.local_resources.load_cluster()
+        local_cluster = load_cluster(self._workspace)
         bootstrap_identities = self._bootstrap_executor().preflight(local_cluster)
         steps = self._preflight_target(
             self._target_releases(target, profile=profile),

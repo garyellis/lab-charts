@@ -30,13 +30,13 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterService,
 )
 from chart_manager.services.clusters.development.drift import kind_config_host_ports
-from chart_manager.services.progress import ProgressEvent
 from chart_manager.shared.charts.chart import (
     ChartMetadata,
     ClusterTestChart,
     HelmChart,
 )
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
+from chart_manager.shared.cluster.progress import ProgressEvent
 from tests.conftest import workspace_for
 
 # Re-use the same shape of fakes the existing converge tests use; new

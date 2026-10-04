@@ -30,7 +30,7 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterEntryOutcome,
     DevelopmentClusterResult,
 )
-from chart_manager.services.progress import detail, failure, info, step, warn
+from chart_manager.shared.cluster.progress import detail, failure, info, step, warn
 
 
 @pytest.fixture

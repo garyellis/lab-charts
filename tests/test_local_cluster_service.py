@@ -18,13 +18,13 @@ from chart_manager.services.clusters.ephemeral import (
 )
 from chart_manager.services.lifecycle.models import LifecyclePlan
 from chart_manager.services.lifecycle.plan_projection import RequiredLifecycleProjection
-from chart_manager.services.progress import ProgressEvent
 from chart_manager.shared.charts.chart import (
     ChartMetadata,
     ClusterTestChart,
     HelmChart,
 )
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
+from chart_manager.shared.cluster.progress import ProgressEvent
 from tests.conftest import workspace_for
 
 

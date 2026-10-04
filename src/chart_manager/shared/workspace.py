@@ -10,6 +10,7 @@ from pathlib import Path, PurePath
 from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, ChartWorkspaceSpec
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
@@ -109,10 +110,8 @@ class RepositoryWorkspace:
         # cluster resource cannot break chart listing or validation.
         if self.local_cluster_path.is_file():
             try:
-                from chart_manager.domain.local_resources import load_local_cluster
-
-                cluster = load_local_cluster(self.local_cluster_path)
-            except SpecError:
+                cluster = LocalCluster.model_validate(load_yaml_file(self.local_cluster_path))
+            except (YamlError, ValueError):
                 pass
             else:
                 implicit.append(cluster.spec.cluster.config.as_posix())

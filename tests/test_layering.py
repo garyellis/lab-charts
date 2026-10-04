@@ -219,6 +219,7 @@ _DOMAIN_ALLOWED_IMPORTS = frozenset(
         "chart_manager.domain",
         "chart_manager.plumbing",
         "chart_manager.shared.charts",
+        "chart_manager.shared.cluster.local_cluster",
         "chart_manager.shared.workspace",
         "pydantic",
     }
@@ -424,7 +425,7 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     Rendering belongs to the surface: Rich widgets live in
     `cli/helmrelease_render.py`, `cli/validate_render.py` and
     `cli/validate_progress.py`; services narrate through injected callbacks
-    (`services/progress.py`, `services/manifest_validation/progress.py`) and return
+    (`shared/cluster/progress.py`, `services/manifest_validation/progress.py`) and return
     plain result objects plus versioned wire projections
     (`services/*/wire.py`).
 

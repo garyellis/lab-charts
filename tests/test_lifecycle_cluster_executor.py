@@ -15,7 +15,7 @@ from chart_manager.services.lifecycle.models import (
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.progress import ProgressEvent
+from chart_manager.shared.cluster.progress import ProgressEvent
 
 NOW = datetime(2026, 7, 27, 9, tzinfo=UTC)
 

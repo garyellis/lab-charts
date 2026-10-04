@@ -1,16 +1,4 @@
-"""Load repository-local authored resources and resolve them against the tree.
-
-The accepted shape of ``LocalCluster`` and ``LocalStack`` is owned by
-``chart_manager.api.v1alpha1``. What is left here is everything that
-needs more than a single document: reading the YAML and translating decode
-failures into ``SpecError``, keeping every referenced path inside the
-repository root, checking that charts, ``Chart.yaml`` files and values files
-actually exist, agreeing a release name with the chart it names, and resolving
-a command-line target to either a chart directory or a loaded stack.
-
-Paths authored in those documents are repository-relative by construction, so
-resolving one never grants access outside the repository root.
-"""
+"""Resolve a `local` target to a chart directory or a loaded `LocalStack`."""
 
 from __future__ import annotations
 
@@ -19,55 +7,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.local_stack import LocalStack
-from chart_manager.api.v1alpha1.releases import (
-    BootstrapRelease,
-    LifecycleRelease,
-    LocalChartRelease,
-    OciChartRelease,
-    RepoChartRelease,
-    StackRelease,
-)
 from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
-from chart_manager.plumbing.paths import relative_path, validate_hook_executable
+from chart_manager.plumbing.paths import relative_path
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.shared.charts.chart import (
-    ResolvedChartTarget,
-    chart_target,
-    load_chart_metadata,
-)
-from chart_manager.shared.charts.lifecycle import (
-    LIFECYCLE_FILENAME,
-    load_chart_lifecycle,
-    require_cluster_test_profile,
-)
+from chart_manager.shared.charts.chart import ResolvedChartTarget, chart_target
+from chart_manager.shared.cluster.local_cluster import inside_root, validate_release
 
 DEFAULT_STACKS_DIR = Path("stacks")
 
 
-def _load_resource(path: Path, model: type[LocalCluster] | type[LocalStack]):
+def load_local_stack(path: Path) -> LocalStack:
+    """Strictly load one ``LocalStack`` resource."""
     if not path.is_file():
         raise SpecError(f"local resource file does not exist: {path}")
     try:
-        document = load_yaml_file(path)
-    except YamlError as exc:
+        return LocalStack.model_validate(load_yaml_file(path))
+    except (YamlError, ValueError) as exc:
         raise SpecError(f"invalid local resource {path}: {exc}") from exc
-    try:
-        return model.model_validate(document)
-    except ValueError as exc:
-        raise SpecError(f"invalid local resource {path}: {exc}") from exc
-
-
-def load_local_cluster(path: Path) -> LocalCluster:
-    """Strictly load one ``LocalCluster`` resource."""
-    return _load_resource(path, LocalCluster)
-
-
-def load_local_stack(path: Path) -> LocalStack:
-    """Strictly load one ``LocalStack`` resource."""
-    return _load_resource(path, LocalStack)
 
 
 class ResolvedStackTarget(BaseModel):
@@ -84,8 +42,8 @@ class ResolvedStackTarget(BaseModel):
 type ResolvedLocalTarget = ResolvedChartTarget | ResolvedStackTarget
 
 
-class LocalResourceLoader:
-    """Load local resources and enforce repository containment/existence."""
+class LocalTargetResolver:
+    """Resolve a repository chart directory or a named/explicit ``LocalStack``."""
 
     def __init__(
         self,
@@ -99,93 +57,14 @@ class LocalResourceLoader:
         self.stacks_dir = relative_path(stacks_dir, field="stacks_dir")
 
     @property
-    def cluster_path(self) -> Path:
-        return self.root / self.local_config
-
-    @property
     def stacks_path(self) -> Path:
         return self.root / self.local_config.parent / self.stacks_dir
 
-    def load_cluster(self) -> LocalCluster:
-        cluster = load_local_cluster(self.cluster_path)
-        self._require_file(cluster.spec.cluster.config, field="spec.cluster.config")
-        hooks = cluster.spec.cluster.hooks
-        if hooks is not None:
-            for phase, command in (
-                ("preProvision", hooks.pre_provision),
-                ("postProvision", hooks.post_provision),
-            ):
-                if command is not None:
-                    validate_hook_executable(
-                        self.root,
-                        command[0],
-                        field=f"spec.cluster.hooks.{phase}[0]",
-                    )
-        for release in cluster.spec.bootstrap.releases:
-            self._validate_release(release)
-        return cluster
-
     def load_stack(self, path: Path) -> LocalStack:
-        absolute = self._inside_root(path)
-        stack = load_local_stack(absolute)
+        stack = load_local_stack(inside_root(self.root, path))
         for release in stack.spec.releases:
-            self._validate_release(release)
+            validate_release(self.root, release)
         return stack
-
-    def _validate_release(self, release: BootstrapRelease | StackRelease) -> None:
-        if isinstance(release, (LifecycleRelease, LocalChartRelease)):
-            chart = self._require_directory(release.chart, field="release.chart")
-            chart_yaml = chart / "Chart.yaml"
-            if not chart_yaml.is_file():
-                raise SpecError(f"release.chart has no Chart.yaml: {release.chart}")
-            chart_name = load_chart_metadata(chart_yaml).name
-            if isinstance(release, LocalChartRelease) and release.name != chart_name:
-                raise SpecError(
-                    f"local release name {release.name!r} does not match "
-                    f"{chart_yaml} name {chart_name!r}"
-                )
-            if isinstance(release, LifecycleRelease):
-                lifecycle_path = chart / LIFECYCLE_FILENAME
-                lifecycle = load_chart_lifecycle(lifecycle_path)
-                if lifecycle.metadata.name != chart_name:
-                    raise SpecError(
-                        f"{lifecycle_path} metadata.name {lifecycle.metadata.name!r} "
-                        f"does not match {chart_yaml} name {chart_name!r}"
-                    )
-                cluster_test = lifecycle.spec.cluster_test
-                if not lifecycle.spec.enabled or cluster_test is None or not cluster_test.enabled:
-                    raise SpecError(
-                        f"lifecycle release chart {release.chart} has no enabled clusterTest"
-                    )
-                require_cluster_test_profile(cluster_test, release.profile)
-        if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):
-            for path in release.values:
-                self._require_file(path, field="release.values[]")
-
-    def _inside_root(self, path: Path) -> Path:
-        candidate = path if path.is_absolute() else self.root / path
-        resolved = candidate.resolve()
-        try:
-            resolved.relative_to(self.root)
-        except ValueError as exc:
-            raise SpecError(f"path escapes repository root {self.root}: {path}") from exc
-        return resolved
-
-    def _require_file(self, path: Path, *, field: str) -> Path:
-        absolute = self._inside_root(path)
-        if not absolute.is_file():
-            raise SpecError(f"{field} file does not exist: {path}")
-        return absolute
-
-    def _require_directory(self, path: Path, *, field: str) -> Path:
-        absolute = self._inside_root(path)
-        if not absolute.is_dir():
-            raise SpecError(f"{field} directory does not exist: {path}")
-        return absolute
-
-
-class LocalTargetResolver(LocalResourceLoader):
-    """Resolve a repository chart directory or a named/explicit ``LocalStack``."""
 
     def resolve(self, target: str | Path) -> ResolvedLocalTarget:
         raw = str(target)
@@ -213,7 +92,7 @@ class LocalTargetResolver(LocalResourceLoader):
         return resolved
 
     def _resolve_explicit(self, path: Path) -> ResolvedLocalTarget:
-        absolute = self._inside_root(path)
+        absolute = inside_root(self.root, path)
         if absolute.is_dir():
             return chart_target(self.root, absolute)
         if absolute.is_file():
@@ -229,10 +108,8 @@ class LocalTargetResolver(LocalResourceLoader):
 
 __all__ = [
     "DEFAULT_STACKS_DIR",
-    "LocalResourceLoader",
     "LocalTargetResolver",
     "ResolvedLocalTarget",
     "ResolvedStackTarget",
-    "load_local_cluster",
     "load_local_stack",
 ]
