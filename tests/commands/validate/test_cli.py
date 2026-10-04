@@ -193,3 +193,24 @@ def test_a_table_run_ends_with_a_summary_of_spec_errors(fake_run) -> None:  # ty
     result = cli("chart", "validate", "--all", "-o", "table", "--progress", "none")
 
     assert "summary: 1 spec error(s)" in result.output
+
+
+def test_markdown_explains_an_empty_run_and_lists_the_diagnostics(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = validate.ValidateOutcome(
+        rows=(),
+        diagnostics=validate.Diagnostics(
+            requested_charts=("demo",),
+            unmatched_changes=("charts/demo/notes.txt",),
+            charts_unvalidated=2,
+        ),
+    )
+
+    markdown = cli("chart", "validate", "demo", "-o", "md").stdout
+
+    assert (
+        "_nothing to validate: requested filters selected no affected validation cases_" in markdown
+    )
+    assert "### Diagnostics" in markdown
+    assert "- Requested charts: demo" in markdown
+    assert "  - `charts/demo/notes.txt`" in markdown
+    assert "- Charts without manifest-validation configuration: 2" in markdown

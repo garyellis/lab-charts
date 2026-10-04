@@ -64,12 +64,25 @@ class Row:
 
 
 @dataclass(frozen=True)
+class Diagnostics:
+    """What shaped the selection: the filters asked for, and the changes and charts left out."""
+
+    requested_charts: tuple[str, ...] = ()
+    requested_envs: tuple[str, ...] = ()
+    ignored_changes: tuple[str, ...] = ()
+    unmatched_changes: tuple[str, ...] = ()
+    rows_filtered_out: int = 0
+    charts_unvalidated: int = 0
+
+
+@dataclass(frozen=True)
 class ValidateOutcome:
     """Every row of one validate run, and the charts whose configuration kept them out."""
 
     rows: tuple[Row, ...]
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    diagnostics: Diagnostics = Diagnostics()
 
     def outcome(self) -> Outcome:
         """The run's exit reason: a spec error, then a tool error, then a failed check."""

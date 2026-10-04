@@ -689,3 +689,33 @@ def test_a_symlinked_row_directory_is_refused_rather_than_emptied(tmp_path: Path
 
     assert "symlink" in outcome.spec_errors[0]
     assert (elsewhere / "keep.yaml").exists()
+
+
+def test_the_outcome_records_what_shaped_the_selection(tmp_path: Path) -> None:
+    write_validation_chart(
+        tmp_path,
+        "demo",
+        environments={"dev": {"values": ["values.yaml"]}, "ci": {"values": ["values.yaml"]}},
+        triggerIgnores=["docs/**"],
+    )
+    (tmp_path / "charts" / "plain").mkdir()
+    (tmp_path / "charts" / "plain" / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: plain\nversion: 0.1.0\n"
+    )
+    changes = ("charts/demo/templates/cm.yaml", "charts/demo/docs/a.md", "charts/demo/notes.txt")
+
+    outcome = validate.run(
+        validate.ValidateRequest(
+            charts=(), out=tmp_path / "out", envs=("ci",), changes=changes, checks=RENDER
+        ),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert outcome.diagnostics == validate.Diagnostics(
+        requested_envs=("ci",),
+        ignored_changes=("charts/demo/docs/a.md",),
+        unmatched_changes=("charts/demo/notes.txt",),
+        rows_filtered_out=1,
+        charts_unvalidated=1,
+    )

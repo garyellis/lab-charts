@@ -43,12 +43,15 @@ DEFAULT_TRIGGERS: Mapping[str, TriggerValue] = MappingProxyType(
 
 @dataclass(frozen=True)
 class Selection:
-    """The selected rows (no checks run yet), the charts they belong to, and load errors."""
+    """The selected rows (no checks run yet), the charts they belong to, and what was left out."""
 
     rows: tuple[Row, ...]
     charts: Mapping[str, Chart] = field(default_factory=dict)
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    ignored_changes: tuple[str, ...] = ()
+    unmatched_changes: tuple[str, ...] = ()
+    charts_unvalidated: int = 0
 
 
 def select(changes: Sequence[str] | None, *, workspace: RepositoryWorkspace) -> Selection:
@@ -61,16 +64,25 @@ def select(changes: Sequence[str] | None, *, workspace: RepositoryWorkspace) -> 
     - otherwise the environments its chart's triggers (over `DEFAULT_TRIGGERS`) name,
       unless `triggerIgnores` covers it, with `unmatchedChanges` deciding the rest.
     """
-    charts, spec_errors, warnings = _load(workspace)
+    charts, spec_errors, skipped = _load(workspace)
     specs = {name: require_validation(c.lifecycle, chart_name=name) for name, c in charts.items()}
+    ignored: list[str] = []
+    unmatched: list[str] = []
     if changes is None:
         pairs = {(chart, env) for chart, spec in specs.items() for env in spec.environments}
+        warnings = skipped
     else:
-        pairs, change_warnings = _pairs_for(changes, specs, workspace)
-        warnings += change_warnings
+        pairs, ignored, unmatched, change_warnings = _pairs_for(changes, specs, workspace)
+        warnings = skipped + change_warnings
     rows = tuple(selected_row(chart, specs[chart], env) for chart, env in sorted(pairs))
     return Selection(
-        rows=rows, charts=charts, spec_errors=tuple(spec_errors), warnings=tuple(warnings)
+        rows=rows,
+        charts=charts,
+        spec_errors=tuple(spec_errors),
+        warnings=tuple(warnings),
+        ignored_changes=tuple(ignored),
+        unmatched_changes=tuple(unmatched),
+        charts_unvalidated=len(skipped),
     )
 
 
@@ -84,7 +96,7 @@ def selected_row(chart: str, spec: ManifestValidationSpec, env: str) -> Row:
 
 
 def _load(workspace: RepositoryWorkspace) -> tuple[dict[str, Chart], list[str], list[str]]:
-    """Every chart with validation enabled; load errors and the other charts are reported."""
+    """Every chart with validation enabled; load errors, and one warning per other chart."""
     charts: dict[str, Chart] = {}
     errors: list[str] = []
     warnings: list[str] = []
@@ -114,10 +126,13 @@ def _pairs_for(
     changes: Sequence[str],
     specs: dict[str, ManifestValidationSpec],
     workspace: RepositoryWorkspace,
-) -> tuple[set[tuple[str, str]], list[str]]:
+) -> tuple[set[tuple[str, str]], list[str], list[str], list[str]]:
+    """The (chart, env) pairs `changes` select, the ignored and unmatched changes, and warnings."""
     pairs: set[tuple[str, str]] = set()
     ignored: list[str] = []
     unmatched: list[str] = []
+    ignored_warnings: list[str] = []
+    unmatched_warnings: list[str] = []
     fanout = False
     dependents = build_helm_dependency_index(workspace.root, charts_dir=workspace.spec.charts_dir)
     prefix = len(workspace.spec.charts_dir.parts)
@@ -146,7 +161,10 @@ def _pairs_for(
         if spec is None:
             continue
         if any(fnmatch.fnmatchcase(relative.as_posix(), p) for p in spec.trigger_ignores):
-            ignored.append(f"changed chart file explicitly ignored by triggerIgnores: {raw}")
+            ignored.append(raw)
+            ignored_warnings.append(
+                f"changed chart file explicitly ignored by triggerIgnores: {raw}"
+            )
             continue
         envs, matched = _triggered(spec, relative)
         if not matched:
@@ -156,11 +174,12 @@ def _pairs_for(
                 else "no environments selected; add a trigger or triggerIgnores entry, "
                 "or set unmatchedChanges=all-environments"
             )
-            unmatched.append(f"changed chart file matches no trigger: {raw} ({behavior})")
+            unmatched.append(raw)
+            unmatched_warnings.append(f"changed chart file matches no trigger: {raw} ({behavior})")
         pairs.update((chart, env) for env in envs)
     if fanout:
         pairs = {(c, e) for c, spec in specs.items() for e in spec.environments}
-    return pairs, ignored + unmatched
+    return pairs, ignored, unmatched, ignored_warnings + unmatched_warnings
 
 
 def _is_chart_wide(relative: Path) -> bool:

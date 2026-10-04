@@ -14,6 +14,7 @@ from chart_manager.commands.validate.models import (
     FAILING,
     CheckName,
     CheckResult,
+    Diagnostics,
     Row,
     ValidateOutcome,
 )
@@ -63,10 +64,10 @@ def to_json(outcome: ValidateOutcome, *, rendered: Path) -> dict[str, object]:
 
 
 def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
-    """The run as GitHub-flavoured markdown: table, tally, failure and advisory details."""
+    """The run as GitHub-flavoured markdown: table, tally, details, diagnostics and warnings."""
     lines = ["## validate", ""]
     if not outcome.rows:
-        lines.append("_nothing to validate_")
+        lines.append(f"_nothing to validate: {_no_work_reason(outcome.diagnostics)}_")
     else:
         header = ["Chart", "Env", "Release", "Render", "Schema", "Policy"]
         header += ["Elapsed"] if timings else []
@@ -92,6 +93,9 @@ def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
                 lines += ["", f"### {title}", ""]
                 for block in blocks:
                     lines += [*block, ""]
+    diagnostics = _diagnostics(outcome.diagnostics)
+    if diagnostics:
+        lines += ["", "### Diagnostics", "", *diagnostics]
     notes = [f"- {warning}" for warning in outcome.warnings]
     if outcome.spec_errors:
         notes.append(f"- {len(outcome.spec_errors)} spec error(s):")
@@ -99,6 +103,41 @@ def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
     if notes:
         lines += ["", "### Warnings", "", *notes]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _no_work_reason(diagnostics: Diagnostics) -> str:
+    """Why a run had no rows, most specific cause first."""
+    if diagnostics.requested_charts or diagnostics.requested_envs:
+        return "requested filters selected no affected validation cases"
+    if diagnostics.unmatched_changes:
+        return "changed files matched no validation trigger"
+    if diagnostics.ignored_changes:
+        return "all relevant changed files were explicitly ignored"
+    if diagnostics.charts_unvalidated:
+        return "no chart with manifest-validation configuration was selected"
+    return "no affected validation cases"
+
+
+def _diagnostics(diagnostics: Diagnostics) -> list[str]:
+    """Markdown bullets for the filters asked for and what the selection left out."""
+    lines = []
+    if diagnostics.requested_charts:
+        lines.append(f"- Requested charts: {', '.join(diagnostics.requested_charts)}")
+    if diagnostics.requested_envs:
+        lines.append(f"- Requested environments: {', '.join(diagnostics.requested_envs)}")
+    if diagnostics.ignored_changes:
+        lines += ["- Ignored changes:", *(f"  - `{path}`" for path in diagnostics.ignored_changes)]
+    if diagnostics.unmatched_changes:
+        lines.append("- Changes matching no trigger:")
+        lines += [f"  - `{path}`" for path in diagnostics.unmatched_changes]
+    if diagnostics.rows_filtered_out:
+        lines.append(f"- Rows filtered out: {diagnostics.rows_filtered_out}")
+    if diagnostics.charts_unvalidated:
+        lines.append(
+            "- Charts without manifest-validation configuration: "
+            f"{diagnostics.charts_unvalidated}"
+        )
+    return lines
 
 
 def to_table(outcome: ValidateOutcome, *, timings: bool) -> Table:

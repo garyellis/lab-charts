@@ -17,6 +17,7 @@ from chart_manager.commands.validate.models import (
     FAILING,
     CheckName,
     CheckResult,
+    Diagnostics,
     RequestError,
     Row,
     ValidateOutcome,
@@ -108,6 +109,14 @@ def run(
             *(result for result in results if isinstance(result, str)),
         ),
         warnings=selection.warnings,
+        diagnostics=Diagnostics(
+            requested_charts=request.charts,
+            requested_envs=request.envs,
+            ignored_changes=selection.ignored_changes,
+            unmatched_changes=selection.unmatched_changes,
+            rows_filtered_out=len(selection.rows) - len(rows),
+            charts_unvalidated=selection.charts_unvalidated,
+        ),
     )
 
 
@@ -140,7 +149,13 @@ def _selection(request: ValidateRequest, workspace: RepositoryWorkspace) -> Sele
         return named
     changed = select(request.changes, workspace=workspace)
     rows = tuple(row for row in changed.rows if row.chart in named.charts)
-    return replace(named, rows=rows, warnings=changed.warnings)
+    return replace(
+        named,
+        rows=rows,
+        warnings=changed.warnings,
+        ignored_changes=changed.ignored_changes,
+        unmatched_changes=changed.unmatched_changes,
+    )
 
 
 def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
