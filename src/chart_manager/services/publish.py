@@ -375,9 +375,9 @@ def directly_changed_charts(workspace: RepositoryWorkspace, changes: Iterable[st
     return sorted(
         {
             name
-            for raw in changes
-            if raw.strip()
-            if (name := workspace.chart_name_from_repo_path(raw.strip())) is not None
+            for path in (raw.strip() for raw in changes)
+            if path
+            if (name := workspace.chart_name_from_repo_path(path)) is not None
             if name in current
         }
     )

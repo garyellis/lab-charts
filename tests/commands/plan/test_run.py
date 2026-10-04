@@ -140,7 +140,7 @@ def test_a_workspace_file_change_selects_every_validation_row_and_chart_test(
     assert outcome.publish == ()
 
 
-def test_a_dependent_test_naming_an_unknown_profile_is_a_spec_error(
+def test_chart_test_spec_errors_reach_the_plan_outcome(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
     _depends_on(make_chart("source"), target="source", profile="nope")

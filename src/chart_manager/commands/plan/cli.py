@@ -5,8 +5,8 @@ Each output mode reads its changes its own way:
 - `-o github` takes explicit paths, else `--all`, `--chart` or the diff against `--base`;
 - `--for publish` takes only `--changed-files`.
 
-`.github/workflows/ci.yaml` reads two of them, so their bytes must not change: the
-`-o github` matrix and the `--for publish -o table` chart list.
+`.github/workflows/ci.yaml` reads two of them: the `-o github` matrix and the
+`--for publish -o table` chart list.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def plan(
             charts=tuple(charts or ()),
         )
         outcome = run(request, workspace=workspace, runner=container.command_runner())
-        # Spec errors fail only the git-diff matrix (#145).
+        # Spec errors fail only the git-diff matrix.
         if request.changes is None and outcome.spec_errors:
             detail = "\n".join(f"- {error}" for error in outcome.spec_errors)
             raise SpecError(f"lifecycle impact analysis found spec errors:\n{detail}")

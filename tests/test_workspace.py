@@ -403,7 +403,7 @@ def test_chart_test_fanout_and_shared_charts_load_from_chart_test_keys(tmp_path:
         {"chartTest": {"sharedPrerequisites": ["base"]}},
     ],
 )
-def test_cluster_test_keys_are_rejected(spec: dict[str, object]) -> None:
+def test_the_old_workspace_keys_are_rejected(spec: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         ChartWorkspace.model_validate(_document(**spec))
 

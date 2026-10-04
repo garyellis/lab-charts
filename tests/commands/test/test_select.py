@@ -208,7 +208,7 @@ def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart
 
     assert _picked(selection) == [("alpha", "minimal")]
     assert selection.tests[0].reasons[0].detail == (
-        "platform/network is a LocalCluster bootstrap chart used by every chart test"
+        "platform/network is part of the LocalCluster every chart test runs on"
     )
 
 

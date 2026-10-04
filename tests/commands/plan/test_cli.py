@@ -1,7 +1,7 @@
 """`plan` at the CLI: flags, output modes and exit codes, with `run()` faked.
 
 `.github/workflows/ci.yaml` reads the `-o github` matrix and the `--for publish -o table`
-chart list, so those two are pinned byte for byte.
+chart list, so those two are pinned exactly.
 """
 
 from __future__ import annotations

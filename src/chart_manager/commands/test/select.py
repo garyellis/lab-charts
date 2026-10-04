@@ -164,5 +164,5 @@ def _fanout_detail(pattern: str, workspace: RepositoryWorkspace) -> str:
         workspace.spec.local_cluster.as_posix(),
         workspace.marker.relative_to(workspace.root).as_posix(),
     }:
-        return f"{pattern} is a LocalCluster bootstrap chart used by every chart test"
+        return f"{pattern} is part of the LocalCluster every chart test runs on"
     return f"workspace chart-test fanout matched {pattern}"
