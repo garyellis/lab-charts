@@ -84,32 +84,19 @@ class LifecycleImpactService:
                 key=Path.as_posix,
             )
         )
-        validation_reasons: dict[tuple[str, str], list[ImpactReason]] = {}
-        for changed_file in changes:
-            single = validate.select([changed_file.as_posix()], workspace=self.workspace)
-            for row in single.rows:
-                key = (row.chart, row.env)
-                _append_reason(
-                    validation_reasons,
-                    key,
-                    _validation_reason(
-                        changed_file,
-                        selected_chart=row.chart,
-                        workspace=self.workspace,
-                    ),
-                )
-
         combined = validate.select([path.as_posix() for path in changes], workspace=self.workspace)
-        rows_by_key = {(row.chart, row.env): row for row in combined.rows}
         validation = tuple(
             ValidationImpact(
-                chart,
-                environment,
-                rows_by_key[(chart, environment)].release,
-                rows_by_key[(chart, environment)].namespace,
-                tuple(reasons),
+                row.chart,
+                row.env,
+                row.release,
+                row.namespace,
+                tuple(
+                    ImpactReason(ImpactReasonCode(reason.code), reason.changed_file, reason.detail)
+                    for reason in combined.reasons[(row.chart, row.env)]
+                ),
             )
-            for (chart, environment), reasons in sorted(validation_reasons.items())
+            for row in combined.rows
         )
 
         cluster_reasons, cluster_errors = self._cluster_test_impact(changes)
@@ -221,46 +208,6 @@ def _default_profile(profiles: Mapping[str, object]) -> str:
     if DEFAULT_PROFILE in profiles:
         return DEFAULT_PROFILE
     return sorted(profiles)[0]
-
-
-def _validation_reason(
-    changed_file: Path,
-    *,
-    selected_chart: str,
-    workspace: RepositoryWorkspace,
-) -> ImpactReason:
-    """Classify the existing validation worklist rule that selected a row."""
-    if changed_file == workspace.marker.relative_to(workspace.root) or _path_is_within(
-        changed_file, workspace.spec.policies_dir
-    ):
-        return ImpactReason(
-            ImpactReasonCode.REPOSITORY_POLICY,
-            changed_file,
-            "repository policy changes validate every configured environment",
-        )
-    if workspace.matches_validation_fanout(changed_file):
-        return ImpactReason(
-            ImpactReasonCode.VALIDATION_ENGINE,
-            changed_file,
-            "validation implementation changes validate every configured environment",
-        )
-    changed_chart = workspace.chart_name_from_repo_path(changed_file)
-    if changed_chart is not None and changed_chart != selected_chart:
-        return ImpactReason(
-            ImpactReasonCode.HELM_DEPENDENT,
-            changed_file,
-            f"{selected_chart} declares a Helm dependency on {changed_chart}",
-        )
-    return ImpactReason(
-        ImpactReasonCode.VALIDATION_TRIGGER,
-        changed_file,
-        f"authored validation triggers selected {selected_chart}",
-    )
-
-
-def _path_is_within(path: Path, relative: Path) -> bool:
-    prefix = relative.parts
-    return path.parts[: len(prefix)] == prefix
 
 
 def _append_reason(
