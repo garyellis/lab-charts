@@ -185,6 +185,20 @@ def test_skip_requires_names_a_missing_requirement_before_installing_anything(
     assert not any(s[:2] == ("helm", "upgrade") for s in _steps(runner))
 
 
+def test_skip_requires_raises_a_failed_listing_instead_of_reading_it_as_not_installed(
+    repo: Path,
+) -> None:
+    """An unreachable cluster is a tool error, not "not installed"."""
+    runner = _runner("lab").respond(
+        argv_prefix("helm", "list"), returncode=1, stderr="Kubernetes cluster unreachable"
+    )
+
+    with pytest.raises(ExternalCommandError, match="Kubernetes cluster unreachable"):
+        _run(repo, runner, skip_requires=True)
+
+    assert not any(s[:2] == ("helm", "upgrade") for s in _steps(runner))
+
+
 def test_a_pre_install_hook_runs_after_its_namespace_and_before_its_install(
     repo: Path, make_chart: MakeChart
 ) -> None:
