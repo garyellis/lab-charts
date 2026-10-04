@@ -81,6 +81,7 @@ def compile_plan(
                 lint=request.lint,
             ),
             owned,
+            root=root,
         )
         for chart, profile in requested
     ]
@@ -105,9 +106,7 @@ def compile_cluster_test(
     for entry in resolver.install_plan(chart, profile):
         cluster_chart = catalog.get(entry.chart)
         profile_spec = require_cluster_test_profile(cluster_chart.spec, entry.profile)
-        values = tuple(
-            path.resolve() for path in catalog.value_paths(cluster_chart, entry.profile)
-        )
+        values = tuple(path.resolve() for path in catalog.value_paths(cluster_chart, entry.profile))
         is_requested_target = entry.chart == chart and entry.profile == profile
         namespace = (
             namespace_override
@@ -224,7 +223,7 @@ def _hook_action(
 
 
 def exclude_bootstrap_owned_charts(
-    plan: LifecyclePlan, bootstrap_owned: frozenset[ExternallySatisfiedLifecycle]
+    plan: LifecyclePlan, bootstrap_owned: frozenset[ExternallySatisfiedLifecycle], *, root: Path
 ) -> LifecyclePlan:
     """Drop the work for charts bootstrap already installed.
 
@@ -265,7 +264,21 @@ def exclude_bootstrap_owned_charts(
             action_id = _action_id(
                 _CLUSTER_TEST_PREFIX, plan.chart, plan.profile, ActionKind.WORKLOAD_READY
             )
-            kept.append(replace(action, kind=ActionKind.WORKLOAD_READY, action_id=action_id))
+            digest = _input_digest(
+                root=root,
+                action_id=action_id,
+                chart_path=action.chart_path,
+                values=action.values,
+                metadata=(("timeout", action.timeout or ""),),
+            )
+            kept.append(
+                replace(
+                    action,
+                    kind=ActionKind.WORKLOAD_READY,
+                    action_id=action_id,
+                    input_digest=digest,
+                )
+            )
             removed.add(action.target.chart)
         else:
             removed.add(action.target.chart)

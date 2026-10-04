@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import test
-from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, MissingToolError
+from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import load_repository_workspace as load_workspace
 from tests.conftest import FakeCommandRunner, MakeChart
@@ -375,3 +376,26 @@ def test_teardown_reports_a_failed_delete(with_cleanups: Path) -> None:
 
     assert outcome.delete_error is not None and "busy" in outcome.delete_error
     assert not outcome.ok
+
+
+def test_a_failed_bootstrap_release_is_raised_as_a_tool_error_after_its_diagnostics(
+    repo: Path,
+) -> None:
+    runner = (
+        _runner()
+        .respond(_is("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
+        .respond(_is("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
+    )
+    events: list[ProgressEvent] = []
+
+    with pytest.raises(ExternalCommandError, match="no cni"):
+        test.run(
+            test.ChartTestRequest(chart="app", cluster_name="lab"),
+            workspace=load_workspace(repo),
+            runner=runner,
+            settings=Settings(),
+            progress=events.append,
+        )
+
+    assert any("cni-0 Pending" in e.message for e in events)
+    assert not any(s[:4] == ("helm", "upgrade", "--install", "db") for s in _steps(runner))

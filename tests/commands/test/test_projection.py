@@ -17,6 +17,8 @@ from chart_manager.commands.test.plan import (
 )
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
+ROOT = Path.cwd()
+
 
 def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
     return LifecycleAction(
@@ -76,6 +78,7 @@ def test_removes_bootstrap_chart_actions() -> None:
     projected = exclude_bootstrap_owned_charts(
         original,
         frozenset({externally_satisfied("cilium")}),
+        root=ROOT,
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -98,7 +101,7 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
     original_action_ids = [item.action_id for item in original.actions]
 
     projected = exclude_bootstrap_owned_charts(
-        original, frozenset({externally_satisfied("cilium")})
+        original, frozenset({externally_satisfied("cilium")}), root=ROOT
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -112,6 +115,7 @@ def test_absent_bootstrap_chart_is_an_idempotent_noop() -> None:
     projected = exclude_bootstrap_owned_charts(
         original,
         frozenset({externally_satisfied("not-in-plan")}),
+        root=ROOT,
     )
 
     assert projected is original
@@ -121,12 +125,18 @@ def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install(
     projected = exclude_bootstrap_owned_charts(
         cluster_plan(),
         frozenset({externally_satisfied("grafana"), externally_satisfied("cilium")}),
+        root=ROOT,
     )
 
     assert [(a.target.chart, a.kind) for a in projected.actions] == [
         ("grafana", ActionKind.WORKLOAD_READY)
     ]
-    assert projected.actions[0].action_id == "cluster-test.grafana.minimal.workload-ready"
+    ready = projected.actions[0]
+    assert ready.action_id == "cluster-test.grafana.minimal.workload-ready"
+    install = next(
+        a for a in cluster_plan().actions if a.action_id.endswith("grafana:minimal:install")
+    )
+    assert ready.input_digest != install.input_digest
 
 
 @pytest.mark.parametrize(
@@ -142,7 +152,7 @@ def test_requires_exact_managed_lifecycle_identity(
 ) -> None:
     original = cluster_plan()
 
-    projected = exclude_bootstrap_owned_charts(original, frozenset({identity}))
+    projected = exclude_bootstrap_owned_charts(original, frozenset({identity}), root=ROOT)
 
     assert projected is original
 

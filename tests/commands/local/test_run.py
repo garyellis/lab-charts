@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import local
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.shared.charts.chart import ResolvedChartTarget
 from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.settings import Settings
@@ -256,3 +256,18 @@ def test_status_survives_a_repository_with_no_local_cluster(chart_root: Path) ->
 
     assert status.exists
     assert status.drift.error is None
+
+
+def test_a_failed_bootstrap_release_stops_up_after_printing_its_diagnostics(repo: Path) -> None:
+    runner = (
+        _runner()
+        .respond(_is("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
+        .respond(_is("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
+    )
+    events: list[ProgressEvent] = []
+
+    with pytest.raises(ExternalCommandError, match="no cni"):
+        _up(repo, runner, progress=events.append)
+
+    assert any("cni-0 Pending" in e.message for e in events)
+    assert _installs(runner) == ["cni"]

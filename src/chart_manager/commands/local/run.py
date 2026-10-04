@@ -263,7 +263,13 @@ def _converge(
     started = time.monotonic()
     summary = RunSummary()
     installed_keys = _installed_keys(lab, report)
-    for outcome in bootstrap.bootstrap(lab, prepared.cluster, root=root, progress=report):
+    try:
+        outcomes = bootstrap.bootstrap(lab, prepared.cluster, root=root, progress=report)
+    except ReleaseFailed as exc:
+        if exc.diagnostics.strip():
+            report(info(exc.diagnostics))
+        raise
+    for outcome in outcomes:
         bucket = summary.applied if outcome.status == "applied" else summary.no_change
         bucket.append(
             DevelopmentClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace)

@@ -157,11 +157,9 @@ def run(
         try:
             bootstrap.bootstrap(lab, cluster, root=root, progress=progress)
         except ReleaseFailed as exc:
-            emit(progress, failure("Failed", str(exc)))
             if exc.diagnostics.strip():
                 emit(progress, info(exc.diagnostics))
-            failed = ActionOutcome(f"bootstrap.{exc.release.name}", "bootstrap", "FAIL", str(exc))
-            return replace(outcome, actions=(failed,), diagnostics=exc.diagnostics)
+            raise
     _require_skipped(request, compiled.skipped, lab)
 
     hooks = ClusterTestHookRunner(root, runner=runner, kube_context=lab.context, cluster_name=name)

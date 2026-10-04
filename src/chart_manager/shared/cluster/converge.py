@@ -13,7 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
+from chart_manager.plumbing.errors import (
+    ChartManagerError,
+    ExternalCommandError,
+    MissingToolError,
+    SpecError,
+)
 from chart_manager.plumbing.yaml_files import parse_yaml_documents
 from chart_manager.shared.cluster.session import Session
 
@@ -36,11 +41,17 @@ class Release:
     repo: str | None = None
 
 
-class ReleaseFailed(ChartManagerError):
+class ReleaseFailed(ExternalCommandError):
     """A release failed to install or become ready; carries the namespace diagnostics."""
 
-    def __init__(self, release: Release, step: Step, detail: str, diagnostics: str) -> None:
-        super().__init__(f"{release.name} -> {release.namespace}: {step} failed: {detail}")
+    def __init__(
+        self, release: Release, step: Step, cause: ChartManagerError, diagnostics: str
+    ) -> None:
+        super().__init__(
+            f"{release.name} -> {release.namespace}: {step} failed: {cause}",
+            stderr=getattr(cause, "stderr", ""),
+            returncode=getattr(cause, "returncode", None),
+        )
         self.release = release
         self.step = step
         self.diagnostics = diagnostics
@@ -73,9 +84,7 @@ def converge(lab: Session, release: Release) -> Literal["applied", "no-change"]:
     except (MissingToolError, SpecError):
         raise
     except ChartManagerError as exc:
-        raise ReleaseFailed(
-            release, step, str(exc), lab.kubectl.diagnostics(release.namespace)
-        ) from exc
+        raise ReleaseFailed(release, step, exc, lab.kubectl.diagnostics(release.namespace)) from exc
     return result.status
 
 
