@@ -10,8 +10,7 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
     MATCH_BY_BASENAME,
     ManifestValidationSpec,
 )
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.manifest_validation.namespaces import resolve_namespace
+from chart_manager.commands.validate.select import selected_row
 
 
 def _spec(**overrides: object) -> ManifestValidationSpec:
@@ -161,13 +160,8 @@ def test_namespace_template_substitution_and_override() -> None:
         }
     )
 
-    assert resolve_namespace(spec, "dev") == "lab-dev"
-    assert resolve_namespace(spec, "prod") == "lab-prod-explicit"
-
-
-def test_resolve_namespace_rejects_unknown_environment() -> None:
-    with pytest.raises(SpecError, match="unknown environment"):
-        resolve_namespace(_spec(), "nope")
+    assert selected_row("x", spec, "dev").namespace == "lab-dev"
+    assert selected_row("x", spec, "prod").namespace == "lab-prod-explicit"
 
 
 def test_trigger_string_must_be_a_known_alias() -> None:

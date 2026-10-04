@@ -6,13 +6,14 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from typing import get_args
 
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.commands.validate.models import Row
+from chart_manager.commands.validate.models import CheckName, Row
 
 #: Rich styles for each status a cell can show.
 STATUS_STYLE = {
@@ -23,6 +24,7 @@ STATUS_STYLE = {
     "skipped": "dim",
 }
 _LIVE_COLUMNS = ("Chart", "Env", "Render", "Schema", "Policy", "Wall")
+_CHECKS: tuple[CheckName, ...] = get_args(CheckName)
 
 
 class PlainNarration:
@@ -105,6 +107,3 @@ class LiveTable:
                 Text(cells["wall"], style="dim"),
             )
         return table
-
-
-_CHECKS = ("render", "schema", "policy")

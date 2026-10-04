@@ -1,114 +1,79 @@
-"""Real kubeconform coverage for managed schema precedence and error outcomes."""
+"""Which schema real kubeconform applies, and how a broken schema or resource is reported."""
 
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
-from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.services.manifest_validation.validator_adapters import (
-    KubeconformProvider,
-    KubeconformValidator,
-)
-from chart_manager.services.manifest_validation.validators import (
-    KubeconformConfig,
-    KubeconformRuntimeInputs,
-    ValidatorCompileContext,
-)
-from tests.conftest import POLICIES_DIR
+from chart_manager.commands import validate
+from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.shared.workspace import RepositoryWorkspace
+from tests.conftest import write_validation_chart
+from tests.integration.conftest import require
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(shutil.which("kubeconform") is None, reason="kubeconform missing"),
-]
+pytestmark = pytest.mark.integration
+
+WIDGET = "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
 
 
-def _manifest(root: Path, text: str | None = None) -> Path:
-    manifests = root / "manifests"
-    manifests.mkdir(exist_ok=True)
-    (manifests / "widget.yaml").write_text(
-        text or "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
+def widget_chart(root: Path, manifest: str = WIDGET, **validation: object) -> None:
+    chart = write_validation_chart(
+        root, "demo", schemaLocations=["local/{{.ResourceKind}}.json"], **validation
     )
-    return manifests
+    (chart / "templates").mkdir()
+    (chart / "templates/widget.yaml").write_text(manifest)
+    (root / "local").mkdir(exist_ok=True)
 
 
-def test_managed_schema_precedence_with_real_kubeconform(tmp_path: Path) -> None:
-    paths = {name: tmp_path / name / "widget.json" for name in ("generated", "local", "upstream")}
-    for name, path in paths.items():
-        path.parent.mkdir()
-        path.write_text(json.dumps({"type": "object", "properties": {"source": {"enum": [name]}}}))
-    spec = ManifestValidationSpec.model_validate(
-        {
-            "releaseName": "demo",
-            "environments": {"dev": {"namespace": "dev"}},
-            "schemaLocations": ["local/{{.ResourceKind}}.json"],
-        }
+def schema_check(workspace: RepositoryWorkspace) -> validate.CheckResult:
+    outcome = validate.run(
+        validate.ValidateRequest(
+            out=workspace.root / "out", charts=("demo",), checks=frozenset({"render", "schema"})
+        ),
+        workspace=workspace,
+        runner=SubprocessRunner(),
     )
-    invocation = KubeconformProvider().compile(
-        ValidatorCompileContext(
-            spec=spec,
-            repo_root=tmp_path,
-            chart_path=tmp_path / "charts/demo",
-            spec_path=tmp_path / "charts/demo/chart-lifecycle.yaml",
-            policies_dir=POLICIES_DIR,
-            kubeconform=KubeconformRuntimeInputs(
-                kubernetes_version="1.35.3",
-                generated_schema_locations=(str(tmp_path / "generated/{{.ResourceKind}}.json"),),
-                fallback_schema_locations=(str(tmp_path / "upstream/{{.ResourceKind}}.json"),),
-            ),
-        )
-    )
-    validator = KubeconformValidator(Kubeconform())
-    for expected in ("generated", "local", "upstream"):
-        manifests = _manifest(
-            tmp_path,
-            "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\n"
-            f"source: {expected}\n",
-        )
-        result = validator.validate(manifests, invocation.config)
-        assert result.status == "PASS", result.detail
-        # Removing the higher-priority file must expose the next source.
-        paths[expected].unlink()
-    result = validator.validate(manifests, invocation.config)
-    assert result.status == "FAIL"
-    assert result.error_type == "tool"
+    return outcome.rows[0].checks["schema"]
 
 
-@pytest.mark.parametrize("ignore_missing", [(), ("Widget",), ("example.io/v1/Widget",)])
-@pytest.mark.parametrize("content", ['{"type":', '{"type":123}', '{"$ref":"#/missing"}'])
-def test_malformed_schema_is_tool_failure_even_for_optional_kind(
-    tmp_path: Path,
-    content: str,
-    ignore_missing: tuple[str, ...],
+def test_the_charts_own_schema_wins_over_the_upstream_catalog(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
-    schema = tmp_path / "schema.json"
-    schema.write_text(content)
-    result = KubeconformValidator(Kubeconform()).validate(
-        _manifest(tmp_path),
-        KubeconformConfig("1.35.3", (str(schema),), ignore_missing),
-    )
-    assert result.status == "FAIL"
-    assert result.error_type == "tool"
-    assert "schema JSON" in result.detail
+    require("helm", "kubeconform", "git")
+    widget_chart(tmp_path, WIDGET + "source: upstream\n")
+    local = tmp_path / "local/widget.json"
+    local.write_text(json.dumps({"type": "object", "properties": {"source": {"enum": ["local"]}}}))
+
+    assert schema_check(schema_workspace).status == "failed"
+    # Without the chart's schema, the permissive pinned catalog schema applies.
+    local.unlink()
+    assert schema_check(schema_workspace).status == "passed"
+
+
+@pytest.mark.parametrize("ignore", [(), ("Widget",)])
+def test_an_unreadable_schema_is_an_error_even_for_an_ignored_kind(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace, ignore: tuple[str, ...]
+) -> None:
+    """Truncated JSON. A schema that parses but is invalid makes kubeconform try the next location."""
+    require("helm", "kubeconform", "git")
+    widget_chart(tmp_path, ignoreMissingSchemas=list(ignore))
+    (tmp_path / "local/widget.json").write_text('{"type":')
+
+    result = schema_check(schema_workspace)
+
+    assert result.status == "error"
     assert "chart-manager schemas sync" in result.detail
 
 
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo\n",
-        "apiVersion: example.io/v1\nmetadata: {name: demo}\n",
-    ],
-)
-def test_malformed_resource_remains_chart_failure(tmp_path: Path, manifest: str) -> None:
-    result = KubeconformValidator(Kubeconform()).validate(
-        _manifest(tmp_path, manifest),
-        KubeconformConfig("1.35.3", (str(tmp_path / "missing.json"),)),
-    )
-    assert result.status == "FAIL"
-    assert result.error_type is None
+def test_a_resource_without_a_kind_is_a_chart_failure(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    require("helm", "kubeconform", "git")
+    widget_chart(tmp_path, "apiVersion: example.io/v1\nmetadata: {name: demo}\n")
+
+    result = schema_check(schema_workspace)
+
+    assert result.status == "failed", result.detail
     assert "chart-manager schemas sync" not in result.detail

@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import sys
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast, get_args
 
@@ -17,11 +19,16 @@ from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.commands.validate.display import LiveTable, PlainNarration
-from chart_manager.commands.validate.models import CheckName, ValidateOutcome, ValidateRequest
+from chart_manager.commands.validate.models import (
+    CheckName,
+    RequestError,
+    ValidateOutcome,
+    ValidateRequest,
+)
 from chart_manager.commands.validate.output import details, to_json, to_markdown, to_table
 from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
-from chart_manager.commands.validate.run import new_run_id, run
+from chart_manager.commands.validate.run import run
 from chart_manager.commands.validate.schemas.app import sync as sync_schemas
 from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
 from chart_manager.integrations.git import Git
@@ -152,7 +159,7 @@ def validate(
             selected = (target.name,)
             workspace = workspace.with_charts_dir(target.path.parent.relative_to(workspace.root))
     runner = container.command_runner()
-    rendered = (out or workspace.render_root / new_run_id()).resolve()
+    rendered = (out or workspace.render_root / _run_id()).resolve()
     request = ValidateRequest(
         charts=selected,
         envs=tuple(env),
@@ -166,8 +173,17 @@ def validate(
         tool_timeout=tool_timeout or None,
         verbose=verbose,
     )
-    display = _display("plain" if verbose and progress in ("auto", "live") else progress, mode)
-    outcome = run(request, workspace=workspace, runner=runner, progress=display)
+    if verbose and workers != 1:
+        narration.print(
+            "[yellow]warn:[/yellow] --verbose forces --workers=1 to keep "
+            "streamed subprocess output readable"
+        )
+    try:
+        outcome = run(
+            request, workspace=workspace, runner=runner, progress=_display(progress, mode, verbose)
+        )
+    except RequestError as exc:
+        raise typer.BadParameter(str(exc), param_hint=exc.flag) from exc
     try:
         _emit(
             outcome, mode=mode, rendered=rendered, timings=timings, step_summary=github_step_summary
@@ -199,15 +215,18 @@ def _changes(
     try:
         return tuple(Git(root, runner).changed_files(base=base))
     except ChartManagerError as exc:
-        narration.print(f"[yellow]warn:[/yellow] git diff failed ({exc}); validating every chart")
+        narration.print(f"[yellow]warn:[/yellow] git diff failed ({exc}); falling back to --all")
         return None
 
 
-def _display(progress: str, mode: str) -> Progress:
-    """The progress sink for this --progress and output mode; machine output gets none."""
+def _display(progress: str, mode: str, verbose: bool) -> Progress:
+    """The progress sink for this --progress and output mode; machine output gets none.
+
+    --verbose streams subprocess output, which a live table would overwrite, so it narrates.
+    """
     if progress == "none" or mode in (output_mod.JSON, output_mod.MD):
         return NULL_PROGRESS
-    if progress == "plain":
+    if progress == "plain" or verbose:
         return PlainNarration()
     if not sys.stderr.isatty():
         if progress == "live":
@@ -233,6 +252,10 @@ def _emit(
             narration.print(f"[yellow]warn:[/yellow] {warning}")
         for error in outcome.spec_errors:
             narration.print(f"[red]spec error:[/red] {error}")
+        summary = [f"{len(outcome.spec_errors)} spec error(s)"] if outcome.spec_errors else []
+        summary += [] if outcome.rows else ["0 rows"]
+        if summary:
+            narration.print(f"[bold]summary:[/bold] {'; '.join(summary)}")
     if mode == output_mod.ALL:
         try:
             rendered.mkdir(parents=True, exist_ok=True)
@@ -326,3 +349,8 @@ def sync(
     console.print(
         f"schema generation {result.lock.generation} {action} at {result.generation_path}"
     )
+
+
+def _run_id() -> str:
+    """A render-dir name for one run: UTC time plus a short random suffix."""
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]

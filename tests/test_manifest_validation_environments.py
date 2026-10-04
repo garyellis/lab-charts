@@ -1,12 +1,11 @@
-"""Manifest-validation ``resolve_namespace()`` matrix."""
+"""The namespace a selected row renders into: explicit, else `namespaceTemplate`."""
 
 from __future__ import annotations
 
 import pytest
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.manifest_validation.namespaces import resolve_namespace
+from chart_manager.commands.validate.select import selected_row
 
 
 def _spec(**kwargs) -> ManifestValidationSpec:
@@ -25,7 +24,7 @@ def test_explicit_namespace_wins_over_template() -> None:
             "dev": {"namespace": "explicit-dev", "values": ["values.yaml"]},
         },
     )
-    assert resolve_namespace(s, "dev") == "explicit-dev"
+    assert selected_row("x", s, "dev").namespace == "explicit-dev"
 
 
 def test_template_substitution_when_namespace_absent() -> None:
@@ -36,13 +35,13 @@ def test_template_substitution_when_namespace_absent() -> None:
             "prod": {"values": ["values.yaml"]},
         },
     )
-    assert resolve_namespace(s, "dev") == "lab-dev"
-    assert resolve_namespace(s, "prod") == "lab-prod"
+    assert selected_row("x", s, "dev").namespace == "lab-dev"
+    assert selected_row("x", s, "prod").namespace == "lab-prod"
 
 
 def test_explicit_namespace_no_template_works() -> None:
     s = _spec()
-    assert resolve_namespace(s, "dev") == "lab-dev"
+    assert selected_row("x", s, "dev").namespace == "lab-dev"
 
 
 def test_neither_set_is_a_validator_error() -> None:
@@ -55,9 +54,3 @@ def test_neither_set_is_a_validator_error() -> None:
                 "environments": {"dev": {"values": ["values.yaml"]}},
             }
         )
-
-
-def test_unknown_env_raises_specerror() -> None:
-    s = _spec(namespaceTemplate="lab-${env}")
-    with pytest.raises(SpecError):
-        resolve_namespace(s, "nope")

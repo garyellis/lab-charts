@@ -10,11 +10,11 @@ from pydantic import ValidationError
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.cli import main
 from chart_manager.cli._container import reset_invocation
+from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.services.grafana.dashboard_lint import discover_dashboards
-from chart_manager.services.manifest_validation.paths import RenderOutputService
 from chart_manager.shared import settings as settings_module
 from chart_manager.shared.charts.chart import ChartRepository
 from chart_manager.shared.settings import Settings, load_settings
@@ -26,7 +26,7 @@ from chart_manager.shared.workspace import (
     resolve_repository_root,
 )
 
-from .conftest import RENDER_DIR, cli, workspace_for, write_workspace
+from .conftest import cli, workspace_for, write_workspace
 
 
 def _document(**spec: object) -> dict[str, object]:
@@ -445,20 +445,21 @@ def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
     link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        RenderOutputService(tmp_path, render_dir=RENDER_DIR)
+        render_dir_state(workspace_for(tmp_path))
 
 
 def test_render_cleanup_rechecks_symlinks_created_after_construction(
     tmp_path: Path,
 ) -> None:
-    service = RenderOutputService(tmp_path, render_dir=RENDER_DIR)
+    workspace = workspace_for(tmp_path)
+    assert not render_dir_state(workspace).exists
     outside = tmp_path.parent / f"{tmp_path.name}-late-outside"
     outside.mkdir()
     marker = tmp_path / ".chart-manager"
     marker.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        service.clean()
+        clean_render_dir(workspace)
 
 
 def test_compiled_workspace_is_shared_across_composed_subsystems(tmp_path: Path) -> None:
@@ -481,18 +482,14 @@ spec:
         tmp_path / "helm/charts"
     )
     assert container.local_target_resolver(tmp_path).local_config == Path("ops/local.yaml")
-    assert container.render_output_service(tmp_path).path == tmp_path / "artifacts/rendered"
+    assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
     assert container.impact_service(tmp_path).workspace is workspace
     assert container.ci_service(tmp_path).workspace is workspace
     assert container.publish_service(tmp_path).repository.charts_dir == (
         tmp_path / "helm/charts"
     )
     assert container.upgrade_finalizer(tmp_path)._charts_dir == Path("helm/charts")
-    validation = container.validate_app(root=tmp_path)
-    assert validation.workspace is workspace
-    assert validation.workspace.spec.charts_dir == Path("helm/charts")
-    assert validation.workspace.spec.policies_dir == Path("compliance/policies")
-    assert validation.workspace.spec.render_dir == Path("artifacts/rendered")
+    assert workspace.spec.policies_dir == Path("compliance/policies")
 
 
 def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> None:

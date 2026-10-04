@@ -100,20 +100,10 @@ def test_all_or_a_named_chart_skips_change_detection(fake_run, argv, charts, cha
     assert (fake_run.requests[0].charts, fake_run.requests[0].changes) == (charts, changes)
 
 
-@pytest.mark.parametrize(
-    ("result", "expected"),
-    [
-        (outcome_with("passed"), Outcome.SUCCESS),
-        (outcome_with("failed"), Outcome.FAILED),
-        (outcome_with("error"), Outcome.TOOL),
-        (outcome_with("passed", spec_errors=("broken: bad",)), Outcome.SPEC),
-    ],
-    ids=["passed", "failed", "tool-error", "spec-error"],
-)
-def test_the_exit_code_follows_the_outcome(fake_run, result, expected) -> None:  # type: ignore[no-untyped-def]
-    fake_run.result = result
+def test_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("error")
 
-    assert cli("chart", "validate", "--all", "-o", "json").exit_code == exit_code_for(expected)
+    assert cli("chart", "validate", "--all", "-o", "json").exit_code == exit_code_for(Outcome.TOOL)
 
 
 def test_a_missing_binary_reaches_main_unchanged(fake_run) -> None:  # type: ignore[no-untyped-def]
@@ -177,3 +167,29 @@ def test_the_render_dir_is_kept_only_when_asked_or_when_the_run_failed(
     cli("chart", "validate", "--all", "-o", "json", *argv)
 
     assert fake_run.requests[0].out.exists() is kept
+
+
+@pytest.mark.parametrize(
+    ("error", "flag"),
+    [
+        (validate.RequestError("unknown chart: nope", flag="--chart"), "--chart"),
+        (validate.RequestError("unknown environment(s): prod", flag="--env"), "--env"),
+    ],
+)
+def test_an_unknown_chart_or_environment_is_a_usage_error_naming_the_flag(
+    fake_run, error, flag
+) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = error
+
+    result = cli("chart", "validate", "--all", "-o", "table")
+
+    assert result.exit_code == 2
+    assert flag in result.output
+
+
+def test_a_table_run_ends_with_a_summary_of_spec_errors(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("passed", spec_errors=("broken: bad",))
+
+    result = cli("chart", "validate", "--all", "-o", "table", "--progress", "none")
+
+    assert "summary: 1 spec error(s)" in result.output

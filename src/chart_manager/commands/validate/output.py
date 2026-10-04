@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import get_args
 
 from rich.table import Table
 from rich.text import Text
 
 from chart_manager.commands.validate.display import STATUS_STYLE
-from chart_manager.commands.validate.models import CheckResult, Row, ValidateOutcome
+from chart_manager.commands.validate.models import (
+    FAILING,
+    CheckName,
+    CheckResult,
+    Row,
+    ValidateOutcome,
+)
 from chart_manager.plumbing.exit_codes import exit_code_for
 
-_CHECKS = ("render", "schema", "policy")
+_CHECKS: tuple[CheckName, ...] = get_args(CheckName)
 _EMOJI = {"passed": "✅", "failed": "❌", "error": "⚠️", "skipped": "➖"}  # noqa: RUF001
 _NOT_RUN = "·"
 
@@ -75,7 +82,7 @@ def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
             f"**{len(outcome.rows)} rows · {passing} passing · {failing} failing · "
             f"{skipped} skipped**",
         ]
-        for title, wanted in (("Failures", ("failed", "error")), ("Advisories", ("passed",))):
+        for title, wanted in (("Failures", FAILING), ("Advisories", {"passed"})):
             blocks = [
                 _details(f"{row.chart}/{row.env} — {name}", result.detail)
                 for row, name, result in _checks(outcome)
@@ -114,7 +121,7 @@ def details(outcome: ValidateOutcome) -> list[str]:
     failures = [
         f"[red]{row.chart}/{row.env}[/red] [bold]{name}[/bold]\n{result.detail}".rstrip()
         for row, name, result in _checks(outcome)
-        if result.status in ("failed", "error")
+        if result.status in FAILING
     ]
     advisories = [
         f"[yellow]{row.chart}/{row.env}[/yellow] [bold]{name}[/bold]\n{result.detail}"
@@ -128,7 +135,7 @@ def _checks(outcome: ValidateOutcome) -> Iterator[tuple[Row, str, CheckResult]]:
     for row in outcome.rows:
         for name in _CHECKS:
             if name in row.checks:
-                yield row, name, row.checks[name]  # type: ignore[index]
+                yield row, name, row.checks[name]
 
 
 def _status(row: Row, name: str) -> str:
@@ -146,7 +153,7 @@ def _tally(outcome: ValidateOutcome) -> tuple[int, int, int]:
     passing = failing = skipped = 0
     for row in outcome.rows:
         statuses = {result.status for result in row.checks.values()}
-        if statuses & {"failed", "error"}:
+        if statuses & FAILING:
             failing += 1
         elif statuses <= {"skipped"}:
             skipped += 1

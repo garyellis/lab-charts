@@ -13,7 +13,7 @@ from chart_manager.commands.validate.schemas.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.yaml_files import dump_yaml
-from tests.conftest import CHARTS_DIR, crd_manifest
+from tests.conftest import crd_manifest
 
 from .schema_fixtures import workspace
 
@@ -323,53 +323,6 @@ def test_mixed_templates_keep_chained_multiline_and_variable_output(expansion):
     assert generated._possible_crd_bytes(
         "templates/resources.yaml", b"kind: ConfigMap\n---\n" + expansion
     )
-
-
-@pytest.mark.parametrize(
-    "failure,expected",
-    [
-        ("network", Outcome.ENVIRONMENT),
-        ("missing-tool", Outcome.TOOL),
-        ("spec", Outcome.SPEC),
-    ],
-)
-def test_dependency_preparation_retains_failure_classification(env, monkeypatch, failure, expected):
-    from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, SpecError
-    from chart_manager.services.manifest_validation import app
-    from chart_manager.services.manifest_validation.catalog import build_catalog
-
-    provider = chart(env.root, "provider", crd_manifest())
-    (provider / "Chart.yaml").write_text(
-        dump_yaml(
-            {
-                "apiVersion": "v2",
-                "name": "provider",
-                "version": "0.1.0",
-                "dependencies": [
-                    {"name": "dep", "version": "1.0.0", "repository": "https://example.test"}
-                ],
-            }
-        )
-    )
-    errors = {
-        "network": ExternalCommandError("offline"),
-        "missing-tool": MissingToolError("helm"),
-        "spec": SpecError("bad chart"),
-    }
-
-    class FakeHelm:
-        def __init__(self, **kwargs):
-            pass
-
-        def dependency_update_if_stale(self, path, *, timeout):
-            assert path == provider
-            raise errors[failure]
-
-    monkeypatch.setattr(app, "Helm", FakeHelm)
-    service = app.ManifestValidationService(workspace=workspace(env.root))
-    with pytest.raises(KubeconformSchemaRenderError) as caught:
-        service.prepare_schema_dependencies(build_catalog(env.root, charts_dir=CHARTS_DIR).targets)
-    assert caught.value.outcome is expected
 
 
 def test_helm_notes_do_not_make_plain_charts_potential_providers():

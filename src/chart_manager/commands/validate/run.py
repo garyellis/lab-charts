@@ -6,18 +6,18 @@ import os
 import shutil
 import threading
 import time
-import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ManifestValidationSpec
 from chart_manager.commands.validate.models import (
+    FAILING,
     CheckName,
     CheckResult,
+    RequestError,
     Row,
     ValidateOutcome,
     ValidateRequest,
@@ -36,6 +36,7 @@ from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import (
     ChartManagerError,
+    ChartNotFoundError,
     ExternalCommandError,
     MissingToolError,
     SpecError,
@@ -72,10 +73,12 @@ def run(
     declared = {env for spec in specs.values() for env in spec.environments}
     unknown = sorted(set(request.envs) - declared)
     if unknown:
-        raise SpecError(
-            f"unknown environment(s): {', '.join(unknown)}; declared: {', '.join(sorted(declared))}"
+        raise RequestError(
+            f"unknown environment(s): {', '.join(unknown)}; "
+            f"declared: {', '.join(sorted(declared))}",
+            flag="--env",
         )
-    out = request.out or workspace.render_root / new_run_id()
+    out = request.out
     rows = [row for row in selection.rows if not request.envs or row.env in request.envs]
     checker = _Checker(request, workspace, runner, progress)
 
@@ -118,7 +121,7 @@ def _one_at_a_time(
         result = checker.skip_all(row, "fail-fast") if stopped else check(row)
         results.append(result)
         statuses = {c.status for c in result.checks.values()} if isinstance(result, Row) else set()
-        if fail_fast and statuses & {"failed", "error"}:
+        if fail_fast and statuses & FAILING:
             stopped = True
     return results
 
@@ -151,6 +154,8 @@ def _named(names: tuple[str, ...], workspace: RepositoryWorkspace) -> Selection:
     for name in names:
         try:
             chart = load_chart(workspace.chart_path(name))
+        except ChartNotFoundError as exc:
+            raise RequestError(str(exc), flag="--chart") from exc
         except SpecError as exc:
             errors.append(f"{name}: {exc}")
             continue
@@ -298,6 +303,8 @@ def _render(
     crds: bool = False,
 ) -> CheckResult:
     values = _values(chart, spec, row.env)
+    if out.is_symlink() or out.parent.is_symlink():
+        raise SpecError(f"render directory must not be a symlink: {out}")
     if out.exists():
         shutil.rmtree(out)
     try:
@@ -440,7 +447,3 @@ def _values(chart: Chart, spec: ManifestValidationSpec, env: str) -> list[Path]:
             f"chart {chart.name!r} env {env!r}: values file not found: {', '.join(missing)}"
         )
     return values
-
-
-def new_run_id() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]

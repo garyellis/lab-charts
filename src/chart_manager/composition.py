@@ -94,9 +94,6 @@ from chart_manager.services.helmrelease import (
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
 from chart_manager.services.lifecycle.impact import LifecycleImpactService
-from chart_manager.services.manifest_validation.app import ManifestValidationService
-from chart_manager.services.manifest_validation.paths import RenderOutputService
-from chart_manager.services.manifest_validation.progress import ProgressDisplay
 from chart_manager.services.progress import ProgressCallback
 from chart_manager.services.publish import PublishService
 from chart_manager.services.upgrader import (
@@ -119,9 +116,6 @@ __all__ = ["Container", "HelmReleaseProgress", "Settings"]
 
 #: Narration callback shape shared by MonitorService and TestService.
 HelmReleaseProgress = Callable[[HelmReleaseRef, Transition], None]
-
-#: Operator-warning channel shape accepted by ManifestValidationService.
-WarnCallback = Callable[[str], None]
 
 
 class Container:
@@ -326,18 +320,6 @@ class Container:
         """
         return ChartCatalogService(workspace=self.workspace(root))
 
-    def render_output_service(self, root: Path) -> RenderOutputService:
-        """Build the render-tree describer/remover for the repo at `root`.
-
-        No configuration reaches it today -- the output directory is a fixed
-        constant under `root`. It is a factory anyway because `chart cache
-        clean` deletes a directory tree, and "which tree" must be decided in
-        the same place as every other repository path, not at the surface that
-        calls `rmtree`.
-        """
-        workspace = self.workspace(root)
-        return RenderOutputService(workspace.root, render_dir=workspace.spec.render_dir)
-
     def impact_service(self, root: Path) -> LifecycleImpactService:
         """Build the changed-file impact analyzer for the repo at `root`.
 
@@ -439,25 +421,6 @@ class Container:
             workspace=self.workspace(root),
             helm=self.helm(verbose=False),
             events=self.event_writer(),
-        )
-
-    def validate_app(
-        self,
-        *,
-        root: Path | None = None,
-        progress: ProgressDisplay | None = None,
-        on_warn: WarnCallback | None = None,
-        charts_dir: Path | None = None,
-    ) -> ManifestValidationService:
-        """Build the validate pipeline entry point (render -> schema -> policy)."""
-        workspace = self.workspace(root)
-        if charts_dir is not None:
-            workspace = workspace.with_charts_dir(charts_dir)
-        return ManifestValidationService(
-            progress=progress,
-            on_warn=on_warn,
-            command_runner=self.command_runner(),
-            workspace=workspace,
         )
 
     def upgrade_service(self, root: Path) -> UpgradeService:

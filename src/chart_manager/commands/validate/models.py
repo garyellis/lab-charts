@@ -7,22 +7,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import Outcome
 
 CheckName = Literal["render", "schema", "policy"]
 #: `failed`: the check found problems in the chart. `error`: the tool itself broke.
 Status = Literal["passed", "failed", "skipped", "error"]
+#: The statuses that fail a row.
+FAILING: frozenset[Status] = frozenset({"failed", "error"})
+
+
+class RequestError(SpecError):
+    """The request names a chart or environment the workspace does not have."""
+
+    def __init__(self, message: str, *, flag: str) -> None:
+        super().__init__(message)
+        self.flag = flag
 
 
 @dataclass(frozen=True)
 class ValidateRequest:
-    """What to validate: the named charts, else the rows `changes` select (None: every row)."""
+    """What to validate: the named charts, else the rows `changes` select (None: every row).
+
+    Each row renders into `out/<chart>/<env>`.
+    """
 
     charts: tuple[str, ...]
+    out: Path
     envs: tuple[str, ...] = ()
     checks: frozenset[CheckName] = frozenset(get_args(CheckName))
     changes: tuple[str, ...] | None = None
-    out: Path | None = None
     workers: int = 0
     fail_fast: bool = False
     tool_timeout: float | None = None
@@ -64,6 +78,6 @@ class ValidateOutcome:
             return Outcome.SPEC
         if "error" in statuses:
             return Outcome.TOOL
-        if "failed" in statuses:
+        if statuses & FAILING:
             return Outcome.FAILED
         return Outcome.SUCCESS
