@@ -22,8 +22,9 @@ from chart_manager.commands.validate.schemas.runtime import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform
+from chart_manager.integrations.kyverno import Kyverno, PolicyResult
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ExternalCommandError, SpecError
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.shared.charts import dependencies
 from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.charts.lifecycle import require_validation
@@ -40,6 +41,7 @@ def run(
     out = request.out or workspace.render_root / _run_id()
     schemas: KubeconformSchemaRuntime | None = None
     kubeconform = Kubeconform(runner)
+    kyverno = Kyverno(runner)
     rows = []
     for name in request.charts:
         chart = load_chart(workspace.chart_path(name))
@@ -57,15 +59,21 @@ def run(
             render = _render(helm, chart, spec, env, rendered)
             checks: dict[CheckName, CheckResult] = {"render": render}
             if "schema" in request.checks:
-                if not spec.validators.kubeconform:
-                    checks["schema"] = CheckResult("skipped", "disabled in chart-lifecycle.yaml")
-                elif render.status != "passed":
-                    checks["schema"] = CheckResult("skipped", "render failed")
+                skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
+                if skip:
+                    checks["schema"] = CheckResult("skipped", skip)
                 else:
                     if schemas is None:
                         schemas = load_kubeconform_schema_runtime(workspace)
                     locations = _schema_locations(workspace.root, chart.name, spec)
                     checks["schema"] = _schema(kubeconform, schemas, spec, locations, rendered)
+            if "policy" in request.checks:
+                skip = _skip_reason(spec.validators.policy, checks, rendered)
+                if skip:
+                    checks["policy"] = CheckResult("skipped", skip)
+                else:
+                    policies = _policy_paths(workspace, chart, spec)
+                    checks["policy"] = _policy(kyverno, policies, rendered)
             rows.append(Row(chart=chart.name, env=env, checks=checks))
     return ValidateOutcome(rows=tuple(rows))
 
@@ -89,6 +97,20 @@ def _render(
     return CheckResult(status="passed")
 
 
+def _skip_reason(
+    enabled: bool, earlier: dict[CheckName, CheckResult], rendered: Path
+) -> str | None:
+    """Why a check on the rendered manifests can't run, or None when it can."""
+    if not enabled:
+        return "disabled in chart-lifecycle.yaml"
+    failed = [name for name, result in earlier.items() if result.status == "failed"]
+    if failed:
+        return f"{failed[0]} failed"
+    if not any(rendered.rglob("*.yaml")):
+        return "no manifests"
+    return None
+
+
 def _schema(
     kubeconform: Kubeconform,
     schemas: KubeconformSchemaRuntime,
@@ -96,8 +118,6 @@ def _schema(
     chart_locations: list[str],
     rendered: Path,
 ) -> CheckResult:
-    if not any(rendered.rglob("*.yaml")):
-        return CheckResult(status="skipped", detail="no manifests")
     locations = schemas.locations()
     try:
         report = kubeconform.validate(
@@ -114,7 +134,9 @@ def _schema(
         return CheckResult(status="failed", detail=str(exc))
     if not report.has_failures():
         return CheckResult(status="passed")
-    findings = [f"{r.kind}/{r.name} ({r.filename}): {r.msg or ''}" for r in report.invalid()]
+    findings = [
+        f"{r.kind}/{r.name} ({r.filename}): {r.msg or ''}".rstrip(": ") for r in report.invalid()
+    ]
     return CheckResult(status="failed", detail="\n".join(findings))
 
 
@@ -126,6 +148,41 @@ def _schema_locations(root: Path, chart: str, spec: ManifestValidationSpec) -> l
         if not base.is_dir():
             raise SpecError(f"chart {chart!r}: schemaLocations directory not found: {base}")
     return [str(root / location) for location in spec.schema_locations]
+
+
+def _policy(kyverno: Kyverno, policies: list[Path], rendered: Path) -> CheckResult:
+    if not policies:
+        return CheckResult(status="skipped", detail="no policies discovered")
+    try:
+        report = kyverno.apply(rendered, policy_paths=policies)
+    except ChartManagerError as exc:
+        return CheckResult(status="failed", detail=str(exc))
+    parts = [_policy_findings(report.failures())]
+    if report.warnings():
+        parts.append("warnings:\n" + _policy_findings(report.warnings()))
+    detail = "\n\n".join(part for part in parts if part)
+    return CheckResult(status="failed" if report.has_failures() else "passed", detail=detail)
+
+
+def _policy_findings(results: tuple[PolicyResult, ...]) -> str:
+    return "\n".join(
+        f"{r.policy}/{r.rule}: {r.resource_kind}/{r.resource_name}: {r.message or ''}".rstrip(": ")
+        for r in results
+    )
+
+
+def _policy_paths(
+    workspace: RepositoryWorkspace, chart: Chart, spec: ManifestValidationSpec
+) -> list[Path]:
+    """The repository and chart `policies/` directories that exist, then the chart's extras."""
+    found = [path for path in (workspace.policies_root, chart.path / "policies") if path.is_dir()]
+    for extra in spec.policies.extra:
+        path = chart.path / extra
+        if not path.is_dir():
+            raise SpecError(f"chart {chart.name!r}: policies.extra is not a directory: {path}")
+        if path not in found:
+            found.append(path)
+    return found
 
 
 def _values(chart: Chart, spec: ManifestValidationSpec, env: str) -> list[Path]:

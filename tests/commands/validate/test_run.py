@@ -259,3 +259,99 @@ def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
         validate.run(
             validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
         )
+
+
+def kyverno_report(result: str, message: str = "") -> str:
+    resource = {"kind": "ConfigMap", "name": "demo"}
+    entry = {"policy": "require-labels", "rule": "check", "result": result, "message": message}
+    return json.dumps({"results": [{**entry, "resources": [resource]}]})
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "status", "detail"),
+    [
+        (0, kyverno_report("pass"), "passed", ""),
+        (1, kyverno_report("fail", "label team is required"), "failed", "team"),
+        (0, kyverno_report("warn", "label owner is advised"), "passed", "owner"),
+        (2, "panic: policy cache", "failed", ""),
+    ],
+    ids=["pass", "fail", "warn", "kyverno-broke"],
+)
+def test_the_policy_check_reports_kyvernos_verdict_on_the_rendered_manifests(
+    tmp_path: Path, returncode: int, stdout: str, status: str, detail: str
+) -> None:
+    write_chart(tmp_path, "demo")
+    (tmp_path / "policies").mkdir()
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(CONFIG_MAP))
+        .respond(("kyverno", "apply"), returncode=returncode, stdout=stdout)
+    )
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"})),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    (row,) = outcome.rows
+    assert row.checks["policy"].status == status
+    assert detail in row.checks["policy"].detail
+    (kyverno,) = [call for call in runner.calls if call[0] == "kyverno"]
+    assert str(tmp_path / "policies") in kyverno
+
+
+@pytest.mark.parametrize(
+    ("validation", "policies_dir"),
+    [({"validators": {"policy": False}}, True), ({}, False)],
+    ids=["policy-disabled", "no-policies"],
+)
+def test_the_policy_check_is_skipped_without_running_kyverno(
+    tmp_path: Path, validation: dict[str, Any], policies_dir: bool
+) -> None:
+    write_chart(tmp_path, "demo", **validation)
+    if policies_dir:
+        (tmp_path / "policies").mkdir()
+    runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"})),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert outcome.rows[0].checks["policy"].status == "skipped"
+    assert not [call for call in runner.calls if call[0] == "kyverno"]
+
+
+def test_the_charts_extra_policies_reach_kyverno_and_must_exist(tmp_path: Path) -> None:
+    chart = write_chart(tmp_path, "demo", policies={"extra": ["extra-policies"]})
+    runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
+    request = validate.ValidateRequest(charts=("demo",), checks=frozenset({"render", "policy"}))
+
+    with pytest.raises(SpecError, match="extra-policies"):
+        validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
+    (chart / "extra-policies").mkdir()
+    validate.run(request, workspace=workspace_for(tmp_path), runner=runner)
+
+    (kyverno,) = [call for call in runner.calls if call[0] == "kyverno"]
+    assert str(chart / "extra-policies") in kyverno
+
+
+def test_a_failed_schema_check_skips_the_policy_check(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_chart(tmp_path, "demo")
+    (tmp_path / "policies").mkdir()
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), returncode=1, stdout=kubeconform_report("statusInvalid"))
+    )
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+    )
+
+    assert outcome.rows[0].checks["policy"] == validate.CheckResult("skipped", "schema failed")
+    assert not [call for call in runner.calls if call[0] == "kyverno"]
