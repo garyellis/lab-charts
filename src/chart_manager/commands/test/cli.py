@@ -27,7 +27,7 @@ from chart_manager.shared.charts.chart import resolve_chart_target
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 from chart_manager.shared.workspace import RepositoryWorkspace
 
-ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
+ProfileOption = Annotated[str, typer.Option("--profile", help="Chart-test profile.")]
 NamespaceOverrideOption = Annotated[
     str | None,
     typer.Option(

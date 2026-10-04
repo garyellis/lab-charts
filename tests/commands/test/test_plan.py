@@ -46,7 +46,7 @@ def _requires(*refs: str) -> dict[str, object]:
     return {"requires": parsed}
 
 
-def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
+def test_chart_test_compiles_dependency_first_actions_and_effective_inputs(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -93,7 +93,7 @@ def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
     assert all(action.metadata == () for action in plan.actions)
 
 
-def test_cluster_test_namespace_override_wins_over_authored_profile(
+def test_chart_test_namespace_override_wins_over_authored_profile(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -111,7 +111,7 @@ def test_cluster_test_namespace_override_wins_over_authored_profile(
     } == {"requested"}
 
 
-def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
+def test_chart_test_namespace_override_does_not_relocate_authored_dependency(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -141,7 +141,7 @@ def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
     assert namespaces == {"base": "foundation", "app": "requested-app"}
 
 
-def test_cluster_test_without_helm_test_ends_at_its_install(
+def test_chart_test_without_helm_test_ends_at_its_install(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
@@ -155,7 +155,7 @@ def test_cluster_test_without_helm_test_ends_at_its_install(
     ]
 
 
-def test_cluster_test_lint_runs_between_the_namespace_and_the_install(
+def test_chart_test_lint_runs_between_the_namespace_and_the_install(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:

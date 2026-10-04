@@ -56,7 +56,7 @@ def lifecycle_to_dict(lifecycle: ChartLifecycle) -> dict[str, Any]:
     """Project one chart's normalized lifecycle intent.
 
     `by_alias` so the keys are the ones a chart author typed (`apiVersion`,
-    `clusterTest`), not the snake_case field names pydantic binds them to --
+    `chartTest`), not the snake_case field names pydantic binds them to --
     the point of `chart show` is to hand back the authored document after
     normalization, and a reader must be able to paste it into
     `chart-lifecycle.yaml`. `exclude_none` for the same reason: an unset

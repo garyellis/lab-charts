@@ -27,7 +27,7 @@ extend = "../../../pyproject.toml"
 "chart_manager.services".msg = """not importable from chart_manager.domain. \
 Domain is below services in the layer graph: services compose domain policy, \
 never the other way round. If a domain algorithm needs something a service \
-computes, take it as a parameter (see DependencyResolver's ClusterTestLoader \
+computes, take it as a parameter (see DependencyResolver's ChartTestLoader \
 callable) rather than importing upward."""
 "chart_manager.integrations".msg = """not importable from chart_manager.domain. \
 Domain interprets authored documents and Chart.yaml; running helm, kubectl or \

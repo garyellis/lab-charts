@@ -85,7 +85,7 @@ def _catalog_table(entries: Sequence[ChartCatalogEntry]) -> Table:
         "Dependencies",
         "Lifecycle",
         "Manifest validation",
-        "Cluster tests",
+        "Chart tests",
         "Profiles",
     )
     for entry in entries:

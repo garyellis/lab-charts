@@ -172,7 +172,7 @@ def test_install_plan_rejects_a_disabled_required_chart(
         resolver.install_plan("app", "minimal")
 
 
-def test_dependent_tests_rejects_a_disabled_cluster_test_section(
+def test_dependent_tests_rejects_a_disabled_chart_test_section(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:

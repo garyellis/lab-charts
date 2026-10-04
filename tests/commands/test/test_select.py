@@ -34,7 +34,7 @@ def test_a_changed_chart_file_selects_that_chart_at_its_default_profile(
     assert reason == test.Reason(
         test.ReasonCode.CHART_CHANGE,
         Path("charts/alpha/values.yaml"),
-        "changed file belongs to enabled cluster-test chart alpha",
+        "changed file belongs to alpha, which has chart tests enabled",
     )
 
 
@@ -93,9 +93,9 @@ def test_a_change_matching_the_chart_test_fanout_selects_every_enabled_chart(
     assert {entry.reasons for entry in selection.tests} == {
         (
             test.Reason(
-                test.ReasonCode.CLUSTER_SAFETY_FANOUT,
+                test.ReasonCode.CHART_TEST_FANOUT,
                 Path("kind-config.yaml"),
-                "workspace cluster-test fanout matched kind-config.yaml",
+                "workspace chart-test fanout matched kind-config.yaml",
             ),
         )
     }
@@ -144,8 +144,8 @@ def test_explicit_charts_reject_every_unknown_and_disabled_chart_at_once(
         _select(chart_root, None, charts=("missing", "disabled", "enabled"))
 
     assert str(caught.value) == (
-        "invalid cluster-test chart request: unknown chart(s): missing; "
-        "chart(s) without enabled cluster tests: disabled"
+        "invalid chart-test request: unknown chart(s): missing; "
+        "chart(s) without enabled chart tests: disabled"
     )
 
 
@@ -154,3 +154,79 @@ def _disable(chart: Path) -> None:
     lifecycle = parse_yaml(path.read_text())
     lifecycle["spec"]["chartTest"]["enabled"] = False
     path.write_text(dump_yaml(lifecycle))
+
+
+def test_a_change_to_a_shared_chart_selects_every_enabled_chart(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha")
+    make_chart("beta")
+    workspace = workspace_for(chart_root, chartTest={"sharedCharts": ["istio-base"]})
+
+    selection = test.select(["charts/istio-base/templates/crd.yaml"], workspace=workspace)
+
+    assert _picked(selection) == [("alpha", "minimal"), ("beta", "minimal")]
+    assert {entry.reasons[0].detail for entry in selection.tests} == {
+        "istio-base is a shared chart used by every chart test"
+    }
+
+
+def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    make_chart("alpha")
+    (chart_root / "platform/network").mkdir(parents=True)
+    (chart_root / "platform/network/Chart.yaml").write_text(
+        "apiVersion: v2\nname: network\nversion: 1.0.0\n"
+    )
+    (chart_root / ".chart-manager/local-cluster.yaml").write_text(
+        dump_yaml(
+            {
+                "apiVersion": "chartmanager.io/v1alpha1",
+                "kind": "LocalCluster",
+                "metadata": {"name": "default"},
+                "spec": {
+                    "cluster": {"config": "kind-config.yaml"},
+                    "bootstrap": {
+                        "releases": [
+                            {
+                                "type": "local",
+                                "name": "network",
+                                "chart": "platform/network",
+                                "namespace": "kube-system",
+                                "values": [],
+                                "timeout": "5m",
+                            }
+                        ]
+                    },
+                },
+            }
+        )
+    )
+
+    selection = _select(chart_root, ["platform/network/templates/daemonset.yaml"])
+
+    assert _picked(selection) == [("alpha", "minimal")]
+    assert selection.tests[0].reasons[0].detail == (
+        "platform/network is a LocalCluster bootstrap chart used by every chart test"
+    )
+
+
+def test_a_fanout_change_and_a_chart_change_together_also_select_dependent_profiles(
+    chart_root: Path, make_chart: MakeChart
+) -> None:
+    source = make_chart("source")
+    make_chart("consumer", profiles={"minimal": {}, "full": {}})
+    _depends_on(source, target="consumer", profile="full")
+
+    selection = _select(chart_root, ["kind-config.yaml", "charts/source/values.yaml"])
+
+    assert _picked(selection) == [
+        ("consumer", "full"),
+        ("consumer", "minimal"),
+        ("source", "minimal"),
+    ]
+    assert {reason.code for reason in selection.tests[-1].reasons} == {
+        test.ReasonCode.CHART_CHANGE,
+        test.ReasonCode.CHART_TEST_FANOUT,
+    }

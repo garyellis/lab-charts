@@ -110,7 +110,7 @@ _FORBIDDEN_ROOTS = ("rich", "typer")
 _DOMAIN_MODULES_FORBIDDEN_IN_PLUMBING = {
     "chart_deps.py",
     "charts.py",
-    "cluster_tests.py",
+    "chart_tests.py",
     "graph.py",
     "install_plan.py",
     "lifecycle_policy.py",

@@ -76,7 +76,7 @@ def test_get_loads_library_chart_without_test_spec(chart_root: Path) -> None:
     assert chart.metadata.chart_type == "library"
 
 
-def test_cluster_test_catalog_requires_chart_manager_configuration(
+def test_chart_test_catalog_requires_chart_manager_configuration(
     chart_root: Path,
 ) -> None:
     chart_dir = chart_root / "charts" / "common"
@@ -93,7 +93,7 @@ def test_cluster_test_catalog_requires_chart_manager_configuration(
         ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get("common")
 
 
-def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
+def test_enabled_chart_test_names_exclude_unmanaged_and_disabled_charts(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:

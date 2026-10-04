@@ -177,7 +177,7 @@ def chart_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_chart(chart_root: Path) -> MakeChart:
-    """Write a minimal Helm chart with enabled cluster tests into ``chart_root``.
+    """Write a minimal Helm chart with enabled chart tests into ``chart_root``.
 
     `profiles` is the raw chart-test profile mapping, so tests express
     requirements exactly as a chart author would:

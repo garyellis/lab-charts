@@ -68,15 +68,15 @@ def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
     assert "--reverse" not in chart_test_help.stdout
 
 
-def test_cluster_test_profile_defaults_to_running_helm_tests() -> None:
+def test_chart_test_profile_defaults_to_running_helm_tests() -> None:
     assert ChartTestProfile(namespace="default").helm_test is True
 
 
-def test_cluster_test_profile_accepts_disabled_helm_tests() -> None:
+def test_chart_test_profile_accepts_disabled_helm_tests() -> None:
     assert ChartTestProfile(namespace="default", helmTest=False).helm_test is False
 
 
-def test_cluster_test_profile_rejects_removed_checks_configuration() -> None:
+def test_chart_test_profile_rejects_removed_checks_configuration() -> None:
     with pytest.raises(ValidationError, match="checks"):
         ChartTestProfile.model_validate(
             {

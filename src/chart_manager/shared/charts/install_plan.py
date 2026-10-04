@@ -1,4 +1,4 @@
-"""Cluster-test dependency resolution."""
+"""Chart-test dependency resolution."""
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -45,7 +45,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager local reset --chart <name>` | Destroy and recreate the cluster, then converge. Required after changing creation-time kind settings. |
 | `uv run chart-manager chart list` | List charts with lifecycle capability status. Same as `mise run charts`. |
 | `uv run chart-manager chart show <name>` | Print one chart's normalized `ChartLifecycle` intent. |
-| `uv run chart-manager plan --changed-file <path>` | Show the validation and cluster-test work a change selects, with reasons. |
+| `uv run chart-manager plan --changed-file <path>` | Show the validation, chart-test and publish work a change selects, with reasons. |
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
 | `uv run chart-manager chart upgrade --path charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
 | `uv run chart-manager helmrelease promote\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |

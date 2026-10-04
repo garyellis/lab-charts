@@ -19,7 +19,7 @@ class ReasonCode(StrEnum):
 
     CHART_CHANGE = "chart-change"
     DECLARED_DEPENDENT_TEST = "declared-dependent-test"
-    CLUSTER_SAFETY_FANOUT = "cluster-safety-fanout"
+    CHART_TEST_FANOUT = "chart-test-fanout"
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ def _default_profile(chart: str, catalog: ChartTestCatalog) -> str:
     """`DEFAULT_PROFILE` when the chart has it, else its first profile in sorted order."""
     profiles = catalog.get(chart).spec.profiles
     if not profiles:
-        raise SpecError(f"chart '{chart}' has enabled cluster tests but declares no profiles")
+        raise SpecError(f"chart '{chart}' has enabled chart tests but declares no profiles")
     if DEFAULT_PROFILE in profiles:
         return DEFAULT_PROFILE
     return sorted(profiles)[0]
@@ -106,8 +106,8 @@ def _explicit(charts: Sequence[str], catalog: ChartTestCatalog) -> tuple[Selecte
         if unknown:
             details.append(f"unknown chart(s): {', '.join(unknown)}")
         if unavailable:
-            details.append(f"chart(s) without enabled cluster tests: {', '.join(unavailable)}")
-        raise SpecError("invalid cluster-test chart request: " + "; ".join(details))
+            details.append(f"chart(s) without enabled chart tests: {', '.join(unavailable)}")
+        raise SpecError("invalid chart-test request: " + "; ".join(details))
     return tuple(selected)
 
 
@@ -132,13 +132,13 @@ def _reasons_for(
     for name, profile in profiles.items():
         for path, pattern in fanout:
             detail = _fanout_detail(pattern, workspace)
-            add((name, profile), Reason(ReasonCode.CLUSTER_SAFETY_FANOUT, path, detail))
+            add((name, profile), Reason(ReasonCode.CHART_TEST_FANOUT, path, detail))
 
     for path in paths:
         chart = workspace.chart_name_from_repo_path(path)
         if chart is None or chart not in profiles:
             continue
-        detail = f"changed file belongs to enabled cluster-test chart {chart}"
+        detail = f"changed file belongs to {chart}, which has chart tests enabled"
         add((chart, profiles[chart]), Reason(ReasonCode.CHART_CHANGE, path, detail))
         for reference in catalog.get(chart).spec.dependent_tests:
             target = f"{reference.chart}:{reference.profile}"
@@ -159,10 +159,10 @@ def _fanout_detail(pattern: str, workspace: RepositoryWorkspace) -> str:
     """Why a chart-test fanout pattern selects every chart test."""
     for chart in workspace.spec.chart_test.shared_charts:
         if pattern == workspace.repo_chart_path(chart).as_posix():
-            return f"{chart} is a shared runtime prerequisite across cluster tests"
+            return f"{chart} is a shared chart used by every chart test"
     if pattern not in workspace.spec.fanout.chart_test and pattern not in {
         workspace.spec.local_cluster.as_posix(),
         workspace.marker.relative_to(workspace.root).as_posix(),
     }:
-        return f"{pattern} is a LocalCluster bootstrap prerequisite used by every cluster test"
-    return f"workspace cluster-test fanout matched {pattern}"
+        return f"{pattern} is a LocalCluster bootstrap chart used by every chart test"
+    return f"workspace chart-test fanout matched {pattern}"

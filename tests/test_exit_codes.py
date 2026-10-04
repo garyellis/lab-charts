@@ -243,7 +243,7 @@ def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) ->
         (CommandTimeout("kubeconform timed out"), 4),
         (SpecError("chart-lifecycle.yaml is not valid"), 3),
         (DependencyCycleError("a -> b -> a"), 3),
-        (CapabilityUnavailableError("cluster tests are disabled"), 1),
+        (CapabilityUnavailableError("chart tests are disabled"), 1),
         (ChartNotFoundError("chart not found: nope"), 1),
         (ChartManagerError("something went wrong"), 1),
     ],
