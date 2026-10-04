@@ -60,7 +60,7 @@ Four authored kinds share the `chartmanager.io/v1alpha1` API under
 
 - `ChartWorkspace` (`.chart-manager/workspace.yaml`) — the checkout-owned
   chart, local-cluster, render, and policy locations, plus repository-wide
-  validation and cluster-test fanout. Its validation policy pins the one
+  validation and chart-test fanout. Its validation policy pins the one
   Kubernetes release used by every chart in a validation run.
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
@@ -344,12 +344,12 @@ environment instead.
 `chartsDir`, `localCluster`, `renderDir`, and `policiesDir` values are
 repository-relative, use `/`, and cannot escape the checkout. `chartsDir`
 alone may be `.`. The two `fanout` lists select the complete validation or
-cluster-test matrix when an additional shared input changes; they do not
+chart-test matrix when an additional shared input changes; they do not
 publish, deploy, or mutate chart dependencies.
 
 Policy changes automatically fan out validation. The workspace marker,
 selected `LocalCluster`, its kind config and repository bootstrap charts, and
-`clusterTest.sharedPrerequisites` automatically fan out cluster tests. A
+`chartTest.sharedCharts` automatically fan out chart tests. A
 plain fanout path matches itself and descendants, `*` matches within one path
 segment, and `**` matches zero or more segments.
 

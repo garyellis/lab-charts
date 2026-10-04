@@ -26,7 +26,7 @@ def _service(root: Path) -> LifecycleImpactService:
                     "src/chart_manager/integrations/kubeconform/**",
                     "src/chart_manager/integrations/kyverno.py",
                 ],
-                "clusterTest": [
+                "chartTest": [
                     "src/chart_manager/**",
                     "kind-config.yaml",
                     ".mise.toml",
@@ -35,7 +35,7 @@ def _service(root: Path) -> LifecycleImpactService:
                     ".github/workflows/ci.yaml",
                 ],
             },
-            clusterTest={"sharedPrerequisites": ["istio-base"]},
+            chartTest={"sharedCharts": ["istio-base"]},
         )
     )
 
@@ -305,7 +305,7 @@ def test_validation_and_cluster_fanout_lists_are_independent(
     _with_validation(chart)
     workspace = workspace_for(
         chart_root,
-        fanout={"validation": ["validation-tool/**"], "clusterTest": ["cluster-tool/**"]},
+        fanout={"validation": ["validation-tool/**"], "chartTest": ["cluster-tool/**"]},
     )
     service = LifecycleImpactService(workspace=workspace)
 

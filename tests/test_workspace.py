@@ -376,12 +376,36 @@ def test_fanout_normalizes_dedupes_and_sorts() -> None:
         _document(
             fanout={
                 "validation": ["./z/**", "a/file", "z/**"],
-                "clusterTest": ["src/**/test.py"],
+                "chartTest": ["src/**/test.py"],
             }
         )
     )
 
     assert resource.spec.fanout.validation == ("a/file", "z/**")
+
+
+def test_chart_test_fanout_and_shared_charts_load_from_chart_test_keys(tmp_path: Path) -> None:
+    workspace = workspace_for(
+        tmp_path,
+        fanout={"chartTest": ["kind/**"]},
+        chartTest={"sharedCharts": ["base"]},
+    )
+
+    assert workspace.matching_chart_test_patterns("kind/config.yaml") == ("kind/**",)
+    assert workspace.matching_chart_test_patterns("charts/base/values.yaml") == ("charts/base",)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"fanout": {"clusterTest": ["kind/**"]}},
+        {"clusterTest": {"sharedPrerequisites": ["base"]}},
+        {"chartTest": {"sharedPrerequisites": ["base"]}},
+    ],
+)
+def test_cluster_test_keys_are_rejected(spec: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ChartWorkspace.model_validate(_document(**spec))
 
 
 @pytest.mark.parametrize(
@@ -411,7 +435,7 @@ def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
     assert workspace.matches_validation_fanout(path) is expected
 
 
-def test_implicit_fanout_includes_marker_policies_cluster_and_prerequisites(
+def test_implicit_fanout_includes_marker_policies_cluster_and_shared_charts(
     tmp_path: Path,
 ) -> None:
     local = tmp_path / ".chart-manager/local-cluster.yaml"
@@ -428,15 +452,15 @@ spec:
 """,
         encoding="utf-8",
     )
-    workspace = workspace_for(tmp_path, clusterTest={"sharedPrerequisites": ["base"]})
+    workspace = workspace_for(tmp_path, chartTest={"sharedCharts": ["base"]})
 
     assert workspace.matches_validation_fanout("policies/rule.yaml")
     assert workspace.matches_validation_fanout(WORKSPACE_FILE)
     assert workspace.matches_validation_fanout(SCHEMA_LOCK_FILE)
-    assert workspace.matches_cluster_test_fanout(WORKSPACE_FILE)
-    assert workspace.matches_cluster_test_fanout("kind/config.yaml")
-    assert workspace.matches_cluster_test_fanout("charts/cni/templates/cni.yaml")
-    assert workspace.matches_cluster_test_fanout("charts/base/templates/crd.yaml")
+    assert workspace.matching_chart_test_patterns(WORKSPACE_FILE)
+    assert workspace.matching_chart_test_patterns("kind/config.yaml")
+    assert workspace.matching_chart_test_patterns("charts/cni/templates/cni.yaml")
+    assert workspace.matching_chart_test_patterns("charts/base/templates/crd.yaml")
 
 
 def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
@@ -591,7 +615,7 @@ def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> No
     write_workspace(
         tmp_path,
         fanout={"validation": ["tooling/**"]},
-        clusterTest={"sharedPrerequisites": ["base"]},
+        chartTest={"sharedCharts": ["base"]},
     )
     original = load_repository_workspace(tmp_path)
     workspace = original.with_charts_dir(Path("vendor/helm"))
@@ -604,7 +628,7 @@ def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> No
     assert workspace.chart_name_from_repo_path("vendor/helm/alpha/Chart.yaml") == "alpha"
     assert (workspace.root, workspace.name) == (original.root, original.name)
     assert workspace.spec.fanout == original.spec.fanout
-    assert workspace.spec.cluster_test == original.spec.cluster_test
+    assert workspace.spec.chart_test == original.spec.chart_test
     assert workspace.spec.render_dir == original.spec.render_dir
     assert original.spec.charts_dir == Path("charts")
 
@@ -619,7 +643,7 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
                 "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
             },
         },
-        fanout={"validation": ["tooling/**"], "clusterTest": ["kind/**"]},
+        fanout={"validation": ["tooling/**"], "chartTest": ["kind/**"]},
     )
     first = load_repository_workspace(tmp_path)
     second = load_repository_workspace(tmp_path)

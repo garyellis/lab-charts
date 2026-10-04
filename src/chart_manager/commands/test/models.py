@@ -7,10 +7,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
+from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
-
-DEFAULT_PROFILE = "minimal"
 
 
 class ActionKind(StrEnum):

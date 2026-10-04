@@ -8,6 +8,7 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import (
@@ -18,7 +19,7 @@ from chart_manager.cli._options import (
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands import test
-from chart_manager.commands.test.models import DEFAULT_PROFILE, LifecyclePlan
+from chart_manager.commands.test.models import LifecyclePlan
 from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError

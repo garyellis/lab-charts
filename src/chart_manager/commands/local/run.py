@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.api.v1alpha1.releases import (
     LifecycleRelease,
@@ -385,7 +386,7 @@ def _target_releases(
             LifecycleRelease(
                 type="lifecycle",
                 chart=target.path.relative_to(root.resolve()),
-                profile=profile or "minimal",
+                profile=profile or DEFAULT_PROFILE,
             ),
         )
     if profile is not None:

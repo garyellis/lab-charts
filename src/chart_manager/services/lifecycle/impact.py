@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.commands import validate
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
@@ -148,7 +149,7 @@ class LifecycleImpactService:
         fanout_matches = [
             (path, pattern)
             for path in changes
-            for pattern in self.workspace.matching_cluster_test_patterns(path)
+            for pattern in self.workspace.matching_chart_test_patterns(path)
         ]
         if fanout_matches:
             for chart in enabled:
@@ -204,10 +205,10 @@ class LifecycleImpactService:
         return selected, errors
 
     def _cluster_fanout_detail(self, pattern: str) -> str:
-        for chart in self.workspace.spec.cluster_test.shared_prerequisites:
+        for chart in self.workspace.spec.chart_test.shared_charts:
             if pattern == self.workspace.repo_chart_path(chart).as_posix():
                 return f"{chart} is a shared runtime prerequisite across cluster tests"
-        if pattern not in self.workspace.spec.fanout.cluster_test and pattern not in {
+        if pattern not in self.workspace.spec.fanout.chart_test and pattern not in {
             self.workspace.spec.local_cluster.as_posix(),
             self.workspace.marker.relative_to(self.workspace.root).as_posix(),
         }:
@@ -217,8 +218,8 @@ class LifecycleImpactService:
 
 def _default_profile(profiles: Mapping[str, object]) -> str:
     """Preserve CI's minimal convention with a deterministic safe fallback."""
-    if "minimal" in profiles:
-        return "minimal"
+    if DEFAULT_PROFILE in profiles:
+        return DEFAULT_PROFILE
     return sorted(profiles)[0]
 
 

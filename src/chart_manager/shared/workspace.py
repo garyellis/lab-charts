@@ -79,17 +79,9 @@ class RepositoryWorkspace:
     def matches_validation_fanout(self, path: PurePath | str) -> bool:
         return any(_pattern_matches(pattern, path) for pattern in self.validation_patterns())
 
-    def matches_cluster_test_fanout(self, path: PurePath | str) -> bool:
-        return any(_pattern_matches(pattern, path) for pattern in self.cluster_test_patterns())
-
-    def matching_validation_patterns(self, path: PurePath | str) -> tuple[str, ...]:
+    def matching_chart_test_patterns(self, path: PurePath | str) -> tuple[str, ...]:
         return tuple(
-            pattern for pattern in self.validation_patterns() if _pattern_matches(pattern, path)
-        )
-
-    def matching_cluster_test_patterns(self, path: PurePath | str) -> tuple[str, ...]:
-        return tuple(
-            pattern for pattern in self.cluster_test_patterns() if _pattern_matches(pattern, path)
+            pattern for pattern in self.chart_test_patterns() if _pattern_matches(pattern, path)
         )
 
     def validation_patterns(self) -> tuple[str, ...]:
@@ -100,11 +92,11 @@ class RepositoryWorkspace:
         )
         return tuple(sorted({*self.spec.fanout.validation, *implicit}))
 
-    def cluster_test_patterns(self) -> tuple[str, ...]:
+    def chart_test_patterns(self) -> tuple[str, ...]:
         implicit = [self.spec.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
         implicit.extend(
             _path_pattern(self.repo_chart_path(name))
-            for name in self.spec.cluster_test.shared_prerequisites
+            for name in self.spec.chart_test.shared_charts
         )
         # LocalCluster dependency discovery is intentionally lazy. A malformed
         # cluster resource cannot break chart listing or validation.
@@ -120,7 +112,7 @@ class RepositoryWorkspace:
                     for release in cluster.spec.bootstrap.releases
                     if isinstance(release, (LifecycleRelease, LocalChartRelease))
                 )
-        return tuple(sorted({*self.spec.fanout.cluster_test, *implicit}))
+        return tuple(sorted({*self.spec.fanout.chart_test, *implicit}))
 
 
 def _path_pattern(path: Path) -> str:

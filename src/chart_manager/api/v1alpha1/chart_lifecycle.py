@@ -28,6 +28,7 @@ from chart_manager.plumbing.paths import ensure_relative, relative_path
 __all__ = [
     "ALL_ENVIRONMENTS",
     "CHART_LIFECYCLE_KIND",
+    "DEFAULT_PROFILE",
     "MATCH_BY_BASENAME",
     "ChartLifecycle",
     "ChartLifecycleKind",
@@ -60,6 +61,9 @@ ALL_ENVIRONMENTS: Final = "all-environments"
 
 TriggerValue = list[str] | Literal["match-by-basename", "all-environments"]
 
+# The chart-test profile used when none is named.
+DEFAULT_PROFILE: Final = "minimal"
+
 
 # ---------------------------------------------------------------------------
 # spec.chartTest -- authored live-chart test configuration
@@ -70,7 +74,7 @@ class ChartTestRef(ApiModel):
     """Reference to another chart's chart-test profile."""
 
     chart: str
-    profile: str = "minimal"
+    profile: str = DEFAULT_PROFILE
 
 
 class ChartTestHooks(StrictApiModel):
