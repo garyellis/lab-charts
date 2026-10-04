@@ -71,7 +71,6 @@ from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
-from chart_manager.services.ci import CiService
 from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
@@ -84,7 +83,6 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.lifecycle.impact import LifecycleImpactService
 from chart_manager.services.publish import PublishService
 from chart_manager.services.upgrader import (
     GitBaselineReader,
@@ -297,25 +295,12 @@ class Container:
     def chart_catalog_service(self, root: Path) -> ChartCatalogService:
         """Build the read-only chart/lifecycle catalog for the repo at `root`.
 
-        Built here rather than at the surface for the same reason `ci_service`
-        is: `charts_dir` is the one setting that decides which directories are
-        charts at all, and a surface that supplies it itself can answer
+        Built here rather than at the surface: `charts_dir` is the one setting
+        that decides which directories are charts at all, and a surface that
+        supplies it itself can answer
         `chart list` from a different directory than `plan` selected against.
         """
         return ChartCatalogService(workspace=self.workspace(root))
-
-    def impact_service(self, root: Path) -> LifecycleImpactService:
-        """Build the changed-file impact analyzer for the repo at `root`.
-
-        `plan` asks this and `CiService` the same question through two
-        engines, so both have to be configured identically; that is exactly
-        what a surface building one of them inline cannot guarantee.
-        """
-        return LifecycleImpactService(workspace=self.workspace(root))
-
-    def ci_service(self, root: Path) -> CiService:
-        """Build the CI selection verbs for the repo at `root`."""
-        return CiService(workspace=self.workspace(root))
 
     def publish_service(self, root: Path) -> PublishService:
         """Build the headless OCI publisher for charts below ``root``."""

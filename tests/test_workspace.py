@@ -508,8 +508,6 @@ spec:
     )
     assert _local_targets(container, tmp_path).local_config == Path("ops/local.yaml")
     assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
-    assert container.impact_service(tmp_path).workspace is workspace
-    assert container.ci_service(tmp_path).workspace is workspace
     assert container.publish_service(tmp_path).repository.charts_dir == (
         tmp_path / "helm/charts"
     )

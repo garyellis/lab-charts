@@ -15,7 +15,7 @@ warnings, access hints, deprecation notices, and error detail.
 Why this is worth a gate rather than a convention:
 
   (a) `.github/workflows/ci.yaml` captures CLI stdout into shell variables
-      (`publish_charts="$(... ci publish-charts ...)"`). A warning printed
+      (`publish_charts="$(... plan --for publish ...)"`). A warning printed
       on the same stream is silently absorbed into the value, and no exit
       code reveals it.
 

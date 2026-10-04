@@ -400,7 +400,7 @@ def test_service_modules_are_discoverable() -> None:
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
-    assert "chart_manager.services.ci" in modules
+    assert "chart_manager.services.publish" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -592,11 +592,10 @@ def test_cli_modules_are_discoverable() -> None:
     paths = _cli_modules()
     assert len(paths) > 10, f"suspiciously few cli modules: {len(paths)}"
     assert _CLI / "_container.py" in paths
-    # The four modules that used to construct services inline. If one is
-    # renamed away, the scan must be updated deliberately rather than
-    # quietly losing coverage of the exact files this rule was written for.
-    for name in ("chart.py", "plan.py"):
-        assert _CLI / name in paths
+    # The module that used to construct services inline. If it is renamed
+    # away, the scan must be updated deliberately rather than quietly losing
+    # coverage of the exact file this rule was written for.
+    assert _CLI / "chart.py" in paths
 
 
 def test_no_cli_module_constructs_a_service() -> None:
@@ -657,13 +656,13 @@ _CONSTRUCTION_LEAKS = {
         "return LocalTargetResolver(root, local_config=Settings().local_config).resolve(target)"
     ),
     "an-adapter-facing-exporter": "exporter = GrafanaExporter(kubectl=Kubectl(runner))",
-    "the-same-thing-reached-through-its-package": "svc = impact.LifecycleImpactService(root)",
+    "the-same-thing-reached-through-its-package": "svc = catalog.ChartCatalogService(root)",
 }
 
 _CONSTRUCTION_NON_LEAKS = {
     "the-container-factory-that-replaced-it": "entries = _container().chart_catalog_service(root)",
-    "a-container-factory-spelled-bare": "svc = container().impact_service(root)",
-    "a-type-annotation-naming-the-same-class": "def f(root: Path) -> LifecycleImpactService: ...",
+    "a-container-factory-spelled-bare": "svc = container().chart_catalog_service(root)",
+    "a-type-annotation-naming-the-same-class": "def f(root: Path) -> ChartCatalogService: ...",
     "an-import-of-the-class-for-that-annotation": (
         "from chart_manager.services.chart_catalog import ChartCatalogService"
     ),
