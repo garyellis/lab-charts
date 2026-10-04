@@ -7,6 +7,7 @@ chart list, so those two are pinned exactly.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from chart_manager.commands.plan import cli as plan_cli
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import parse_yaml
-from tests.conftest import MakeChart, cli
+from tests.conftest import cli
 
 CHANGED = Path("charts/grafana/values-dev.yaml")
 
@@ -130,34 +131,30 @@ def test_all_and_chart_are_mutually_exclusive(fake_run: FakeRun) -> None:
 # --- --for publish: the chart list CI reads ----------------------------------
 
 
-def test_publish_table_prints_one_changed_chart_per_line(
-    fake_run: FakeRun, chart_root: Path, make_chart: MakeChart
-) -> None:
-    make_chart("alpha")
-    make_chart("zeta")
+def test_publish_table_prints_one_chart_per_line(fake_run: FakeRun, chart_root: Path) -> None:
+    fake_run.result = replace(outcome_with(), publish=("alpha", "zeta"))
     changed = chart_root / "changed.txt"
-    changed.write_text(
-        "charts/zeta/values.yaml\n\n  charts/alpha/Chart.yaml  \ncharts/gone/x\nkind-config.yaml\n"
-    )
+    changed.write_text("charts/zeta/values.yaml\n\n  charts/alpha/Chart.yaml  \n")
 
     result = cli("plan", "--for", "publish", "-o", "table", "--changed-files", str(changed))
 
     assert (result.exit_code, result.stdout) == (0, "alpha\nzeta\n")
-    assert fake_run.requests == []
+    assert fake_run.requests == [
+        plan.PlanRequest(changes=("charts/zeta/values.yaml", "charts/alpha/Chart.yaml"))
+    ]
 
 
 @pytest.mark.parametrize(("output", "load"), [("json", json.loads), ("yaml", parse_yaml)])
 def test_publish_machine_output_is_a_bare_list(
-    fake_run: FakeRun, chart_root: Path, make_chart: MakeChart, output: str, load: object
+    fake_run: FakeRun, chart_root: Path, output: str, load: object
 ) -> None:
-    make_chart("alpha")
     changed = chart_root / "changed.txt"
-    changed.write_text("charts/alpha/values.yaml\n")
+    changed.write_text("charts/grafana/values.yaml\n")
 
     result = cli("plan", "--for", "publish", "-o", output, "--changed-files", str(changed))
 
     assert result.exit_code == 0
-    assert load(result.stdout) == ["alpha"]  # type: ignore[operator]
+    assert load(result.stdout) == ["grafana"]  # type: ignore[operator]
 
 
 def test_publish_needs_a_changed_files_list(fake_run: FakeRun) -> None:

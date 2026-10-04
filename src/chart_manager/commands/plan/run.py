@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.commands import test, validate
+from chart_manager.commands import publish, test, validate
 from chart_manager.commands.plan.models import PlanOutcome, PlanRequest
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.publish_selection import directly_changed_charts
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
@@ -31,5 +30,5 @@ def run(
         changed_files=paths,
         validation=validate.select(paths, workspace=workspace),
         chart_tests=test.select(paths, workspace=workspace),
-        publish=tuple(directly_changed_charts(workspace, paths)),
+        publish=publish.select(paths, workspace=workspace),
     )

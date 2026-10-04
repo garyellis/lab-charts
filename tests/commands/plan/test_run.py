@@ -71,30 +71,6 @@ def test_a_chart_change_selects_its_validation_its_chart_tests_and_its_publish(
     assert outcome.spec_errors == ()
 
 
-def test_publish_is_the_changed_charts_only_without_fanout_or_deleted_charts(
-    chart_root: Path, make_chart: MakeChart
-) -> None:
-    make_chart("alpha")
-    make_chart("zeta")
-    make_chart("untouched")
-
-    outcome = _run(
-        chart_root,
-        plan.PlanRequest(
-            changes=(
-                "README.md",
-                "charts/zeta/README.md",
-                "charts/alpha/templates/deployment.yaml",
-                "charts/removed/Chart.yaml",
-                "kind-config.yaml",
-            )
-        ),
-    )
-
-    assert outcome.publish == ("alpha", "zeta")
-    assert _tests(outcome) == [("alpha", "minimal"), ("untouched", "minimal"), ("zeta", "minimal")]
-
-
 def test_changed_files_are_deduplicated_and_sorted(chart_root: Path, make_chart: MakeChart) -> None:
     make_chart("app")
 
