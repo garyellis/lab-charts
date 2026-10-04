@@ -15,21 +15,21 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from chart_manager.plumbing.errors import SpecError
-from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
     KubeconformSchemaStoreError,
 )
-from chart_manager.services.kubeconform_schemas.inventory import scan_rendered_directory
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.models import (
     GroupVersionKind,
     MaterializedSchema,
     SchemaScope,
     content_digest,
 )
-from chart_manager.services.kubeconform_schemas.store import default_schema_cache_root
+from chart_manager.commands.validate.schemas.store import default_schema_cache_root
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
+from chart_manager.services.kubeconform_schemas.inventory import scan_rendered_directory
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import ManifestValidationTarget, RunRequest
 from chart_manager.shared.charts.chart import ChartRepository, load_chart_metadata

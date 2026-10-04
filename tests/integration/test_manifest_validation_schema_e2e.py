@@ -132,8 +132,8 @@ def test_real_missing_schema_reports_remediation(tmp_path: Path) -> None:
 
 
 def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(tmp_path, monkeypatch, caplog):
-    from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
-    from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+    from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+    from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
     from chart_manager.services.manifest_validation.app import ManifestValidationService
     from chart_manager.services.manifest_validation.models import RunRequest
     from tests.schema_fixtures import schema_store, workspace

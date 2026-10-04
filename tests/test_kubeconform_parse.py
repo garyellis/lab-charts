@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.validate.schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
-from chart_manager.services.kubeconform_schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
 from tests.conftest import FakeCommandRunner
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"

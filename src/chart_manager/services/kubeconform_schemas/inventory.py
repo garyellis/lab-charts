@@ -6,16 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from chart_manager.plumbing.errors import YamlError
-from chart_manager.plumbing.yaml_files import load_yaml_documents
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaIntegrityError,
 )
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.models import (
     GroupVersionKind,
     SchemaScope,
 )
+from chart_manager.plumbing.errors import YamlError
+from chart_manager.plumbing.yaml_files import load_yaml_documents
 
 # JSON is a YAML subset and Helm may preserve JSON-formatted CRDs in the
 # rendered tree. Inspect every manifest format accepted by kubeconform so

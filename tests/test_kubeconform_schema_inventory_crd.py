@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml_mapping
-from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
+from chart_manager.commands.validate.schemas.models import SchemaScope
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml_mapping
+from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
 from chart_manager.services.kubeconform_schemas.inventory import (
     scan_rendered_directory,
 )
-from chart_manager.services.kubeconform_schemas.models import SchemaScope
 
 
 @pytest.mark.parametrize("document", ["metadata: {}", "- bad", "kind: List\nitems: [bad]"])

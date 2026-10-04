@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
 

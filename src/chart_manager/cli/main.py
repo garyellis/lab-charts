@@ -39,6 +39,14 @@ from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli import validate as validate_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.commands.validate.schemas.errors import (
+    KubeconformSchemaConfigurationError,
+    KubeconformSchemaError,
+    KubeconformSchemaLockError,
+    KubeconformSchemaRenderError,
+    KubeconformSchemaSourceEnvironmentError,
+    KubeconformSchemaSourceError,
+)
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
@@ -48,14 +56,6 @@ from chart_manager.plumbing.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
-from chart_manager.services.kubeconform_schemas.errors import (
-    KubeconformSchemaConfigurationError,
-    KubeconformSchemaError,
-    KubeconformSchemaLockError,
-    KubeconformSchemaRenderError,
-    KubeconformSchemaSourceEnvironmentError,
-    KubeconformSchemaSourceError,
-)
 from chart_manager.shared.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
 
 # --- the command tree ------------------------------------------------------

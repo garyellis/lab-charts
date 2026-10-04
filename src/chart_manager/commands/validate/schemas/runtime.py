@@ -5,19 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaLockError,
     KubeconformSchemaSourceEnvironmentError,
     KubeconformSchemaStoreError,
 )
-from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.lock import load_schema_lock
+from chart_manager.commands.validate.schemas.models import (
     AuthoredSchemaPolicy,
     SchemaLock,
     lock_policy_mismatches,
 )
-from chart_manager.services.kubeconform_schemas.store import (
+from chart_manager.commands.validate.schemas.store import (
     KubeconformSchemaLocations,
     KubeconformSchemaStore,
     kubeconform_schema_locations,

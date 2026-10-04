@@ -1,7 +1,7 @@
+from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.services.kubeconform_schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.services.kubeconform_schemas.lock import write_schema_lock_atomic
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 
 from .schema_fixtures import schema_store, workspace
