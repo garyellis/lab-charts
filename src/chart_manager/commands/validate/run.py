@@ -75,7 +75,7 @@ def run(
         raise SpecError(
             f"unknown environment(s): {', '.join(unknown)}; declared: {', '.join(sorted(declared))}"
         )
-    out = request.out or workspace.render_root / _run_id()
+    out = request.out or workspace.render_root / new_run_id()
     rows = [row for row in selection.rows if not request.envs or row.env in request.envs]
     checker = _Checker(request, workspace, runner, progress)
 
@@ -442,5 +442,5 @@ def _values(chart: Chart, spec: ManifestValidationSpec, env: str) -> list[Path]:
     return values
 
 
-def _run_id() -> str:
+def new_run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
