@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from chart_manager.commands import validate
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.manifest_validation.planner import build_worklist
 from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -84,10 +84,7 @@ class LifecycleImpactService:
         )
         validation_reasons: dict[tuple[str, str], list[ImpactReason]] = {}
         for changed_file in changes:
-            single = build_worklist(
-                changed_files=[changed_file.as_posix()],
-                workspace=self.workspace,
-            )
+            single = validate.select([changed_file.as_posix()], workspace=self.workspace)
             for row in single.rows:
                 key = (row.chart, row.env)
                 _append_reason(
@@ -100,10 +97,7 @@ class LifecycleImpactService:
                     ),
                 )
 
-        combined = build_worklist(
-            changed_files=[path.as_posix() for path in changes],
-            workspace=self.workspace,
-        )
+        combined = validate.select([path.as_posix() for path in changes], workspace=self.workspace)
         rows_by_key = {(row.chart, row.env): row for row in combined.rows}
         validation = tuple(
             ValidationImpact(

@@ -13,11 +13,12 @@ Status = Literal["passed", "failed", "skipped"]
 
 @dataclass(frozen=True)
 class ValidateRequest:
-    """Which charts and environments to validate, with which validation checks."""
+    """What to validate: the named charts, else the rows `changes` select (None: every row)."""
 
     charts: tuple[str, ...]
     envs: tuple[str, ...] = ()
     checks: frozenset[CheckName] = frozenset(get_args(CheckName))
+    changes: tuple[str, ...] | None = None
     out: Path | None = None
 
 
@@ -35,6 +36,8 @@ class Row:
 
     chart: str
     env: str
+    release: str
+    namespace: str
     checks: Mapping[CheckName, CheckResult]
 
 
@@ -44,3 +47,4 @@ class ValidateOutcome:
 
     rows: tuple[Row, ...]
     spec_errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()

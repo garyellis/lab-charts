@@ -260,7 +260,6 @@ def write_validation_chart(root: Path, name: str, **validation: Any) -> Path:
     return chart
 
 
-
 # --- the CLI argv seam -------------------------------------------------------
 #
 # Every test that drives the CLI names a command as a sequence of argv

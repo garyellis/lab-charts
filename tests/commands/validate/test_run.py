@@ -196,7 +196,9 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
         .respond(("kubeconform",), stdout=json.dumps({"resources": []}))
     )
 
-    validate.run(validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner)
+    validate.run(
+        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+    )
 
     (kubeconform,) = [call for call in runner.calls if call[0] == "kubeconform"]
     flags = list(pairwise(kubeconform))
@@ -366,3 +368,68 @@ def test_a_charts_config_error_is_collected_while_the_other_charts_run(tmp_path:
     assert [row.chart for row in outcome.rows] == ["fine"]
     (error,) = outcome.spec_errors
     assert "broken" in error and "missing.yaml" in error
+
+
+def test_without_named_charts_the_changed_files_select_the_rows(tmp_path: Path) -> None:
+    write_validation_chart(
+        tmp_path,
+        "demo",
+        environments={"dev": {"values": ["values.yaml"]}, "ci": {"values": ["values.yaml"]}},
+    )
+    broken = write_validation_chart(tmp_path, "broken")
+    (broken / "Chart.yaml").write_text("name: other\n")
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=(), changes=("charts/demo/values-ci.yaml",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [(row.chart, row.env) for row in outcome.rows] == [("demo", "ci")]
+    assert [error.split(":")[0] for error in outcome.spec_errors] == ["broken"]
+
+
+def test_named_charts_narrow_the_changed_rows_and_warnings_reach_the_outcome(
+    tmp_path: Path,
+) -> None:
+    two_envs = {"dev": {"values": ["values.yaml"]}, "ci": {"values": ["values.yaml"]}}
+    write_validation_chart(tmp_path, "demo", environments=two_envs)
+    write_validation_chart(tmp_path, "other", environments=two_envs)
+    changes = ("charts/demo/values-ci.yaml", "charts/other/values-ci.yaml", "charts/demo/notes.txt")
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), changes=changes, checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [(row.chart, row.env) for row in outcome.rows] == [("demo", "ci")]
+    assert any("charts/demo/notes.txt" in warning for warning in outcome.warnings)
+
+
+def test_an_unknown_environment_raises_when_the_rows_come_from_changes(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+
+    with pytest.raises(SpecError, match="prod"):
+        validate.run(
+            validate.ValidateRequest(charts=(), changes=(), envs=("prod",), checks=RENDER),
+            workspace=workspace_for(tmp_path),
+            runner=FakeCommandRunner(),
+        )
+
+
+def test_a_malformed_named_chart_is_collected_while_the_other_named_chart_runs(
+    tmp_path: Path,
+) -> None:
+    write_validation_chart(tmp_path, "fine")
+    broken = write_validation_chart(tmp_path, "broken")
+    (broken / "chart-lifecycle.yaml").write_text("kind: nonsense\n")
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("broken", "fine"), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [row.chart for row in outcome.rows] == ["fine"]
+    assert [error.split(":")[0] for error in outcome.spec_errors] == ["broken"]

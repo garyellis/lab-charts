@@ -7,5 +7,14 @@ from chart_manager.commands.validate.models import (
     ValidateRequest,
 )
 from chart_manager.commands.validate.run import run
+from chart_manager.commands.validate.select import Selection, select
 
-__all__ = ["CheckResult", "Row", "ValidateOutcome", "ValidateRequest", "run"]
+__all__ = [
+    "CheckResult",
+    "Row",
+    "Selection",
+    "ValidateOutcome",
+    "ValidateRequest",
+    "run",
+    "select",
+]
