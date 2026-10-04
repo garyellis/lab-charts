@@ -16,7 +16,8 @@ from chart_manager.commands.validate.schemas.store import (
     KubeconformSchemaStore,
     default_schema_cache_root,
 )
-from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.errors import MissingToolError, SpecError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from tests import schema_fixtures
 from tests.conftest import (
@@ -127,9 +128,15 @@ def kubeconform_report(status: str, msg: str = "") -> str:
     [
         (0, kubeconform_report("statusValid"), "passed", ""),
         (1, kubeconform_report("statusInvalid", "missing properties: data"), "failed", "data"),
-        (2, "panic: schema cache", "failed", ""),
+        (2, "panic: schema cache", "error", ""),
+        (
+            1,
+            kubeconform_report("statusError", "could not find schema for Widget"),
+            "error",
+            "schemas sync",
+        ),
     ],
-    ids=["valid", "invalid", "kubeconform-broke"],
+    ids=["valid", "invalid", "kubeconform-broke", "schema-missing"],
 )
 def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests(
     tmp_path: Path,
@@ -251,7 +258,7 @@ def kyverno_report(result: str, message: str = "") -> str:
         (0, kyverno_report("pass"), "passed", ""),
         (1, kyverno_report("fail", "label team is required"), "failed", "team"),
         (0, kyverno_report("warn", "label owner is advised"), "passed", "owner"),
-        (2, "panic: policy cache", "failed", ""),
+        (2, "panic: policy cache", "error", ""),
     ],
     ids=["pass", "fail", "warn", "kyverno-broke"],
 )
@@ -502,3 +509,147 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
 
     assert ("helm", "dependency", "update", str(app)) in runner.calls
     assert not [call for call in runner.calls if "--include-crds" in call]
+
+
+def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+    runner = FakeCommandRunner().respond(("helm", "template"), returncode=-9)
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert outcome.rows[0].checks["render"].status == "error"
+
+
+class _NoHelm(FakeCommandRunner):
+    def run(self, args, **kwargs):  # type: ignore[no-untyped-def]
+        if args[0] == "helm":
+            raise MissingToolError("required tool not found on PATH: helm")
+        return super().run(args, **kwargs)
+
+
+def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+
+    with pytest.raises(MissingToolError):
+        validate.run(
+            validate.ValidateRequest(charts=("demo",), checks=RENDER),
+            workspace=workspace_for(tmp_path),
+            runner=_NoHelm(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("statuses", "spec_errors", "expected"),
+    [
+        (["passed", "skipped"], (), Outcome.SUCCESS),
+        (["passed", "failed"], (), Outcome.FAILED),
+        (["failed", "error"], (), Outcome.TOOL),
+        (["error"], ("broken: bad",), Outcome.SPEC),
+    ],
+)
+def test_the_outcome_folds_rows_and_spec_errors_into_one_exit_reason(
+    statuses: list[str], spec_errors: tuple[str, ...], expected: Outcome
+) -> None:
+    checks = {
+        name: validate.CheckResult(status)
+        for name, status in zip(("render", "schema"), statuses, strict=False)
+    }
+    row = validate.Row("demo", "dev", "demo", "lab-dev", checks)
+
+    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome() is expected
+
+
+class RecordingProgress:
+    def __init__(self) -> None:
+        self.started: list[tuple[str, str]] = []
+        self.events: list[tuple[str, str, str, bool]] = []
+        self.stopped = False
+
+    def start(self, rows):  # type: ignore[no-untyped-def]
+        self.started = [(row.chart, row.env) for row in rows]
+
+    def on_event(self, row, check, status, elapsed_s=None):  # type: ignore[no-untyped-def]
+        self.events.append((row.chart, check, status, elapsed_s is not None))
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_progress_hears_each_check_start_and_finish_with_its_time(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "demo")
+    progress = RecordingProgress()
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+        progress=progress,
+    )
+
+    assert progress.started == [("demo", "dev")]
+    assert progress.events == [
+        ("demo", "render", "running", False),
+        ("demo", "render", "passed", True),
+    ]
+    assert progress.stopped
+    assert outcome.rows[0].checks["render"].elapsed_seconds is not None
+
+
+def test_rows_checked_in_parallel_come_back_in_selection_order(tmp_path: Path) -> None:
+    names = ("a", "b", "c", "d")
+    for name in names:
+        write_validation_chart(tmp_path, name)
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=names, checks=RENDER, workers=4),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner(),
+    )
+
+    assert [row.chart for row in outcome.rows] == list(names)
+
+
+def test_fail_fast_skips_the_rows_after_the_first_failure(tmp_path: Path) -> None:
+    write_validation_chart(tmp_path, "one")
+    write_validation_chart(tmp_path, "two")
+    runner = FakeCommandRunner().respond(("helm", "template", "one"), returncode=1)
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("one", "two"), checks=RENDER, fail_fast=True),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert [row.checks["render"].status for row in outcome.rows] == ["failed", "skipped"]
+    assert not [call for call in runner.calls if call[1:3] == ("template", "two")]
+
+
+def test_the_tool_timeout_and_verbose_reach_every_tool_call(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    (tmp_path / "policies").mkdir()
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+        .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
+    )
+
+    validate.run(
+        validate.ValidateRequest(charts=("demo",), tool_timeout=30.0, verbose=True),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    tools = {record.args[0]: record for record in runner.records if record.args[1] != "dependency"}
+    assert {tool: record.timeout for tool, record in tools.items()} == {
+        "helm": 30.0,
+        "kubeconform": 30.0,
+        "kyverno": 30.0,
+    }
+    assert tools["helm"].capture is False

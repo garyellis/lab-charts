@@ -515,7 +515,9 @@ class Helm:
         stderr = (debug_result.stderr or result.stderr or "").strip()
         raise ExternalCommandError(
             f"helm template failed for {release} ({chart_ref}); "
-            f"rendered (partial) output at: {output_dir}\n{stderr}"
+            f"rendered (partial) output at: {output_dir}\n{stderr}",
+            stderr=stderr,
+            returncode=result.returncode,
         )
 
     def test(

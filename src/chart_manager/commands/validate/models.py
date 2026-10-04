@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
+from chart_manager.plumbing.exit_codes import Outcome
+
 CheckName = Literal["render", "schema", "policy"]
-Status = Literal["passed", "failed", "skipped"]
+#: `failed`: the check found problems in the chart. `error`: the tool itself broke.
+Status = Literal["passed", "failed", "skipped", "error"]
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,10 @@ class ValidateRequest:
     checks: frozenset[CheckName] = frozenset(get_args(CheckName))
     changes: tuple[str, ...] | None = None
     out: Path | None = None
+    workers: int = 0
+    fail_fast: bool = False
+    tool_timeout: float | None = None
+    verbose: bool = False
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,7 @@ class CheckResult:
 
     status: Status
     detail: str = ""
+    elapsed_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,3 +56,14 @@ class ValidateOutcome:
     rows: tuple[Row, ...]
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+
+    def outcome(self) -> Outcome:
+        """The run's exit reason: a spec error, then a tool error, then a failed check."""
+        statuses = {result.status for row in self.rows for result in row.checks.values()}
+        if self.spec_errors:
+            return Outcome.SPEC
+        if "error" in statuses:
+            return Outcome.TOOL
+        if "failed" in statuses:
+            return Outcome.FAILED
+        return Outcome.SUCCESS
