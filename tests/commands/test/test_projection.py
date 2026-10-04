@@ -22,7 +22,7 @@ ROOT = Path.cwd()
 
 def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
     return LifecycleAction(
-        action_id=f"cluster-test:{chart}:minimal:{suffix}",
+        action_id=f"chart-test:{chart}:minimal:{suffix}",
         kind=kind,
         target=ActionTarget(
             chart=chart,
@@ -82,9 +82,9 @@ def test_removes_bootstrap_chart_actions() -> None:
     )
 
     assert [item.action_id for item in projected.actions] == [
-        "cluster-test:grafana:minimal:namespace",
-        "cluster-test:grafana:minimal:dependency",
-        "cluster-test:grafana:minimal:install",
+        "chart-test:grafana:minimal:namespace",
+        "chart-test:grafana:minimal:dependency",
+        "chart-test:grafana:minimal:install",
     ]
     assert projected.warnings == (
         "authored warning",
@@ -132,7 +132,7 @@ def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install(
         ("grafana", ActionKind.WORKLOAD_READY)
     ]
     ready = projected.actions[0]
-    assert ready.action_id == "cluster-test.grafana.minimal.workload-ready"
+    assert ready.action_id == "chart-test.grafana.minimal.workload-ready"
     install = next(
         a for a in cluster_plan().actions if a.action_id.endswith("grafana:minimal:install")
     )

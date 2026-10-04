@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, ClusterTestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartTestProfile, ChartTestSpec
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.lifecycle import (
     load_chart_lifecycle,
@@ -14,7 +14,7 @@ from chart_manager.shared.charts.lifecycle import (
 from .conftest import cli
 
 
-def _alloy_spec() -> ClusterTestSpec:
+def _alloy_spec() -> ChartTestSpec:
     lifecycle = load_chart_lifecycle(Path("charts/alloy/chart-lifecycle.yaml"))
     return require_chart_test(lifecycle, chart_name="alloy")
 
@@ -37,7 +37,7 @@ def test_unknown_profile_raises_spec_error() -> None:
 
 
 def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
-    spec = ClusterTestSpec.model_validate(
+    spec = ChartTestSpec.model_validate(
         {
             "profiles": {"minimal": {"namespace": "default"}},
             "dependentTests": [{"chart": "grafana", "profile": "with-deps"}],
@@ -49,7 +49,7 @@ def test_dependent_tests_is_the_only_authored_reverse_target_field() -> None:
     ]
 
     with pytest.raises(ValidationError, match="reverseTests"):
-        ClusterTestSpec.model_validate(
+        ChartTestSpec.model_validate(
             {
                 "profiles": {"minimal": {"namespace": "default"}},
                 "reverseTests": [{"chart": "grafana"}],
@@ -69,16 +69,16 @@ def test_cli_exposes_dependent_tests_only_on_chart_test() -> None:
 
 
 def test_cluster_test_profile_defaults_to_running_helm_tests() -> None:
-    assert ClusterTestProfile(namespace="default").helm_test is True
+    assert ChartTestProfile(namespace="default").helm_test is True
 
 
 def test_cluster_test_profile_accepts_disabled_helm_tests() -> None:
-    assert ClusterTestProfile(namespace="default", helmTest=False).helm_test is False
+    assert ChartTestProfile(namespace="default", helmTest=False).helm_test is False
 
 
 def test_cluster_test_profile_rejects_removed_checks_configuration() -> None:
     with pytest.raises(ValidationError, match="checks"):
-        ClusterTestProfile.model_validate(
+        ChartTestProfile.model_validate(
             {
                 "namespace": "default",
                 "checks": [{"name": "pods-ready", "type": "helm-test"}],

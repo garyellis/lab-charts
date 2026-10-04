@@ -102,7 +102,7 @@ def preflight(
             if profile.hooks is not None:
                 raise SpecError(
                     f"bootstrap chart {entry.chart}:{entry.profile} declares "
-                    "cluster-test hooks, which bootstrap does not run"
+                    "chart-test hooks, which bootstrap does not run"
                 )
             identities.add(
                 ExternallySatisfiedLifecycle(

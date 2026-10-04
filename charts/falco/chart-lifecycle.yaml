@@ -32,7 +32,7 @@ spec:
       "chart-lifecycle.yaml": [ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     enabled: true
     profiles:
       minimal:

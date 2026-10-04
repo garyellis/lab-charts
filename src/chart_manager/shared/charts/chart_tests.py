@@ -1,4 +1,4 @@
-"""Compose Helm charts with enabled live-cluster test configuration."""
+"""Compose Helm charts with enabled live-chart test configuration."""
 
 from __future__ import annotations
 
@@ -21,14 +21,14 @@ from chart_manager.shared.charts.lifecycle import (
 
 
 class ChartTestCatalog:
-    """Load cluster-test capabilities without coupling Helm discovery to them."""
+    """Load chart-test capabilities without coupling Helm discovery to them."""
 
     def __init__(self, root: Path, *, charts_dir: Path) -> None:
         """Anchor Helm and lifecycle-intent lookup at ``root``."""
         self.repository = ChartRepository(root, charts_dir=charts_dir)
 
     def get(self, name: str) -> ChartUnderTest:
-        """Return ``name`` composed with its required, enabled cluster tests."""
+        """Return ``name`` composed with its required, enabled chart tests."""
         chart = self.repository.get(name)
         lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
         if lifecycle is not None:
@@ -43,7 +43,7 @@ class ChartTestCatalog:
         )
 
     def enabled_names(self) -> list[str]:
-        """Return charts whose cluster-test capability is enabled.
+        """Return charts whose chart-test capability is enabled.
 
         Present malformed configuration fails loudly rather than silently
         shrinking a CI matrix.

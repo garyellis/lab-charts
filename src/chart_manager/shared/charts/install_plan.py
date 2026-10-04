@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestRef
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartTestRef
 from chart_manager.plumbing.errors import DependencyCycleError
 from chart_manager.shared.charts.chart import ChartUnderTest
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
@@ -22,7 +22,7 @@ ChartTestLoader = Callable[[str], ChartUnderTest]
 
 
 class DependencyResolver:
-    """Resolve cluster-test requirements into ordered install plans."""
+    """Resolve chart-test requirements into ordered install plans."""
 
     def __init__(self, load_chart: ChartTestLoader) -> None:
         """Store the capability loader used during traversal."""
@@ -58,6 +58,6 @@ class DependencyResolver:
         visit(chart, profile)
         return plan
 
-    def dependent_tests(self, chart: str) -> list[ClusterTestRef]:
+    def dependent_tests(self, chart: str) -> list[ChartTestRef]:
         """Return the chart's declared dependent-test targets."""
         return self._load_chart(chart).spec.dependent_tests

@@ -82,10 +82,10 @@ def validate_release(root: Path, release: BootstrapRelease | StackRelease) -> No
                     f"{lifecycle_path} metadata.name {lifecycle.metadata.name!r} "
                     f"does not match {chart_yaml} name {chart_name!r}"
                 )
-            cluster_test = lifecycle.spec.cluster_test
+            cluster_test = lifecycle.spec.chart_test
             if not lifecycle.spec.enabled or cluster_test is None or not cluster_test.enabled:
                 raise SpecError(
-                    f"lifecycle release chart {release.chart} has no enabled clusterTest"
+                    f"lifecycle release chart {release.chart} has no enabled chartTest"
                 )
             require_chart_test_profile(cluster_test, release.profile)
     if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):

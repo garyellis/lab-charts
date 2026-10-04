@@ -84,7 +84,7 @@ apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
-  clusterTest:
+  chartTest:
     profiles:
       minimal:
         namespace: kube-system
@@ -136,7 +136,7 @@ def test_preflight_rejects_a_lifecycle_profile_that_declares_no_namespace(
         "kind: ChartLifecycle\n"
         "metadata: {name: network}\n"
         "spec:\n"
-        "  clusterTest:\n"
+        "  chartTest:\n"
         "    profiles:\n"
         "      minimal: {values: []}\n",
         encoding="utf-8",
@@ -170,7 +170,7 @@ def test_a_lifecycle_release_pointing_at_a_foreign_chart_is_rejected(
         "kind: ChartLifecycle\n"
         "metadata: {name: other}\n"
         "spec:\n"
-        "  clusterTest:\n"
+        "  chartTest:\n"
         "    profiles:\n"
         "      minimal: {namespace: kube-system, values: []}\n",
         encoding="utf-8",
@@ -196,7 +196,7 @@ apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
-  clusterTest:
+  chartTest:
     profiles:
       minimal: {namespace: kube-system, values: []}
 """.lstrip(),
@@ -229,7 +229,7 @@ apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {name: network}
 spec:
-  clusterTest:
+  chartTest:
     profiles:
       minimal: {namespace: kube-system, values: []}
 """.lstrip(),
@@ -265,7 +265,7 @@ def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(
         "kind: ChartLifecycle\n"
         "metadata: {name: network}\n"
         "spec:\n"
-        "  clusterTest:\n"
+        "  chartTest:\n"
         "    profiles:\n"
         "      minimal:\n"
         "        namespace: kube-system\n"
@@ -275,5 +275,5 @@ def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(
     )
     cluster = _cluster([{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}])
 
-    with pytest.raises(SpecError, match=r"bootstrap chart network:minimal declares cluster-test hooks"):
+    with pytest.raises(SpecError, match=r"bootstrap chart network:minimal declares chart-test hooks"):
         bootstrap.preflight(cluster, root=tmp_path)

@@ -1,4 +1,4 @@
-"""Host-side execution of one compiled cluster-test hook action."""
+"""Host-side execution of one compiled chart-test hook action."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _action(
     timeout: str = "1m",
 ) -> LifecycleAction:
     return LifecycleAction(
-        action_id=f"cluster-test.app.minimal.{kind.value}",
+        action_id=f"chart-test.app.minimal.{kind.value}",
         kind=kind,
         target=ActionTarget(chart="app", profile="minimal", release="app", namespace="apps"),
         input_digest="digest",

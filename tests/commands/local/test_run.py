@@ -197,7 +197,7 @@ def test_plan_fails_on_an_unresolvable_profile_like_the_real_run(repo: Path) -> 
         local.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing")
 
 
-def test_plan_warns_that_local_up_does_not_run_cluster_test_hooks(
+def test_plan_warns_that_local_up_does_not_run_chart_test_hooks(
     repo: Path, make_chart: MakeChart
 ) -> None:
     make_chart(
@@ -214,7 +214,7 @@ def test_plan_warns_that_local_up_does_not_run_cluster_test_hooks(
     )
 
     assert [e.message for e in events if e.severity == "warn"] == [
-        "local up does not run cluster-test hooks declared by app:minimal"
+        "local up does not run chart-test hooks declared by app:minimal"
     ]
 
 

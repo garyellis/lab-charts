@@ -68,8 +68,8 @@ _Avoid_: worklist row, target
 
 **Chart test**:
 The whole lifecycle `chart test` runs for a chart on a test cluster: install what it needs,
-install the chart, run its checks, clean up. Configured today by `spec.clusterTest` in
-`chart-lifecycle.yaml`; rename the key to match when the chart test package is rebuilt.
+install the chart, run its checks, clean up. Configured by `spec.chartTest` in
+`chart-lifecycle.yaml`.
 _Avoid_: cluster test
 
 **Helm test step**:

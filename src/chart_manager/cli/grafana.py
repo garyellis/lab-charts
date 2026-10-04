@@ -28,7 +28,7 @@ from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 #: Where the lab's Grafana runs: the namespace `charts/grafana` declares for
-#: its cluster-test profiles. Owned here, not borrowed from a fallback.
+#: its chart-test profiles. Owned here, not borrowed from a fallback.
 GRAFANA_NAMESPACE = "observability"
 
 NamespaceOption = Annotated[

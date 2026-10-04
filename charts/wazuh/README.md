@@ -194,7 +194,7 @@ supports two modes:
   the chart from the same `ClusterIssuer` as the gateway and copy its CA with
   trust-manager or ExternalSecrets. The rule then also pins `subjectAltNames`.
 
-**Locally.** The `minimal` cluster-test profile requires `istio-gateway` (which
+**Locally.** The `minimal` chart-test profile requires `istio-gateway` (which
 brings cert-manager, istio-base, and istiod). kind maps host port 443 to the
 gateway, so the dashboard is at `https://wazuh.kind.local`:
 

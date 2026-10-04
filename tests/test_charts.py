@@ -88,7 +88,7 @@ def test_cluster_test_catalog_requires_chart_manager_configuration(
 
     with pytest.raises(
         CapabilityUnavailableError,
-        match=r"no clusterTest configuration in chart-lifecycle\.yaml",
+        match=r"no chartTest configuration in chart-lifecycle\.yaml",
     ):
         ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get("common")
 
@@ -120,7 +120,7 @@ def test_enabled_cluster_test_names_exclude_unmanaged_and_disabled_charts(
                 "kind": "ChartLifecycle",
                 "metadata": {"name": "section-disabled"},
                 "spec": {
-                    "clusterTest": {
+                    "chartTest": {
                         "enabled": False,
                         "profiles": {"minimal": {"namespace": "default"}},
                     }
@@ -198,7 +198,7 @@ def test_charts_lifecycle_prints_the_normalized_envelope(
     assert result.exit_code == 0
     assert '"apiVersion": "chartmanager.io/v1alpha1"' in result.stdout
     assert '"kind": "ChartLifecycle"' in result.stdout
-    assert '"clusterTest"' in result.stdout
+    assert '"chartTest"' in result.stdout
     assert '"enabled": true' in result.stdout
 
 
@@ -249,7 +249,7 @@ def test_chart_list_json_is_the_versioned_catalog_document(
             "dependencies": [],
             "lifecycle": "enabled",
             "manifest_validation": "absent",
-            "cluster_test": "enabled",
+            "chart_test": "enabled",
             "profiles": ["minimal", "telemetry"],
             "error": None,
         }
@@ -346,7 +346,7 @@ def test_chart_show_yaml_is_the_authored_envelope(
     document = parse_yaml(result.stdout)
     assert document["apiVersion"] == "chartmanager.io/v1alpha1"
     assert document["metadata"] == {"name": "alloy"}
-    assert document["spec"]["clusterTest"]["enabled"] is True
+    assert document["spec"]["chartTest"]["enabled"] is True
 
 
 def test_chart_show_table_flattens_the_envelope_onto_dotted_fields(
@@ -358,7 +358,7 @@ def test_chart_show_table_flattens_the_envelope_onto_dotted_fields(
     result = cli("chart", "show", "alloy", "-o", "table", "--root", str(chart_root))
 
     assert result.exit_code == 0, result.output
-    assert "spec.clusterTest.profiles.minimal.values" in result.stdout
+    assert "spec.chartTest.profiles.minimal.values" in result.stdout
     assert "values.yaml" in result.stdout
     # Leaves are spelled the way the document spells them, not the way
     # Python repr's them: `true`, never `True`.

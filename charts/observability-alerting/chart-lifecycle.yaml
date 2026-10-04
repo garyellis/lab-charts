@@ -29,7 +29,7 @@ spec:
       "README.md": [ci, ci-runbook-markdown]
       "tests/**": [ci, ci-runbook-markdown]
     unmatchedChanges: all-environments
-  clusterTest:
+  chartTest:
     enabled: true
     profiles:
       minimal:

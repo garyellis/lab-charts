@@ -104,7 +104,7 @@ def test_github_matrix_can_be_built_from_an_explicit_changed_file_list(
 ) -> None:
     """`plan --changed-files F -o github` -- the design doc's CI invocation.
 
-    `ci cluster-test-matrix` could only diff against `--base`; `ci impact`
+    `ci chart-test-matrix` could only diff against `--base`; `ci impact`
     could take explicit paths but only ever rendered reasons. Feeding CI a
     matrix computed from the changed-file list the workflow already has is
     the capability that only exists once the two are one command.
@@ -265,7 +265,7 @@ def test_publish_plan_requires_an_explicit_changed_file_list() -> None:
 
 @pytest.mark.parametrize("kind", ["validate", "publish"])
 def test_github_output_rejects_a_work_kind_it_cannot_project(kind: str) -> None:
-    """`-o github` is the cluster-test matrix; there is no validate/publish matrix.
+    """`-o github` is the chart-test matrix; there is no validate/publish matrix.
 
     Rejected at the surface rather than silently emitting the test matrix,
     which would hand a workflow a matrix for work it did not ask for.
@@ -277,7 +277,7 @@ def test_github_output_rejects_a_work_kind_it_cannot_project(kind: str) -> None:
 
 
 def test_all_and_chart_remain_mutually_exclusive() -> None:
-    """Inherited from `ci cluster-test-matrix`; classification is the surface's job."""
+    """Inherited from `ci chart-test-matrix`; classification is the surface's job."""
     result = cli("plan", "--all", "--chart", "alpha", "-o", "github")
 
     assert result.exit_code == 1

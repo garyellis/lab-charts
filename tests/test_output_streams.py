@@ -94,7 +94,7 @@ def _argv(name: str, root: Path) -> list[str]:
             "chart", "validate", "--all",
             "--progress", "none", "--github-step-summary", "--root", str(root),
         ],
-        "cluster-test-matrix": [
+        "chart-test-matrix": [
             "plan", "-o", "github", "--all", "--root", str(root),
         ],
     }[name]
@@ -102,7 +102,7 @@ def _argv(name: str, root: Path) -> list[str]:
 
 @pytest.mark.parametrize(
     "command",
-    ["validate-json", "validate-json-with-warning", "cluster-test-matrix"],
+    ["validate-json", "validate-json-with-warning", "chart-test-matrix"],
 )
 def test_json_projections_are_parseable_on_stdout(
     command: str, root: Path, monkeypatch: pytest.MonkeyPatch

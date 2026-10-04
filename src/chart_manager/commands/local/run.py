@@ -436,7 +436,7 @@ def _preflight(
             seen[chart_path] = identity
             if entry_profile.hooks is not None:
                 message = (
-                    f"local up does not run cluster-test hooks declared by "
+                    f"local up does not run chart-test hooks declared by "
                     f"{entry.chart}:{entry.profile}"
                 )
                 _LOG.warning("%s", message)

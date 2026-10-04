@@ -2,7 +2,7 @@
 
 ``chart-lifecycle.yaml`` is the only per-chart lifecycle document.  This
 module owns its complete accepted shape: the envelope, the metadata identity,
-and both capability sections (``spec.validation`` and ``spec.clusterTest``).
+and both capability sections (``spec.validation`` and ``spec.chartTest``).
 
 Everything here is decidable from one document.  Loading the file, agreeing
 its ``metadata.name`` with the chart directory and ``Chart.yaml``, deciding
@@ -10,7 +10,7 @@ whether a capability is enabled, resolving namespaces, and looking a profile
 up by name all need more than the document and therefore live in
 ``chart_manager.services``.
 
-Types are declared dependency-first -- cluster test, then manifest
+Types are declared dependency-first -- chart test, then manifest
 validation, then the envelope -- so the module reads bottom-up from the
 leaves an author writes to the wrapper they write around them.
 """
@@ -33,10 +33,10 @@ __all__ = [
     "ChartLifecycleKind",
     "ChartLifecycleMetadata",
     "ChartLifecycleSpec",
-    "ClusterTestHooks",
-    "ClusterTestProfile",
-    "ClusterTestRef",
-    "ClusterTestSpec",
+    "ChartTestHooks",
+    "ChartTestProfile",
+    "ChartTestRef",
+    "ChartTestSpec",
     "ManifestValidationEnvironmentSpec",
     "ManifestValidationPolicySpec",
     "ManifestValidationSpec",
@@ -62,18 +62,18 @@ TriggerValue = list[str] | Literal["match-by-basename", "all-environments"]
 
 
 # ---------------------------------------------------------------------------
-# spec.clusterTest -- authored live-cluster test configuration
+# spec.chartTest -- authored live-chart test configuration
 # ---------------------------------------------------------------------------
 
 
-class ClusterTestRef(ApiModel):
-    """Reference to another chart's cluster-test profile."""
+class ChartTestRef(ApiModel):
+    """Reference to another chart's chart-test profile."""
 
     chart: str
     profile: str = "minimal"
 
 
-class ClusterTestHooks(StrictApiModel):
+class ChartTestHooks(StrictApiModel):
     """Commands run around a profile's install, as argv lists (not shell strings).
 
     `preInstall` runs before every install or upgrade, so it must be idempotent.
@@ -89,11 +89,11 @@ class ClusterTestHooks(StrictApiModel):
     @classmethod
     def _valid_argv(cls, value: list[str] | None) -> list[str] | None:
         if value is not None and (not value or any(not item for item in value)):
-            raise ValueError("cluster-test hook must be a non-empty argv of non-empty strings")
+            raise ValueError("chart-test hook must be a non-empty argv of non-empty strings")
         return value
 
 
-class ClusterTestProfile(ApiModel):
+class ChartTestProfile(ApiModel):
     """How to install and test a chart under one named profile.
 
     `namespace` is required: a chart's values routinely address siblings by
@@ -103,11 +103,11 @@ class ClusterTestProfile(ApiModel):
 
     description: str | None = None
     namespace: str = Field(min_length=1)
-    requires: list[ClusterTestRef] = Field(default_factory=list)
+    requires: list[ChartTestRef] = Field(default_factory=list)
     values: list[str] = Field(default_factory=lambda: ["values.yaml"])
     helm_test: bool = Field(default=True, alias="helmTest")
     timeout: str = "10m"
-    hooks: ClusterTestHooks | None = None
+    hooks: ChartTestHooks | None = None
 
     @field_validator("values")
     @classmethod
@@ -116,12 +116,12 @@ class ClusterTestProfile(ApiModel):
         return ensure_relative(values, label="value file", relation="chart-relative")
 
 
-class ClusterTestSpec(ApiModel):
-    """Authored configuration for a chart's live-cluster test workflows."""
+class ChartTestSpec(ApiModel):
+    """Authored configuration for a chart's live-chart test workflows."""
 
     enabled: bool = True
-    profiles: dict[str, ClusterTestProfile]
-    dependent_tests: list[ClusterTestRef] = Field(
+    profiles: dict[str, ChartTestProfile]
+    dependent_tests: list[ChartTestRef] = Field(
         default_factory=list,
         alias="dependentTests",
     )
@@ -141,7 +141,7 @@ class ManifestValidationEnvironmentSpec(ApiModel):
     @field_validator("values")
     @classmethod
     def values_must_be_relative(cls, values: list[str]) -> list[str]:
-        """Reject escaping values paths, as cluster-test profiles do."""
+        """Reject escaping values paths, as chart-test profiles do."""
         return ensure_relative(values, label="value file", relation="chart-relative")
 
 
@@ -314,7 +314,7 @@ class ChartLifecycleSpec(StrictApiModel):
 
     enabled: bool = True
     validation: ManifestValidationSpec | None = None
-    cluster_test: ClusterTestSpec | None = Field(default=None, alias="clusterTest")
+    chart_test: ChartTestSpec | None = Field(default=None, alias="chartTest")
 
 
 class ChartLifecycle(StrictApiModel):

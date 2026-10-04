@@ -48,7 +48,7 @@ apiVersion: chartmanager.io/v1alpha1
 kind: ChartLifecycle
 metadata: {{name: {name}}}
 spec:
-  clusterTest:
+  chartTest:
     profiles:
       kind: {{namespace: default}}
       minimal: {{namespace: default}}

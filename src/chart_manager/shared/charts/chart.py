@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ClusterTestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ChartTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import inside_root
@@ -40,7 +40,7 @@ class ChartMetadata:
 
 @dataclass(frozen=True)
 class HelmChart:
-    """A Helm chart, independent of cluster-test configuration."""
+    """A Helm chart, independent of chart-test configuration."""
 
     name: str
     path: Path
@@ -81,10 +81,10 @@ def load_helm_chart(path: Path) -> HelmChart:
 
 @dataclass(frozen=True)
 class ChartUnderTest:
-    """A Helm chart paired with its live-cluster test configuration."""
+    """A Helm chart paired with its live-chart test configuration."""
 
     chart: HelmChart
-    spec: ClusterTestSpec
+    spec: ChartTestSpec
 
     @property
     def name(self) -> str:
@@ -178,7 +178,7 @@ class ChartRepository:
         return sorted(names)
 
     def get(self, name: str) -> HelmChart:
-        """Load Helm metadata; no cluster-test configuration is required."""
+        """Load Helm metadata; no chart-test configuration is required."""
         return load_helm_chart(self.charts_dir / name)
 
 

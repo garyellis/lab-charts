@@ -42,7 +42,7 @@ spec:
 
 def _cluster_spec(*, root_enabled: bool = True, section_enabled: bool = True) -> str:
     return f"""  enabled: {str(root_enabled).lower()}
-  clusterTest:
+  chartTest:
     enabled: {str(section_enabled).lower()}
     profiles:
       minimal:
@@ -74,8 +74,8 @@ def test_loads_each_capability_from_chart_lifecycle(tmp_path: Path) -> None:
     assert cluster.api_version == API_VERSION
     assert cluster.kind == "ChartLifecycle"
     assert cluster.metadata.name == "demo"
-    assert cluster.spec.cluster_test is not None
-    assert require_chart_test_profile(cluster.spec.cluster_test, "minimal").helm_test is True
+    assert cluster.spec.chart_test is not None
+    assert require_chart_test_profile(cluster.spec.chart_test, "minimal").helm_test is True
     assert chart_test_status(cluster) is CapabilityStatus.ENABLED
 
     validation = load_chart_lifecycle(_write_lifecycle(tmp_path, _validation_spec()))
@@ -89,7 +89,7 @@ def test_both_capabilities_can_share_one_spec(tmp_path: Path) -> None:
         _write_lifecycle(
             tmp_path,
             _validation_spec()
-            + """  clusterTest:
+            + """  chartTest:
     profiles:
       minimal:
         namespace: default
@@ -206,7 +206,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
             "spec": {
-                "clusterTest": {
+                "chartTest": {
                     "enabled": False,
                     "profiles": {"minimal": {"namespace": "default"}},
                 }
@@ -218,7 +218,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
             "apiVersion": API_VERSION,
             "kind": "ChartLifecycle",
             "metadata": {"name": "demo"},
-            "spec": {"clusterTest": {"profiles": {"minimal": {"namespace": "default"}}}},
+            "spec": {"chartTest": {"profiles": {"minimal": {"namespace": "default"}}}},
         }
     )
 
@@ -251,7 +251,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
         (
             None,
             require_chart_test,
-            "chart 'demo' has no clusterTest configuration in chart-lifecycle.yaml",
+            "chart 'demo' has no chartTest configuration in chart-lifecycle.yaml",
         ),
         (
             ChartLifecycle.model_validate(
@@ -260,7 +260,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
                     "kind": "ChartLifecycle",
                     "metadata": {"name": "demo"},
                     "spec": {
-                        "clusterTest": {
+                        "chartTest": {
                             "enabled": False,
                             "profiles": {"minimal": {"namespace": "default"}},
                         }
@@ -268,7 +268,7 @@ def test_capability_status_distinguishes_absent_disabled_and_enabled() -> None:
                 }
             ),
             require_chart_test,
-            "cluster tests are disabled for chart 'demo'",
+            "chart tests are disabled for chart 'demo'",
         ),
     ],
 )

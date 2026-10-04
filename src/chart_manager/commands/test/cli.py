@@ -58,7 +58,7 @@ def _target(chart: str) -> tuple[str, RepositoryWorkspace]:
 
 
 def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | None) -> None:
-    """Print the compiled cluster-test plan; say on stderr what did not happen.
+    """Print the compiled chart-test plan; say on stderr what did not happen.
 
     The plan is what the caller asked for, so it is the projection and goes
     to stdout. That it was *only* a plan is narration, and stays off the
@@ -101,7 +101,7 @@ def chart_test(
         bool,
         typer.Option(
             "--dependent-tests",
-            help="Run cluster tests affected by this chart.",
+            help="Run chart tests affected by this chart.",
         ),
     ] = False,
     skip_requires: Annotated[
@@ -123,7 +123,7 @@ def chart_test(
         bool,
         typer.Option(
             "--dry-run",
-            help="Print the cluster-test plan and exit; create no cluster, install nothing.",
+            help="Print the chart-test plan and exit; create no cluster, install nothing.",
         ),
     ] = False,
     output: DryRunOutputOption = None,
@@ -181,7 +181,7 @@ def chart_teardown(
     cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
     dependent_tests: Annotated[
         bool,
-        typer.Option("--dependent-tests", help="Include cleanups of affected cluster tests."),
+        typer.Option("--dependent-tests", help="Include cleanups of affected chart tests."),
     ] = False,
     keep_cluster: Annotated[
         bool,

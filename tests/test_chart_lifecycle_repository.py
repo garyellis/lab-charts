@@ -15,7 +15,7 @@ from chart_manager.shared.charts.lifecycle import (
 
 from .conftest import REPO_ROOT
 
-#: Charts that author `clusterTest` as disabled. An offline kind sandbox
+#: Charts that author `chartTest` as disabled. An offline kind sandbox
 #: cannot produce a truthful signal for these, so the invariant below is
 #: relaxed for exactly the names listed here -- and only here, so that
 #: skipping cluster tests stays a deliberate, reviewed act instead of
@@ -53,7 +53,7 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
         assert list(document["spec"]) == [
             "enabled",
             "validation",
-            "clusterTest",
+            "chartTest",
         ], chart_dir.name
 
         lifecycle = load_chart_lifecycle(config_path)

@@ -46,7 +46,7 @@ def _entry_to_dict(entry: ChartCatalogEntry) -> dict[str, Any]:
         "dependencies": list(entry.dependencies),
         "lifecycle": entry.lifecycle_status,
         "manifest_validation": entry.validation.value,
-        "cluster_test": entry.cluster_test.value,
+        "chart_test": entry.chart_test.value,
         "profiles": list(entry.profiles),
         "error": entry.error,
     }

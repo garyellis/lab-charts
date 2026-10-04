@@ -26,7 +26,7 @@ and the package goes when the empty layers are deleted. The policy and algorithm
 | `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
-| `shared/charts/chart_tests.py` | `ChartTestCatalog`: charts composed with their enabled cluster tests |
+| `shared/charts/chart_tests.py` | `ChartTestCatalog`: charts composed with their enabled chart tests |
 | `shared/charts/install_plan.py` | Dependency resolution and install order |
 | `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
@@ -73,7 +73,7 @@ Ask in order:
 
 Worked examples where the halves look like one thing:
 
-- **`spec.clusterTest`** — shape is API (`helmTest` is the wire format), but
+- **`spec.chartTest`** — shape is API (`helmTest` is the wire format), but
   "profile `minimal` is not declared, here are the ones that are" is a
   catalog lookup raising the user-facing `SpecError`, so it lives in
   `shared/charts/lifecycle.py` with the other `require_*` gates. An API

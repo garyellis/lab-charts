@@ -179,14 +179,14 @@ def test_dependent_tests_rejects_a_disabled_cluster_test_section(
     chart = make_chart("source")
     path = chart / "chart-lifecycle.yaml"
     config = parse_yaml(path.read_text())
-    config["spec"]["clusterTest"]["enabled"] = False
+    config["spec"]["chartTest"]["enabled"] = False
     path.write_text(dump_yaml(config), encoding="utf-8")
 
     resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
 
     with pytest.raises(
         CapabilityUnavailableError,
-        match="cluster tests are disabled for chart 'source'",
+        match="chart tests are disabled for chart 'source'",
     ):
         resolver.dependent_tests("source")
 

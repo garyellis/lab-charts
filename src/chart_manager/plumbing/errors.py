@@ -26,7 +26,7 @@ class ChartNotFoundError(ChartManagerError):
 
 
 class DependencyCycleError(SpecError):
-    """Raised when cluster-test requirements contain a cycle."""
+    """Raised when chart-test requirements contain a cycle."""
 
 
 class ExternalCommandError(ChartManagerError):

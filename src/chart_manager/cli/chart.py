@@ -101,7 +101,7 @@ def _catalog_table(entries: Sequence[ChartCatalogEntry]) -> Table:
             ", ".join(entry.dependencies),
             lifecycle_status,
             entry.validation.value,
-            entry.cluster_test.value,
+            entry.chart_test.value,
             ", ".join(entry.profiles),
         )
     return table

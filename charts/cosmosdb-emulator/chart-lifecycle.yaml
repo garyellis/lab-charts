@@ -24,7 +24,7 @@ spec:
       "values-ci.yaml":  [ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     # The preview emulator does not become ready reliably on hosted runners.
     # Keep static validation enabled while quarantining the blocking live test.
     enabled: false

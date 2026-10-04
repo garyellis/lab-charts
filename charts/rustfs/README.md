@@ -72,6 +72,6 @@ uv run chart-manager chart test rustfs --profile minimal
 
 The CI overlay creates deterministic, non-default local credentials and a
 small ephemeral-sized PVC. It also adds `loki` and `mimir` tenants, because the
-Loki and Mimir cluster tests use this chart as their object store in place of
+Loki and Mimir chart tests use this chart as their object store in place of
 the MinIO images that are no longer publicly pullable. Those credentials are
 test-only and must never be used in a deployed environment.

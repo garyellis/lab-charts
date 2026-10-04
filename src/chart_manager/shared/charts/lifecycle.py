@@ -22,8 +22,8 @@ from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import (
     ChartLifecycle,
-    ClusterTestProfile,
-    ClusterTestSpec,
+    ChartTestProfile,
+    ChartTestSpec,
     ManifestValidationSpec,
 )
 from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError, YamlError
@@ -99,10 +99,10 @@ def validation_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
 
 
 def chart_test_status(lifecycle: ChartLifecycle | None) -> CapabilityStatus:
-    """Return effective live-cluster-test availability."""
-    if lifecycle is None or lifecycle.spec.cluster_test is None:
+    """Return effective live-chart-test availability."""
+    if lifecycle is None or lifecycle.spec.chart_test is None:
         return CapabilityStatus.ABSENT
-    if not lifecycle.spec.enabled or not lifecycle.spec.cluster_test.enabled:
+    if not lifecycle.spec.enabled or not lifecycle.spec.chart_test.enabled:
         return CapabilityStatus.DISABLED
     return CapabilityStatus.ENABLED
 
@@ -131,21 +131,21 @@ def require_chart_test(
     lifecycle: ChartLifecycle | None,
     *,
     chart_name: str,
-) -> ClusterTestSpec:
-    """Return an enabled cluster-test section or raise precisely."""
-    if lifecycle is None or lifecycle.spec.cluster_test is None:
+) -> ChartTestSpec:
+    """Return an enabled chart-test section or raise precisely."""
+    if lifecycle is None or lifecycle.spec.chart_test is None:
         raise CapabilityUnavailableError(
-            f"chart '{chart_name}' has no clusterTest configuration in "
+            f"chart '{chart_name}' has no chartTest configuration in "
             f"{LIFECYCLE_FILENAME}"
         )
     if not lifecycle.spec.enabled:
         raise CapabilityUnavailableError(f"ChartLifecycle is disabled for chart '{chart_name}'")
-    if not lifecycle.spec.cluster_test.enabled:
-        raise CapabilityUnavailableError(f"cluster tests are disabled for chart '{chart_name}'")
-    return lifecycle.spec.cluster_test
+    if not lifecycle.spec.chart_test.enabled:
+        raise CapabilityUnavailableError(f"chart tests are disabled for chart '{chart_name}'")
+    return lifecycle.spec.chart_test
 
 
-def require_chart_test_profile(spec: ClusterTestSpec, name: str) -> ClusterTestProfile:
+def require_chart_test_profile(spec: ChartTestSpec, name: str) -> ChartTestProfile:
     """Look up a profile by name; SpecError lists available names."""
     try:
         return spec.profiles[name]

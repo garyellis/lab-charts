@@ -185,7 +185,7 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["chart"] == "app"
     assert first["profile"] == "minimal"
-    assert first["actions"][0]["action_id"].startswith("cluster-test.app.minimal.")
+    assert first["actions"][0]["action_id"].startswith("chart-test.app.minimal.")
     assert first["actions"][0]["target"]["chart"] == "app"
     assert "edges" not in first
 
@@ -290,7 +290,7 @@ def test_compile_accepts_a_valid_requires_graph(
     assert [action.target.chart for action in plan.actions].count("base") >= 1
 
 
-# --- cluster-test hooks ------------------------------------------------------
+# --- chart-test hooks ------------------------------------------------------
 
 
 def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
@@ -340,7 +340,7 @@ def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
         ("app", ActionKind.HOOK_CLEANUP),
         ("base", ActionKind.HOOK_CLEANUP),
     ]
-    pre = _by_id(plan, "cluster-test.app.minimal.hook-pre-install")
+    pre = _by_id(plan, "chart-test.app.minimal.hook-pre-install")
     assert pre.command == ("scripts/app-preInstall", "app")
     assert pre.values == ()
     assert pre.target.namespace == "default"
@@ -385,8 +385,8 @@ def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
 
     hooks = [(action.action_id, action.command) for action in plan.actions if action.command]
     assert hooks == [
-        ("cluster-test.base.secured.hook-pre-install", ("scripts/base-preInstall", "base")),
-        ("cluster-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
+        ("chart-test.base.secured.hook-pre-install", ("scripts/base-preInstall", "base")),
+        ("chart-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
     ]
     assert plan.actions[-1].kind is ActionKind.HOOK_CLEANUP
 
@@ -400,7 +400,7 @@ def test_hook_digest_covers_argv_and_repo_script_content(
     def pre_digest(argv: list[str]) -> str:
         make_chart("app", profiles={"minimal": {"hooks": {"preInstall": argv}}})
         plan = _compile(chart_root, "app", "minimal")
-        return _by_id(plan, "cluster-test.app.minimal.hook-pre-install").input_digest
+        return _by_id(plan, "chart-test.app.minimal.hook-pre-install").input_digest
 
     original = pre_digest([script, "--flag"])
     assert pre_digest([script, "--flag"]) == original
@@ -447,7 +447,7 @@ def test_compile_accepts_a_bare_hook_executable_found_on_path(
 
     plan = _compile(chart_root, "app", "minimal")
 
-    assert _by_id(plan, "cluster-test.app.minimal.hook-pre-install").command == (
+    assert _by_id(plan, "chart-test.app.minimal.hook-pre-install").command == (
         "mint-token",
         "-q",
     )

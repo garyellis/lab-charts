@@ -28,7 +28,7 @@ class ChartCatalogEntry:
     dependencies: tuple[str, ...] = ()
     lifecycle_status: str = "absent"
     validation: CapabilityStatus = CapabilityStatus.ABSENT
-    cluster_test: CapabilityStatus = CapabilityStatus.ABSENT
+    chart_test: CapabilityStatus = CapabilityStatus.ABSENT
     profiles: tuple[str, ...] = ()
     error: str | None = None
 
@@ -87,9 +87,9 @@ class ChartCatalogService:
         manifest_status = validation_status(lifecycle)
         cluster_status = chart_test_status(lifecycle)
         profiles = (
-            tuple(sorted(lifecycle.spec.cluster_test.profiles))
+            tuple(sorted(lifecycle.spec.chart_test.profiles))
             if cluster_status is CapabilityStatus.ENABLED
-            and lifecycle.spec.cluster_test is not None
+            and lifecycle.spec.chart_test is not None
             else ()
         )
         return ChartCatalogEntry(
@@ -99,7 +99,7 @@ class ChartCatalogService:
             dependencies=_dependencies(chart.metadata.dependencies),
             lifecycle_status="enabled" if lifecycle.spec.enabled else "disabled",
             validation=manifest_status,
-            cluster_test=cluster_status,
+            chart_test=cluster_status,
             profiles=profiles,
         )
 

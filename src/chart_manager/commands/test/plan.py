@@ -30,7 +30,7 @@ from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 #: Changing this string changes every `action_id` and therefore every `input_digest`.
-_CLUSTER_TEST_PREFIX = "cluster-test"
+_CHART_TEST_PREFIX = "chart-test"
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
 SKIPPED_REQUIRES_WARNING_PREFIX = "requires assumed installed (--skip-requires): "
@@ -116,7 +116,7 @@ def compile_chart_test(
         target = ActionTarget(
             chart=entry.chart, profile=entry.profile, release=entry.chart, namespace=namespace
         )
-        prefix = (_CLUSTER_TEST_PREFIX, entry.chart, entry.profile)
+        prefix = (_CHART_TEST_PREFIX, entry.chart, entry.profile)
 
         def action(
             kind: ActionKind,
@@ -155,7 +155,7 @@ def compile_chart_test(
                 prefix=prefix,
                 chart_path=cluster_chart.path,
                 timeout=profile_spec.timeout,
-                field=f"{entry.chart}: spec.clusterTest.profiles.{entry.profile}.hooks.{phase}[0]",
+                field=f"{entry.chart}: spec.chartTest.profiles.{entry.profile}.hooks.{phase}[0]",
             )
             for kind, phase, argv in (
                 (ActionKind.HOOK_PRE_INSTALL, "preInstall", hooks and hooks.pre_install),
@@ -262,7 +262,7 @@ def exclude_bootstrap_owned_charts(
             kept.append(action)
         elif is_target and action.kind is ActionKind.INSTALL:
             action_id = _action_id(
-                _CLUSTER_TEST_PREFIX, plan.chart, plan.profile, ActionKind.WORKLOAD_READY
+                _CHART_TEST_PREFIX, plan.chart, plan.profile, ActionKind.WORKLOAD_READY
             )
             digest = _input_digest(
                 root=root,
@@ -361,7 +361,7 @@ def merge_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
     cleanups then form one tail.
     """
     if not plans:
-        raise PlanError("cluster test produced no lifecycle plans")
+        raise PlanError("chart test produced no lifecycle plans")
     actions: dict[str, LifecycleAction] = {}
     warnings: dict[str, None] = {}
     for plan in plans:

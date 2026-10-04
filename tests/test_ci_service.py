@@ -26,7 +26,7 @@ def _dependent_test(
 ) -> None:
     path = chart / "chart-lifecycle.yaml"
     config = parse_yaml(path.read_text())
-    config["spec"]["clusterTest"]["dependentTests"] = [
+    config["spec"]["chartTest"]["dependentTests"] = [
         {"chart": target, "profile": profile}
     ]
     path.write_text(dump_yaml(config))
@@ -175,7 +175,7 @@ def test_explicit_matrix_rejects_unknown_and_unavailable_charts_together(
     disabled = make_chart("disabled")
     path = disabled / "chart-lifecycle.yaml"
     config = parse_yaml(path.read_text())
-    config["spec"]["clusterTest"]["enabled"] = False
+    config["spec"]["chartTest"]["enabled"] = False
     path.write_text(dump_yaml(config))
 
     with pytest.raises(SpecError) as caught:

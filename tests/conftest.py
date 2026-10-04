@@ -179,7 +179,7 @@ def chart_root(tmp_path: Path) -> Path:
 def make_chart(chart_root: Path) -> MakeChart:
     """Write a minimal Helm chart with enabled cluster tests into ``chart_root``.
 
-    `profiles` is the raw cluster-test profile mapping, so tests express
+    `profiles` is the raw chart-test profile mapping, so tests express
     requirements exactly as a chart author would:
 
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
@@ -222,7 +222,7 @@ def make_chart(chart_root: Path) -> MakeChart:
                     "metadata": {"name": name},
                     "spec": {
                         "enabled": True,
-                        "clusterTest": {
+                        "chartTest": {
                             "enabled": True,
                             "profiles": spec_profiles,
                             "dependentTests": [],

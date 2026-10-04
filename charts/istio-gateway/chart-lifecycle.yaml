@@ -26,7 +26,7 @@ spec:
       "templates/**":          [openstack, ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     enabled: true
     profiles:
       minimal:

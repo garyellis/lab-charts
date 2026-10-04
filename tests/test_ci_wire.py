@@ -1,4 +1,4 @@
-"""The GitHub Actions cluster-test matrix contract, tested without a surface.
+"""The GitHub Actions chart-test matrix contract, tested without a surface.
 
 `tests/test_ci_matrix_cli.py` asserts the same bytes through the CLI. This
 module asserts them one layer down, so a second surface that never goes
@@ -110,7 +110,7 @@ def test_entry_order_is_preserved() -> None:
 #
 # Exercised through the private `_select_cluster_tests` rather than
 # `CiService.matrix`, its only caller: `CiService.__init__` wires a chart
-# repository, a cluster-test catalog, an impact service and Git against a
+# repository, a chart-test catalog, an impact service and Git against a
 # real root, none of which the precedence rules depend on. The method is a
 # one-line delegation, and `tests/test_ci_matrix_cli.py` covers the path a
 # surface actually takes.

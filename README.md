@@ -319,7 +319,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 Each managed chart owns one `charts/<name>/chart-lifecycle.yaml` with
 `apiVersion: chartmanager.io/v1alpha1`, `kind: ChartLifecycle`.
 `spec.validation` declares environments, composed values, triggers, and
-policies; `spec.clusterTest` declares install profiles and their Helm test
+policies; `spec.chartTest` declares install profiles and their Helm test
 gates, plus `dependentTests` — chart/profile tests to rerun when this chart
 changes. Either capability can be absent or disabled; `spec.enabled: false`
 pauses both. See

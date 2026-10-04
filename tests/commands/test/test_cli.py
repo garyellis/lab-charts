@@ -42,7 +42,7 @@ def _plan() -> LifecyclePlan:
         profile="minimal",
         actions=tuple(
             LifecycleAction(
-                action_id=f"cluster-test.alloy.minimal.{kind.value}",
+                action_id=f"chart-test.alloy.minimal.{kind.value}",
                 kind=kind,
                 target=ActionTarget("alloy", "minimal", release="alloy", namespace="observability"),
                 input_digest=f"sha256:{kind.value}",
@@ -123,14 +123,14 @@ def test_a_failed_chart_test_raises_a_plain_error_naming_the_failed_action(
         "minimal",
         "chart-manager",
         actions=(
-            ActionOutcome("cluster-test.alloy.minimal.install", "install", "FAIL", "timed out"),
+            ActionOutcome("chart-test.alloy.minimal.install", "install", "FAIL", "timed out"),
         ),
     )
 
     result = _cli(chart_root, "chart", "test", "alloy")
 
     assert isinstance(result.exception, ChartManagerError)
-    assert "cluster-test.alloy.minimal.install" in str(result.exception)
+    assert "chart-test.alloy.minimal.install" in str(result.exception)
     assert "timed out" in str(result.exception)
 
 
@@ -277,7 +277,7 @@ def test_chart_teardown_fails_naming_the_failed_cleanup_and_delete(
         "lab",
         cleanups=(
             ActionOutcome(
-                "cluster-test.alloy.minimal.hook-cleanup",
+                "chart-test.alloy.minimal.hook-cleanup",
                 "hook-cleanup",
                 "FAIL",
                 "cleanup hook exited 3: ./hook",
@@ -290,7 +290,7 @@ def test_chart_teardown_fails_naming_the_failed_cleanup_and_delete(
 
     message = str(result.exception)
     assert isinstance(result.exception, ChartManagerError)
-    assert "cluster-test.alloy.minimal.hook-cleanup" in message
+    assert "chart-test.alloy.minimal.hook-cleanup" in message
     assert "cleanup hook exited 3: ./hook" in message
     assert "kind delete cluster failed" in message
 

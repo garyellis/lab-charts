@@ -1,4 +1,4 @@
-"""Spec-derived validation and cluster-test impact analysis."""
+"""Spec-derived validation and chart-test impact analysis."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def _with_dependent_test(
     dependent_profile: str,
 ) -> None:
     lifecycle = parse_yaml((chart / "chart-lifecycle.yaml").read_text())
-    lifecycle["spec"]["clusterTest"]["dependentTests"] = [
+    lifecycle["spec"]["chartTest"]["dependentTests"] = [
         {"chart": dependent_chart, "profile": dependent_profile}
     ]
     (chart / "chart-lifecycle.yaml").write_text(dump_yaml(lifecycle))

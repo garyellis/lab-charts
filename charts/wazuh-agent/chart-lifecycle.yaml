@@ -34,7 +34,7 @@ spec:
       "README.md": [ci]
       "tests/**": [ci]
     unmatchedChanges: all-environments
-  clusterTest:
+  chartTest:
     enabled: true
     profiles:
       minimal:
