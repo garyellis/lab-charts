@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from chart_manager.domain.workspace import RepositoryWorkspace
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 @dataclass(frozen=True)

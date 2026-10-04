@@ -24,13 +24,13 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 
 | Module | What it decides |
 |---|---|
-| `domain/charts.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
-| `domain/chart_deps.py` | Whether materialized chart dependencies are stale |
-| `domain/lifecycle_policy.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
+| `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
+| `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
+| `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
 | `domain/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
 | `domain/install_plan.py` | Dependency resolution and install order |
 | `domain/local_resources.py` | Loading `LocalCluster`/`LocalStack`; resolving a CLI target |
-| `domain/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
+| `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |
 
 ## What `api/` is for
 
@@ -73,7 +73,7 @@ Worked examples where the halves look like one thing:
 - **`spec.clusterTest`** — shape is API (`helmTest` is the wire format), but
   "profile `minimal` is not declared, here are the ones that are" is a
   catalog lookup raising the user-facing `SpecError`, so it lives in
-  `domain/lifecycle_policy.py` with the other `require_*` gates. An API
+  `shared/charts/lifecycle.py` with the other `require_*` gates. An API
   model that raised `SpecError` would know what a CLI exit code is.
 - **`spec.validation`** — shape is API; `resolve_namespace()` is in
   `services/manifest_validation/namespaces.py` because choosing between an

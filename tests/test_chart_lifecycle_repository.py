@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from chart_manager.api.v1alpha1.chart_lifecycle import CHART_LIFECYCLE_KIND
 from chart_manager.api.v1alpha1.common import API_VERSION
-from chart_manager.domain.lifecycle_policy import (
+from chart_manager.plumbing.yaml_files import parse_yaml
+from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     cluster_test_status,
     load_chart_lifecycle,
     validation_status,
 )
-from chart_manager.plumbing.yaml_files import parse_yaml
 
 from .conftest import REPO_ROOT
 

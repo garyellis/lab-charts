@@ -14,9 +14,6 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
     ManifestValidationSpec,
     TriggerValue,
 )
-from chart_manager.domain.chart_deps import build_helm_dependency_index
-from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.services.manifest_validation.catalog import build_catalog
 from chart_manager.services.manifest_validation.models import (
     ManifestValidationTarget,
@@ -24,6 +21,9 @@ from chart_manager.services.manifest_validation.models import (
     WorklistRow,
 )
 from chart_manager.services.manifest_validation.namespaces import resolve_namespace
+from chart_manager.shared.charts.dependencies import build_helm_dependency_index
+from chart_manager.shared.charts.lifecycle import LIFECYCLE_FILENAME
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 # Repository-wide triggers merged UNDER each chart's authored `triggers`; an
 # authored pattern with the identical spelling replaces the default, so a chart

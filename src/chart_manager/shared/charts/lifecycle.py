@@ -77,10 +77,8 @@ def validate_chart_lifecycle_identity(
 ) -> None:
     """Require lifecycle, Helm, and directory identities to agree.
 
-    ``ChartRepository.get`` has already established that ``chart_name`` is
-    both the requested directory name and ``Chart.yaml`` name.  Keeping this
-    final comparison at composition sites avoids coupling the standalone
-    lifecycle schema to Helm discovery.
+    ``load_helm_chart`` has already established that ``chart_name`` is both
+    the directory name and the ``Chart.yaml`` name.
     """
     directory_name = chart_directory.name
     if lifecycle.metadata.name != chart_name or directory_name != chart_name:

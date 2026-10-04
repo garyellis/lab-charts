@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from chart_manager.domain.charts import ChartRepository
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
@@ -18,6 +16,8 @@ from chart_manager.services.lifecycle.impact import (
     LifecycleImpact,
     LifecycleImpactService,
 )
+from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 @dataclass(frozen=True)

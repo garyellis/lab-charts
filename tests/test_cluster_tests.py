@@ -6,11 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile, ClusterTestSpec
-from chart_manager.domain.lifecycle_policy import (
-    load_chart_lifecycle,
-    require_cluster_test,
-    require_cluster_test_profile,
-)
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.services.clusters.bootstrap import LocalBootstrapExecutor
@@ -33,6 +28,11 @@ from chart_manager.services.lifecycle.models import (
     LifecyclePlan,
 )
 from chart_manager.services.lifecycle.plan_projection import ExternallySatisfiedLifecycle
+from chart_manager.shared.charts.lifecycle import (
+    load_chart_lifecycle,
+    require_cluster_test,
+    require_cluster_test_profile,
+)
 from tests.conftest import workspace_for
 
 from .conftest import MakeChart, cli

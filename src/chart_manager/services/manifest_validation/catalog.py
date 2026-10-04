@@ -6,8 +6,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.domain.charts import ChartRepository
-from chart_manager.domain.lifecycle_policy import (
+from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.services.manifest_validation.models import ManifestValidationTarget
+from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
     load_optional_chart_lifecycle,
@@ -15,8 +17,6 @@ from chart_manager.domain.lifecycle_policy import (
     validate_chart_lifecycle_identity,
     validation_status,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.services.manifest_validation.models import ManifestValidationTarget
 
 
 @dataclass(frozen=True)

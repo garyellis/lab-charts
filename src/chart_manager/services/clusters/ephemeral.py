@@ -17,7 +17,6 @@ from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.domain.cluster_tests import ClusterTestCatalog
 from chart_manager.domain.install_plan import DependencyResolver
 from chart_manager.domain.local_resources import LocalResourceLoader
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
@@ -54,6 +53,7 @@ from chart_manager.services.lifecycle.plan_projection import (
     exclude_required_lifecycles,
 )
 from chart_manager.services.progress import ProgressCallback, info, step, warn
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Diagnostic channel. This service is the CI-shaped one, where the process
 #: that failed is frequently no longer around to be asked and its terminal

@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.lifecycle_policy import LIFECYCLE_FILENAME, load_chart_lifecycle
 from chart_manager.domain.local_resources import load_local_cluster
-from chart_manager.domain.workspace import load_repository_workspace
 from chart_manager.services.kubeconform_schemas.lock import load_schema_lock
+from chart_manager.shared.charts.lifecycle import LIFECYCLE_FILENAME, load_chart_lifecycle
+from chart_manager.shared.workspace import load_repository_workspace
 
 from .conftest import REPO_ROOT
 

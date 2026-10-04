@@ -1,6 +1,5 @@
 import pytest
 
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaLockError,
@@ -12,6 +11,7 @@ from chart_manager.services.kubeconform_schemas.sync import (
     KubeconformSchemaSyncRequest,
     KubeconformSchemaSyncService,
 )
+from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 
 from .schema_fixtures import schema_store
 

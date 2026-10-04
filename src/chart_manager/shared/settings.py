@@ -1,4 +1,4 @@
-"""Process configuration. Repository layout lives in `domain.workspace`."""
+"""Process configuration. Repository layout lives in `shared.workspace`."""
 
 from __future__ import annotations
 

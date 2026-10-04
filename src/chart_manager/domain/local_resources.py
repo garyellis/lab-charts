@@ -29,16 +29,16 @@ from chart_manager.api.v1alpha1.releases import (
     RepoChartRelease,
     StackRelease,
 )
-from chart_manager.domain.charts import load_chart_metadata, load_chart_name
-from chart_manager.domain.lifecycle_policy import (
-    LIFECYCLE_FILENAME,
-    load_chart_lifecycle,
-    require_cluster_test_profile,
-)
 from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import relative_path, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
+from chart_manager.shared.charts.chart import load_chart_metadata, load_chart_name
+from chart_manager.shared.charts.lifecycle import (
+    LIFECYCLE_FILENAME,
+    load_chart_lifecycle,
+    require_cluster_test_profile,
+)
 
 DEFAULT_STACKS_DIR = Path("stacks")
 

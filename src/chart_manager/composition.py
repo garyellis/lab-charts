@@ -56,13 +56,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
-from chart_manager.domain import chart_deps
 from chart_manager.domain.local_resources import LocalTargetResolver
-from chart_manager.domain.workspace import (
-    RepositoryWorkspace,
-    load_repository_workspace,
-    resolve_repository_root,
-)
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -118,7 +112,13 @@ from chart_manager.services.upgrader import (
     UpgradeService,
     UpgradeTelemetry,
 )
-from chart_manager.settings import Settings, load_settings
+from chart_manager.shared.charts import dependencies as chart_deps
+from chart_manager.shared.settings import Settings, load_settings
+from chart_manager.shared.workspace import (
+    RepositoryWorkspace,
+    load_repository_workspace,
+    resolve_repository_root,
+)
 
 __all__ = ["Container", "HelmReleaseProgress", "Settings"]
 

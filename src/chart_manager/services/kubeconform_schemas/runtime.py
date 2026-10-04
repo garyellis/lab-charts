@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.domain.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 from chart_manager.services.kubeconform_schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaLockError,
@@ -23,6 +22,7 @@ from chart_manager.services.kubeconform_schemas.store import (
     KubeconformSchemaStore,
     kubeconform_schema_locations,
 )
+from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
 UNSUPPORTED_CRD_OBJECT_GVK = "apiextensions.k8s.io/v1/CustomResourceDefinition"
 

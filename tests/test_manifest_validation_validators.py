@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain import chart_deps
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.services.manifest_validation import app as manifest_app
@@ -33,6 +32,7 @@ from chart_manager.services.manifest_validation.validators import (
     ValidatorInvocation,
     validate_registry,
 )
+from chart_manager.shared.charts import dependencies as chart_deps
 from tests.conftest import CHARTS_DIR, POLICIES_DIR, REPO_ROOT, workspace_for
 
 
