@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -9,9 +10,20 @@ from typing import Any
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.validate.models import CheckName
+from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+from chart_manager.commands.validate.schemas.store import (
+    KubeconformSchemaStore,
+    default_schema_cache_root,
+)
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
+from tests import schema_fixtures
 from tests.conftest import FakeCommandRunner, workspace_for
+
+RENDER: frozenset[CheckName] = frozenset({"render"})
+CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
 
 
 def write_chart(root: Path, name: str, **validation: Any) -> Path:
@@ -39,12 +51,36 @@ def write_chart(root: Path, name: str, **validation: Any) -> Path:
     return chart
 
 
+@pytest.fixture
+def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryWorkspace:
+    """A workspace whose locked schema generation is synced into a tmp cache."""
+    lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots).sync(lock)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    return schema_fixtures.workspace(tmp_path)
+
+
+def renders(manifest: str):
+    """Match `helm template` and write `manifest` into its --output-dir, as helm would."""
+
+    def match(argv: tuple[str, ...]) -> bool:
+        if argv[1:2] != ("template",):
+            return False
+        out = Path(argv[argv.index("--output-dir") + 1]) / argv[2] / "templates"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "manifest.yaml").write_text(manifest)
+        return True
+
+    return match
+
+
 def test_one_chart_in_one_environment_renders_into_one_passed_row(tmp_path: Path) -> None:
     write_chart(tmp_path, "demo")
     runner = FakeCommandRunner()
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",), envs=("dev",)),
+        validate.ValidateRequest(charts=("demo",), envs=("dev",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -62,7 +98,7 @@ def test_a_helm_template_failure_fails_the_row_with_helms_error(tmp_path: Path) 
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=1, stderr="bad values")
 
     outcome = validate.run(
-        validate.ValidateRequest(charts=("demo",)),
+        validate.ValidateRequest(charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -85,7 +121,7 @@ def test_a_request_the_chart_cannot_satisfy_is_a_spec_error(
 
     with pytest.raises(SpecError):
         validate.run(
-            validate.ValidateRequest(charts=("demo",), envs=envs),
+            validate.ValidateRequest(charts=("demo",), envs=envs, checks=RENDER),
             workspace=workspace_for(tmp_path),
             runner=runner,
         )
@@ -99,9 +135,127 @@ def test_rendering_into_a_reused_out_dir_drops_the_previous_manifests(tmp_path: 
     stale.write_text("kind: ConfigMap\n")
 
     validate.run(
-        validate.ValidateRequest(charts=("demo",), out=tmp_path / "out"),
+        validate.ValidateRequest(charts=("demo",), out=tmp_path / "out", checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
     )
 
     assert not stale.exists()
+
+
+def kubeconform_report(status: str, msg: str = "") -> str:
+    resource = {"filename": "manifest.yaml", "kind": "ConfigMap", "name": "demo"}
+    return json.dumps({"resources": [{**resource, "status": status, "msg": msg}]})
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "status", "detail"),
+    [
+        (0, kubeconform_report("statusValid"), "passed", ""),
+        (1, kubeconform_report("statusInvalid", "missing properties: data"), "failed", "data"),
+        (2, "panic: schema cache", "failed", ""),
+    ],
+    ids=["valid", "invalid", "kubeconform-broke"],
+)
+def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests(
+    tmp_path: Path,
+    schema_workspace: RepositoryWorkspace,
+    returncode: int,
+    stdout: str,
+    status: str,
+    detail: str,
+) -> None:
+    write_chart(tmp_path, "demo")
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), returncode=returncode, stdout=stdout)
+    )
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+    )
+
+    (row,) = outcome.rows
+    assert row.checks["schema"].status == status
+    assert detail in row.checks["schema"].detail
+    (kubeconform,) = [call for call in runner.calls if call[0] == "kubeconform"]
+    validation = schema_workspace.spec.validation
+    assert validation is not None
+    assert ("-kubernetes-version", validation.kubernetes_version) in pairwise(kubeconform)
+
+
+@pytest.mark.parametrize(
+    ("validation", "helm"),
+    [
+        ({"validators": {"kubeconform": False}}, {"matcher": renders(CONFIG_MAP)}),
+        ({}, {"matcher": ("helm", "template"), "returncode": 1}),
+        ({}, {"matcher": ("helm", "template")}),
+    ],
+    ids=["kubeconform-disabled", "render-failed", "no-manifests"],
+)
+def test_the_schema_check_is_skipped_without_running_kubeconform(
+    tmp_path: Path,
+    schema_workspace: RepositoryWorkspace,
+    validation: dict[str, Any],
+    helm: dict[str, Any],
+) -> None:
+    write_chart(tmp_path, "demo", **validation)
+    runner = FakeCommandRunner().respond(**helm)
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+    )
+
+    (row,) = outcome.rows
+    assert row.checks["schema"].status == "skipped"
+    assert not [call for call in runner.calls if call[0] == "kubeconform"]
+
+
+def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_chart(
+        tmp_path,
+        "demo",
+        schemaLocations=["schemas/{{.ResourceKind}}.json"],
+        ignoreMissingSchemas=["Gadget"],
+    )
+    (tmp_path / "schemas").mkdir()
+    gadget = "apiVersion: example.io/v1\nkind: Gadget\nmetadata:\n  name: demo\n"
+    runner = (
+        FakeCommandRunner()
+        .respond(renders(gadget))
+        .respond(("kubeconform",), stdout=json.dumps({"resources": []}))
+    )
+
+    validate.run(validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner)
+
+    (kubeconform,) = [call for call in runner.calls if call[0] == "kubeconform"]
+    flags = list(pairwise(kubeconform))
+    assert ("-schema-location", f"{tmp_path}/schemas/{{{{.ResourceKind}}}}.json") in flags
+    assert "example.io/v1/Gadget" in dict(flags)["-skip"].split(",")
+
+
+def test_a_chart_that_disables_kubeconform_needs_no_schema_lock(tmp_path: Path) -> None:
+    write_chart(tmp_path, "demo", validators={"kubeconform": False})
+
+    outcome = validate.run(
+        validate.ValidateRequest(charts=("demo",)),
+        workspace=workspace_for(tmp_path),
+        runner=FakeCommandRunner().respond(renders(CONFIG_MAP)),
+    )
+
+    assert outcome.rows[0].checks["schema"].status == "skipped"
+
+
+def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_chart(tmp_path, "demo", schemaLocations=["schemas/{{.ResourceKind}}.json"])
+    runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
+
+    with pytest.raises(SpecError, match="schemas"):
+        validate.run(
+            validate.ValidateRequest(charts=("demo",)), workspace=schema_workspace, runner=runner
+        )

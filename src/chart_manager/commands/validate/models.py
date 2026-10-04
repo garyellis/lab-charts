@@ -5,18 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
-CheckName = Literal["render"]
-Status = Literal["passed", "failed"]
+CheckName = Literal["render", "schema"]
+Status = Literal["passed", "failed", "skipped"]
 
 
 @dataclass(frozen=True)
 class ValidateRequest:
-    """Which charts and environments to validate."""
+    """Which charts and environments to validate, with which validation checks."""
 
     charts: tuple[str, ...]
     envs: tuple[str, ...] = ()
+    checks: frozenset[CheckName] = frozenset(get_args(CheckName))
     out: Path | None = None
 
 
