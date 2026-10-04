@@ -1,7 +1,7 @@
 """Read-only snapshot of the development cluster: what exists, and where.
 
 Every lookup here already existed inside the converge path -- `helm list -A`
-is the install-skip snapshot (`service._existing_release_keys`), the URL list
+is the install-skip snapshot, the URL list
 is `access.virtualservice_urls`, the port diff is `drift.port_mapping_drift`.
 `status` asks the same questions and keeps the answers instead of consuming
 them, which is why this module composes those helpers rather than reaching
@@ -18,70 +18,46 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from chart_manager.commands.local.access import virtualservice_urls
+from chart_manager.commands.local.drift import port_mapping_drift
+from chart_manager.commands.local.models import (
+    DevelopmentClusterRelease,
+    DevelopmentClusterStatus,
+)
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters.development.access import virtualservice_urls
-from chart_manager.services.clusters.development.drift import port_mapping_drift
-from chart_manager.services.clusters.development.models import (
-    DevelopmentClusterRelease,
-    DevelopmentClusterStatus,
-)
-from chart_manager.services.clusters.environment import (
-    ClientFactory,
-    EnvironmentSpec,
-    KubernetesEnvironmentProvider,
-)
+from chart_manager.shared.cluster.session import Session
 
 
 def cluster_status(
-    cluster_name: str,
+    lab: Session | None,
     *,
-    clients: ClientFactory,
+    name: str,
     kind: Kind,
-    environment_provider: KubernetesEnvironmentProvider,
     root: Path,
     config: Path | None = None,
 ) -> DevelopmentClusterStatus:
-    """Collect the current state of the named development cluster.
+    """Collect the current state of the cluster, or report that it does not exist.
 
-    `provider.inspect` is the existence question -- it is the same call
-    `up` would make to decide whether to create -- and it gates the rest:
-    querying Helm against an absent cluster produces a kubeconfig error that
-    says nothing the `exists: false` did not already say, only louder.
-
-    Clients are built *from the resolved handle* rather than taken as
-    arguments, for the same reason `up` rebinds them after ensuring the
-    environment: an unbound Helm answers about whatever kubecontext the
-    workstation happens to be pointing at, so `local status` would
-    confidently report a production cluster's releases as the local lab's.
-
-    The port-forward is read from the state file rather than probed, so this
-    stays free of the "is it really alive" cost `ExposeService.status`
-    already pays and no more.
+    Existence gates the rest: asking Helm about an absent cluster only produces a
+    kubeconfig error that says nothing `exists: false` did not.
     """
-    handle = environment_provider.inspect(
-        EnvironmentSpec(name=cluster_name, cluster_name=cluster_name)
-    )
-    if handle is None:
-        return DevelopmentClusterStatus(cluster_name=cluster_name, exists=False)
-
-    bound = clients(handle)
-    releases, releases_error = _releases(bound.helm)
-    urls, urls_error = _urls(bound.kubectl)
-    forward = bound.expose.status(cluster_name)
+    if lab is None:
+        return DevelopmentClusterStatus(cluster_name=name, exists=False)
+    releases, releases_error = _releases(lab.helm)
+    urls, urls_error = _urls(lab.kubectl)
     return DevelopmentClusterStatus(
-        cluster_name=cluster_name,
+        cluster_name=name,
         exists=True,
-        context=handle.context,
-        provider=handle.provider_type,
+        context=lab.context,
+        provider="kind",
         releases=releases,
         releases_error=releases_error,
         urls=urls,
         urls_error=urls_error,
-        port_forward_pid=None if forward is None else forward.pid,
-        drift=port_mapping_drift(cluster_name, kind=kind, root=root, config=config),
+        drift=port_mapping_drift(name, kind=kind, root=root, config=config),
     )
 
 

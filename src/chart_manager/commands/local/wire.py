@@ -91,7 +91,6 @@ def action_to_dict(
         "cluster_name": result.cluster_name,
         "ok": result.ok,
         "changed": result.changed,
-        "port_forward_pid": result.port_forward_pid,
     }
 
 
@@ -128,7 +127,6 @@ def status_to_dict(status: DevelopmentClusterStatus) -> dict[str, Any]:
         "releases_error": status.releases_error,
         "urls": list(status.urls),
         "urls_error": status.urls_error,
-        "port_forward_pid": status.port_forward_pid,
         "drift": {
             "missing_host_ports": list(status.drift.missing),
             "error": status.drift.error,

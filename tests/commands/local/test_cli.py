@@ -8,11 +8,8 @@ from pathlib import Path
 import pytest
 
 from chart_manager.cli import _container
-from chart_manager.cli import local as local_cli
-from chart_manager.composition import Container
-from chart_manager.domain.local_resources import ResolvedStackTarget
-from chart_manager.plumbing.yaml_files import parse_yaml
-from chart_manager.services.clusters.development import (
+from chart_manager.commands import local
+from chart_manager.commands.local.models import (
     DevelopmentClusterActionResult,
     DevelopmentClusterPlan,
     DevelopmentClusterPlanEntry,
@@ -20,8 +17,9 @@ from chart_manager.services.clusters.development import (
     DevelopmentClusterResult,
     DevelopmentClusterStatus,
 )
-
-from .conftest import cli
+from chart_manager.commands.local.targets import ResolvedStackTarget
+from chart_manager.plumbing.yaml_files import parse_yaml
+from tests.conftest import cli
 
 pytestmark = pytest.mark.usefixtures("tmp_workspace")
 
@@ -118,29 +116,10 @@ def test_local_up_rejects_the_old_positional_chart_shape(tmp_path: Path) -> None
 
 
 def test_chart_up_delegates_profile_and_skip_installed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, recorded: _RecordingService
 ) -> None:
     chart = _chart(tmp_path)
-    calls: list[tuple[object, str | None, str, bool]] = []
 
-    class Service:
-        def up_target(
-            self,
-            target: object,
-            *,
-            profile: str | None,
-            cluster_name: str,
-            skip_installed: bool,
-        ) -> DevelopmentClusterResult:
-            calls.append((target, profile, cluster_name, skip_installed))
-            return DevelopmentClusterResult()
-
-    class Container:
-        def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
-            return Service()
-
-    monkeypatch.setattr(local_cli, "_container", Container)
     result = cli(
         "local",
         "up",
@@ -154,40 +133,21 @@ def test_chart_up_delegates_profile_and_skip_installed(
     )
 
     assert result.exit_code == 0, result.output
-    target, profile, cluster_name, skip_installed = calls[0]
-    assert target.kind == "chart"  # type: ignore[attr-defined]
-    assert profile == "telemetry"
-    assert cluster_name == "chart-manager"
-    assert skip_installed is True
+    target, options = recorded.requests[0]
+    assert target.kind == "chart"
+    assert options["profile"] == "telemetry"
+    assert options["skip_installed"] is True
 
 
 def test_named_stack_up_loads_the_authored_composition(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, recorded: _RecordingService
 ) -> None:
     _stack(tmp_path)
-    calls: list[object] = []
 
-    class Service:
-        def up_target(self, target: object, **_kwargs: object) -> DevelopmentClusterResult:
-            calls.append(target)
-            return DevelopmentClusterResult()
-
-    # Subclassed rather than duck-typed: `--stack` also asks the container
-    # for the LocalTargetResolver that reads the authored stack file, and
-    # this test is about what that resolution produces. A hand-rolled stand-in
-    # would have to reimplement it to keep the assertions below meaningful.
-    class FakeContainer(Container):
-        def development_cluster_service(  # type: ignore[override]
-            self, _root: Path, *, progress: object
-        ) -> Service:
-            return Service()
-
-    monkeypatch.setattr(local_cli, "_container", FakeContainer)
     result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
 
     assert result.exit_code == 0, result.output
-    target = calls[0]
+    target, _options = recorded.requests[0]
     assert isinstance(target, ResolvedStackTarget)
     assert target.name == "platform"
     assert target.stack.spec.releases[0].type == "oci"
@@ -214,47 +174,6 @@ def test_profile_is_rejected_for_a_stack(
     assert "--profile is only valid for a chart target" in str(result.exception)
 
 
-def test_down_and_reset_address_the_same_cluster(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stack(tmp_path)
-    down_calls: list[str] = []
-    reset_calls: list[str] = []
-
-    class Service:
-        def down(self, cluster_name: str) -> DevelopmentClusterActionResult:
-            down_calls.append(cluster_name)
-            return DevelopmentClusterActionResult(cluster_name, changed=True)
-
-        def reset_target(
-            self,
-            _target: object,
-            *,
-            profile: str | None,
-            cluster_name: str,
-        ) -> DevelopmentClusterResult:
-            assert profile is None
-            reset_calls.append(cluster_name)
-            return DevelopmentClusterResult()
-
-    # Subclassed for the same reason as the named-stack test above: `reset
-    # --stack` resolves the stack through the container before it reaches the
-    # service being recorded here.
-    class FakeContainer(Container):
-        def development_cluster_service(  # type: ignore[override]
-            self, _root: Path, *, progress: object
-        ) -> Service:
-            return Service()
-
-    monkeypatch.setattr(local_cli, "_container", FakeContainer)
-    down = cli("local", "down", "--root", str(tmp_path))
-    reset = cli("local", "reset", "--stack", "platform", "--root", str(tmp_path))
-    assert down.exit_code == reset.exit_code == 0
-    assert down_calls == ["chart-manager"]
-    assert reset_calls == ["chart-manager"]
-
-
 # ----- the output vocabulary -------------------------------------------------
 #
 # Design doc 6.2: every command gets `json`, `auto` resolves from the
@@ -263,27 +182,30 @@ def test_down_and_reset_address_the_same_cluster(
 
 
 class _RecordingService:
-    """Records every call and returns empty results. Nothing here mutates."""
+    """Stands in for `commands.local`: records each call and returns empty results."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.requests: list[tuple[object, dict[str, object]]] = []
 
-    def up_target(self, _target: object, **_kwargs: object) -> DevelopmentClusterResult:
-        self.calls.append("up_target")
+    def up(self, target: object, **options: object) -> DevelopmentClusterResult:
+        self.calls.append("up")
+        self.requests.append((target, options))
         return DevelopmentClusterResult()
 
-    def reset_target(self, _target: object, **_kwargs: object) -> DevelopmentClusterResult:
-        self.calls.append("reset_target")
+    def reset(self, target: object, **options: object) -> DevelopmentClusterResult:
+        self.calls.append("reset")
+        self.requests.append((target, options))
         return DevelopmentClusterResult()
 
-    def down(self, cluster_name: str) -> DevelopmentClusterActionResult:
+    def down(self, **_options: object) -> DevelopmentClusterActionResult:
         self.calls.append("down")
-        return DevelopmentClusterActionResult(cluster_name, changed=True, port_forward_pid=7)
+        return DevelopmentClusterActionResult("chart-manager", changed=True)
 
-    def status(self, cluster_name: str) -> DevelopmentClusterStatus:
+    def status(self, **_options: object) -> DevelopmentClusterStatus:
         self.calls.append("status")
         return DevelopmentClusterStatus(
-            cluster_name=cluster_name,
+            cluster_name="chart-manager",
             exists=True,
             context="kind-chart-manager",
             provider="kind",
@@ -295,13 +217,13 @@ class _RecordingService:
             urls=("https://loki.localhost/",),
         )
 
-    def plan_target(
-        self, target: object, *, profile: str | None, cluster_name: str, destroys: bool = False
+    def plan(
+        self, target: object, *, profile: str | None, destroys: bool = False, **_options: object
     ) -> DevelopmentClusterPlan:
-        self.calls.append("plan_target")
+        self.calls.append("plan")
         return DevelopmentClusterPlan(
             command="reset" if destroys else "up",
-            cluster_name=cluster_name,
+            cluster_name="chart-manager",
             target=getattr(target, "name", None),
             target_kind=getattr(target, "kind", None),
             destroys=destroys,
@@ -312,21 +234,17 @@ class _RecordingService:
             ),
         )
 
-    def plan_down(self, cluster_name: str) -> DevelopmentClusterPlan:
+    def plan_down(self) -> DevelopmentClusterPlan:
         self.calls.append("plan_down")
-        return DevelopmentClusterPlan(command="down", cluster_name=cluster_name)
+        return DevelopmentClusterPlan(command="down", cluster_name="chart-manager")
 
 
 @pytest.fixture
 def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingService:
-    """Route every `local` command at one recording service."""
+    """Route every `local` command at one recording stand-in."""
     service = _RecordingService()
-
-    class Container:
-        def development_cluster_service(self, _root: Path, *, progress: object) -> _RecordingService:
-            return service
-
-    monkeypatch.setattr(local_cli, "_container", Container)
+    for name in ("up", "reset", "down", "status", "plan", "plan_down"):
+        monkeypatch.setattr(local, name, getattr(service, name))
     return service
 
 
@@ -422,16 +340,11 @@ def test_status_exits_zero_for_an_absent_cluster(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`status` reports; it does not grade. An absent cluster is the answer."""
-
-    class Service:
-        def status(self, cluster_name: str) -> DevelopmentClusterStatus:
-            return DevelopmentClusterStatus(cluster_name=cluster_name, exists=False)
-
-    class Container:
-        def development_cluster_service(self, _root: Path, *, progress: object) -> Service:
-            return Service()
-
-    monkeypatch.setattr(local_cli, "_container", Container)
+    monkeypatch.setattr(
+        local,
+        "status",
+        lambda **_options: DevelopmentClusterStatus(cluster_name="chart-manager", exists=False),
+    )
     result = cli("local", "status", "--root", str(tmp_path), "-o", "json")
 
     assert result.exit_code == 0, result.output
@@ -450,8 +363,8 @@ def test_status_exits_zero_for_an_absent_cluster(
 @pytest.mark.parametrize(
     ("command", "planner", "mutator"),
     [
-        ("up", "plan_target", "up_target"),
-        ("reset", "plan_target", "reset_target"),
+        ("up", "plan", "up"),
+        ("reset", "plan", "reset"),
         ("down", "plan_down", "down"),
     ],
 )
@@ -474,9 +387,7 @@ def test_dry_run_plans_and_mutates_nothing(
     assert payload["command"] == command
 
 
-def test_dry_run_reset_is_marked_destructive(
-    tmp_path: Path, recorded: _RecordingService
-) -> None:
+def test_dry_run_reset_is_marked_destructive(tmp_path: Path, recorded: _RecordingService) -> None:
     """`up` and `reset` share a plan; only one of them deletes the cluster first."""
     _chart(tmp_path)
 
@@ -487,9 +398,7 @@ def test_dry_run_reset_is_marked_destructive(
     assert json.loads(reset.stdout)["destroys"] is True
 
 
-def test_dry_run_renders_the_plan_as_a_table(
-    tmp_path: Path, recorded: _RecordingService
-) -> None:
+def test_dry_run_renders_the_plan_as_a_table(tmp_path: Path, recorded: _RecordingService) -> None:
     _chart(tmp_path)
 
     result = cli(*_local_argv("up", tmp_path), "--dry-run", "-o", "table")

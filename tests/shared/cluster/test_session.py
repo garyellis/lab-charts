@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
+from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.shared.cluster import session
 from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, Reply
@@ -146,3 +149,20 @@ def test_teardown_deletes_an_existing_cluster_and_reports_an_absent_one() -> Non
     assert session.teardown(gone) is False
     assert ("kind", "delete", "cluster", "--name", "lab") in runner.calls
     assert ("kind", "delete", "cluster", "--name", "gone") not in runner.calls
+
+
+def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: Path) -> None:
+    runner = _runner("lab").respond(("pre",), returncode=9, stderr="blocked")
+
+    with pytest.raises(ExternalCommandError, match="blocked"):
+        session.provision(
+            _cluster(tmp_path, {"preProvision": ["pre"]}),
+            root=tmp_path,
+            name="lab",
+            run_hooks=True,
+            runner=runner,
+            settings=Settings(),
+            replace=True,
+        )
+
+    assert not any(call[:2] == ("kind", "delete") for call in runner.calls)

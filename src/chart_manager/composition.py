@@ -57,7 +57,6 @@ from pathlib import Path
 from typing import cast
 
 from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.domain.local_resources import LocalTargetResolver
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
@@ -73,16 +72,9 @@ from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.ci import CiService
-from chart_manager.services.clusters.development import DevelopmentClusterService
-from chart_manager.services.clusters.environment import (
-    BoundClients,
-    EnvironmentHandle,
-    KindEnvironmentProvider,
-)
 from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.expose import ExposeService
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
 from chart_manager.services.helmrelease import (
     HelmReleaseRef,
@@ -103,7 +95,6 @@ from chart_manager.services.upgrader import (
     UpgradeTelemetry,
 )
 from chart_manager.shared.charts import dependencies as chart_deps
-from chart_manager.shared.cluster.progress import ProgressCallback
 from chart_manager.shared.settings import Settings, load_settings
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
@@ -299,12 +290,6 @@ class Container:
             events=self.event_writer(),
         )
 
-    def expose_service(
-        self, *, state_dir: Path | None = None, context: str | None = None
-    ) -> ExposeService:
-        """Build the detached port-forward manager."""
-        return ExposeService(state_dir=state_dir, kubectl=self.kubectl(context=context))
-
     def grafana_exporter(self) -> GrafanaExporter:
         """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
         return GrafanaExporter(kubectl=self.kubectl())
@@ -327,48 +312,6 @@ class Container:
         what a surface building one of them inline cannot guarantee.
         """
         return LifecycleImpactService(workspace=self.workspace(root))
-
-    def local_target_resolver(self, root: Path) -> LocalTargetResolver:
-        """Resolve `--chart`/`--stack` tokens against the configured layout.
-
-        A domain object rather than a service, and still built here: it reads
-        `local_config`, so a surface constructing its own would resolve stack
-        names against a different file than the cluster service then converges
-        from.
-        """
-        workspace = self.workspace(root)
-        return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)
-
-    def cluster_clients(self, handle: EnvironmentHandle) -> BoundClients:
-        """Every cluster-facing client the development service uses, addressed at one cluster."""
-        return BoundClients(
-            helm=self.helm(context=handle.context),
-            kubectl=self.kubectl(context=handle.context),
-            expose=self.expose_service(context=handle.context),
-        )
-
-    def development_cluster_service(
-        self, root: Path, *, progress: ProgressCallback | None = None
-    ) -> DevelopmentClusterService:
-        """Build the full-stack lab converger for the repo at `root`.
-
-        `root` is a per-invocation argument, not configuration -- see
-        `Settings`. Every cluster-facing adapter is passed in, so there is
-        no path by which the service can fall back to an unconfigured one.
-        """
-        kind = self.kind()
-        return DevelopmentClusterService(
-            workspace=self.workspace(root),
-            helm=self.helm(),
-            kind=kind,
-            kubectl=self.kubectl(),
-            expose=self.expose_service(),
-            progress=progress,
-            environment_provider=KindEnvironmentProvider(kind),
-            client_factory=self.cluster_clients,
-            command_runner=self.command_runner(),
-            command_timeout=self._settings.command_timeout,
-        )
 
     def ci_service(self, root: Path) -> CiService:
         """Build the CI selection verbs for the repo at `root`."""

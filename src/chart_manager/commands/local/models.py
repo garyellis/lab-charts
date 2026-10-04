@@ -146,7 +146,6 @@ class DevelopmentClusterStatus:
     releases_error: str | None = None
     urls: tuple[str, ...] = ()
     urls_error: str | None = None
-    port_forward_pid: int | None = None
     drift: PortMappingDrift = field(default_factory=PortMappingDrift)
 
 
@@ -186,7 +185,7 @@ class DevelopmentClusterPlan:
 
 @dataclass(frozen=True)
 class DevelopmentClusterActionResult:
-    """Outcome of a stop or destroy operation, including port-forward cleanup.
+    """Outcome of a stop or destroy operation.
 
     `changed` is False when the cluster was already stopped / already absent
     -- both are success, so `ok` is unconditionally True (real failures raise).
@@ -194,7 +193,6 @@ class DevelopmentClusterActionResult:
 
     cluster_name: str
     changed: bool
-    port_forward_pid: int | None = None
 
     @property
     def ok(self) -> bool:

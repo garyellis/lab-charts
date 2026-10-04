@@ -17,10 +17,9 @@ cli/surfaces -> services -> api + domain + integrations
 depend on all three — not because an adapter should reach for an authored API
 type. Adapters are handed resolved service inputs.
 
-`domain/` is a top-level package holding policy and algorithms over `api/`
-models plus the schemas this project does not own (`Chart.yaml`,
-`Chart.lock`). It may not import `services/`, `integrations/`, or `cli/` —
-enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
+`domain/` is now empty: its modules moved to `shared/` and `commands/` under ADR-0001,
+and the package goes when the empty layers are deleted. The policy and algorithms over
+`api/` models and `Chart.yaml` live here:
 
 | Module | What it decides |
 |---|---|
@@ -29,7 +28,7 @@ enforced by its `.ruff.toml` and `test_domain_does_not_import_upward`.
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
 | `shared/charts/cluster_tests.py` | `ClusterTestCatalog`: charts composed with their enabled cluster tests |
 | `shared/charts/install_plan.py` | Dependency resolution and install order |
-| `domain/local_resources.py` | Loading `LocalStack`; resolving a `local` target |
+| `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
 | `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
 | `shared/cluster/converge.py` | The one release install and its readiness wait; `installed()` |

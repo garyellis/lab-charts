@@ -30,13 +30,13 @@ from chart_manager.cli import doctor as doctor_cli
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import grafana as grafana_cli
 from chart_manager.cli import helmrelease as helmrelease_cli
-from chart_manager.cli import local as local_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli import plan as plan_cli
 from chart_manager.cli import publish as publish_cli
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.commands.local import cli as local_cli
 from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,

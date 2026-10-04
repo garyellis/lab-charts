@@ -1,6 +1,6 @@
 """CLI rendering of the results the lab/sandbox services now return.
 
-`cli/local.py` is where the `local` group's Rich rendering lives -- the
+`commands/local/cli.py` is where the `local` group's Rich rendering lives -- the
 service layer knows nothing about a terminal. These tests pin
 the output shape so the services-return-results refactor stayed a refactor:
 the summary table, the access-hint blocks, the lifecycle lines and the
@@ -20,9 +20,9 @@ import pytest
 import typer
 from rich.console import Console
 
-from chart_manager.cli import local as cli_local
 from chart_manager.cli import streams
-from chart_manager.services.clusters.development import (
+from chart_manager.commands.local import cli as cli_local
+from chart_manager.commands.local.models import (
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
     DevelopmentClusterCredentials,
@@ -228,13 +228,9 @@ def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -
 # ----- down / delete --------------------------------------------------------
 
 
-def test_cluster_action_reports_the_change_and_the_reaped_forward(
-    narrated: Console,
-) -> None:
+def test_cluster_action_reports_the_change(narrated: Console) -> None:
     cli_local._render_cluster_action(
-        DevelopmentClusterActionResult(
-            cluster_name="chart-manager", changed=True, port_forward_pid=4242
-        ),
+        DevelopmentClusterActionResult(cluster_name="chart-manager", changed=True),
         "table",
         command="down",
         verb="stopped",
@@ -243,7 +239,6 @@ def test_cluster_action_reports_the_change_and_the_reaped_forward(
     out = narrated.export_text()
 
     assert "local cluster stopped: chart-manager" in out
-    assert "stopped port-forward (pid 4242)" in out
 
 
 def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
@@ -257,7 +252,6 @@ def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
     out = narrated.export_text()
 
     assert "local cluster not present: chart-manager" in out
-    assert "port-forward" not in out
 
 
 # ----- markup safety and exit codes ------------------------------------------

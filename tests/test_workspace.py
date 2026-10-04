@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.cli import main
 from chart_manager.cli._container import reset_invocation
+from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
@@ -481,7 +482,7 @@ spec:
     assert container.chart_catalog_service(tmp_path).repository.charts_dir == (
         tmp_path / "helm/charts"
     )
-    assert container.local_target_resolver(tmp_path).local_config == Path("ops/local.yaml")
+    assert _local_targets(container, tmp_path).local_config == Path("ops/local.yaml")
     assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
     assert container.impact_service(tmp_path).workspace is workspace
     assert container.ci_service(tmp_path).workspace is workspace
@@ -630,3 +631,8 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
     assert same_dir == first
     assert hash(same_dir) == hash(first)
     assert first.with_charts_dir(Path("other")) != first
+
+
+def _local_targets(container: Container, root: Path) -> LocalTargetResolver:
+    workspace = container.workspace(root)
+    return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)

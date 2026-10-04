@@ -1,7 +1,7 @@
 """`local up/down/reset/status` -- the persistent development cluster.
 
 Every decision this module could plausibly make has already been made by
-`DevelopmentClusterService` and arrives on the result object: which charts
+`commands/local/run.py` and arrives on the result object: which charts
 applied, which were unchanged, which failed, whether the CA hint applies,
 which URLs exist. What is left is four command signatures, the resolution of
 `--chart`/`--stack` into a target, and four renderers.
@@ -34,24 +34,27 @@ from chart_manager.cli._options import (
 )
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
-from chart_manager.domain.local_resources import (
-    ResolvedLocalTarget,
-    ResolvedStackTarget,
-)
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters.development import (
-    LAB_CA_SECRET_NAME,
-    LAB_CA_SECRET_NAMESPACE,
+from chart_manager.commands import local
+from chart_manager.commands.local.access import LAB_CA_SECRET_NAME, LAB_CA_SECRET_NAMESPACE
+from chart_manager.commands.local.models import (
     DevelopmentClusterAccessHints,
     DevelopmentClusterActionResult,
     DevelopmentClusterPlan,
     DevelopmentClusterResult,
     DevelopmentClusterStatus,
+)
+from chart_manager.commands.local.targets import (
+    LocalTargetResolver,
+    ResolvedLocalTarget,
+    ResolvedStackTarget,
+)
+from chart_manager.commands.local.wire import (
     action_to_dict,
     converge_to_dict,
     plan_to_dict,
     status_to_dict,
 )
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
@@ -80,7 +83,10 @@ def register(app: typer.Typer) -> None:
 
 def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
     """Resolve a chart directory or LocalStack through configured repository paths."""
-    return _container().local_target_resolver(root).resolve(target)
+    workspace = _container().workspace(root)
+    return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster).resolve(
+        target
+    )
 
 
 def _resolve_stack_target(root: Path, stack: str) -> ResolvedStackTarget:
@@ -164,24 +170,30 @@ def local_up(
     root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
-    service = _container().development_cluster_service(root, progress=_print_progress)
     hooks_enabled = provision_hooks_enabled(run_provision_hooks)
-    service.run_provision_hooks = hooks_enabled
+    container = _container()
+    workspace = container.workspace(root)
     if dry_run:
         _render_plan(
-            service.plan_target(
+            local.plan(
                 resolved,
+                workspace=workspace,
                 profile=profile,
-                cluster_name=DEFAULT_CLUSTER_NAME,
+                run_hooks=hooks_enabled,
+                progress=_print_progress,
             ),
             output,
         )
         return
-    result = service.up_target(
+    result = local.up(
         resolved,
+        workspace=workspace,
+        runner=container.command_runner(),
+        settings=container.settings,
         profile=profile,
-        cluster_name=DEFAULT_CLUSTER_NAME,
         skip_installed=skip_installed,
+        run_hooks=hooks_enabled,
+        progress=_print_progress,
     )
     _render_development_cluster_result(result, output, command="up")
     _exit_if_failed(result.ok)
@@ -195,18 +207,18 @@ def local_down(
     """Stop the configured local cluster while preserving its state.
 
     Installed Helm releases, PVCs, and provider-owned caches survive. Use
-    `local up` to bring it back. Any active port-forward for the
-    environment is stopped with it.
+    `local up` to bring it back.
 
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
-    root = repository_root()
-    service = _container().development_cluster_service(root, progress=_print_progress)
     if dry_run:
-        _render_plan(service.plan_down(DEFAULT_CLUSTER_NAME), output)
+        _render_plan(local.plan_down(), output)
         return
+    container = _container()
     _render_cluster_action(
-        service.down(DEFAULT_CLUSTER_NAME),
+        local.down(
+            runner=container.command_runner(), settings=container.settings, progress=_print_progress
+        ),
         output,
         command="down",
         verb="stopped",
@@ -246,24 +258,30 @@ def local_reset(
     root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
-    service = _container().development_cluster_service(root, progress=_print_progress)
     hooks_enabled = provision_hooks_enabled(run_provision_hooks)
-    service.run_provision_hooks = hooks_enabled
+    container = _container()
+    workspace = container.workspace(root)
     if dry_run:
         _render_plan(
-            service.plan_target(
+            local.plan(
                 resolved,
+                workspace=workspace,
                 profile=profile,
-                cluster_name=DEFAULT_CLUSTER_NAME,
                 destroys=True,
+                run_hooks=hooks_enabled,
+                progress=_print_progress,
             ),
             output,
         )
         return
-    result = service.reset_target(
+    result = local.reset(
         resolved,
+        workspace=workspace,
+        runner=container.command_runner(),
+        settings=container.settings,
         profile=profile,
-        cluster_name=DEFAULT_CLUSTER_NAME,
+        run_hooks=hooks_enabled,
+        progress=_print_progress,
     )
     _render_development_cluster_result(result, output, command="reset")
     _exit_if_failed(result.ok)
@@ -286,11 +304,9 @@ def local_status(
     URLs are the same VirtualService hosts it prints when it finishes.
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
-    root = repository_root()
-    status = (
-        _container()
-        .development_cluster_service(root, progress=_print_progress)
-        .status(DEFAULT_CLUSTER_NAME)
+    container = _container()
+    status = local.status(
+        workspace=container.workspace(), runner=container.command_runner(), settings=container.settings
     )
     if output != output_mod.TABLE:
         output_mod.emit(status_to_dict(status), mode=output)
@@ -310,8 +326,6 @@ def _render_status_table(status: DevelopmentClusterStatus) -> None:
     if not status.exists:
         return
     console.print(f"  context: {escape(status.context or '')} ({escape(status.provider or '')})")
-    if status.port_forward_pid is not None:
-        console.print(f"  port-forward: pid {status.port_forward_pid}")
 
     if status.releases_error is not None:
         console.print(f"  [yellow]{escape(status.releases_error)}[/yellow]")
@@ -384,11 +398,11 @@ def _render_development_cluster_result(
     Order is operational and load-bearing: what happened, then how to reach
     it. Everything here is pure formatting -- every decision (which bucket,
     whether the CA hint applies, which URLs exist) was already made by
-    DevelopmentClusterService and arrives on the result.
+    commands/local/run.py and arrives on the result.
 
     The access hints print in every mode, because they are narration on
     stderr in every mode. They are advice for an operator, not part of the
-    document -- see `services/clusters/development/wire.py` for why the
+    document -- see `commands/local/wire.py` for why the
     payload does not carry them.
     """
     if output == output_mod.TABLE:
@@ -490,7 +504,7 @@ def _render_cluster_action(
     verb: str,
     absent: str,
 ) -> None:
-    """Print the outcome of ``down`` plus any port-forward we reaped.
+    """Print the outcome of ``down``.
 
     The human form is a mutation status line rather than a document, so it
     narrates onto stderr as it always did. `-o json`/`-o yaml` do produce a
@@ -503,8 +517,6 @@ def _render_cluster_action(
         return
     state = verb if result.changed else absent
     narration.print(f"local cluster {state}: {result.cluster_name}")
-    if result.port_forward_pid is not None:
-        narration.print(f"stopped port-forward (pid {result.port_forward_pid})")
 
 
 __all__ = ["register"]

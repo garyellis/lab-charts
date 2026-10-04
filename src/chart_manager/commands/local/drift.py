@@ -6,10 +6,10 @@ import logging
 from collections.abc import Mapping
 from pathlib import Path
 
+from chart_manager.commands.local.models import PortMappingDrift
 from chart_manager.integrations.kind import Kind
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.clusters.development.models import PortMappingDrift
 from chart_manager.shared.cluster.progress import ProgressCallback, warn
 
 _LOG = logging.getLogger(__name__)

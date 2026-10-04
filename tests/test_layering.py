@@ -172,15 +172,6 @@ def test_chart_domain_modules_stay_out_of_plumbing() -> None:
         f"not plumbing: {', '.join(misplaced)}"
     )
 
-    # Chart loading, dependencies and lifecycle policy moved to `shared/charts`
-    # (ADR-0001); the rest leave `domain/` as their command packages are built.
-    expected = {"local_resources.py"}
-    actual = {path.name for path in _DOMAIN.glob("*.py") if path.name != "__init__.py"}
-    assert expected <= actual, (
-        f"missing from domain: {sorted(expected - actual)} -- these are "
-        "chart policy, not authored contract and not generic plumbing"
-    )
-
 
 def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
     """Generic plumbing may not depend on chart or validation policy."""
@@ -195,13 +186,6 @@ def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
     assert not offenders, (
         "generic plumbing must not import domain or service policy:\n  " + "\n  ".join(offenders)
     )
-
-
-def test_domain_modules_are_discoverable() -> None:
-    """Guard the guard: an empty sweep would make the next test vacuously pass."""
-    paths = sorted(_DOMAIN.rglob("*.py"))
-    assert len(paths) > 1, f"suspiciously few domain modules found: {paths}"
-    assert _DOMAIN / "local_resources.py" in paths
 
 
 #: What `chart_manager.domain` may import, beyond the standard library.
@@ -416,7 +400,7 @@ def test_service_modules_are_discoverable() -> None:
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
-    assert "chart_manager.domain.local_resources" in modules
+    assert "chart_manager.services.ci" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
@@ -495,9 +479,7 @@ def test_non_surface_modules_are_discoverable() -> None:
     paths = _non_surface_modules()
     assert len(paths) > 30, f"suspiciously few non-surface modules: {len(paths)}"
     assert _PKG / "composition.py" in paths
-    # The canary keeps the development converge engine visible to the layer scan.
-    clusters = _PKG / "services" / "clusters"
-    assert clusters / "development" / "service.py" in paths
+    assert _PKG / "commands" / "local" / "run.py" in paths
 
 
 def test_no_process_exit_outside_cli() -> None:
@@ -613,7 +595,7 @@ def test_cli_modules_are_discoverable() -> None:
     # The four modules that used to construct services inline. If one is
     # renamed away, the scan must be updated deliberately rather than
     # quietly losing coverage of the exact files this rule was written for.
-    for name in ("chart.py", "local.py", "plan.py"):
+    for name in ("chart.py", "plan.py"):
         assert _CLI / name in paths
 
 

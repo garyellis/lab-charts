@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.composition import Container
 from chart_manager.integrations.git import Git
@@ -160,7 +161,12 @@ def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path
     impact = container.impact_service(tmp_path)
     assert impact.workspace.spec.charts_dir == CUSTOM_CHARTS_DIR
 
-    resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
+    resolved = _local_targets(container, tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()
 
     assert render_dir_state(container.workspace(tmp_path)).path.is_relative_to(tmp_path)
+
+
+def _local_targets(container: Container, root: Path) -> LocalTargetResolver:
+    workspace = container.workspace(root)
+    return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)

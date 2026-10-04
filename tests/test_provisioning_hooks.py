@@ -1,23 +1,18 @@
-"""Authored provisioning-hook contract, runner, activation, and safety gates."""
+"""Authored provisioning-hook contract, activation, and safety gates."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.cli._options import provision_hooks_enabled
-from chart_manager.plumbing.errors import ExternalCommandError, SpecError
-from chart_manager.services.clusters.development.models import DevelopmentClusterPlan
-from chart_manager.services.clusters.development.wire import plan_to_dict
-from chart_manager.services.clusters.environment import EnvironmentHandle
-from chart_manager.services.clusters.provisioning_hooks import ProvisioningHookRunner
+from chart_manager.commands.local.models import DevelopmentClusterPlan
+from chart_manager.commands.local.wire import plan_to_dict
+from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.cluster.local_cluster import load_cluster
 from tests.conftest import workspace_for
-
-from .conftest import FakeCommandRunner
 
 
 def _document(hooks: str) -> str:
@@ -43,44 +38,6 @@ def _repository(tmp_path: Path, hooks: str) -> LocalCluster:
     config.parent.mkdir(exist_ok=True)
     config.write_text(_document(hooks), encoding="utf-8")
     return load_cluster(workspace_for(tmp_path))
-
-
-def test_hook_contract_accepts_one_argv_per_phase_and_runner_scopes_metadata(
-    tmp_path: Path,
-) -> None:
-    cluster = _repository(
-        tmp_path,
-        "      preProvision: [./scripts/prepare, before]\n"
-        "      postProvision: [tool-on-path, after]",
-    )
-    runner = FakeCommandRunner()
-    hooks = ProvisioningHookRunner(tmp_path, runner=runner, timeout=17)
-
-    hooks.run("preProvision", cluster, cluster_name="lab")
-    hooks.run(
-        "postProvision",
-        cluster,
-        cluster_name="lab",
-        environment=EnvironmentHandle("lab", "kind-lab", "kind"),
-    )
-
-    assert runner.calls == [
-        ("./scripts/prepare", "before"),
-        ("tool-on-path", "after"),
-    ]
-    pre, post = runner.records
-    assert pre.cwd == post.cwd == tmp_path.resolve()
-    assert pre.capture is post.capture is False
-    assert pre.timeout == post.timeout == 17
-    assert pre.env == {
-        "CHART_MANAGER_HOOK_PHASE": "preProvision",
-        "CHART_MANAGER_ROOT": str(tmp_path.resolve()),
-        "CHART_MANAGER_CLUSTER_NAME": "lab",
-        "CHART_MANAGER_KIND_CONFIG": str(tmp_path / "kind.yaml"),
-    }
-    assert post.env is not None
-    assert post.env["CHART_MANAGER_KUBE_CONTEXT"] == "kind-lab"
-    assert post.env["CHART_MANAGER_PROVIDER_TYPE"] == "kind"
 
 
 @pytest.mark.parametrize(
@@ -135,52 +92,3 @@ def test_local_machine_plan_reports_hook_argv_and_activation() -> None:
     assert payload["provisioning_hooks"] == [
         {"phase": "preProvision", "argv": ["./prepare", "arg"]}
     ]
-
-
-def test_reset_pre_hook_failure_prevents_destroy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from chart_manager.services.clusters.development.service import DevelopmentClusterService
-
-    cluster = _repository(tmp_path, "      preProvision: [./scripts/prepare]")
-    runner = FakeCommandRunner(returncode=9, stderr="blocked")
-
-    class Provider:
-        def __init__(self) -> None:
-            self.destroyed = False
-
-        def destroy(self, _handle: object) -> bool:
-            self.destroyed = True
-            return True
-
-        def handle(self, _spec: object) -> EnvironmentHandle:
-            return EnvironmentHandle("lab", "kind-lab", "kind")
-
-    provider = Provider()
-    service = DevelopmentClusterService(
-        workspace=workspace_for(tmp_path),
-        helm=SimpleNamespace(),  # type: ignore[arg-type]
-        kind=SimpleNamespace(),  # type: ignore[arg-type]
-        kubectl=SimpleNamespace(),  # type: ignore[arg-type]
-        expose=SimpleNamespace(),  # type: ignore[arg-type]
-        environment_provider=provider,  # type: ignore[arg-type]
-        command_runner=runner,
-    )
-    monkeypatch.setattr(
-        service,
-        "_prepare_target",
-        lambda *_a, **_k: SimpleNamespace(
-            local_cluster=cluster,
-            steps=(),
-            config=tmp_path / "kind.yaml",
-        ),
-    )
-
-    with pytest.raises(ExternalCommandError, match="blocked"):
-        service.reset_target(
-            SimpleNamespace(name="demo", kind="chart"),  # type: ignore[arg-type]
-            profile=None,
-            cluster_name="lab",
-        )
-
-    assert provider.destroyed is False

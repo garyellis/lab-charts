@@ -1,0 +1,489 @@
+"""`local up/reset/down/status`: converge a chart or LocalStack onto the persistent cluster.
+
+Everything authored is loaded and checked before the cluster is touched. Bootstrap is
+fail-fast; the target's releases are converged one by one, and a failed release is
+recorded while the rest carry on.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
+from chart_manager.api.v1alpha1.releases import (
+    LifecycleRelease,
+    OciChartRelease,
+    RepoChartRelease,
+)
+from chart_manager.commands.local.access import access_hints, wait_apps_wildcard_ready
+from chart_manager.commands.local.drift import warn_on_port_mapping_drift
+from chart_manager.commands.local.models import (
+    DevelopmentClusterActionResult,
+    DevelopmentClusterEntryFailure,
+    DevelopmentClusterEntryOutcome,
+    DevelopmentClusterPlan,
+    DevelopmentClusterPlanEntry,
+    DevelopmentClusterResult,
+    DevelopmentClusterStatus,
+    RunSummary,
+)
+from chart_manager.commands.local.status import cluster_status
+from chart_manager.commands.local.targets import ResolvedLocalTarget
+from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
+from chart_manager.shared.charts.lifecycle import require_cluster_test_profile
+from chart_manager.shared.cluster import bootstrap
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.progress import (
+    ProgressCallback,
+    detail,
+    failure,
+    info,
+    step,
+    warn,
+)
+from chart_manager.shared.cluster.releases import (
+    lifecycle_install_plan,
+    oci_chart_ref,
+    oci_identity,
+)
+from chart_manager.shared.cluster.session import (
+    DEFAULT_CLUSTER_NAME,
+    Session,
+    attach,
+    find,
+    kind_config_path,
+    provision,
+    stop,
+)
+from chart_manager.shared.settings import Settings
+from chart_manager.shared.workspace import RepositoryWorkspace
+
+_LOG = logging.getLogger(__name__)
+
+
+def _silent(_event: object) -> None:
+    pass
+
+
+@dataclass(frozen=True)
+class _LifecycleStep:
+    """A lifecycle release resolved to its install plan."""
+
+    catalog: ClusterTestCatalog
+    plan: tuple[InstallPlanEntry, ...]
+
+
+type _Step = _LifecycleStep | OciChartRelease | RepoChartRelease
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    cluster: LocalCluster
+    steps: tuple[_Step, ...]
+
+
+def up(
+    target: ResolvedLocalTarget,
+    *,
+    workspace: RepositoryWorkspace,
+    runner: CommandRunner,
+    settings: Settings,
+    profile: str | None = None,
+    skip_installed: bool = False,
+    run_hooks: bool = True,
+    progress: ProgressCallback | None = None,
+) -> DevelopmentClusterResult:
+    """Create or start the cluster, bootstrap it, then converge the chart or stack.
+
+    `skip_installed` skips releases `helm list` shows as deployed or failed.
+    """
+    report = progress or _silent
+    prepared = _prepare(target, profile, workspace, report)
+    lab = provision(
+        prepared.cluster,
+        root=workspace.root,
+        name=DEFAULT_CLUSTER_NAME,
+        run_hooks=run_hooks,
+        runner=runner,
+        settings=settings,
+        progress=progress,
+    )
+    return _converge(lab, prepared, workspace.root, skip_installed=skip_installed, report=report)
+
+
+def reset(
+    target: ResolvedLocalTarget,
+    *,
+    workspace: RepositoryWorkspace,
+    runner: CommandRunner,
+    settings: Settings,
+    profile: str | None = None,
+    run_hooks: bool = True,
+    progress: ProgressCallback | None = None,
+) -> DevelopmentClusterResult:
+    """Delete the cluster and converge the chart or stack onto a new one.
+
+    Everything authored is resolved before the healthy cluster is deleted.
+    """
+    report = progress or _silent
+    prepared = _prepare(target, profile, workspace, report)
+    lab = provision(
+        prepared.cluster,
+        root=workspace.root,
+        name=DEFAULT_CLUSTER_NAME,
+        run_hooks=run_hooks,
+        runner=runner,
+        settings=settings,
+        replace=True,
+        progress=progress,
+    )
+    return _converge(lab, prepared, workspace.root, skip_installed=False, report=report)
+
+
+def down(
+    *, runner: CommandRunner, settings: Settings, progress: ProgressCallback | None = None
+) -> DevelopmentClusterActionResult:
+    """Stop the cluster's nodes, keeping etcd, Helm releases, PVCs and the image cache."""
+    (progress or _silent)(step("Stopping local cluster", DEFAULT_CLUSTER_NAME))
+    stopped = stop(attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings))
+    _LOG.info("local cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
+    return DevelopmentClusterActionResult(cluster_name=DEFAULT_CLUSTER_NAME, changed=stopped)
+
+
+def status(
+    *, workspace: RepositoryWorkspace, runner: CommandRunner, settings: Settings
+) -> DevelopmentClusterStatus:
+    """Whether the cluster exists, its releases, URLs and port-mapping drift; never raises."""
+    return cluster_status(
+        find(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings),
+        name=DEFAULT_CLUSTER_NAME,
+        kind=attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings).kind,
+        root=workspace.root,
+        config=_authored_kind_config(workspace),
+    )
+
+
+def plan(
+    target: ResolvedLocalTarget,
+    *,
+    workspace: RepositoryWorkspace,
+    profile: str | None,
+    destroys: bool = False,
+    run_hooks: bool = True,
+    progress: ProgressCallback | None = None,
+) -> DevelopmentClusterPlan:
+    """What `up` (or `reset`, with `destroys`) would install; asks no cluster anything.
+
+    Runs the same preflight as the real command, so a plan that cannot resolve fails
+    the same way. Bootstrap entries are sorted rather than in authored order.
+    """
+    cluster = load_cluster(workspace)
+    owned = bootstrap.preflight(cluster, root=workspace.root)
+    steps = _preflight(
+        _target_releases(target, profile, workspace.root),
+        owned,
+        workspace.root,
+        progress or _silent,
+    )
+    entries = [
+        DevelopmentClusterPlanEntry(i.chart, i.profile, i.namespace, "bootstrap")
+        for i in sorted(owned, key=lambda i: (i.chart, i.profile, i.namespace))
+    ]
+    for target_step in steps:
+        if isinstance(target_step, _LifecycleStep):
+            for entry in target_step.plan:
+                chart = target_step.catalog.get(entry.chart)
+                namespace = require_cluster_test_profile(chart.spec, entry.profile).namespace
+                entries.append(
+                    DevelopmentClusterPlanEntry(entry.chart, entry.profile, namespace, "target")
+                )
+            continue
+        _release, label = _stack_release(target_step, workspace.root)
+        entries.append(
+            DevelopmentClusterPlanEntry(target_step.name, label, target_step.namespace, "target")
+        )
+    hooks = cluster.spec.cluster.hooks
+    return DevelopmentClusterPlan(
+        command="reset" if destroys else "up",
+        cluster_name=DEFAULT_CLUSTER_NAME,
+        target=target.name,
+        target_kind=target.kind,
+        destroys=destroys,
+        entries=tuple(entries),
+        provisioning_hooks_enabled=run_hooks,
+        provisioning_hooks=(
+            ()
+            if hooks is None
+            else tuple(
+                (phase, tuple(command))
+                for phase, command in (
+                    ("preProvision", hooks.pre_provision),
+                    ("postProvision", hooks.post_provision),
+                )
+                if command is not None
+            )
+        ),
+    )
+
+
+def plan_down() -> DevelopmentClusterPlan:
+    """The plan for `down`: stop this cluster, install nothing."""
+    return DevelopmentClusterPlan(command="down", cluster_name=DEFAULT_CLUSTER_NAME)
+
+
+def _prepare(
+    target: ResolvedLocalTarget,
+    profile: str | None,
+    workspace: RepositoryWorkspace,
+    report: ProgressCallback,
+) -> _Prepared:
+    cluster = load_cluster(workspace)
+    owned = bootstrap.preflight(cluster, root=workspace.root)
+    releases = _target_releases(target, profile, workspace.root)
+    return _Prepared(cluster, _preflight(releases, owned, workspace.root, report))
+
+
+def _converge(
+    lab: Session,
+    prepared: _Prepared,
+    root: Path,
+    *,
+    skip_installed: bool,
+    report: ProgressCallback,
+) -> DevelopmentClusterResult:
+    started = time.monotonic()
+    summary = RunSummary()
+    installed_keys = _installed_keys(lab, report)
+    for outcome in bootstrap.bootstrap(lab, prepared.cluster, root=root, progress=report):
+        bucket = summary.applied if outcome.status == "applied" else summary.no_change
+        bucket.append(
+            DevelopmentClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace)
+        )
+        installed_keys.add((outcome.namespace, outcome.name))
+    for target_step in prepared.steps:
+        if isinstance(target_step, _LifecycleStep):
+            releases = _lifecycle_releases(target_step, summary, report)
+        else:
+            releases = [_stack_release(target_step, root)]
+        for release, label in releases:
+            _converge_one(lab, release, label, installed_keys, summary, skip_installed, report)
+    wait_apps_wildcard_ready(summary, kubectl=lab.kubectl, progress=report)
+    warn_on_port_mapping_drift(
+        lab.name,
+        kind=lab.kind,
+        root=root,
+        progress=report,
+        config=kind_config_path(root, prepared.cluster),
+    )
+    _LOG.info(
+        "local converge finished: cluster=%s applied=%d no_change=%d failed=%d elapsed=%.1fs",
+        lab.name,
+        len(summary.applied),
+        len(summary.no_change),
+        len(summary.failed),
+        time.monotonic() - started,
+    )
+    return summary.freeze(access_hints(summary, kubectl=lab.kubectl))
+
+
+def _installed_keys(lab: Session, report: ProgressCallback) -> set[tuple[str, str]]:
+    """Releases `--skip-installed` skips: deployed or failed, as `helm list` shows them.
+
+    A failed listing falls back to "nothing installed" rather than aborting.
+    """
+    try:
+        releases = installed(lab)
+    except ChartManagerError as exc:
+        _LOG.warning("helm release listing failed; treating every release as uninstalled: %s", exc)
+        report(warn(f"could not list helm releases ({exc}); proceeding as if no releases exist"))
+        return set()
+    return {key for key, state in releases.items() if state in {"deployed", "failed"}}
+
+
+def _lifecycle_releases(
+    target_step: _LifecycleStep, summary: RunSummary, report: ProgressCallback
+) -> list[tuple[Release, str]]:
+    """Each plan entry as a release; an entry that does not resolve is a failed row."""
+    releases = []
+    for entry in target_step.plan:
+        try:
+            chart = target_step.catalog.get(entry.chart)
+            profile = require_cluster_test_profile(chart.spec, entry.profile)
+            values = target_step.catalog.value_paths(chart, entry.profile)
+        except ChartManagerError as exc:
+            _LOG.error(
+                "chart resolution failed: chart=%s profile=%s: %s", entry.chart, entry.profile, exc
+            )
+            report(failure("chart resolution failed:", f"{entry.chart}: {exc}"))
+            summary.failed.append(
+                DevelopmentClusterEntryFailure(entry.chart, entry.profile, "?", str(exc))
+            )
+            continue
+        release = Release(
+            name=entry.chart,
+            chart=chart.path,
+            namespace=profile.namespace,
+            values=tuple(values),
+            timeout=profile.timeout,
+        )
+        releases.append((release, entry.profile))
+    return releases
+
+
+def _converge_one(
+    lab: Session,
+    release: Release,
+    label: str,
+    installed_keys: set[tuple[str, str]],
+    summary: RunSummary,
+    skip_installed: bool,
+    report: ProgressCallback,
+) -> None:
+    key = (release.namespace, release.name)
+    if skip_installed and key in installed_keys:
+        report(detail("skip", f"{release.name} (already installed in {release.namespace})"))
+        summary.no_change.append(
+            DevelopmentClusterEntryOutcome(release.name, label, release.namespace)
+        )
+        return
+    report(step("Applying", f"{release.name}:{label} -> {release.namespace}"))
+    try:
+        state = converge(lab, release)
+    except ChartManagerError as exc:
+        if isinstance(exc, ReleaseFailed) and exc.diagnostics.strip():
+            report(info(exc.diagnostics))
+        _LOG.error(
+            "release failed; converge continues: release=%s profile=%s namespace=%s: %s",
+            release.name,
+            label,
+            release.namespace,
+            exc,
+        )
+        report(failure("apply failed:", f"{release.name}:{label} -> {exc}"))
+        summary.failed.append(
+            DevelopmentClusterEntryFailure(release.name, label, release.namespace, str(exc))
+        )
+        return
+    bucket = summary.applied if state == "applied" else summary.no_change
+    bucket.append(DevelopmentClusterEntryOutcome(release.name, label, release.namespace))
+    installed_keys.add(key)
+
+
+def _stack_release(source: OciChartRelease | RepoChartRelease, root: Path) -> tuple[Release, str]:
+    """The Helm release behind a stack's OCI or HTTPS repository entry, and its label."""
+    values = tuple(root / path for path in source.values)
+    if isinstance(source, OciChartRelease):
+        release = Release(
+            name=source.name,
+            chart=oci_chart_ref(source),
+            namespace=source.namespace,
+            values=values,
+            timeout=source.timeout,
+            version=source.version,
+        )
+        return release, oci_identity(source)
+    release = Release(
+        name=source.name,
+        chart=source.chart,
+        namespace=source.namespace,
+        values=values,
+        timeout=source.timeout,
+        version=source.version,
+        repo=source.repo,
+    )
+    return release, source.version
+
+
+def _target_releases(
+    target: ResolvedLocalTarget, profile: str | None, root: Path
+) -> tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...]:
+    if isinstance(target, ResolvedChartTarget):
+        return (
+            LifecycleRelease(
+                type="lifecycle",
+                chart=target.path.relative_to(root.resolve()),
+                profile=profile or "minimal",
+            ),
+        )
+    if profile is not None:
+        raise ChartManagerError(
+            "--profile is only valid for a chart target; LocalStack releases declare their profiles"
+        )
+    return tuple(target.stack.spec.releases)
+
+
+def _preflight(
+    releases: tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...],
+    owned: frozenset[ExternallySatisfiedLifecycle],
+    root: Path,
+    report: ProgressCallback,
+) -> tuple[_Step, ...]:
+    """Resolve every release before anything is installed, in authored order.
+
+    A lifecycle release becomes its install plan, minus what bootstrap owns and what an
+    earlier release already installs; the same chart under two identities is an error.
+    """
+    seen: dict[Path, tuple[str, str]] = {}
+    steps: list[_Step] = []
+    for release in releases:
+        if isinstance(release, (OciChartRelease, RepoChartRelease)):
+            steps.append(release)
+            continue
+        catalog, install_plan = lifecycle_install_plan(root, release, source="local release")
+        kept: list[InstallPlanEntry] = []
+        for entry in install_plan:
+            chart = catalog.get(entry.chart)
+            chart_path = chart.path.resolve()
+            entry_profile = require_cluster_test_profile(chart.spec, entry.profile)
+            namespace = entry_profile.namespace
+            if (
+                ExternallySatisfiedLifecycle(chart_path, entry.chart, entry.profile, namespace)
+                in owned
+            ):
+                continue
+            identity = (entry.profile, namespace)
+            previous = seen.get(chart_path)
+            if previous == identity:
+                continue
+            if previous is not None:
+                raise ChartManagerError(
+                    f"conflicting local lifecycle identities for {entry.chart}: "
+                    f"first {previous[0]} in {previous[1]}, then {entry.profile} in {namespace}"
+                )
+            seen[chart_path] = identity
+            if entry_profile.hooks is not None:
+                message = (
+                    f"local up does not run cluster-test hooks declared by "
+                    f"{entry.chart}:{entry.profile}"
+                )
+                _LOG.warning("%s", message)
+                report(warn(message))
+            kept.append(entry)
+        steps.append(_LifecycleStep(catalog, tuple(kept)))
+    return tuple(steps)
+
+
+def _authored_kind_config(workspace: RepositoryWorkspace) -> Path | None:
+    """The LocalCluster's kind config, or None when it cannot be read.
+
+    `status` answers even without a valid LocalCluster; the drift check then has no
+    baseline, which is logged rather than raised.
+    """
+    try:
+        return kind_config_path(workspace.root, load_cluster(workspace))
+    except (ChartManagerError, OSError) as exc:
+        _LOG.warning(
+            "LocalCluster unreadable; port-mapping drift has no baseline: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None

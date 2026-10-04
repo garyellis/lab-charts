@@ -13,7 +13,7 @@ from chart_manager.api.v1alpha1.releases import (
     OciChartRelease,
     RepoChartRelease,
 )
-from chart_manager.domain.local_resources import (
+from chart_manager.commands.local.targets import (
     LocalTargetResolver,
     ResolvedStackTarget,
     load_local_stack,
@@ -21,9 +21,7 @@ from chart_manager.domain.local_resources import (
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.charts.chart import ResolvedChartTarget
 from chart_manager.shared.cluster.local_cluster import load_cluster
-from tests.conftest import LOCAL_CONFIG, workspace_for
-
-from .conftest import REPO_ROOT
+from tests.conftest import LOCAL_CONFIG, REPO_ROOT, workspace_for
 
 
 def _write(root: Path, relative: str, body: str) -> Path:

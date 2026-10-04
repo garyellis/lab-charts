@@ -11,13 +11,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from itertools import chain
 
-from chart_manager.integrations.kubectl import Kubectl, VirtualService
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.clusters.development.models import (
+from chart_manager.commands.local.models import (
     DevelopmentClusterAccessHints,
     DevelopmentClusterCredentials,
     RunSummary,
 )
+from chart_manager.integrations.kubectl import Kubectl, VirtualService
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.cluster.progress import ProgressCallback, step, warn
 
 # A VirtualService opts in to a credential hint under its URLs with these

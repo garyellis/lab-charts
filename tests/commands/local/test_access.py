@@ -1,14 +1,10 @@
-"""DevelopmentClusterService access-hint resolution + cert gate + port-mapping drift.
+"""`local` access hints, the apps-wildcard cert wait and port-mapping drift.
 
-Three concerns covered here:
-  * `_access_hints`: empty / one / many VS results, with credentials
-    attached to the URLs of every VirtualService that opts in through the
-    `chartmanager.io/credentials-*` annotations, read from that
-    VirtualService's own namespace. The service resolves the data;
-    `cli/local.py` renders it (see test_lab_cli_rendering.py).
-  * Cert wait: happy path (call recorded) and timeout path
-    (warning surfaced, run continues).
-  * Port-mapping drift: matching no-op, mismatch produces a warning event.
+  * `access_hints`: empty / one / many VirtualServices, with credentials attached to the
+    URLs of every VirtualService that opts in through the `chartmanager.io/credentials-*`
+    annotations, read from its own namespace.
+  * The cert wait: happy path and timeout (a warning; the run continues).
+  * Port-mapping drift: matching is silent, a mismatch warns.
 """
 
 from __future__ import annotations
@@ -18,26 +14,17 @@ from typing import Any
 
 import pytest
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestProfile
-from chart_manager.api.v1alpha1.chart_lifecycle import ClusterTestSpec as _TestSpec
-from chart_manager.integrations.helm import ReleaseInfo, UpgradeResult
-from chart_manager.integrations.kubectl import VirtualService
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.clusters import development as lab_module
-from chart_manager.services.clusters.development import (
+from chart_manager.commands.local.access import access_hints, wait_apps_wildcard_ready
+from chart_manager.commands.local.drift import kind_config_host_ports, warn_on_port_mapping_drift
+from chart_manager.commands.local.models import (
+    DevelopmentClusterAccessHints,
     DevelopmentClusterCredentials,
     DevelopmentClusterEntryOutcome,
-    DevelopmentClusterService,
+    RunSummary,
 )
-from chart_manager.services.clusters.development.drift import kind_config_host_ports
-from chart_manager.shared.charts.chart import (
-    ChartMetadata,
-    ClusterTestChart,
-    HelmChart,
-)
-from chart_manager.shared.charts.install_plan import InstallPlanEntry
+from chart_manager.integrations.kubectl import VirtualService
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.shared.cluster.progress import ProgressEvent
-from tests.conftest import workspace_for
 
 # Re-use the same shape of fakes the existing converge tests use; new
 # behaviour gets new attributes (e.g. VS host list, port mapping set) and
@@ -109,40 +96,6 @@ class _Kind:
         return set(self._host_ports)
 
 
-class _Helm:
-    def __init__(self, *, status: str = "applied") -> None:
-        self._status = status
-
-    def list_releases(
-        self, *, all_namespaces: bool = True, namespace: str | None = None
-    ) -> list[ReleaseInfo]:
-        return []
-
-    def dependency_update_if_stale(self, _path: Path) -> bool:
-        return False
-
-    def dependency_update(self, _path: Path) -> None:
-        pass
-
-    def upgrade_install(
-        self, release: str, _chart: Any, *, namespace: str, **_kw: Any
-    ) -> UpgradeResult:
-        return UpgradeResult(
-            status=self._status,
-            revision_before=0,
-            revision_after=1 if self._status == "applied" else 0,
-            output="",
-        )
-
-    def lint(self, *_args: Any, **_kwargs: Any) -> None:
-        pass
-
-
-class _Expose:
-    def stop(self, _cluster: str) -> int | None:
-        return None
-
-
 class _Recorder:
     """Collect progress events and flatten them to text for substring asserts."""
 
@@ -155,77 +108,6 @@ class _Recorder:
     @property
     def text(self) -> str:
         return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
-
-
-def _service(
-    tmp_path: Path,
-    *,
-    helm: _Helm,
-    kind: _Kind,
-    kubectl: _RecordingKubectl,
-    progress: _Recorder | None = None,
-) -> DevelopmentClusterService:
-    return DevelopmentClusterService(
-        workspace=workspace_for(tmp_path),
-        helm=helm,  # type: ignore[arg-type]
-        kind=kind,  # type: ignore[arg-type]
-        kubectl=kubectl,  # type: ignore[arg-type]
-        expose=_Expose(),  # type: ignore[arg-type]
-        progress=progress,
-    )
-
-
-def _stub_chart(name: str, *, namespace: str = "observability") -> ClusterTestChart:
-    profile = ClusterTestProfile(
-        description="stub",
-        namespace=namespace,
-        values=[],
-        timeout="1m",
-        requires=[],
-        helmTest=False,
-    )
-    spec = _TestSpec(profiles={"minimal": profile}, dependentTests=[])
-    return ClusterTestChart(
-        chart=HelmChart(
-            name=name,
-            path=Path(f"/tmp/{name}"),
-            metadata=ChartMetadata(name, "0.0.0", "application", ()),
-        ),
-        spec=spec,
-    )
-
-
-class _StubCatalog:
-    """The two-method slice of ClusterTestCatalog that _install_plan reads."""
-
-    def __init__(self, charts: dict[str, ClusterTestChart]) -> None:
-        self._charts = charts
-
-    def get(self, name: str) -> ClusterTestChart:
-        return self._charts[name]
-
-    def value_paths(self, _chart: ClusterTestChart, _profile: str) -> list[Path]:
-        return []
-
-
-def _install_plan(
-    service: DevelopmentClusterService,
-    plan: list[InstallPlanEntry],
-    charts: dict[str, ClusterTestChart],
-) -> lab_module.RunSummary:
-    summary = lab_module.RunSummary()
-    service._install_plan(
-        plan,
-        installed_keys=set(),
-        namespaces_created=set(),
-        summary=summary,
-        skip_installed=False,
-        cluster_tests=_StubCatalog(charts),  # type: ignore[arg-type]
-    )
-    return summary
-
-
-# ----- _access_hints --------------------------------------------------------
 
 
 _GATEWAY_SYNCED = (DevelopmentClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
@@ -242,9 +124,8 @@ def _vs(
     return VirtualService(namespace=namespace, hosts=hosts, annotations=annotations or {})
 
 
-def _hints(tmp_path: Path, kubectl: _RecordingKubectl) -> lab_module.DevelopmentClusterAccessHints:
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    return svc._access_hints(lab_module.RunSummary(applied=list(_GATEWAY_SYNCED)))
+def _hints(tmp_path: Path, kubectl: _RecordingKubectl) -> DevelopmentClusterAccessHints:
+    return access_hints(RunSummary(applied=list(_GATEWAY_SYNCED)), kubectl=kubectl)  # type: ignore[arg-type]
 
 
 def test_no_virtualservices_yields_no_urls(tmp_path: Path) -> None:
@@ -365,9 +246,9 @@ def test_ca_trust_hint_false_when_lab_ca_owner_absent(tmp_path: Path) -> None:
     # No istio-gateway in the summary -> CA decision is False, but the VS
     # list still resolves (a sync that touched only some app chart).
     kubectl = _RecordingKubectl(virtualservices=[_vs("app.localhost")])
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    hints = svc._access_hints(
-        lab_module.RunSummary(applied=[DevelopmentClusterEntryOutcome("app", "minimal", "apps")])
+    hints = access_hints(
+        RunSummary(applied=[DevelopmentClusterEntryOutcome("app", "minimal", "apps")]),
+        kubectl=kubectl,  # type: ignore[arg-type]
     )
 
     assert hints.ca_trust_hint is False
@@ -393,9 +274,9 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
     tmp_path: Path,
 ) -> None:
     kubectl = _RecordingKubectl()
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module.RunSummary(no_change=list(_GATEWAY_SYNCED))
-    svc._wait_apps_wildcard_ready(summary)
+    progress = _Recorder()
+    summary = RunSummary(no_change=list(_GATEWAY_SYNCED))
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
 
     assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
 
@@ -404,11 +285,11 @@ def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
     tmp_path: Path,
 ) -> None:
     kubectl = _RecordingKubectl()
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl)
-    summary = lab_module.RunSummary(
+    progress = _Recorder()
+    summary = RunSummary(
         applied=[DevelopmentClusterEntryOutcome("grafana", "minimal", "observability")]
     )
-    svc._wait_apps_wildcard_ready(summary)
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
     assert kubectl.cert_waits == []
 
 
@@ -420,9 +301,8 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
         cert_raise=ExternalCommandError("timed out waiting"),
     )
     progress = _Recorder()
-    svc = _service(tmp_path, helm=_Helm(), kind=_Kind(), kubectl=kubectl, progress=progress)
-    summary = lab_module.RunSummary(applied=list(_GATEWAY_SYNCED))
-    svc._wait_apps_wildcard_ready(summary)
+    summary = RunSummary(applied=list(_GATEWAY_SYNCED))
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
     assert "warn:" in progress.text
     assert "apps-wildcard cert not Ready" in progress.text
 
@@ -451,14 +331,14 @@ def test_port_mapping_drift_warning_when_live_missing_expected(tmp_path: Path) -
         "      - containerPort: 30443\n"
         "        hostPort: 443\n",
     )
-    kubectl = _RecordingKubectl()
     kind = _Kind(host_ports={80})
-    helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
 
-    svc._warn_on_port_mapping_drift(
+    warn_on_port_mapping_drift(
         "chart-manager",
+        kind=kind,  # type: ignore[arg-type]
+        root=tmp_path,
+        progress=progress,
         config=tmp_path / "kind-config.yaml",
     )
     assert "kind cluster port mappings do not match kind-config" in progress.text
@@ -477,13 +357,13 @@ def test_port_mapping_drift_no_warning_when_matching(tmp_path: Path) -> None:
         "      - containerPort: 30443\n"
         "        hostPort: 443\n",
     )
-    kubectl = _RecordingKubectl()
     kind = _Kind(host_ports={80, 443})
-    helm = _Helm(status="applied")
     progress = _Recorder()
-    svc = _service(tmp_path, helm=helm, kind=kind, kubectl=kubectl, progress=progress)
-    svc._warn_on_port_mapping_drift(
+    warn_on_port_mapping_drift(
         "chart-manager",
+        kind=kind,  # type: ignore[arg-type]
+        root=tmp_path,
+        progress=progress,
         config=tmp_path / "kind-config.yaml",
     )
     assert "kind cluster port mappings do not match" not in progress.text
@@ -502,17 +382,13 @@ def test_port_mapping_drift_without_kind_config_is_silent_but_logged(
     check permanently with no signal at all.
     """
     progress = _Recorder()
-    svc = _service(
-        tmp_path,
-        helm=_Helm(status="applied"),
-        kind=_Kind(host_ports=set()),
-        kubectl=_RecordingKubectl(),
-        progress=progress,
-    )
 
     with caplog.at_level("WARNING"):
-        svc._warn_on_port_mapping_drift(
+        warn_on_port_mapping_drift(
             "chart-manager",
+            kind=_Kind(host_ports=set()),  # type: ignore[arg-type]
+            root=tmp_path,
+            progress=progress,
             config=tmp_path / "kind-config.yaml",
         )
 
