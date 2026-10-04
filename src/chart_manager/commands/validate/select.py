@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from string import Template
 from types import MappingProxyType
@@ -41,12 +42,34 @@ DEFAULT_TRIGGERS: Mapping[str, TriggerValue] = MappingProxyType(
 )
 
 
+class ReasonCode(StrEnum):
+    """The rule that selected a row."""
+
+    VALIDATION_TRIGGER = "validation-trigger"
+    HELM_DEPENDENT = "helm-dependent"
+    REPOSITORY_POLICY = "repository-policy"
+    VALIDATION_ENGINE = "validation-engine"
+
+
+@dataclass(frozen=True)
+class Reason:
+    """One changed file and the rule by which it selected a row."""
+
+    code: ReasonCode
+    changed_file: Path
+    detail: str
+
+
 @dataclass(frozen=True)
 class Selection:
-    """The selected rows (no checks run yet), the charts they belong to, and what was left out."""
+    """The selected rows (no checks run yet), the charts they belong to, and what was left out.
+
+    `reasons` maps each (chart, env) row that changes selected to why, in changed-file order.
+    """
 
     rows: tuple[Row, ...]
     charts: Mapping[str, Chart] = field(default_factory=dict)
+    reasons: Mapping[tuple[str, str], tuple[Reason, ...]] = field(default_factory=dict)
     spec_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     ignored_changes: tuple[str, ...] = ()
@@ -66,18 +89,21 @@ def select(changes: Sequence[str] | None, *, workspace: RepositoryWorkspace) -> 
     """
     charts, spec_errors, skipped = _load(workspace)
     specs = {name: require_validation(c.lifecycle, chart_name=name) for name, c in charts.items()}
+    reasons: dict[tuple[str, str], tuple[Reason, ...]] = {}
     ignored: list[str] = []
     unmatched: list[str] = []
     if changes is None:
         pairs = {(chart, env) for chart, spec in specs.items() for env in spec.environments}
         warnings = skipped
     else:
-        pairs, ignored, unmatched, change_warnings = _pairs_for(changes, specs, workspace)
+        reasons, ignored, unmatched, change_warnings = _reasons_for(changes, specs, workspace)
+        pairs = set(reasons)
         warnings = skipped + change_warnings
     rows = tuple(selected_row(chart, specs[chart], env) for chart, env in sorted(pairs))
     return Selection(
         rows=rows,
         charts=charts,
+        reasons=reasons,
         spec_errors=tuple(spec_errors),
         warnings=tuple(warnings),
         ignored_changes=tuple(ignored),
@@ -122,30 +148,40 @@ def _load(workspace: RepositoryWorkspace) -> tuple[dict[str, Chart], list[str], 
     return charts, errors, warnings
 
 
-def _pairs_for(
+def _reasons_for(
     changes: Sequence[str],
     specs: dict[str, ManifestValidationSpec],
     workspace: RepositoryWorkspace,
-) -> tuple[set[tuple[str, str]], list[str], list[str], list[str]]:
-    """The (chart, env) pairs `changes` select, the ignored and unmatched changes, and warnings."""
-    pairs: set[tuple[str, str]] = set()
+) -> tuple[dict[tuple[str, str], tuple[Reason, ...]], list[str], list[str], list[str]]:
+    """Why `changes` select each (chart, env) pair; the ignored and unmatched changes; warnings."""
+    by_file: dict[tuple[str, str], dict[str, Reason]] = {}
     ignored: list[str] = []
     unmatched: list[str] = []
     ignored_warnings: list[str] = []
     unmatched_warnings: list[str] = []
-    fanout = False
+    fanout: dict[str, Reason] = {}
     dependents = build_helm_dependency_index(workspace.root, charts_dir=workspace.spec.charts_dir)
     prefix = len(workspace.spec.charts_dir.parts)
+    marker = workspace.marker.relative_to(workspace.root)
+    policies = workspace.spec.policies_dir.parts
 
-    def every_env(*charts: str) -> None:
-        for name in charts:
-            if name in specs:
-                pairs.update((name, env) for env in specs[name].environments)
+    def select_envs(chart: str, envs: Iterable[str], raw: str, reason: Reason) -> None:
+        for env in envs:
+            by_file.setdefault((chart, env), {})[raw] = reason
+
+    def every_env(chart: str, raw: str, code: ReasonCode, detail: str) -> None:
+        if chart in specs:
+            select_envs(chart, specs[chart].environments, raw, Reason(code, Path(raw), detail))
 
     for raw in sorted({raw for raw in changes if raw}):
         path = Path(raw)
         if workspace.matches_validation_fanout(path):
-            fanout = True
+            if path == marker or path.parts[: len(policies)] == policies:
+                code, rule = ReasonCode.REPOSITORY_POLICY, "repository policy"
+            else:
+                code, rule = ReasonCode.VALIDATION_ENGINE, "validation implementation"
+            detail = f"{rule} changes validate every configured environment"
+            fanout[raw] = Reason(code, path, detail)
             continue
         chart = workspace.chart_name_from_repo_path(path)
         if chart is None:
@@ -153,9 +189,12 @@ def _pairs_for(
         relative = Path(*path.parts[prefix + 1 :])
         if relative == Path(LIFECYCLE_FILENAME) and chart not in specs:
             continue
-        every_env(*dependents.get(chart, ()))
+        for dependent in dependents.get(chart, ()):
+            detail = f"{dependent} declares a Helm dependency on {chart}"
+            every_env(dependent, raw, ReasonCode.HELM_DEPENDENT, detail)
+        triggered = f"authored validation triggers selected {chart}"
         if _is_chart_wide(relative):
-            every_env(chart)
+            every_env(chart, raw, ReasonCode.VALIDATION_TRIGGER, triggered)
             continue
         spec = specs.get(chart)
         if spec is None:
@@ -176,10 +215,12 @@ def _pairs_for(
             )
             unmatched.append(raw)
             unmatched_warnings.append(f"changed chart file matches no trigger: {raw} ({behavior})")
-        pairs.update((chart, env) for env in envs)
-    if fanout:
-        pairs = {(c, e) for c, spec in specs.items() for e in spec.environments}
-    return pairs, ignored, unmatched, ignored_warnings + unmatched_warnings
+        select_envs(chart, envs, raw, Reason(ReasonCode.VALIDATION_TRIGGER, path, triggered))
+    for raw, reason in fanout.items():
+        for name, spec in specs.items():
+            select_envs(name, spec.environments, raw, reason)
+    reasons = {pair: tuple(r for _, r in sorted(files.items())) for pair, files in by_file.items()}
+    return reasons, ignored, unmatched, ignored_warnings + unmatched_warnings
 
 
 def _is_chart_wide(relative: Path) -> bool:

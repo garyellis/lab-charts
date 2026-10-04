@@ -92,3 +92,50 @@ def test_select_collects_a_broken_chart_and_selects_the_rest(
     (error,) = selection.spec_errors
     assert error.startswith("broken:")
     assert validate.Row("demo", "dev", "demo", "lab-dev", {}) in selection.rows
+
+
+def test_select_gives_each_row_the_changed_files_and_rules_that_selected_it(
+    workspace: RepositoryWorkspace,
+) -> None:
+    trigger = Path("charts/demo/values-dev.yaml")
+    engine = Path("src/chart_manager/x.py")
+
+    selection = validate.select([engine.as_posix(), trigger.as_posix()], workspace=workspace)
+
+    every_env = "validation implementation changes validate every configured environment"
+    assert selection.reasons == {
+        ("demo", "dev"): (
+            validate.Reason(
+                validate.ReasonCode.VALIDATION_TRIGGER,
+                trigger,
+                "authored validation triggers selected demo",
+            ),
+            validate.Reason(validate.ReasonCode.VALIDATION_ENGINE, engine, every_env),
+        ),
+        ("demo", "ci"): (
+            validate.Reason(validate.ReasonCode.VALIDATION_ENGINE, engine, every_env),
+        ),
+        APP: (
+            validate.Reason(
+                validate.ReasonCode.HELM_DEPENDENT,
+                trigger,
+                "app declares a Helm dependency on demo",
+            ),
+            validate.Reason(validate.ReasonCode.VALIDATION_ENGINE, engine, every_env),
+        ),
+    }
+
+
+def test_select_names_a_workspace_file_change_a_repository_policy_reason(
+    workspace: RepositoryWorkspace,
+) -> None:
+    marker = Path(".chart-manager/workspace.yaml")
+
+    selection = validate.select([marker.as_posix()], workspace=workspace)
+
+    reason = validate.Reason(
+        validate.ReasonCode.REPOSITORY_POLICY,
+        marker,
+        "repository policy changes validate every configured environment",
+    )
+    assert selection.reasons == dict.fromkeys(EVERY_ROW, (reason,))

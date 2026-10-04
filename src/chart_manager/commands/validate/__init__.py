@@ -9,11 +9,13 @@ from chart_manager.commands.validate.models import (
     ValidateRequest,
 )
 from chart_manager.commands.validate.run import run
-from chart_manager.commands.validate.select import Selection, select
+from chart_manager.commands.validate.select import Reason, ReasonCode, Selection, select
 
 __all__ = [
     "CheckResult",
     "Diagnostics",
+    "Reason",
+    "ReasonCode",
     "RequestError",
     "Row",
     "Selection",
