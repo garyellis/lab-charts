@@ -1,4 +1,4 @@
-"""Lifecycle compiler contract tests."""
+"""`chart test` plan compilation: action order, inputs, digests and hooks."""
 
 from __future__ import annotations
 
@@ -7,20 +7,35 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.test.models import ActionKind, LifecycleAction, LifecyclePlan
+from chart_manager.commands.test.plan import compile_cluster_test
+from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     DependencyCycleError,
     SpecError,
 )
-from chart_manager.services.lifecycle import (
-    ActionKind,
-    ClusterTestCompiler,
-    LifecyclePlan,
-    plan_to_dict,
-)
-from tests.conftest import workspace_for
+from chart_manager.shared.charts.cluster_tests import ClusterTestCatalog
+from chart_manager.shared.charts.install_plan import DependencyResolver
+from tests.conftest import MakeChart
 
-from .conftest import MakeChart
+CHARTS_DIR = Path("charts")
+
+
+def _compile(root: Path, chart: str, profile: str, **options: object) -> LifecyclePlan:
+    catalog = ClusterTestCatalog(root, charts_dir=CHARTS_DIR)
+    return compile_cluster_test(
+        chart,
+        profile,
+        root=root.resolve(),
+        catalog=catalog,
+        resolver=DependencyResolver(catalog.get),
+        **options,  # type: ignore[arg-type]
+    )
+
+
+def _by_id(plan: LifecyclePlan, action_id: str) -> LifecycleAction:
+    return next(action for action in plan.actions if action.action_id == action_id)
 
 
 def _requires(*refs: str) -> dict[str, object]:
@@ -57,19 +72,16 @@ def test_cluster_test_compiles_dependency_first_actions_and_effective_inputs(
         },
     )
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "full"
-    )
+    plan = _compile(chart_root, "app", "full")
 
     assert [action.target.chart for action in plan.actions] == [
-        *(["base"] * 5),
-        *(["app"] * 5),
+        *(["base"] * 3),
+        *(["app"] * 3),
     ]
     app_install = next(
         action
         for action in plan.actions
-        if action.target.chart == "app"
-        and action.kind is ActionKind.HELM_UPGRADE_INSTALL
+        if action.target.chart == "app" and action.kind is ActionKind.INSTALL
     )
     assert app_install.target.namespace == "workloads"
     assert app_install.timeout == "20m"
@@ -87,16 +99,15 @@ def test_cluster_test_namespace_override_wins_over_authored_profile(
 ) -> None:
     make_chart("app", profiles={"minimal": {"namespace": "authored"}})
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
+    plan = _compile(
+        chart_root,
         "app",
         "minimal",
         namespace_override="requested",
     )
 
     assert {
-        action.target.namespace
-        for action in plan.actions
-        if action.target.namespace is not None
+        action.target.namespace for action in plan.actions if action.target.namespace is not None
     } == {"requested"}
 
 
@@ -115,7 +126,8 @@ def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
         },
     )
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
+    plan = _compile(
+        chart_root,
         "app",
         "minimal",
         namespace_override="requested-app",
@@ -124,45 +136,37 @@ def test_cluster_test_namespace_override_does_not_relocate_authored_dependency(
     namespaces = {
         action.target.chart: action.target.namespace
         for action in plan.actions
-        if action.kind is ActionKind.HELM_UPGRADE_INSTALL
+        if action.kind is ActionKind.INSTALL
     }
     assert namespaces == {"base": "foundation", "app": "requested-app"}
 
 
-def test_cluster_test_keeps_readiness_when_helm_test_is_disabled(
+def test_cluster_test_without_helm_test_ends_at_its_install(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
     make_chart("app", profiles={"minimal": {"helmTest": False}})
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal"
-    )
+    plan = _compile(chart_root, "app", "minimal")
 
     assert [action.kind for action in plan.actions] == [
         ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_DEPENDENCY_UPDATE,
-        ActionKind.HELM_UPGRADE_INSTALL,
-        ActionKind.WORKLOAD_READY,
+        ActionKind.INSTALL,
     ]
 
 
-def test_cluster_test_lint_is_typed_and_ordered_between_dependency_and_install(
+def test_cluster_test_lint_runs_between_the_namespace_and_the_install(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
     make_chart("app")
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal", lint=True
-    )
+    plan = _compile(chart_root, "app", "minimal", lint=True)
 
     assert [action.kind for action in plan.actions] == [
         ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_DEPENDENCY_UPDATE,
         ActionKind.HELM_LINT,
-        ActionKind.HELM_UPGRADE_INSTALL,
-        ActionKind.WORKLOAD_READY,
+        ActionKind.INSTALL,
         ActionKind.HELM_TEST,
     ]
     lint = next(action for action in plan.actions if action.kind is ActionKind.HELM_LINT)
@@ -174,10 +178,9 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     make_chart: MakeChart,
 ) -> None:
     make_chart("app")
-    compiler = ClusterTestCompiler(workspace=workspace_for(chart_root))
 
-    first = plan_to_dict(compiler.compile_cluster_test("app", "minimal"))
-    second = plan_to_dict(compiler.compile_cluster_test("app", "minimal"))
+    first = plan_to_dict(_compile(chart_root, "app", "minimal"))
+    second = plan_to_dict(_compile(chart_root, "app", "minimal"))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["chart"] == "app"
@@ -192,13 +195,12 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("app")
-    compiler = ClusterTestCompiler(workspace=workspace_for(chart_root))
-    before = compiler.compile_cluster_test("app", "minimal")
+    before = _compile(chart_root, "app", "minimal")
 
     generated = chart / "charts"
     generated.mkdir()
     (generated / "dependency-1.2.3.tgz").write_bytes(b"downloaded later")
-    after = compiler.compile_cluster_test("app", "minimal")
+    after = _compile(chart_root, "app", "minimal")
 
     assert [action.input_digest for action in before.actions] == [
         action.input_digest for action in after.actions
@@ -207,14 +209,14 @@ def test_generated_dependency_contents_do_not_change_compiled_input_digest(
     templates = chart / "templates"
     templates.mkdir()
     (templates / "deployment.yaml").write_text("kind: Deployment\n")
-    source_changed = compiler.compile_cluster_test("app", "minimal")
+    source_changed = _compile(chart_root, "app", "minimal")
 
     assert [action.input_digest for action in after.actions] != [
         action.input_digest for action in source_changed.actions
     ]
 
     (chart / "Chart.lock").write_text("dependencies: []\n")
-    lock_changed = compiler.compile_cluster_test("app", "minimal")
+    lock_changed = _compile(chart_root, "app", "minimal")
     assert [action.input_digest for action in source_changed.actions] != [
         action.input_digest for action in lock_changed.actions
     ]
@@ -232,9 +234,7 @@ def test_digest_rejects_value_symlink_that_escapes_repository_root(
     values.symlink_to(outside)
 
     with pytest.raises(SpecError, match="digest input escapes repository root"):
-        ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "app", "minimal"
-        )
+        _compile(chart_root, "app", "minimal")
 
 
 def test_compile_rejects_a_requires_cycle(
@@ -254,9 +254,7 @@ def test_compile_rejects_a_requires_cycle(
     make_chart("b", profiles={"minimal": _requires("a")})
 
     with pytest.raises(DependencyCycleError, match="dependency cycle detected"):
-        ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "a", "minimal"
-        )
+        _compile(chart_root, "a", "minimal")
 
 
 def test_compile_rejects_an_unknown_chart_reference(
@@ -266,9 +264,7 @@ def test_compile_rejects_an_unknown_chart_reference(
     make_chart("a", profiles={"minimal": _requires("missing")})
 
     with pytest.raises(ChartManagerError):
-        ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "a", "minimal"
-        )
+        _compile(chart_root, "a", "minimal")
 
 
 def test_compile_rejects_an_unknown_profile_reference(
@@ -279,9 +275,7 @@ def test_compile_rejects_an_unknown_profile_reference(
     make_chart("a", profiles={"minimal": _requires("base:nope")})
 
     with pytest.raises(SpecError, match="unknown profile 'nope'"):
-        ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "a", "minimal"
-        )
+        _compile(chart_root, "a", "minimal")
 
 
 def test_compile_accepts_a_valid_requires_graph(
@@ -291,9 +285,7 @@ def test_compile_accepts_a_valid_requires_graph(
     make_chart("base")
     make_chart("app", profiles={"minimal": _requires("base")})
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal"
-    )
+    plan = _compile(chart_root, "app", "minimal")
 
     assert [action.target.chart for action in plan.actions].count("base") >= 1
 
@@ -311,10 +303,7 @@ def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
 
 def _hooks(root: Path, chart: str, *phases: str) -> dict[str, object]:
     return {
-        "hooks": {
-            phase: [_script(root, f"scripts/{chart}-{phase}"), chart]
-            for phase in phases
-        }
+        "hooks": {phase: [_script(root, f"scripts/{chart}-{phase}"), chart] for phase in phases}
     }
 
 
@@ -332,22 +321,16 @@ def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
     make_chart("base", profiles={"minimal": _hooks(chart_root, "base", *_ALL_PHASES)})
     make_chart(
         "app",
-        profiles={
-            "minimal": {**_requires("base"), **_hooks(chart_root, "app", *_ALL_PHASES)}
-        },
+        profiles={"minimal": {**_requires("base"), **_hooks(chart_root, "app", *_ALL_PHASES)}},
     )
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal", lint=True
-    )
+    plan = _compile(chart_root, "app", "minimal", lint=True)
 
     body = [
         ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_DEPENDENCY_UPDATE,
         ActionKind.HELM_LINT,
         ActionKind.HOOK_PRE_INSTALL,
-        ActionKind.HELM_UPGRADE_INSTALL,
-        ActionKind.WORKLOAD_READY,
+        ActionKind.INSTALL,
         ActionKind.HOOK_POST_INSTALL,
         ActionKind.HELM_TEST,
     ]
@@ -357,12 +340,12 @@ def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
         ("app", ActionKind.HOOK_CLEANUP),
         ("base", ActionKind.HOOK_CLEANUP),
     ]
-    pre = plan.action("cluster-test.app.minimal.hook-pre-install")
+    pre = _by_id(plan, "cluster-test.app.minimal.hook-pre-install")
     assert pre.command == ("scripts/app-preInstall", "app")
     assert pre.values == ()
     assert pre.target.namespace == "default"
     assert pre.timeout == "10m"  # the profile's timeout bounds its hooks too
-    assert plan_to_dict(plan)["actions"][3]["command"] == ["scripts/base-preInstall", "base"]
+    assert plan_to_dict(plan)["actions"][2]["command"] == ["scripts/base-preInstall", "base"]
 
 
 def test_undeclared_hooks_compile_no_hook_actions(
@@ -372,25 +355,17 @@ def test_undeclared_hooks_compile_no_hook_actions(
     make_chart("app", profiles={"minimal": _hooks(chart_root, "app", "postInstall")})
     make_chart("plain")
 
-    with_post = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal"
-    )
-    plain = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "plain", "minimal"
-    )
+    with_post = _compile(chart_root, "app", "minimal")
+    plain = _compile(chart_root, "plain", "minimal")
 
     assert [kind for _chart, kind in _kinds(with_post)] == [
         ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_DEPENDENCY_UPDATE,
-        ActionKind.HELM_UPGRADE_INSTALL,
-        ActionKind.WORKLOAD_READY,
+        ActionKind.INSTALL,
         ActionKind.HOOK_POST_INSTALL,
         ActionKind.HELM_TEST,
     ]
     assert all(action.command == () for action in plain.actions)
-    assert all(
-        payload["command"] == [] for payload in plan_to_dict(plain)["actions"]
-    )
+    assert all(payload["command"] == [] for payload in plan_to_dict(plain)["actions"])
 
 
 def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
@@ -406,15 +381,9 @@ def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
     )
     make_chart("app", profiles={"minimal": _requires("base:secured")})
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal"
-    )
+    plan = _compile(chart_root, "app", "minimal")
 
-    hooks = [
-        (action.action_id, action.command)
-        for action in plan.actions
-        if action.command
-    ]
+    hooks = [(action.action_id, action.command) for action in plan.actions if action.command]
     assert hooks == [
         ("cluster-test.base.secured.hook-pre-install", ("scripts/base-preInstall", "base")),
         ("cluster-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
@@ -430,10 +399,8 @@ def test_hook_digest_covers_argv_and_repo_script_content(
 
     def pre_digest(argv: list[str]) -> str:
         make_chart("app", profiles={"minimal": {"hooks": {"preInstall": argv}}})
-        plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "app", "minimal"
-        )
-        return plan.action("cluster-test.app.minimal.hook-pre-install").input_digest
+        plan = _compile(chart_root, "app", "minimal")
+        return _by_id(plan, "cluster-test.app.minimal.hook-pre-install").input_digest
 
     original = pre_digest([script, "--flag"])
     assert pre_digest([script, "--flag"]) == original
@@ -450,9 +417,7 @@ def test_hook_digest_covers_argv_and_repo_script_content(
         pytest.param("/usr/bin/true", "relative", id="absolute"),
         pytest.param("scripts/../prepare", "without", id="parent-segment"),
         pytest.param("scripts/missing", "file does not exist", id="missing"),
-        pytest.param(
-            "chart-manager-no-such-command", "not found on PATH", id="bare-not-on-path"
-        ),
+        pytest.param("chart-manager-no-such-command", "not found on PATH", id="bare-not-on-path"),
     ],
 )
 def test_compile_rejects_an_unresolvable_hook_executable(
@@ -465,9 +430,7 @@ def test_compile_rejects_an_unresolvable_hook_executable(
     make_chart("app", profiles={"minimal": {"hooks": {"cleanup": [executable]}}})
 
     with pytest.raises(SpecError, match=message) as excinfo:
-        ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-            "app", "minimal"
-        )
+        _compile(chart_root, "app", "minimal")
     assert "hooks.cleanup[0]" in str(excinfo.value)
 
 
@@ -482,11 +445,9 @@ def test_compile_accepts_a_bare_hook_executable_found_on_path(
     monkeypatch.setenv("PATH", str(bin_dir))
     make_chart("app", profiles={"minimal": {"hooks": {"preInstall": ["mint-token", "-q"]}}})
 
-    plan = ClusterTestCompiler(workspace=workspace_for(chart_root)).compile_cluster_test(
-        "app", "minimal"
-    )
+    plan = _compile(chart_root, "app", "minimal")
 
-    assert plan.action("cluster-test.app.minimal.hook-pre-install").command == (
+    assert _by_id(plan, "cluster-test.app.minimal.hook-pre-install").command == (
         "mint-token",
         "-q",
     )

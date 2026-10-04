@@ -164,7 +164,7 @@ class Kind:
 
         Preserves the docker volumes backing containerd, etcd, and any host
         path mounts -- so installed Helm releases, PVCs, and cached images
-        survive a subsequent `start_cluster` / `ensure_cluster`.
+        survive a subsequent `ensure_cluster`.
 
         Returns True when at least one container was stopped. Returns False
         when the cluster has no containers (either never created, or already
@@ -174,21 +174,6 @@ class Kind:
         if not names:
             return False
         self._run(["docker", "stop", *names], capture=False)
-        return True
-
-    def start_cluster(self, name: str) -> bool:
-        """Start previously-stopped node containers for the named cluster.
-
-        Returns True if any node containers were found (running or stopped)
-        and a start was issued; False if no node containers exist. The
-        apiserver takes a few seconds to become reachable after start --
-        intentionally NOT awaited here, so the caller can decide whether to
-        block (e.g. via Kubectl.wait_workloads_ready or a readiness probe).
-        """
-        names = self._node_container_names(name, include_stopped=True)
-        if not names:
-            return False
-        self._run(["docker", "start", *names], capture=False)
         return True
 
     def control_plane_ip(self, name: str) -> str:
@@ -301,7 +286,7 @@ class Kind:
         Uses the `io.x-k8s.kind.cluster=<name>` label so multi-node clusters
         (control-plane + workers) are handled uniformly. When
         ``include_stopped`` is True, also returns containers that are not
-        currently running (needed for `start_cluster`).
+        currently running.
         """
         args = ["docker", "ps"]
         if include_stopped:

@@ -1,6 +1,5 @@
-"""Public lifecycle planning and change-impact API."""
+"""Change-impact analysis for `plan` and CI."""
 
-from chart_manager.services.lifecycle.compiler import ClusterTestCompiler
 from chart_manager.services.lifecycle.impact import (
     ClusterTestImpact,
     ImpactReason,
@@ -10,26 +9,13 @@ from chart_manager.services.lifecycle.impact import (
     ValidationImpact,
     impact_to_dict,
 )
-from chart_manager.services.lifecycle.models import (
-    ActionKind,
-    ActionTarget,
-    LifecycleAction,
-    LifecyclePlan,
-)
-from chart_manager.services.lifecycle.wire import plan_to_dict
 
 __all__ = [
-    "ActionKind",
-    "ActionTarget",
-    "ClusterTestCompiler",
     "ClusterTestImpact",
     "ImpactReason",
     "ImpactReasonCode",
-    "LifecycleAction",
     "LifecycleImpact",
     "LifecycleImpactService",
-    "LifecyclePlan",
     "ValidationImpact",
     "impact_to_dict",
-    "plan_to_dict",
 ]

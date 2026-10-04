@@ -79,7 +79,6 @@ from chart_manager.services.clusters.environment import (
     EnvironmentHandle,
     KindEnvironmentProvider,
 )
-from chart_manager.services.clusters.ephemeral import EphemeralTestClusterService
 from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
@@ -341,20 +340,7 @@ class Container:
         return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)
 
     def cluster_clients(self, handle: EnvironmentHandle) -> BoundClients:
-        """Every cluster-facing client, addressed at one resolved environment.
-
-        Both cluster services take this same factory. They used to get two
-        closures defined here that differed only in arity -- three clients for
-        the development service, two for the ephemeral one -- which meant the
-        composition root described "bind the clients to the resolved context"
-        twice, in two shapes, for one job. A service that needs fewer clients
-        reads fewer attributes off the result; that is cheaper than a second
-        factory.
-
-        Passed as a bound method rather than a closure so there is exactly one
-        of it per container, and so the shape is checkable without reading
-        either service's constructor.
-        """
+        """Every cluster-facing client the development service uses, addressed at one cluster."""
         return BoundClients(
             helm=self.helm(context=handle.context),
             kubectl=self.kubectl(context=handle.context),
@@ -377,33 +363,6 @@ class Container:
             kind=kind,
             kubectl=self.kubectl(),
             expose=self.expose_service(),
-            progress=progress,
-            environment_provider=KindEnvironmentProvider(kind),
-            client_factory=self.cluster_clients,
-            command_runner=self.command_runner(),
-            command_timeout=self._settings.command_timeout,
-        )
-
-    def ephemeral_test_cluster_service(
-        self,
-        root: Path,
-        *,
-        progress: ProgressCallback | None = None,
-        charts_dir: Path | None = None,
-    ) -> EphemeralTestClusterService:
-        """Build the local chart-test installer for the repository at `root`.
-
-        `charts_dir` overrides the workspace's chart directory (`chart test <dir>`).
-        """
-        workspace = self.workspace(root)
-        if charts_dir is not None:
-            workspace = workspace.with_charts_dir(charts_dir)
-        kind = self.kind()
-        return EphemeralTestClusterService(
-            workspace=workspace,
-            helm=self.helm(),
-            kind=kind,
-            kubectl=self.kubectl(),
             progress=progress,
             environment_provider=KindEnvironmentProvider(kind),
             client_factory=self.cluster_clients,

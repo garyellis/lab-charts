@@ -303,7 +303,7 @@ class Kubectl:
     ) -> None:
         """Block until the apiserver's /readyz endpoint returns 200.
 
-        Needed after `kind start_cluster`: docker has the containers up but
+        Needed after kind starts stopped nodes: docker has the containers up but
         the apiserver (and the static pods that back it) take several
         seconds to settle, during which any `kubectl get` / `helm list`
         races and fails. Polling `/readyz` is the same gate kubeadm uses

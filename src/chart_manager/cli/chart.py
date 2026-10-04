@@ -1,23 +1,14 @@
-"""`chart list`, `chart show`, `chart test`, `chart teardown` -- reading and exercising charts.
+"""`chart list` and `chart show`: pure reads of the chart catalog.
 
-The rest of the `chart` group lives elsewhere and always has:
-`cli/validate.py` owns `validate` and the `cache` subgroup, `cli/publish.py`
-owns `publish`, `cli/upgrade.py` owns `upgrade`. What is left here are the
-three commands that had no module of their own and so stayed in `main.py`,
-which is how `main.py` came to be a thousand lines longer than every other
-file under `cli/`.
-
-`list` and `show` are pure reads: both hand a wire document from
-`services/chart_catalog_wire.py` to `output.emit` and build their own table
-projection beside it. `test` and `teardown` touch a cluster; `EphemeralTestCluster`
-compiles and runs the plan, and this module prints or runs it.
+Both hand a wire document from `services/chart_catalog_wire.py` to `output.emit` and build
+their own table beside it. `chart test` and `chart teardown` live in `commands/test` and
+register between them, which is their `--help` order.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -26,37 +17,12 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root, resolve_chart
-from chart_manager.cli._options import (
-    ClusterNameOption,
-    ProvisionHooksOption,
-    provision_hooks_enabled,
-)
-from chart_manager.cli.streams import console, narration
-from chart_manager.cli.streams import print_progress as _print_progress
-from chart_manager.plumbing.commands import redact
-from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.cli._container import repository_root
+from chart_manager.cli.streams import console
+from chart_manager.commands.test import cli as test_cli
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.services.chart_catalog import ChartCatalogEntry
 from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
-from chart_manager.services.clusters.ephemeral import (
-    DEFAULT_PROFILE,
-    EphemeralTeardownRequest,
-    EphemeralTeardownResult,
-    EphemeralTestRequest,
-)
-from chart_manager.services.lifecycle.models import LifecyclePlan
-from chart_manager.services.lifecycle.wire import plan_to_dict
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
-
-ProfileOption = Annotated[str, typer.Option("--profile", help="Cluster-test profile.")]
-NamespaceOverrideOption = Annotated[
-    str | None,
-    typer.Option(
-        "--namespace",
-        help="Override the namespace declared by the selected ChartLifecycle profile.",
-    ),
-]
 
 #: `chart list` and `chart show` speak the core projections minus `md`:
 #: neither has a markdown form, and advertising one the resolver cannot
@@ -71,14 +37,6 @@ ChartCatalogOutputOption = Annotated[
 #: The vocabulary a `--dry-run` plan is printed in. Same three projections;
 #: named separately because the document is a *plan*, not a catalog, and the
 #: two have no reason to stay equal.
-_DRY_RUN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
-
-DryRunOutputOption = Annotated[
-    str | None,
-    output_mod.output_option(*_DRY_RUN_OUTPUTS, extra_help=" Requires --dry-run."),
-]
-
-
 def register(app: typer.Typer) -> None:
     """Attach the read-and-exercise commands to the `chart` Typer group.
 
@@ -87,8 +45,7 @@ def register(app: typer.Typer) -> None:
     these three sat when they were decorated inline.
     """
     app.command("list")(list_charts)
-    app.command("test")(chart_test)
-    app.command("teardown")(chart_teardown)
+    test_cli.register(app)
     app.command("show")(show_lifecycle)
 
 
@@ -193,210 +150,6 @@ def _leaf(value: Any) -> str:
     into the document -- and not Python's `True`/`None`/`{}`.
     """
     return value if isinstance(value, str) else json.dumps(value)
-
-
-def _run_chart_test(
-    chart: str,
-    *,
-    ctx: typer.Context,
-    root: Path,
-    profile: str,
-    namespace: str | None,
-    cluster_name: str,
-    dependent_tests: bool,
-    skip_requires: bool,
-    no_ensure_cluster: bool,
-    lint: bool,
-    dry_run: bool,
-    output: str | None,
-    run_provision_hooks: bool | None,
-) -> None:
-    """Run one chart test through the canonical charts command."""
-    root = root.resolve()
-    target = resolve_chart(root, chart)
-    charts_dir = target.path.parent.relative_to(root)
-    service = _container().ephemeral_test_cluster_service(
-        root,
-        progress=_print_progress,
-        charts_dir=charts_dir,
-    )
-    request = EphemeralTestRequest(
-        chart=target.name,
-        profile=profile,
-        namespace=namespace,
-        cluster_name=cluster_name,
-        ensure_cluster=not no_ensure_cluster,
-        include_dependent_tests=dependent_tests,
-        skip_requires=skip_requires,
-        lint=lint,
-        run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
-    )
-    if dry_run:
-        _render_test_plan(service.plan(request), ctx=ctx, output=output)
-        return
-    service.run(request)
-
-
-def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | None) -> None:
-    """Print the compiled cluster-test plan; say on stderr what did not happen.
-
-    The plan is what the caller asked for, so it is the projection and goes
-    to stdout. That it was *only* a plan is narration, and stays off the
-    stream a `-o json | jq` consumer reads.
-    """
-    mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
-    output_mod.emit(plan_to_dict(plan), mode=mode, table=_plan_table(plan))
-    for warning in plan.warnings:
-        narration.print(f"[yellow]warn:[/yellow] {escape(warning)}")
-    narration.print(
-        "[yellow]dry run[/yellow]: no cluster was created, nothing was installed or tested"
-    )
-
-
-def _plan_table(plan: LifecyclePlan) -> Table:
-    table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release", "Command")
-    for step, action in enumerate(plan.actions, start=1):
-        table.add_row(
-            str(step),
-            action.kind.value,
-            action.target.chart,
-            action.target.profile or "",
-            action.target.namespace or "",
-            action.target.release or "",
-            escape(redact(action.command)),
-        )
-    return table
-
-
-def chart_test(
-    ctx: typer.Context,
-    chart: Annotated[
-        str,
-        typer.Argument(metavar="CHART", help="Chart name or chart directory."),
-    ],
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOverrideOption = None,
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    dependent_tests: Annotated[
-        bool,
-        typer.Option(
-            "--dependent-tests",
-            help="Run cluster tests affected by this chart.",
-        ),
-    ] = False,
-    skip_requires: Annotated[
-        bool,
-        typer.Option(
-            "--skip-requires",
-            help=(
-                "Reuse installed prerequisites without upgrading them; on a new cluster, "
-                "install prerequisites but Helm-test selected targets only."
-            ),
-        ),
-    ] = False,
-    no_ensure_cluster: Annotated[
-        bool,
-        typer.Option("--no-ensure-cluster", help="Do not create the test cluster if missing."),
-    ] = False,
-    lint: Annotated[bool, typer.Option("--lint", help="Run helm lint before install.")] = False,
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run",
-            help="Print the cluster-test plan and exit; create no cluster, install nothing.",
-        ),
-    ] = False,
-    output: DryRunOutputOption = None,
-    run_provision_hooks: ProvisionHooksOption = None,
-) -> None:
-    """Install and exercise one chart on an ephemeral local Kubernetes cluster.
-
-    `--dry-run` prints the compiled lifecycle plan -- every namespace,
-    install and helm test the run would perform, in order -- and exits 0
-    having touched nothing. It is the same plan object the real run
-    executes, so it cannot describe work that would not happen.
-
-    `-o` selects the form that plan is printed in. It is only meaningful
-    with `--dry-run` -- a real run's report is progress narration, not a
-    document -- so naming it without `--dry-run` is a usage error rather
-    than a flag that is quietly ignored.
-    """
-    output_mod.require_dry_run(output, dry_run=dry_run)
-    root = repository_root()
-    _run_chart_test(
-        chart,
-        ctx=ctx,
-        output=output,
-        root=root,
-        profile=profile,
-        namespace=namespace,
-        cluster_name=cluster_name,
-        dependent_tests=dependent_tests,
-        skip_requires=skip_requires,
-        no_ensure_cluster=no_ensure_cluster,
-        lint=lint,
-        dry_run=dry_run,
-        run_provision_hooks=run_provision_hooks,
-    )
-
-
-def chart_teardown(
-    chart: Annotated[
-        str,
-        typer.Argument(metavar="CHART", help="Chart name or chart directory."),
-    ],
-    profile: ProfileOption = DEFAULT_PROFILE,
-    namespace: NamespaceOverrideOption = None,
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
-    dependent_tests: Annotated[
-        bool,
-        typer.Option("--dependent-tests", help="Include cleanups of affected cluster tests."),
-    ] = False,
-    keep_cluster: Annotated[
-        bool,
-        typer.Option("--keep-cluster", help="Run cleanup hooks but keep the test cluster."),
-    ] = False,
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Print the cleanup hooks and exit; run nothing."),
-    ] = False,
-) -> None:
-    """Run cleanup hooks in reverse install order, then delete the test cluster."""
-    root = repository_root()
-    target = resolve_chart(root, chart)
-    service = _container().ephemeral_test_cluster_service(
-        root,
-        progress=_print_progress,
-        charts_dir=target.path.parent.relative_to(root),
-    )
-    request = EphemeralTeardownRequest(
-        chart=target.name,
-        profile=profile,
-        namespace=namespace,
-        cluster_name=cluster_name,
-        include_dependent_tests=dependent_tests,
-        keep_cluster=keep_cluster,
-    )
-    if dry_run:
-        console.print(_plan_table(service.teardown_plan(request)))
-        verb = "keep" if keep_cluster else "delete"
-        narration.print(
-            f"[yellow]dry run[/yellow]: ran no hook; would {verb} cluster {escape(cluster_name)}"
-        )
-        return
-    result = service.teardown(request)
-    if not result.ok:
-        raise ChartManagerError(_teardown_failure(result))
-
-
-def _teardown_failure(result: EphemeralTeardownResult) -> str:
-    problems = [
-        f"cleanup {outcome.action_id} failed: {outcome.detail}"
-        for outcome in result.failed_cleanups
-    ]
-    if result.delete_error is not None:
-        problems.append(f"deleting cluster {result.cluster_name} failed: {result.delete_error}")
-    return "chart teardown failed:\n" + "\n".join(problems)
 
 
 def show_lifecycle(

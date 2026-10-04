@@ -495,12 +495,9 @@ def test_non_surface_modules_are_discoverable() -> None:
     paths = _non_surface_modules()
     assert len(paths) > 30, f"suspiciously few non-surface modules: {len(paths)}"
     assert _PKG / "composition.py" in paths
-    # Cluster workflows are grouped by subject but remain separate services.
-    # The canaries ensure both the persistent development converge engine and
-    # fail-fast ephemeral test service remain visible to the layer scan.
+    # The canary keeps the development converge engine visible to the layer scan.
     clusters = _PKG / "services" / "clusters"
     assert clusters / "development" / "service.py" in paths
-    assert clusters / "ephemeral.py" in paths
 
 
 def test_no_process_exit_outside_cli() -> None:

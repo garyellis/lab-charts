@@ -2,16 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.lifecycle.compiler import cleanup_tail
-from chart_manager.services.lifecycle.models import (
+from chart_manager.commands.test.models import (
     ActionKind,
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,
 )
-from chart_manager.services.lifecycle.plan_projection import (
+from chart_manager.commands.test.plan import (
     EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
     SKIPPED_REQUIRES_WARNING_PREFIX,
+    cleanup_tail,
     exclude_bootstrap_owned_charts,
     exclude_required_lifecycles,
 )
@@ -35,13 +35,11 @@ def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
 
 def cluster_plan() -> LifecyclePlan:
     cilium_namespace = action("cilium", "namespace", ActionKind.NAMESPACE_ENSURE)
-    cilium_install = action("cilium", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    cilium_install = action("cilium", "install", ActionKind.INSTALL)
     cilium_test = action("cilium", "test", ActionKind.HELM_TEST)
     grafana_namespace = action("grafana", "namespace", ActionKind.NAMESPACE_ENSURE)
-    grafana_dependency = action(
-        "grafana", "dependency", ActionKind.HELM_DEPENDENCY_UPDATE
-    )
-    grafana_install = action("grafana", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    grafana_dependency = action("grafana", "dependency", ActionKind.HELM_LINT)
+    grafana_install = action("grafana", "install", ActionKind.INSTALL)
     return LifecyclePlan(
         chart="grafana",
         profile="minimal",
@@ -77,7 +75,7 @@ def test_removes_bootstrap_chart_actions() -> None:
 
     projected = exclude_bootstrap_owned_charts(
         original,
-        {externally_satisfied("cilium")},
+        frozenset({externally_satisfied("cilium")}),
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -100,8 +98,7 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
     original_action_ids = [item.action_id for item in original.actions]
 
     projected = exclude_bootstrap_owned_charts(
-        original,
-        (externally_satisfied("cilium"),),
+        original, frozenset({externally_satisfied("cilium")})
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -114,25 +111,22 @@ def test_absent_bootstrap_chart_is_an_idempotent_noop() -> None:
 
     projected = exclude_bootstrap_owned_charts(
         original,
-        {externally_satisfied("not-in-plan")},
+        frozenset({externally_satisfied("not-in-plan")}),
     )
 
     assert projected is original
 
 
-def test_bootstrap_requested_target_keeps_only_readiness_and_test_actions() -> None:
-    original = cluster_plan()
+def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install() -> None:
     projected = exclude_bootstrap_owned_charts(
-        original,
-        {
-            externally_satisfied("grafana"),
-            externally_satisfied("cilium"),
-        },
+        cluster_plan(),
+        frozenset({externally_satisfied("grafana"), externally_satisfied("cilium")}),
     )
 
-    # This fixture has no target readiness/test actions, so all target install
-    # preparation is removed. A compiled plan retains its readiness/test pair.
-    assert projected.actions == ()
+    assert [(a.target.chart, a.kind) for a in projected.actions] == [
+        ("grafana", ActionKind.WORKLOAD_READY)
+    ]
+    assert projected.actions[0].action_id == "cluster-test.grafana.minimal.workload-ready"
 
 
 @pytest.mark.parametrize(
@@ -148,17 +142,17 @@ def test_requires_exact_managed_lifecycle_identity(
 ) -> None:
     original = cluster_plan()
 
-    projected = exclude_bootstrap_owned_charts(original, {identity})
+    projected = exclude_bootstrap_owned_charts(original, frozenset({identity}))
 
     assert projected is original
 
 
 def test_skip_requires_removes_every_required_action_including_tests() -> None:
-    base_install = action("base", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    base_install = action("base", "install", ActionKind.INSTALL)
     base_test = action("base", "test", ActionKind.HELM_TEST)
-    dependency_ready = action("dependency", "ready", ActionKind.WORKLOAD_READY)
+    dependency_ready = action("dependency", "ready", ActionKind.INSTALL)
     dependency_test = action("dependency", "test", ActionKind.HELM_TEST)
-    target_install = action("app", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    target_install = action("app", "install", ActionKind.INSTALL)
     target_test = action("app", "test", ActionKind.HELM_TEST)
     original = LifecyclePlan(
         chart="app",
@@ -208,11 +202,11 @@ def test_skip_requires_preserves_every_explicit_fanout_target() -> None:
 
 
 def test_cleanup_tail_moves_cleanups_last_in_reverse_entry_order() -> None:
-    base_install = action("base", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    base_install = action("base", "install", ActionKind.INSTALL)
     base_cleanup = action("base", "cleanup", ActionKind.HOOK_CLEANUP)
-    app_install = action("app", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    app_install = action("app", "install", ActionKind.INSTALL)
     app_cleanup = action("app", "cleanup", ActionKind.HOOK_CLEANUP)
-    web_install = action("web", "install", ActionKind.HELM_UPGRADE_INSTALL)
+    web_install = action("web", "install", ActionKind.INSTALL)
     web_cleanup = action("web", "cleanup", ActionKind.HOOK_CLEANUP)
 
     reordered = cleanup_tail(

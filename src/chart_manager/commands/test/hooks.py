@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from chart_manager.commands.test.models import LifecycleAction
 from chart_manager.plumbing.commands import CommandRunner, redact
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
-from chart_manager.services.lifecycle.models import LifecycleAction
 
 _LOG = logging.getLogger(__name__)
 

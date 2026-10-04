@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from chart_manager.services.lifecycle.models import (
+from chart_manager.commands.test.models import (
     ActionTarget,
     LifecycleAction,
     LifecyclePlan,

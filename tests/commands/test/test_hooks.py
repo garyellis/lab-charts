@@ -6,16 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.test.hooks import ClusterTestHookRunner
+from chart_manager.commands.test.models import ActionKind, ActionTarget, LifecycleAction
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     CommandTimeout,
     ExternalCommandError,
 )
-from chart_manager.services.lifecycle.hooks import ClusterTestHookRunner
-from chart_manager.services.lifecycle.models import ActionKind, ActionTarget, LifecycleAction
-
-from .conftest import FakeCommandRunner
+from tests.conftest import FakeCommandRunner
 
 
 def _script(root: Path, body: str) -> str:
@@ -147,7 +146,7 @@ def test_hook_logs_that_it_runs_and_its_output_at_debug(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     argv = (_script(tmp_path, 'echo "hello $2"\necho "warn" >&2\n'), "--token", "s3cret")
-    caplog.set_level("DEBUG", logger="chart_manager.services.lifecycle.hooks")
+    caplog.set_level("DEBUG", logger="chart_manager.commands.test.hooks")
 
     _runner(tmp_path).run(_action(tmp_path, argv))
 

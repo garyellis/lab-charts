@@ -69,7 +69,7 @@ def converge(lab: Session, release: Release) -> Literal["applied", "no-change"]:
             repo=release.repo,
         )
         step = "wait"
-        _wait(lab, release)
+        wait(lab, release)
     except (MissingToolError, SpecError):
         raise
     except ChartManagerError as exc:
@@ -87,7 +87,8 @@ def installed(lab: Session) -> dict[tuple[str, str], str]:
     }
 
 
-def _wait(lab: Session, release: Release) -> None:
+def wait(lab: Session, release: Release) -> None:
+    """Wait for the release's workloads to roll out and its CRDs to be Established."""
     workloads: dict[tuple[str, str, str], None] = {}
     crds: list[str] = []
     for document in parse_yaml_documents(

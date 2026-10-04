@@ -80,37 +80,6 @@ def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
     assert kind.stop_cluster("chart-manager") is False
 
 
-# ----- start_cluster --------------------------------------------------------
-
-
-def test_start_cluster_starts_stopped_containers() -> None:
-    runner = FakeCommandRunner()
-    # docker ps -a returns stopped containers too.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\nchart-manager-worker\n",
-    )
-    kind = Kind(runner=runner)
-
-    assert kind.start_cluster("chart-manager") is True
-
-    ps_calls = [c for c in runner.calls if c[:2] == ("docker", "ps")]
-    assert len(ps_calls) == 1
-    assert "-a" in ps_calls[0]
-
-    start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    assert start_calls == [
-        ("docker", "start", "chart-manager-control-plane", "chart-manager-worker"),
-    ]
-
-
-def test_start_cluster_returns_false_when_no_containers() -> None:
-    runner = FakeCommandRunner()
-    runner.respond(_is_docker_ps(running_only=False), stdout="")
-    kind = Kind(runner=runner)
-
-    assert kind.start_cluster("chart-manager") is False
-    assert not any(c[:2] == ("docker", "start") for c in runner.calls)
 
 
 # ----- ensure_cluster on stopped cluster ------------------------------------
@@ -249,7 +218,6 @@ def _exercise(kind: Kind) -> None:
     """Touch every kind/docker argv-building path."""
     kind.clusters()
     kind.stop_cluster("a")
-    kind.start_cluster("a")
     kind.delete_cluster("a")
     kind.container_host_ports("a")
 
