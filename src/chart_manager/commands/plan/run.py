@@ -8,7 +8,7 @@ from chart_manager.commands import test, validate
 from chart_manager.commands.plan.models import PlanOutcome, PlanRequest
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.services.publish import directly_changed_charts
+from chart_manager.services.publish_selection import directly_changed_charts
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 

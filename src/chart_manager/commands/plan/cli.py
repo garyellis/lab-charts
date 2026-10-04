@@ -25,7 +25,7 @@ from chart_manager.commands.plan.models import PlanOutcome, PlanRequest
 from chart_manager.commands.plan.run import run
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.publish import directly_changed_charts
+from chart_manager.services.publish_selection import directly_changed_charts
 
 _OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML, output_mod.GITHUB)
 _KINDS = ("validate", "test", "publish", "all")
