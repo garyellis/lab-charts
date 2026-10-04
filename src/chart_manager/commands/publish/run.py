@@ -7,6 +7,7 @@ import logging
 import re
 import tempfile
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from chart_manager.commands.publish.models import (
@@ -185,22 +186,17 @@ def _emit_events(
             "batch_count": len(successful),
         }
 
-        def write_event(
-            row: PublishedChart = row,
-            detail: dict[str, object] = detail,
-            key: str = hashlib.sha256(identity.encode()).hexdigest(),
-        ) -> None:
-            events.build(
-                chart_name=row.chart,
-                chart_version=row.version,
-                phase=phase,
-                build_correlation_id=request.build_correlation_id,
-                pr_url=request.pr_url,
-                git_sha=request.git_sha,
-                detail=detail,
-                idempotency_key=key,
-            )
-
+        write_event = partial(
+            events.build,
+            chart_name=row.chart,
+            chart_version=row.version,
+            phase=phase,
+            build_correlation_id=request.build_correlation_id,
+            pr_url=request.pr_url,
+            git_sha=request.git_sha,
+            detail=detail,
+            idempotency_key=hashlib.sha256(identity.encode()).hexdigest(),
+        )
         error = emit_non_fatal(
             write_event, strict=False, what=f"build:{phase.value} for {row.chart}@{row.version}"
         )

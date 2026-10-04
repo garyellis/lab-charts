@@ -20,7 +20,7 @@ import typer
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import console
-from chart_manager.commands import test, validate
+from chart_manager.commands import publish, test, validate
 from chart_manager.commands.plan.models import PlanOutcome, PlanRequest
 from chart_manager.commands.plan.run import run
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
@@ -95,13 +95,12 @@ def plan(
                 "planning publish work needs an explicit changed-file list",
                 param_hint="--changed-files",
             )
-        request = PlanRequest(changes=tuple(_read_changed_files(changed_files)))
-        outcome = run(request, workspace=workspace, runner=container.command_runner())
+        selected = publish.select(_read_changed_files(changed_files), workspace=workspace)
         if mode == output_mod.TABLE:
-            for chart in outcome.publish:
+            for chart in selected:
                 console.print(chart)
         else:
-            output_mod.emit(list(outcome.publish), mode=mode)
+            output_mod.emit(list(selected), mode=mode)
         return
 
     explicit = changed_files is not None or bool(changed_file)
