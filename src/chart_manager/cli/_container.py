@@ -1,16 +1,14 @@
 """Surface glue every `cli/` module needs and none of them should own.
 
-Three things live here, and each was previously copy-pasted with its
+Two things live here, and each was previously copy-pasted with its
 docstring into several command modules:
 
   * `container()` -- the composition root for one invocation;
   * `exit_if_failed()` -- the surface's rule for a result that reports its
-    own failure;
-  * `resolve_chart()` -- the shared reading of a chart name or directory.
+    own failure.
 
 None of them is a capability. `services/` owns what a command *does*;
-`plumbing/exit_codes.py` owns which outcome is which number;
-`domain/local_resources.py` owns how a chart name is resolved. What is
+`plumbing/exit_codes.py` owns which outcome is which number. What is
 left is the few lines of surface that bind them to configuration, which is
 exactly what a module with a leading underscore is for -- this is internal
 to `cli/` and nothing outside it should import it.
@@ -46,7 +44,6 @@ import typer
 
 from chart_manager.composition import Container, Settings
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.shared.charts.chart import ResolvedChartTarget, resolve_chart_target
 
 #: The current invocation's composition root; see the module docstring.
 _invocation: Container | None = None
@@ -108,28 +105,10 @@ def repository_root() -> Path:
     return container().workspace().root
 
 
-def resolve_chart(root: Path, chart: str) -> ResolvedChartTarget:
-    """Resolve either a configured chart name or an explicit chart directory.
-
-    Here rather than in one of the four command modules that call it
-    (`chart test`, `local up`/`local reset`, `validate`, `upgrade`) because
-    it is the point where a chart name means the same thing to all of them,
-    and design commitment 6 says no command module carries a path heuristic
-    of its own.
-    """
-    workspace = container().workspace(root)
-    return resolve_chart_target(
-        workspace.root,
-        chart,
-        charts_dir=workspace.spec.charts_dir,
-    )
-
-
 __all__ = [
     "container",
     "exit_if_failed",
     "repository_root",
     "reset_invocation",
-    "resolve_chart",
     "start_invocation",
 ]

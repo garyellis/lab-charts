@@ -14,6 +14,7 @@ from chart_manager.shared.charts.lifecycle import (
     load_optional_chart_lifecycle,
     validate_chart_lifecycle_identity,
 )
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 @dataclass(frozen=True)
@@ -189,18 +190,18 @@ class ResolvedChartTarget:
     kind: Literal["chart"] = "chart"
 
 
-def resolve_chart_target(root: Path, chart: str, *, charts_dir: Path) -> ResolvedChartTarget:
-    """Resolve a chart name under `charts_dir`, or a chart directory inside `root`.
+def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> ResolvedChartTarget:
+    """Resolve a chart name under the workspace's charts directory, or a chart directory.
 
-    A bare name that is not a path under `root` is looked up in `charts_dir`.
+    A bare name that is not a path under the repository root is looked up in `chartsDir`.
     """
     if not chart or chart != chart.strip():
         raise SpecError("chart must be a non-empty chart name or directory")
-    root = root.resolve()
+    root = workspace.root.resolve()
     candidate = Path(chart)
     path = candidate if candidate.is_absolute() else root / candidate
     if not path.exists() and len(candidate.parts) == 1 and not candidate.is_absolute():
-        path = root / charts_dir / candidate
+        path = root / workspace.spec.charts_dir / candidate
     return chart_target(root, path)
 
 

@@ -10,7 +10,6 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import resolve_chart
 from chart_manager.cli._options import (
     ClusterNameOption,
     ProvisionHooksOption,
@@ -23,6 +22,7 @@ from chart_manager.commands.test.models import DEFAULT_PROFILE, LifecyclePlan
 from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.shared.charts.chart import resolve_chart_target
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -52,7 +52,7 @@ def register(app: typer.Typer) -> None:
 def _target(chart: str) -> tuple[str, RepositoryWorkspace]:
     """The chart's name, and the workspace with its charts directory pointed at the chart's."""
     workspace = _container().workspace()
-    target = resolve_chart(workspace.root, chart)
+    target = resolve_chart_target(workspace, chart)
     charts_dir = target.path.parent.relative_to(workspace.root)
     return target.name, workspace.with_charts_dir(charts_dir)
 

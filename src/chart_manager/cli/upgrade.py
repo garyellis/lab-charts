@@ -17,7 +17,7 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root, resolve_chart
+from chart_manager.cli._container import repository_root
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.upgrader import (
     FinalizeRequest,
@@ -27,6 +27,7 @@ from chart_manager.services.upgrader import (
     load_update_data,
 )
 from chart_manager.services.upgrader.wire import finalize_to_dict, upgrade_to_dict
+from chart_manager.shared.charts.chart import resolve_chart_target
 
 #: `upgrade-finalize`'s vocabulary, and ONLY its vocabulary.
 #:
@@ -128,8 +129,8 @@ def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
 
     `--path` is the frozen-in-muscle-memory spelling and stays verbatim: it
     is a repository-relative path and the service has always taken it as
-    one. The CHART argument goes through `_container.resolve_chart`, the same
-    helper `chart test`, `local up` and `chart validate` use, so a bare chart
+    one. The CHART argument goes through `resolve_chart_target`, the same
+    function `chart test`, `local up` and `chart validate` use, so a bare chart
     name means the same thing in all four -- and so this module contains no
     path heuristic and no configuration read of its own (design commitment 6).
     """
@@ -138,7 +139,7 @@ def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
     if path is not None:
         return path
     assert chart is not None
-    return resolve_chart(root, chart).path.relative_to(root)
+    return resolve_chart_target(_container().workspace(root), chart).path.relative_to(root)
 
 
 def upgrade_finalize(

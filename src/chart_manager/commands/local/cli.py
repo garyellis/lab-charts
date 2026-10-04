@@ -27,7 +27,7 @@ from rich.table import Table
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import exit_if_failed as _exit_if_failed
-from chart_manager.cli._container import repository_root, resolve_chart
+from chart_manager.cli._container import repository_root
 from chart_manager.cli._options import (
     ProvisionHooksOption,
     provision_hooks_enabled,
@@ -55,6 +55,7 @@ from chart_manager.commands.local.wire import (
     status_to_dict,
 )
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.shared.charts.chart import resolve_chart_target
 from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
@@ -105,7 +106,7 @@ def _resolve_local_selection(
     if (chart is None) == (stack is None):
         raise ChartManagerError("select exactly one of --chart or --stack")
     if chart is not None:
-        return resolve_chart(root, chart)
+        return resolve_chart_target(_container().workspace(root), chart)
     assert stack is not None
     return _resolve_stack_target(root, stack)
 

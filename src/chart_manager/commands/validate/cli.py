@@ -16,7 +16,6 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import resolve_chart
 from chart_manager.cli.streams import console, narration
 from chart_manager.commands.validate.display import LiveTable, PlainNarration
 from chart_manager.commands.validate.models import (
@@ -36,6 +35,7 @@ from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.shared.charts.chart import resolve_chart_target
 
 _OUTPUTS = (output_mod.TABLE, output_mod.MD, output_mod.JSON, output_mod.ALL)
 _CLEAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
@@ -152,7 +152,7 @@ def validate(
     selected = (*(charts or ()), *chart)
     if len(selected) == 1:
         try:
-            target = resolve_chart(workspace.root, selected[0])
+            target = resolve_chart_target(workspace, selected[0])
         except SpecError:
             target = None
         if target is not None:
