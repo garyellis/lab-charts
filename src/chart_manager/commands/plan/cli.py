@@ -96,11 +96,7 @@ def plan(
                 "planning publish work needs an explicit changed-file list",
                 param_hint="--changed-files",
             )
-        try:
-            lines = changed_files.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise SpecError(f"cannot read changed-files input {changed_files}: {exc}") from exc
-        selected = directly_changed_charts(workspace, lines)
+        selected = directly_changed_charts(workspace, _read_changed_files(changed_files))
         if mode == output_mod.TABLE:
             for chart in selected:
                 console.print(chart)
@@ -137,16 +133,7 @@ def plan(
 
 def _changed_paths(changed_files: Path | None, changed_file: list[str]) -> tuple[str, ...]:
     """The non-blank paths in `--changed-files` and `--changed-file`; at least one."""
-    changes: list[str] = []
-    if changed_files is not None:
-        try:
-            contents = changed_files.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise typer.BadParameter(
-                f"cannot read changed-files input {changed_files}: {exc}",
-                param_hint="--changed-files",
-            ) from exc
-        changes.extend(line.strip() for line in contents.splitlines() if line.strip())
+    changes = _read_changed_files(changed_files) if changed_files is not None else []
     changes.extend(path.strip() for path in changed_file if path.strip())
     if not changes:
         raise typer.BadParameter(
@@ -154,6 +141,18 @@ def _changed_paths(changed_files: Path | None, changed_file: list[str]) -> tuple
             param_hint="--changed-files / --changed-file",
         )
     return tuple(changes)
+
+
+def _read_changed_files(changed_files: Path) -> list[str]:
+    """The non-blank paths in `--changed-files`; an unreadable file is a usage error."""
+    try:
+        contents = changed_files.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise typer.BadParameter(
+            f"cannot read changed-files input {changed_files}: {exc}",
+            param_hint="--changed-files",
+        ) from exc
+    return [line.strip() for line in contents.splitlines() if line.strip()]
 
 
 def _print_table(outcome: PlanOutcome, for_: str) -> None:

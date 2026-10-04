@@ -167,11 +167,12 @@ def test_publish_needs_a_changed_files_list(fake_run: FakeRun) -> None:
     assert "--changed-files" in result.stderr
 
 
-def test_publish_with_an_unreadable_list_is_a_spec_error(fake_run: FakeRun, tmp_path: Path) -> None:
+def test_publish_with_an_unreadable_list_is_a_usage_error(fake_run: FakeRun, tmp_path: Path) -> None:
     result = cli("plan", "--for", "publish", "--changed-files", str(tmp_path / "missing.txt"))
 
-    assert isinstance(result.exception, SpecError)  # main() exits 3
-    assert "cannot read changed-files input" in str(result.exception)
+    assert result.exit_code == 2
+    assert "cannot read changed-files input" in result.stderr
+    assert "--changed-files" in result.stderr
 
 
 # --- table, json, yaml: explicit paths only ----------------------------------
