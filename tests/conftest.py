@@ -734,3 +734,18 @@ def _as_predicate(matcher: Matcher) -> Predicate:
         prefix = matcher
         return lambda argv: argv[: len(prefix)] == prefix
     return matcher
+
+
+def plain_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Argv with the binary reduced to its name and a pinned kube context dropped."""
+    head = (Path(argv[0]).name, *argv[1:])
+    for flag in ("--kube-context", "--context"):
+        if flag in head:
+            at = head.index(flag)
+            head = head[:at] + head[at + 2 :]
+    return head
+
+
+def argv_prefix(*prefix: str) -> Callable[[tuple[str, ...]], bool]:
+    """A `FakeCommandRunner` matcher on the start of `plain_argv`."""
+    return lambda argv: plain_argv(argv)[: len(prefix)] == prefix

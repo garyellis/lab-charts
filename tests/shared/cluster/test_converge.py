@@ -10,7 +10,7 @@ from chart_manager.plumbing.errors import MissingToolError
 from chart_manager.shared.cluster import session
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
 from chart_manager.shared.settings import Settings
-from tests.conftest import FakeCommandRunner
+from tests.conftest import FakeCommandRunner, argv_prefix, plain_argv
 
 MANIFEST = """\
 ---
@@ -32,24 +32,10 @@ metadata: {name: settings}
 """
 
 
-def _cmd(argv: tuple[str, ...]) -> tuple[str, ...]:
-    """Argv with the binary reduced to its name and the pinned context dropped."""
-    head = (Path(argv[0]).name, *argv[1:])
-    if "--kube-context" in head or "--context" in head:
-        flag = "--kube-context" if "--kube-context" in head else "--context"
-        at = head.index(flag)
-        head = head[:at] + head[at + 2 :]
-    return head
-
-
-def _is(*prefix: str):
-    return lambda argv: _cmd(argv)[: len(prefix)] == prefix
-
-
 def _runner(manifest: str = MANIFEST, labelled: dict[str, str] | None = None) -> FakeCommandRunner:
-    runner = FakeCommandRunner().respond(_is("helm", "get", "manifest"), stdout=manifest)
+    runner = FakeCommandRunner().respond(argv_prefix("helm", "get", "manifest"), stdout=manifest)
     for kind, names in (labelled or {}).items():
-        runner.respond(_is("kubectl", "-n", "apps", "get", kind, "-l"), stdout=names)
+        runner.respond(argv_prefix("kubectl", "-n", "apps", "get", kind, "-l"), stdout=names)
     return runner
 
 
@@ -60,7 +46,7 @@ def _lab(runner: FakeCommandRunner) -> session.Session:
 def _significant(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
     """Every call except helm's revision lookups around the install."""
     return [
-        _cmd(argv) for argv in runner.calls if _cmd(argv)[:2] != ("helm", "list")
+        plain_argv(argv) for argv in runner.calls if plain_argv(argv)[:2] != ("helm", "list")
     ]
 
 
@@ -102,8 +88,8 @@ def test_a_failed_rollout_raises_release_failed_with_the_namespace_diagnostics(
 ) -> None:
     runner = (
         _runner()
-        .respond(_is("kubectl", "-n", "apps", "rollout"), returncode=1, stderr="timed out")
-        .respond(_is("kubectl", "get", "pods", "-n", "apps"), stdout="web-0 CrashLoopBackOff")
+        .respond(argv_prefix("kubectl", "-n", "apps", "rollout"), returncode=1, stderr="timed out")
+        .respond(argv_prefix("kubectl", "get", "pods", "-n", "apps"), stdout="web-0 CrashLoopBackOff")
     )
 
     with pytest.raises(ReleaseFailed) as failed:
@@ -117,19 +103,19 @@ def test_a_failed_rollout_raises_release_failed_with_the_namespace_diagnostics(
 def test_a_failed_install_is_reported_with_diagnostics_and_nothing_is_awaited(
     tmp_path: Path,
 ) -> None:
-    runner = _runner().respond(_is("helm", "upgrade"), returncode=1, stderr="conflict")
+    runner = _runner().respond(argv_prefix("helm", "upgrade"), returncode=1, stderr="conflict")
 
     with pytest.raises(ReleaseFailed) as failed:
         converge(_lab(runner), Release(name="web", chart=_chart(tmp_path), namespace="apps"))
 
     assert failed.value.step == "install"
     assert "## pods" in failed.value.diagnostics
-    assert not any(_cmd(argv)[:3] == ("helm", "get", "manifest") for argv in runner.calls)
+    assert not any(plain_argv(argv)[:3] == ("helm", "get", "manifest") for argv in runner.calls)
 
 
 def test_a_missing_tool_is_raised_as_itself() -> None:
     def helm_missing(argv: tuple[str, ...]) -> bool:
-        if _cmd(argv)[:2] == ("helm", "upgrade"):
+        if plain_argv(argv)[:2] == ("helm", "upgrade"):
             raise MissingToolError("helm not found")
         return False
 
@@ -158,7 +144,7 @@ def test_a_remote_chart_skips_the_dependency_update_and_passes_version_and_repo(
 
 def test_installed_maps_every_release_in_any_state_from_one_helm_list() -> None:
     runner = FakeCommandRunner().respond(
-        _is("helm", "list"),
+        argv_prefix("helm", "list"),
         stdout=(
             '[{"name": "web", "namespace": "apps", "revision": "2", "status": "deployed"},'
             ' {"name": "db", "namespace": "data", "revision": "1", "status": "pending-install"}]'
@@ -168,4 +154,4 @@ def test_installed_maps_every_release_in_any_state_from_one_helm_list() -> None:
     releases = installed(_lab(runner))
 
     assert releases == {("apps", "web"): "deployed", ("data", "db"): "pending-install"}
-    assert [_cmd(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A", "--all")]
+    assert [plain_argv(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A", "--all")]

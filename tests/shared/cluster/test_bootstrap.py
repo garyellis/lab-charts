@@ -11,9 +11,7 @@ from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.cluster import bootstrap, session
 from chart_manager.shared.cluster.converge import ReleaseFailed
 from chart_manager.shared.settings import Settings
-from tests.conftest import FakeCommandRunner
-
-from .test_converge import _cmd, _is
+from tests.conftest import FakeCommandRunner, argv_prefix, plain_argv
 
 CILIUM_MANIFEST = """\
 apiVersion: apps/v1
@@ -64,8 +62,8 @@ METRICS = {
 def _runner() -> FakeCommandRunner:
     return (
         FakeCommandRunner()
-        .respond(_is("helm", "get", "manifest", "network"), stdout=CILIUM_MANIFEST)
-        .respond(_is("docker", "inspect"), stdout="172.18.0.2\n")
+        .respond(argv_prefix("helm", "get", "manifest", "network"), stdout=CILIUM_MANIFEST)
+        .respond(argv_prefix("docker", "inspect"), stdout="172.18.0.2\n")
     )
 
 
@@ -80,7 +78,7 @@ def _steps(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
     """The installs and waits, in order, without listings and lookups."""
     return [
         cmd
-        for cmd in map(_cmd, runner.calls)
+        for cmd in map(plain_argv, runner.calls)
         if cmd[:2] == ("helm", "upgrade") or "rollout" in cmd or cmd[1:2] == ("wait",)
     ]
 
@@ -110,13 +108,13 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
 
 
 def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
-    runner = _runner().respond(_is("helm", "upgrade", "--install", "network"), returncode=1)
+    runner = _runner().respond(argv_prefix("helm", "upgrade", "--install", "network"), returncode=1)
     dev = session.attach("dev", runner=runner, settings=Settings())
 
     with pytest.raises(ReleaseFailed, match="network"):
         bootstrap.bootstrap(dev, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
 
-    assert not any(_cmd(argv)[:4] == ("helm", "upgrade", "--install", "metrics") for argv in runner.calls)
+    assert not any(plain_argv(argv)[:4] == ("helm", "upgrade", "--install", "metrics") for argv in runner.calls)
 
 
 def test_verify_accepts_a_release_in_any_state_and_names_a_missing_one(tmp_path: Path) -> None:

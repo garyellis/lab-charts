@@ -11,8 +11,7 @@ from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandErro
 from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import load_repository_workspace as load_workspace
-from tests.conftest import FakeCommandRunner, MakeChart
-from tests.shared.cluster.test_converge import _cmd, _is
+from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv
 
 LOCAL_CLUSTER = """\
 apiVersion: chartmanager.io/v1alpha1
@@ -57,8 +56,8 @@ def repo(chart_root: Path, make_chart: MakeChart) -> Path:
 def _runner(*clusters: str) -> FakeCommandRunner:
     return (
         FakeCommandRunner()
-        .respond(_is("kind", "get", "clusters"), stdout="\n".join(clusters))
-        .respond(_is("kubectl", "get", "--raw=/readyz"), stdout="ok")
+        .respond(argv_prefix("kind", "get", "clusters"), stdout="\n".join(clusters))
+        .respond(argv_prefix("kubectl", "get", "--raw=/readyz"), stdout="ok")
     )
 
 
@@ -82,7 +81,7 @@ def _steps(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
     )
     return [
         cmd
-        for cmd in map(_cmd, runner.calls)
+        for cmd in map(plain_argv, runner.calls)
         if any(cmd[: len(prefix)] == prefix for prefix in keep)
     ]
 
@@ -115,8 +114,8 @@ def test_a_failed_install_fails_the_outcome_with_diagnostics_and_skips_the_rest(
 ) -> None:
     runner = (
         _runner()
-        .respond(_is("helm", "upgrade", "--install", "db"), returncode=1, stderr="db broke")
-        .respond(_is("kubectl", "get", "pods", "-n", "data"), stdout="db-0 Pending")
+        .respond(argv_prefix("helm", "upgrade", "--install", "db"), returncode=1, stderr="db broke")
+        .respond(argv_prefix("kubectl", "get", "pods", "-n", "data"), stdout="db-0 Pending")
     )
 
     outcome = _run(repo, runner)
@@ -131,7 +130,7 @@ def test_a_failed_install_fails_the_outcome_with_diagnostics_and_skips_the_rest(
 
 
 def test_a_failed_helm_test_is_a_failed_action_not_an_exception(repo: Path) -> None:
-    runner = _runner().respond(_is("helm", "test", "app"), returncode=1, stderr="probe failed")
+    runner = _runner().respond(argv_prefix("helm", "test", "app"), returncode=1, stderr="probe failed")
 
     outcome = _run(repo, runner)
 
@@ -144,7 +143,7 @@ def test_a_failed_helm_test_is_a_failed_action_not_an_exception(repo: Path) -> N
 
 def test_a_missing_helm_binary_is_raised_as_itself(repo: Path) -> None:
     def helm_missing(argv: tuple[str, ...]) -> bool:
-        if _cmd(argv)[:2] == ("helm", "upgrade"):
+        if plain_argv(argv)[:2] == ("helm", "upgrade"):
             raise MissingToolError("helm not found")
         return False
 
@@ -162,7 +161,7 @@ def test_skip_requires_on_an_existing_cluster_verifies_instead_of_installing(
         ' {"name": "db", "namespace": "data", "revision": "1", "status": "failed"}]'
     )
     runner = _runner("lab").respond(
-        _is("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
     )
 
     outcome = _run(repo, runner, skip_requires=True)
@@ -177,7 +176,7 @@ def test_skip_requires_names_a_missing_requirement_before_installing_anything(
 ) -> None:
     listing = '[{"name": "cni", "namespace": "kube-system", "revision": "1", "status": "deployed"}]'
     runner = _runner("lab").respond(
-        _is("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
     )
 
     with pytest.raises(ChartManagerError, match="app requires db:minimal, not installed in data"):
@@ -197,7 +196,7 @@ def test_a_pre_install_hook_runs_after_its_namespace_and_before_its_install(
 
     _run(repo, runner)
 
-    calls = [_cmd(argv) for argv in runner.calls]
+    calls = [plain_argv(argv) for argv in runner.calls]
     namespace = calls.index(("kubectl", "create", "namespace", "apps"))
     hook = calls.index(("true", "pre"))
     install = next(
@@ -227,7 +226,7 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
     )
 
     assert outcome.ok and outcome.cluster_deleted
-    calls = [_cmd(argv) for argv in runner.calls]
+    calls = [plain_argv(argv) for argv in runner.calls]
     assert calls.index(("true", "bye")) < calls.index(
         ("kind", "delete", "cluster", "--name", "lab")
     )
@@ -252,8 +251,8 @@ def test_no_ensure_cluster_attaches_without_creating_anything(repo: Path) -> Non
     outcome = _run(repo, runner, ensure_cluster=False)
 
     assert outcome.ok
-    assert not any(_cmd(argv)[:2] in {("kind", "create"), ("kind", "get")} for argv in runner.calls)
-    install = next(argv for argv in runner.calls if _cmd(argv)[:2] == ("helm", "upgrade"))
+    assert not any(plain_argv(argv)[:2] in {("kind", "create"), ("kind", "get")} for argv in runner.calls)
+    install = next(argv for argv in runner.calls if plain_argv(argv)[:2] == ("helm", "upgrade"))
     assert install[install.index("--kube-context") + 1] == "kind-lab"
 
 
@@ -271,7 +270,7 @@ def test_skip_requires_on_a_new_cluster_installs_requirements_but_tests_only_the
 
 
 def test_lint_runs_before_each_charts_install_and_fails_it(repo: Path) -> None:
-    runner = _runner().respond(_is("helm", "lint", str(repo / "charts" / "app")), returncode=1)
+    runner = _runner().respond(argv_prefix("helm", "lint", str(repo / "charts" / "app")), returncode=1)
 
     outcome = _run(repo, runner, lint=True)
 
@@ -355,7 +354,7 @@ def test_teardown_keep_cluster_runs_cleanups_without_deleting(with_cleanups: Pat
     outcome = _teardown(with_cleanups, runner, keep_cluster=True)
 
     assert outcome.ok and not outcome.cluster_deleted
-    assert not any(_cmd(argv)[:2] == ("kind", "delete") for argv in runner.calls)
+    assert not any(plain_argv(argv)[:2] == ("kind", "delete") for argv in runner.calls)
 
 
 def test_teardown_of_a_missing_cluster_still_runs_cleanups(with_cleanups: Path) -> None:
@@ -370,7 +369,7 @@ def test_teardown_of_a_missing_cluster_still_runs_cleanups(with_cleanups: Path) 
 
 
 def test_teardown_reports_a_failed_delete(with_cleanups: Path) -> None:
-    runner = _runner("lab").respond(_is("kind", "delete"), returncode=1, stderr="busy")
+    runner = _runner("lab").respond(argv_prefix("kind", "delete"), returncode=1, stderr="busy")
 
     outcome = _teardown(with_cleanups, runner)
 
@@ -383,8 +382,8 @@ def test_a_failed_bootstrap_release_is_raised_as_a_tool_error_after_its_diagnost
 ) -> None:
     runner = (
         _runner()
-        .respond(_is("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
-        .respond(_is("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
+        .respond(argv_prefix("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
+        .respond(argv_prefix("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
     )
     events: list[ProgressEvent] = []
 
