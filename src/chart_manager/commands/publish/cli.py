@@ -1,4 +1,8 @@
-"""CLI surface for batch OCI publishing."""
+"""`chart publish`: flags, the per-chart stderr lines, the `--dry-run` plan and exit status.
+
+A real publish prints every line to stderr: each is a report of a push that already happened.
+The `--dry-run` plan is the data the caller asked for, so it goes to stdout.
+"""
 
 from __future__ import annotations
 
@@ -9,17 +13,15 @@ import typer
 from rich.markup import escape
 
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root
-from chart_manager.cli.streams import console as data
-from chart_manager.cli.streams import narration
+from chart_manager.cli.streams import console, narration
+from chart_manager.commands.publish.models import PublishKind, PublishOutcome, PublishRequest
+from chart_manager.commands.publish.run import run
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.publish import PublishKind, PublishResult
 
-# `narration` (stderr) carries every line a real publish prints: a per-chart
-# mutation status is a report of something that already happened. `data`
-# (stdout) carries the `--dry-run` plan, which *is* the thing the caller asked
-# for. Both come from `cli/streams.py`; the alias keeps this module's older
-# spelling of the stdout console at its call site.
+
+def register(app: typer.Typer) -> None:
+    """Attach `publish` to the `chart` Typer group."""
+    app.command("publish")(publish)
 
 
 def publish(
@@ -81,19 +83,26 @@ def publish(
     ] = False,
 ) -> None:
     """Package all requested charts before pushing any of them."""
-    root = repository_root()
-    result = _container().publish_service(root).publish(
-        charts,
+    container = _container()
+    request = PublishRequest(
+        charts=tuple(charts),
         repository=repository,
         version_suffix=version_suffix,
         version=version,
         ca_file=ca_file,
-        publish_kind=publish_kind,
+        kind=publish_kind,
         build_correlation_id=build_correlation_id,
         pr_url=pr_url,
         git_sha=git_sha,
         operation_id=operation_id,
         dry_run=dry_run,
+    )
+    result = run(
+        request,
+        workspace=container.workspace(),
+        runner=container.command_runner(),
+        settings=container.settings,
+        events=container.event_writer(),
     )
     if dry_run:
         _render_plan(result)
@@ -119,28 +128,19 @@ def publish(
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
-def _render_plan(result: PublishResult) -> None:
+def _render_plan(result: PublishOutcome) -> None:
     """Print the dry-run plan to stdout and say on stderr what did not happen.
 
     Exits 0 by falling off the end: a plan that was produced is a success,
     and there is no push outcome to fail on.
     """
-    kind = result.publish_kind.value if result.publish_kind is not None else "unknown"
     for chart in result.charts:
-        data.print(
+        console.print(
             f"would publish [bold]{escape(chart.chart)}[/bold] "
             f"{escape(chart.version)} -> {escape(chart.reference or '')} "
-            f"({escape(kind)})"
+            f"({escape(result.kind.value)})"
         )
     narration.print(
         f"[yellow]dry run[/yellow]: packaged {len(result.charts)} chart(s); "
         "pushed nothing and emitted no lifecycle event"
     )
-
-
-def register(app: typer.Typer) -> None:
-    """Attach the top-level publish command."""
-    app.command("publish")(publish)
-
-
-__all__ = ["publish", "register"]

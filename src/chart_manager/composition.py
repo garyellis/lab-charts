@@ -83,7 +83,6 @@ from chart_manager.services.helmrelease import (
     Transition,
 )
 from chart_manager.services.helmrelease.promote import DowngradeConfirmFn
-from chart_manager.services.publish import PublishService
 from chart_manager.services.upgrader import (
     GitBaselineReader,
     PullRequestLike,
@@ -301,14 +300,6 @@ class Container:
         `chart list` from a different directory than `plan` selected against.
         """
         return ChartCatalogService(workspace=self.workspace(root))
-
-    def publish_service(self, root: Path) -> PublishService:
-        """Build the headless OCI publisher for charts below ``root``."""
-        return PublishService(
-            workspace=self.workspace(root),
-            helm=self.helm(verbose=False),
-            events=self.event_writer(),
-        )
 
     def upgrade_service(self, root: Path) -> UpgradeService:
         """Build the chart-scoped Renovate orchestrator with one shared runner.

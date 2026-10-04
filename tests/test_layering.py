@@ -400,7 +400,7 @@ def test_service_modules_are_discoverable() -> None:
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.helmrelease.wire" in modules
-    assert "chart_manager.services.publish" in modules
+    assert "chart_manager.services.doctor" in modules
 
 
 def test_no_service_module_imports_rich_or_typer() -> None:
