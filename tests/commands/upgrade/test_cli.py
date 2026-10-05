@@ -72,7 +72,6 @@ def _fake_finalize(monkeypatch: pytest.MonkeyPatch, result: FinalizeResult = UPD
 
 # ----- chart upgrade --------------------------------------------------------
 
-
 def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -207,7 +206,6 @@ def test_unknown_output_is_rejected_before_run(
 
 
 # ----- upgrade-finalize -----------------------------------------------------
-
 
 def test_finalize_is_hidden_and_reads_callback_data_from_outside_the_repository(
     repo: Path, monkeypatch: pytest.MonkeyPatch

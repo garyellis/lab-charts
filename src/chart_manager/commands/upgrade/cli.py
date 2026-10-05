@@ -1,6 +1,6 @@
 """`chart upgrade` and the hidden `upgrade-finalize`: flags, output encoding and rendering.
 
-`commands/upgrade/wire.py` owns the machine-readable contract.
+`commands/upgrade/wire.py` owns the machine-readable payload.
 """
 
 from __future__ import annotations

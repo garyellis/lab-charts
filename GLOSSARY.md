@@ -94,6 +94,7 @@ _Avoid_: using "upgrade" for a Helm release (that is release converge)
 **Finalize**:
 `upgrade-finalize`, the hidden callback Renovate runs on the upgrade branch: it bumps the
 wrapper chart's version (major or patch) and writes its changelog entry.
+_Avoid_: finalizer
 
 ### Promoting a chart
 
