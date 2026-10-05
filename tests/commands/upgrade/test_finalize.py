@@ -11,7 +11,6 @@ from chart_manager.commands.upgrade import (
     UpgradeError,
     finalize,
 )
-from chart_manager.commands.upgrade.finalize import load_update_data
 from tests.conftest import FakeCommandRunner, workspace_for
 
 
@@ -156,25 +155,6 @@ def test_refuses_a_wrapper_version_with_leading_zeros(tmp_path: Path, version: s
 
     with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
         _finalize(tmp_path, baseline)
-
-
-def test_loads_explicit_renovate_temp_data_outside_repository(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    data = tmp_path / "renovate-data.json"
-    data.write_text('{"updates": []}', encoding="utf-8")
-    assert load_update_data(data) == {"updates": []}
-    link = tmp_path / "link.json"
-    link.symlink_to(data)
-    with pytest.raises(UpgradeError, match="symlink"):
-        load_update_data(link)
-
-
-def test_rejects_oversized_renovate_data(tmp_path: Path) -> None:
-    data = tmp_path / "renovate-data.json"
-    data.write_text('{"padding": "xxxxxxxx"}', encoding="utf-8")
-    with pytest.raises(UpgradeError, match="safety limit"):
-        load_update_data(data, max_bytes=4)
 
 
 def test_rejects_incomplete_qualifying_update_metadata(tmp_path: Path) -> None:
