@@ -53,66 +53,44 @@ def run(
     diagnostics: list[str] = []
     _LOG.debug("Checking upgrade inputs for uncommitted changes")
     _require_relevant_files_clean(plan, git)
-    existing_pr, found_existing = (
-        (None, True)
-        if request.dry_run
-        else _find_pull_request(github, plan.branch_prefix, diagnostics)
-    )
-    # The version already on the open branch, read before Renovate can rewrite it, so
-    # telemetry can tell a re-run against an unchanged pull request from a retarget.
-    previously_proposed = (
-        _proposed_version(plan, github, existing_pr, []) if existing_pr is not None else None
-    )
     chart_config = plan.chart_path / "renovate.json"
-    result = Renovate(runner).run(
-        RenovateRequest(
-            repo_root=plan.repo_root,
-            repository=repository,
-            global_config_path=root / "renovate-global.json",
-            additional_config_path=chart_config if chart_config.is_file() else None,
-            runtime_overlay=plan.runtime_overlay,
-            dry_run="full" if request.dry_run else None,
-            # Renovate's own name first, then the token GitHub Actions provides.
-            token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
-        )
+    renovate_request = RenovateRequest(
+        repo_root=plan.repo_root,
+        repository=repository,
+        global_config_path=root / "renovate-global.json",
+        additional_config_path=chart_config if chart_config.is_file() else None,
+        runtime_overlay=plan.runtime_overlay,
+        dry_run="full" if request.dry_run else None,
+        # Renovate's own name first, then the token GitHub Actions provides.
+        token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
     )
-    stdout, stderr = result.stdout, result.stderr
-    if result.returncode:
-        raise UpgradeError(
-            f"Renovate failed for chart {plan.chart}: {stderr.strip() or stdout.strip()}"
-        )
-    # Renovate can exit zero after a repository-scoped failure it logged to stdout.
-    if _renovate_reported_error(stdout):
-        raise UpgradeError(
-            f"Renovate reported an error for chart {plan.chart}: {stdout.strip()}"
-        )
-    diagnostics.extend(line for line in stderr.splitlines() if line.strip())
-    diagnostics.extend(_renovate_warnings(stdout))
-    current_pr, found_current = (
-        (existing_pr, True)
-        if request.dry_run
-        else _find_pull_request(github, plan.branch_prefix, diagnostics)
-    )
-    lookup_failed = not (found_existing and found_current)
     if request.dry_run:
-        outcome = UpgradeStatus.DRY_RUN
-    elif lookup_failed:
-        outcome = UpgradeStatus.STATUS_UNKNOWN
-    elif current_pr is None:
-        outcome = UpgradeStatus.NO_CHANGES
-        diagnostics.append(
-            f"Renovate completed without an open pull request under "
-            f"{plan.branch_prefix}; no eligible update was proposed"
-        )
-    elif existing_pr is None:
-        outcome = UpgradeStatus.PR_OPEN
+        diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
+        outcome, current_pr = UpgradeStatus.DRY_RUN, None
+        previously_proposed = proposed_version = None
     else:
-        outcome = UpgradeStatus.PR_UPDATED
+        existing_pr, found_existing = _find_pull_request(github, plan.branch_prefix, diagnostics)
+        # Read before Renovate can rewrite the branch, so telemetry can tell a re-run
+        # against an unchanged pull request from a retarget.
+        previously_proposed, _ = _proposed_version(plan, github, existing_pr)
+        diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
+        current_pr, found_current = _find_pull_request(github, plan.branch_prefix, diagnostics)
+        outcome = _outcome(
+            existing_pr, current_pr, lookup_failed=not (found_existing and found_current)
+        )
+        if outcome is UpgradeStatus.NO_CHANGES:
+            diagnostics.append(
+                f"Renovate completed without an open pull request under "
+                f"{plan.branch_prefix}; no eligible update was proposed"
+            )
+        proposed_version, diagnostic = _proposed_version(plan, github, current_pr)
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
     upgrade_result = UpgradeResult(
         chart=plan.chart,
         chart_path=plan.chart_path,
         current_version=plan.current_version,
-        proposed_version=_proposed_version(plan, github, current_pr, diagnostics),
+        proposed_version=proposed_version,
         # The branch Renovate actually opened; None when no PR is open for this chart.
         branch=current_pr.branch if current_pr is not None else None,
         group=plan.group,
@@ -140,6 +118,35 @@ def run(
     return upgrade_result
 
 
+def _renovate(runner: CommandRunner, request: RenovateRequest, *, chart: str) -> list[str]:
+    """Run Renovate, raise on a failure it reported, and return its stderr and warnings."""
+    result = Renovate(runner).run(request)
+    stdout, stderr = result.stdout, result.stderr
+    if result.returncode:
+        raise UpgradeError(
+            f"Renovate failed for chart {chart}: {stderr.strip() or stdout.strip()}"
+        )
+    # Renovate can exit zero after a repository-scoped failure it logged to stdout.
+    if _renovate_reported_error(stdout):
+        raise UpgradeError(f"Renovate reported an error for chart {chart}: {stdout.strip()}")
+    return [line for line in stderr.splitlines() if line.strip()] + list(
+        _renovate_warnings(stdout)
+    )
+
+
+def _outcome(
+    existing: PullRequest | None, current: PullRequest | None, *, lookup_failed: bool
+) -> UpgradeStatus:
+    """Classify a pushed run by the chart's open pull request before and after it."""
+    if lookup_failed:
+        return UpgradeStatus.STATUS_UNKNOWN
+    if current is None:
+        return UpgradeStatus.NO_CHANGES
+    if existing is None:
+        return UpgradeStatus.PR_OPEN
+    return UpgradeStatus.PR_UPDATED
+
+
 def _repository(git: Git) -> str:
     """Read owner/repository from CI metadata or the origin remote."""
     configured = os.environ.get("GITHUB_REPOSITORY")
@@ -158,55 +165,33 @@ def _proposed_version(
     plan: UpgradePlan,
     github: Github,
     pull_request: PullRequest | None,
-    diagnostics: list[str],
-) -> str | None:
-    """Read the wrapper version `upgrade-finalize` wrote on the upgrade branch.
+) -> tuple[str | None, str | None]:
+    """Read the wrapper version `upgrade-finalize` wrote on the upgrade branch, and any diagnostic.
 
-    The callback runs inside Renovate's checkout, so reading the pushed branch is also
-    the only check that it ran: Renovate records a failed post-upgrade command as an
-    artifact error and still opens the pull request with a zero exit code.
+    Reading the pushed branch is also the only check that the callback ran: Renovate records a
+    failed post-upgrade command as an artifact error and still opens the pull request.
     """
     if pull_request is None or not pull_request.branch:
-        return None
-    relative = plan.chart_path.relative_to(plan.repo_root).as_posix()
+        return None, None
+    branch = pull_request.branch
+    chart_file = f"{plan.chart_path.relative_to(plan.repo_root).as_posix()}/Chart.yaml"
     try:
-        text = github.read_file_at_ref(f"{relative}/Chart.yaml", pull_request.branch)
+        text = github.read_file_at_ref(chart_file, branch)
     except ChartManagerError as exc:
-        _LOG.warning(
-            "proposed wrapper version unavailable: chart=%s branch=%s file=%s: %s",
-            plan.chart,
-            pull_request.branch,
-            f"{relative}/Chart.yaml",
-            exc,
-        )
-        diagnostics.append(f"proposed wrapper version unavailable: {exc}")
-        return None
-    version = _chart_version(text)
-    if version is None:
-        _LOG.warning(
-            "no wrapper version on the upgrade branch: chart=%s branch=%s file=%s",
-            plan.chart,
-            pull_request.branch,
-            f"{relative}/Chart.yaml",
-        )
-        diagnostics.append(
-            f"no wrapper version found in {relative}/Chart.yaml on {pull_request.branch}"
-        )
-        return None
-    if version == plan.current_version:
-        _LOG.warning(
-            "wrapper version unchanged on the upgrade branch; the "
-            "upgrade-finalize callback may not have run: chart=%s branch=%s "
-            "baseline=%s",
-            plan.chart,
-            pull_request.branch,
-            plan.current_version,
-        )
-        diagnostics.append(
-            f"wrapper version on {pull_request.branch} still matches the baseline "
-            f"{plan.current_version}; the upgrade-finalize callback may not have run"
-        )
-    return version
+        version, diagnostic = None, f"proposed wrapper version unavailable: {exc}"
+    else:
+        version = _chart_version(text)
+        if version is None:
+            diagnostic = f"no wrapper version found in {chart_file} on {branch}"
+        elif version == plan.current_version:
+            diagnostic = (
+                f"wrapper version on {branch} still matches the baseline "
+                f"{plan.current_version}; the upgrade-finalize callback may not have run"
+            )
+        else:
+            return version, None
+    _LOG.warning("%s: chart=%s", diagnostic, plan.chart)
+    return version, diagnostic
 
 
 def _require_relevant_files_clean(plan: UpgradePlan, git: Git) -> None:
