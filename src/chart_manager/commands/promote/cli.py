@@ -8,8 +8,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 from typing import Annotated
 
@@ -175,7 +173,23 @@ def monitor(
         environment=environment,
     )
 
-    result = _run_stage(run_monitor, request, mode, narration)
+    container = _container()
+    runner = container.command_runner()
+    events = container.event_writer()
+    # Progress renders onto the narration console: it is never the projection.
+    if mode == output_mod.TABLE:
+        with _PrettyProgressDriver(narration) as driver:
+            result = run_monitor(
+                request,
+                runner=runner,
+                settings=container.settings,
+                events=events,
+                progress=driver,
+            )
+    else:
+        result = run_monitor(
+            request, runner=runner, settings=container.settings, events=events, progress=None
+        )
 
     if mode == output_mod.TABLE:
         render_monitor_pretty(result, console, chart=chart, version=version)
@@ -184,26 +198,6 @@ def monitor(
 
     if not result.ok:
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
-
-
-def _run_stage[R](run: Callable[..., R], request: object, mode: str, narration: Console) -> R:
-    """Run a monitor or test stage, with a live progress table only in table mode.
-
-    The driver renders onto the narration console: progress is never the
-    selected projection.
-    """
-    container = _container()
-    stage = partial(
-        run,
-        request,
-        runner=container.command_runner(),
-        settings=container.settings,
-        events=container.event_writer(),
-    )
-    if mode == output_mod.TABLE:
-        with _PrettyProgressDriver(narration) as driver:
-            return stage(progress=driver)
-    return stage(progress=None)
 
 
 def test(
@@ -249,7 +243,23 @@ def test(
         environment=environment,
     )
 
-    result = _run_stage(run_test, request, mode, narration)
+    container = _container()
+    runner = container.command_runner()
+    events = container.event_writer()
+    # Progress renders onto the narration console: it is never the projection.
+    if mode == output_mod.TABLE:
+        with _PrettyProgressDriver(narration) as driver:
+            result = run_test(
+                request,
+                runner=runner,
+                settings=container.settings,
+                events=events,
+                progress=driver,
+            )
+    else:
+        result = run_test(
+            request, runner=runner, settings=container.settings, events=events, progress=None
+        )
 
     if mode == output_mod.TABLE:
         render_test_pretty(result, console, chart=chart, version=version)
