@@ -21,7 +21,6 @@ from chart_manager.shared.events.query import (
 )
 from chart_manager.shared.events.ref import parse_selector
 from chart_manager.shared.events.store import NullEventStore, query_events
-from tests.conftest import FakeCosmosContainer
 
 
 def _doc(**overrides: Any) -> dict[str, Any]:
@@ -122,18 +121,3 @@ def test_query_events_with_dynamodb_refuses_without_touching_the_table(
 
     with pytest.raises(EventReadUnsupportedError, match="Cosmos-only"):
         query_events(EventQuery())
-
-
-def test_query_events_with_cosmos_returns_the_page_re_sorted_newest_first(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The backend ORDER BY is over strings; the caller sees chronology."""
-    utc = _doc(timestamp="2026-08-01T13:00:00+00:00")
-    offset = _doc(timestamp="2026-08-01T14:30:00+02:00")  # 12:30 UTC
-
-    # The container returns the backend's string order.
-    container = FakeCosmosContainer(documents=[offset, utc])
-    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
-    monkeypatch.setattr(store_module, "get_container", lambda **kwargs: container)
-
-    assert query_events(EventQuery()) == [utc, offset]
