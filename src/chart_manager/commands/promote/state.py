@@ -17,7 +17,7 @@ caller holding a plain string), and `json.dump` writes the value verbatim.
 The three phase tables below are data, not code, on purpose: mapping a
 terminal state to a lifecycle event is the kind of decision that gets
 silently forked the moment it is expressed as an if-chain in each caller,
-which is exactly what `promote.py` and `commands/promote/cli.py` had done.
+which is exactly what `pr.py` and `commands/promote/cli.py` had done.
 """
 from __future__ import annotations
 
@@ -212,7 +212,7 @@ START_PHASE: Mapping[Stage, PromotionPhase] = {
 #: no ROLLOUT_FAILED member, and ABANDONED is already its "this version did
 #: not reach the environment" terminal. The emitted `detail` carries the
 #: stage, verdict and failure count, so a consumer can still tell a declined
-#: downgrade (promote.py's ABANDONED) from a stuck rollout.
+#: downgrade (pr.py's ABANDONED) from a stuck rollout.
 #:
 #: A green `helm test` is what makes a promotion *verified* live, so it also
 #: carries PROMOTED. A monitor-only pipeline therefore closes at ROLLOUT_OK

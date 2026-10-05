@@ -1,12 +1,6 @@
-"""How `run_fanout` classifies a worker that raised, and how `run_matched` reports.
+"""`run_fanout` and `run_matched`: a failed release vs a failed run vs Ctrl-C.
 
-Beyond running workers in parallel, the interesting axis is not the happy path --
-`monitor.run` and `test.run` cover that end to end -- but the boundary between "a release
-failed", "this run's infrastructure failed", and "the operator pressed
-Ctrl-C". The third used to be indistinguishable from the second: it was
-caught as a `BaseException` and reborn as `ChartManagerError`, so both
-callers' `except Exception:` telemetry handlers put a network write in front
-of the exit and the process returned 1 instead of 130.
+The happy path is covered end to end by `monitor.run` and `test.run`.
 """
 from __future__ import annotations
 
@@ -111,7 +105,7 @@ def test_keyboard_interrupt_propagates_unwrapped_and_cancels_peers() -> None:
     """Ctrl-C must stay Ctrl-C all the way out of the fan-out.
 
     Wrapping it in `ChartManagerError` made it an `Exception`, which both
-    services catch to close their telemetry interval -- a network write
+    stages catch to close their telemetry interval -- a network write
     standing between the operator's Ctrl-C and the process exiting 130.
     """
     cancel_event = threading.Event()
@@ -162,8 +156,8 @@ def test_sorted_by_ref_orders_by_namespace_then_name() -> None:
 #
 # `monitor.run` and `test.run` both delegate here, so these cases are
 # the single place the no-match, crash and Ctrl-C contracts are pinned for
-# both stages. The service suites (and tests/commands/promote/test_telemetry.py)
-# cover the same paths end to end through each service.
+# both stages. The stage suites (and tests/commands/promote/test_telemetry.py)
+# cover the same paths end to end through each stage.
 
 
 @dataclass(frozen=True)

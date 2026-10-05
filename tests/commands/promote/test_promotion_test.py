@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -21,6 +20,7 @@ from tests.commands.promote.conftest import (
     EMPTY,
     HR,
     VERSION,
+    Clock,
     EventLog,
     calls,
     cluster,
@@ -33,18 +33,8 @@ from tests.commands.promote.conftest import (
 )
 from tests.conftest import FakeCommandRunner, Reply, argv_prefix, plain_argv
 
-WALL = datetime(2026, 6, 16, 12, 0, 0, tzinfo=UTC)
 HELM_TEST = ("helm", "test", "loki", "--namespace", "loki")
 TEST_FAILED = failure("Error: bare failure")
-
-
-class _Clock:
-    def __init__(self, step: float = 0.0) -> None:
-        self.t, self.step = 0.0, step
-
-    def __call__(self) -> float:
-        value, self.t = self.t, self.t + self.step
-        return value
 
 
 class _Raising(FakeCommandRunner):
@@ -75,8 +65,7 @@ def _test(
         runner=runner,
         settings=Settings(kube_context="lab"),
         events=EventWriter(EventLog()),
-        clock=clock or _Clock(),
-        now=lambda: WALL,
+        clock=clock or Clock(),
         progress=progress,
     )
 
@@ -279,6 +268,19 @@ def test_a_swallowed_cluster_read_says_so_in_the_report_and_the_log(
         assert text in record.getMessage()
 
 
+def test_every_cluster_call_is_pinned_to_the_context_and_bounded() -> None:
+    runner = _helm(cluster(helmrelease()), TEST_FAILED)
+    runner.respond_each(hook_pods, items(), items(pod("loki-test", "Failed")))
+
+    _test(runner, per_poll_timeout_seconds=7.0)
+
+    kubectl = [r for r in runner.records if r.args[0] == "kubectl"]
+    [helm] = [r for r in runner.records if r.args[0] == "helm"]
+    assert {r.timeout for r in kubectl} == {7.0}
+    assert all(r.args[-2:] == ("--context", "lab") for r in kubectl)
+    assert helm.args[-2:] == ("--kube-context", "lab")
+
+
 def test_unlistable_test_pods_are_distinguished_from_no_test_pods() -> None:
     runner = _helm(cluster(helmrelease()), TEST_FAILED)
     runner.respond_each(hook_pods, items(), failure("pods forbidden"))
@@ -311,7 +313,7 @@ def test_a_helm_timeout_spends_the_per_hr_budget() -> None:
 def test_the_total_budget_stops_releases_before_helm_runs() -> None:
     runner = cluster(helmrelease())
 
-    [outcome] = _test(runner, clock=_Clock(step=200.0)).outcomes
+    [outcome] = _test(runner, clock=Clock(step=200.0)).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("timed-out", "TotalBudgetExhausted")
     assert calls(runner, "helm") == []
@@ -320,7 +322,7 @@ def test_the_total_budget_stops_releases_before_helm_runs() -> None:
 def test_the_total_budget_marks_the_run_timed_out() -> None:
     runner = cluster(*(helmrelease(f"a{i}", "ns") for i in range(3)))
 
-    assert _test(runner, clock=_Clock(step=250.0), concurrency=3).total_timed_out is True
+    assert _test(runner, clock=Clock(step=250.0), concurrency=3).total_timed_out is True
 
 
 @pytest.mark.parametrize(

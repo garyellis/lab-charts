@@ -15,7 +15,7 @@ enough to stop the run, and this module decides *how* stopping works.
 zero-match short circuit, the telemetry bracket that must close even when a
 worker crashes, the `Exception`-but-not-`BaseException` boundary on that
 close, and the aggregate result. `run_matched` owns that whole sequence and
-`RunResult` is the one aggregate type. What still differs per service is a
+`RunResult` is the one aggregate type. What still differs per stage is a
 parameter, not a code path: the synthetic no-match outcome is a `no_match`
 factory, the lifecycle stage and the verdict that counts as success are
 arguments, and the log lines are built from `log_label`. The stages keep
@@ -75,7 +75,7 @@ class HasVerdict(HasRef, Protocol):
 class RunResult[OutcomeT: HasVerdict]:
     """Aggregate of every per-HelmRelease outcome of one monitor or test run.
 
-    Generic over the outcome type so each service keeps its own public name
+    Generic over the outcome type so each stage keeps its own public name
     as a plain alias (`MonitorResult = RunResult[MonitorOutcome]`). The alias
     is an assignment, not a PEP 695 `type` statement, because callers --
     tests included -- construct `MonitorResult(...)` directly and a

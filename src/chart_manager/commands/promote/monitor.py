@@ -136,10 +136,8 @@ def _no_match_outcome(elapsed: float) -> MonitorOutcome:
 class _WatchState:
     """Mutable per-HelmRelease state threaded through one watcher's phases.
 
-    Mirrors `test._RunContext`: the polling loop, the classifier
-    plumbing and the finalizer all need the same five values, and passing
-    them positionally is how `_finalize` acquired an eight-keyword call
-    repeated at eleven sites.
+    Mirrors `test._RunContext`: the polling loop, the classifier plumbing and
+    the finalizer share these values.
     """
 
     ref: HelmReleaseRef
@@ -170,7 +168,6 @@ def run(
     progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
     rand: Callable[[float, float], float] = random.uniform,
 ) -> MonitorResult:
     """Watch every matching HelmRelease concurrently and aggregate the outcomes.
@@ -183,7 +180,7 @@ def run(
     # diagnostics events address the same cluster.
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
     client = HelmReleaseClient(kubectl)
-    watcher = _Watcher(client, kubectl, sleep, clock, now, rand, progress)
+    watcher = _Watcher(client, kubectl, sleep, clock, rand, progress)
     start = clock()
     per_poll = request.per_poll_timeout_seconds
     matched = filter_matched_statuses(
@@ -249,7 +246,6 @@ class _Watcher:
     kubectl: Kubectl
     sleep: Callable[[float], None]
     clock: Callable[[], float]
-    now: Callable[[], datetime]
     rand: Callable[[float, float], float]
     progress: Callable[[HelmReleaseRef, Transition], None] | None
 
@@ -485,7 +481,7 @@ class _Watcher:
 
     def _record(self, state: _WatchState, phase: str, detail: str) -> None:
         """Append a transition to the ring buffer and fire the progress callback."""
-        transition = Transition(at=self.now(), phase=phase, detail=detail)
+        transition = Transition(at=datetime.now(UTC), phase=phase, detail=detail)
         state.ring.append(transition)
         self._fire_progress(state.ref, transition)
 
@@ -592,10 +588,7 @@ class _Watcher:
                 parts.append(f"- {t.at.isoformat()} {t.phase} - {t.detail}")
 
         # Events come from where the workloads run, not where the HelmRelease
-        # object lives. Those differ whenever `spec.targetNamespace` is set,
-        # and this used `ref.namespace` -- reporting events from a namespace
-        # containing none of the resources listed above. `promote test` already
-        # keys on target_namespace; this matches it.
+        # object lives; those differ whenever `spec.targetNamespace` is set.
         events_namespace = ref.target_namespace or ref.namespace
         if events_namespace:
             parts.append(f"\n### Events (namespace {events_namespace})")

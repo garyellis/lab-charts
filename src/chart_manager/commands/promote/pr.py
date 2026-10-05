@@ -117,11 +117,10 @@ def run(
 def _emit_promotion(request: PromoteRequest, result: PromoteResult, events: EventWriter) -> None:
     """Map the terminal state to a PromotionPhase event.
 
-    One table lookup, not an if-chain: the CLI printer decodes the same
-    status in `commands/promote/cli.py` and the two used to walk the flags in
-    different orders, so a new terminal state could be handled by one and
-    silently dropped by the other. Statuses mapping to None (dry-run, no
-    changes) are not real transitions and must leave no mark. The event is
+    One table lookup, not an if-chain, so this and the CLI printer in
+    `commands/promote/cli.py` decode the same status the same way. Statuses
+    mapping to None (dry-run, no changes) are not real transitions and must
+    leave no mark. The event is
     written after the PR is open, so a failed write is logged, not raised.
     """
     phase = PROMOTE_PHASE[result.status]
@@ -259,9 +258,7 @@ def _promote_in_workdir(
         raise ChartManagerError(
             f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
         ) from exc
-    # PUSHED vs PR_OPENED is decided here, once. The CLI used to derive
-    # it from `pull_request.url` being truthy, which put a second decoder
-    # of the same state in the surface layer.
+    # PUSHED vs PR_OPENED is decided here, once.
     return PromoteResult(
         status=PromoteStatus.PR_OPENED if pr.url else PromoteStatus.PUSHED,
         matches=matches,

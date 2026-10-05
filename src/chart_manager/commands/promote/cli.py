@@ -46,10 +46,7 @@ from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 # --- helpers --------------------------------------------------------------
 
 
-#: `pretty` is now spelled `table` -- one word for "the human projection"
-#: across the whole surface. The resolver that used to live here is
-#: `cli/output.resolve`; this command group was the only one that got `auto`
-#: right, which is why P1.4 lifted it rather than writing a second one.
+#: `--output` for every promote command; `cli/output.resolve` resolves it.
 OutputOption = Annotated[
     str | None,
     output_mod.output_option(output_mod.TABLE, output_mod.JSON),
@@ -263,7 +260,7 @@ def test(
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
-def promote(
+def pr(
     ctx: typer.Context,
     flux_repo: Annotated[
         str,
@@ -379,7 +376,7 @@ def promote(
                 "[yellow]aborted[/yellow]: declined downgrade prompt; no PR opened"
             )
         case PromoteStatus.ALREADY_OPEN:
-            # The service pairs this status with the existing PR. The old
+            # `pr.run` pairs this status with the existing PR. The old
             # `already_open and result.pull_request is not None` guard let the
             # impossible pair fall through to the "pushed branch=..." line,
             # which tells the operator the opposite of what happened.
@@ -401,13 +398,11 @@ def promote(
             path=path,
         )
 
-    # Two lookups, one judgement. `PROMOTE_OUTCOME` is the service's answer to
-    # "did this promote succeed" -- the same lookup `wire.promote_to_dict`
-    # publishes as the payload's `ok` -- and `exit_code_for` is plumbing's
-    # answer to "what number is that worth" (design §6.1). Neither layer
-    # re-derives the other's half, so the exit status and the json a CI step
-    # reads cannot disagree. Before this, *no* branch raised Exit: a declined
-    # downgrade printed "aborted" and exited 0, which reads as success.
+    # Two lookups, one judgement. `PROMOTE_OUTCOME` answers "did this promote
+    # succeed" -- the same lookup `wire.promote_to_dict` publishes as the
+    # payload's `ok` -- and `exit_code_for` answers "what number is that
+    # worth" (design §6.1). Neither re-derives the other's half, so the exit
+    # status and the json a CI step reads cannot disagree.
     exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
     if exit_code:
         raise typer.Exit(code=exit_code)
@@ -415,9 +410,9 @@ def promote(
 
 def register(app: typer.Typer) -> None:
     """Attach `pr`, `monitor` and `test` to the `promote` Typer group."""
-    app.command("pr")(promote)
+    app.command("pr")(pr)
     app.command("monitor")(monitor)
     app.command("test")(test)
 
 
-__all__ = ["monitor", "promote", "register", "test"]
+__all__ = ["monitor", "pr", "register", "test"]

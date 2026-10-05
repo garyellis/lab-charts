@@ -459,7 +459,7 @@ def _timeouts(request: Any) -> tuple[float, float, float]:
     )
 
 
-def test_monitor_default_timeouts_reach_the_service_as_seconds(
+def test_monitor_default_timeouts_reach_run_as_seconds(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
@@ -468,7 +468,7 @@ def test_monitor_default_timeouts_reach_the_service_as_seconds(
     assert _timeouts(fake.captured_requests[0]) == (10.0, 300.0, 900.0)
 
 
-def test_test_default_timeouts_reach_the_service_as_seconds(
+def test_test_default_timeouts_reach_run_as_seconds(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _install_fake_test(monkeypatch, result=_passed_test_result())
@@ -512,7 +512,7 @@ def test_timeout_duration_syntax_is_parsed_to_seconds(
         ("--total-timeout", "nan"),
     ],
 )
-def test_malformed_timeout_is_a_usage_error_before_any_service_runs(
+def test_malformed_timeout_is_a_usage_error_before_any_run(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch, flag: str, value: str
 ) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())

@@ -1,4 +1,4 @@
-"""Cluster objects and an event log for driving the promote stages through `FakeCommandRunner`.
+"""Cluster objects, a clock and an event log for driving the promote stages through `FakeCommandRunner`.
 
 `cluster(...)` answers `kubectl get` for HelmReleases the way a real cluster would; anything a
 test does not script reads as an empty list.
@@ -17,6 +17,20 @@ from tests.conftest import FakeCommandRunner, Predicate, Reply, argv_prefix, pla
 CHART = "loki"
 VERSION = "0.2.0"
 HR = "helmreleases.helm.toolkit.fluxcd.io"
+
+
+class Clock:
+    """Monotonic clock: `warmup` reads of 0.0, then advancing by `step` per read."""
+
+    def __init__(self, *, step: float = 0.0, warmup: int = 0) -> None:
+        self.step, self.warmup, self.reads, self.t = step, warmup, 0, 0.0
+
+    def __call__(self) -> float:
+        self.reads += 1
+        if self.reads <= self.warmup:
+            return 0.0
+        value, self.t = self.t, self.t + self.step
+        return value
 
 
 class EventLog:

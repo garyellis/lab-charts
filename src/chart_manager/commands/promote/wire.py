@@ -1,4 +1,4 @@
-"""Wire contract for `promote monitor` / `test` / `promote`.
+"""Wire contract for `promote pr` / `monitor` / `test`.
 
 This module is the single source of truth for the machine-readable shape of
 monitor, test, and promote results. Every surface -- the CLI's `--output

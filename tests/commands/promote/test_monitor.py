@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -19,6 +18,7 @@ from tests.commands.promote.conftest import (
     CHART,
     HR,
     VERSION,
+    Clock,
     EventLog,
     calls,
     cluster,
@@ -31,23 +31,8 @@ from tests.commands.promote.conftest import (
 )
 from tests.conftest import FakeCommandRunner, argv_prefix
 
-WALL = datetime(2026, 6, 16, 12, 0, 0, tzinfo=UTC)
 PROGRESSING = (condition("Ready", "Unknown", "Progressing"),)
 INSTALL_FAILED = (condition("Ready", "False", "InstallFailed", "bad"),)
-
-
-class _Clock:
-    """Monotonic clock: `warmup` reads of 0.0, then advancing by `step` per read."""
-
-    def __init__(self, *, step: float = 0.0, warmup: int = 0) -> None:
-        self.step, self.warmup, self.reads, self.t = step, warmup, 0, 0.0
-
-    def __call__(self) -> float:
-        self.reads += 1
-        if self.reads <= self.warmup:
-            return 0.0
-        value, self.t = self.t, self.t + self.step
-        return value
 
 
 def _monitor(
@@ -65,8 +50,7 @@ def _monitor(
         settings=Settings(kube_context="lab", command_timeout=30.0),
         events=EventWriter(EventLog()),
         sleep=sleep,
-        clock=clock or _Clock(),
-        now=lambda: WALL,
+        clock=clock or Clock(),
         rand=rand,
         progress=progress,
     )
@@ -194,7 +178,7 @@ def test_a_workload_that_never_converges_times_out_the_release() -> None:
     runner.respond_each(workloads(), items(deployment(converged=False)))
     runner.respond(argv_prefix("kubectl", "get", "events"), stdout="BackOff pulling image")
     # Hold the clock until the first poll is recorded, then pass per-HR but not total.
-    clock = _Clock(step=400.0, warmup=5)
+    clock = Clock(step=400.0, warmup=5)
 
     [outcome] = _monitor(runner, clock=clock, per_poll_timeout_seconds=7.0).outcomes
 
@@ -213,7 +197,7 @@ def test_the_total_budget_times_out_the_releases_still_waiting() -> None:
         helmrelease("a2", "ns", generation=2, conditions=PROGRESSING),
     )
 
-    result = _monitor(runner, clock=_Clock(step=500.0), concurrency=3)
+    result = _monitor(runner, clock=Clock(step=500.0), concurrency=3)
 
     assert sorted(o.verdict for o in result.outcomes) == ["ready", "timed-out", "timed-out"]
 
@@ -235,7 +219,7 @@ def test_repeated_polls_record_one_transition_per_change() -> None:
     history_lag = helmrelease(generation=2, observed=2, history="old", conditions=PROGRESSING)
     runner = cluster([gen_lag] * 10 + [history_lag] * 2)
 
-    [outcome] = _monitor(runner, clock=_Clock(step=400.0, warmup=50)).outcomes
+    [outcome] = _monitor(runner, clock=Clock(step=400.0, warmup=50)).outcomes
 
     phases = [t.phase for t in outcome.recent_transitions]
     assert phases == ["GenerationLag", "HistoryLag"]
@@ -247,7 +231,7 @@ def test_only_the_last_five_transitions_are_kept() -> None:
     history_lag = helmrelease(generation=2, observed=2, history="old", conditions=PROGRESSING)
     runner = cluster([gen_lag, history_lag] * 6)
 
-    [outcome] = _monitor(runner, clock=_Clock(step=400.0, warmup=50)).outcomes
+    [outcome] = _monitor(runner, clock=Clock(step=400.0, warmup=50)).outcomes
 
     assert len(outcome.recent_transitions) == 5
 
@@ -264,7 +248,7 @@ def test_a_release_deleted_mid_watch_fails_as_disappeared() -> None:
 def test_a_flaky_poll_is_recorded_and_the_watch_continues() -> None:
     runner = cluster([helmrelease(generation=2, conditions=PROGRESSING), failure("flake")])
 
-    [outcome] = _monitor(runner, clock=_Clock(step=200.0)).outcomes
+    [outcome] = _monitor(runner, clock=Clock(step=200.0)).outcomes
 
     assert outcome.verdict == "timed-out"
     assert "PollError" in [t.phase for t in outcome.recent_transitions]

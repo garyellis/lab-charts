@@ -198,7 +198,6 @@ def run(
     events: EventWriter,
     progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> TestResult:
     """Test every matching HelmRelease in parallel; return an aggregate TestResult.
 
@@ -220,7 +219,7 @@ def run(
         deps_are_fresh=dependencies.deps_are_fresh,
         chart_has_dependencies=dependencies.chart_has_dependencies,
     )
-    tester = _Tester(client, kubectl, helm, clock, now, progress)
+    tester = _Tester(client, kubectl, helm, clock, progress)
     start = clock()
     matched = filter_matched_statuses(
         client,
@@ -286,7 +285,6 @@ class _Tester:
     kubectl: Kubectl
     helm: Helm
     clock: Callable[[], float]
-    now: Callable[[], datetime]
     progress: Callable[[HelmReleaseRef, Transition], None] | None
 
     # --- per-HR pipeline ---------------------------------------------------
@@ -852,7 +850,7 @@ class _Tester:
 
     def _fire(self, ctx: _RunContext, phase: str, detail: str) -> None:
         """Record a phase transition (ring-buffered) and fire the progress callback safely."""
-        t = Transition(at=self.now(), phase=phase, detail=detail)
+        t = Transition(at=datetime.now(UTC), phase=phase, detail=detail)
         ctx.phase_log.append(t)
         if self.progress is None:
             return
