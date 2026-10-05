@@ -1,7 +1,6 @@
 """In-place version edits for HelmRelease YAML files."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,24 +10,14 @@ from chart_manager.plumbing.yaml_files import edit_yaml_documents
 from .scanner import is_helmrelease
 
 
-@dataclass(frozen=True)
-class EditResult:
-    """Result of editing one file: how many docs were rewritten."""
-
-    path: Path
-    changed_docs: int
-
-
 def set_version(
     file_path: Path,
     *,
     chart_name: str,
     new_version: str,
-) -> EditResult:
+) -> None:
     """Rewrite `.spec.chart.spec.version` for every matching HelmRelease in `file_path`."""
-    changed = 0
     def edit(docs: list[Any]) -> None:
-        nonlocal changed
         for doc in docs:
             if not is_helmrelease(doc):
                 continue
@@ -38,13 +27,11 @@ def set_version(
             if str(inner.get("version")) == new_version:
                 continue
             inner["version"] = new_version
-            changed += 1
 
     try:
         edit_yaml_documents(file_path, edit)
     except YamlError as exc:
         raise ChartManagerError(f"failed to edit {file_path}: {exc}") from exc
-    return EditResult(path=file_path, changed_docs=changed)
 
 
 def _chart_spec_inner(doc: Any) -> dict[str, Any] | None:

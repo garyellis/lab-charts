@@ -29,9 +29,8 @@ def test_set_version_updates_matching_chart(tmp_path: Path) -> None:
     f = tmp_path / "loki.yaml"
     f.write_text(_HR)
 
-    result = set_version(f, chart_name="loki", new_version="0.1.2")
+    set_version(f, chart_name="loki", new_version="0.1.2")
 
-    assert result.changed_docs == 1
     text = f.read_text()
     assert 'version: "0.1.2"' in text
     # Comment preserved by round-trip loader.
@@ -43,9 +42,8 @@ def test_set_version_no_op_when_already_target(tmp_path: Path) -> None:
     original = _HR.replace('"0.1.1"', '"0.1.2"')
     f.write_text(original)
 
-    result = set_version(f, chart_name="loki", new_version="0.1.2")
+    set_version(f, chart_name="loki", new_version="0.1.2")
 
-    assert result.changed_docs == 0
     assert f.read_text() == original
 
 
@@ -53,9 +51,8 @@ def test_set_version_skips_other_charts(tmp_path: Path) -> None:
     f = tmp_path / "grafana.yaml"
     f.write_text(_HR.replace("chart: loki", "chart: grafana"))
 
-    result = set_version(f, chart_name="loki", new_version="9.9.9")
+    set_version(f, chart_name="loki", new_version="9.9.9")
 
-    assert result.changed_docs == 0
     assert "9.9.9" not in f.read_text()
 
 
@@ -64,10 +61,9 @@ def test_set_version_updates_only_matching_doc_in_multidoc(tmp_path: Path) -> No
     second = _HR.replace("chart: loki", "chart: grafana").replace("name: loki", "name: grafana")
     f.write_text(_HR + second)
 
-    result = set_version(f, chart_name="loki", new_version="0.2.0")
+    set_version(f, chart_name="loki", new_version="0.2.0")
 
-    assert result.changed_docs == 1
     text = f.read_text()
-    assert 'version: "0.2.0"' in text
+    assert text.count('version: "0.2.0"') == 1
     # grafana version unchanged
     assert text.count('version: "0.1.1"') == 1
