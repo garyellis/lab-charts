@@ -75,7 +75,7 @@ COMMAND_REQUIREMENTS: Final[Mapping[str, frozenset[str]]] = {
     "local up": frozenset({"helm", "kubectl", "kind"}),
     "plan": frozenset({"git"}),
     "promote monitor": frozenset({"kubectl", "events"}),
-    "promote pr": frozenset({"git", "events"}),
+    "promote pr": frozenset({"git", "github", "events"}),
     "promote test": frozenset({"helm", "kubectl", "events"}),
     "schemas sync": frozenset({"git", "schemas"}),
     "upgrade-finalize": frozenset({"git"}),

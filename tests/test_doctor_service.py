@@ -478,18 +478,27 @@ def test_for_narrows_to_the_capabilities_that_command_needs() -> None:
     assert report.selector == "chart validate"
 
 
-def test_schema_sync_requires_git_and_read_only_schema_preflight() -> None:
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("schemas sync", ["git", "schema-store"]),
+        # The promotion PR is opened with `gh`.
+        ("promote pr", ["git", "github", "events"]),
+    ],
+)
+def test_for_runs_only_the_checks_that_command_needs(command: str, expected: list[str]) -> None:
     service = DoctorService(
         {
             "git": _provider(Check.ok("git", "")),
+            "github": _provider(Check.ok("github", "")),
             "schemas": _provider(Check.ok("schema-store", "ready=true")),
             "events": _provider(Check.ok("events", "")),
         }
     )
 
-    report = service.run(for_command="schemas sync")
+    report = service.run(for_command=command)
 
-    assert [check.name for check in report.checks] == ["git", "schema-store"]
+    assert [check.name for check in report.checks] == expected
 
 
 def test_a_capability_with_no_requirements_runs_nothing() -> None:
