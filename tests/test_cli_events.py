@@ -26,8 +26,8 @@ import pytest
 
 from chart_manager.cli import events as events_cli
 from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
-from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
-from chart_manager.services.events.ref import SEPARATOR
+from chart_manager.shared.events.model import BuildPhase, PromotionPhase
+from chart_manager.shared.events.ref import SEPARATOR
 
 from .conftest import cli
 
@@ -171,7 +171,7 @@ def test_the_surface_delegates_the_grammar_to_the_service() -> None:
         alias.name
         for node in ast.walk(_cli_events_ast())
         if isinstance(node, ast.ImportFrom)
-        and node.module == "chart_manager.services.events.ref"
+        and node.module == "chart_manager.shared.events.ref"
         for alias in node.names
     }
 
@@ -196,7 +196,7 @@ def test_the_surface_never_names_the_separator() -> None:
 
     assert not offenders, (
         f"cli/events.py handles the ref separator itself at line(s) {offenders}; "
-        "the grammar belongs to services/events/ref.py"
+        "the grammar belongs to shared/events/ref.py"
     )
 
 
@@ -307,10 +307,8 @@ def test_dry_run_prints_the_composed_document_and_confirms_nothing(
     Backend resolution is rigged to fail, so the test proves --dry-run never
     reaches it; EVENTS_BACKEND is unset, which is the shipped default.
     """
-    from chart_manager.services.events import writer as writer_module
-
     monkeypatch.setattr(
-        writer_module,
+        events_cli,
         "get_event_store",
         lambda: pytest.fail("--dry-run resolved an event store"),
     )
@@ -427,7 +425,7 @@ def test_list_with_a_versioned_selector_selects_one_release_timeline(reader) -> 
 
 
 def test_list_passes_the_limit_through_and_defaults_it(reader) -> None:
-    from chart_manager.services.events.query import DEFAULT_LIMIT
+    from chart_manager.shared.events.query import DEFAULT_LIMIT
 
     cli("event", "list")
     cli("event", "list", "-n", "5")
@@ -503,12 +501,12 @@ def test_list_renders_newest_first_across_mixed_timezone_stamps(
     newer. The fake container returns the backend's string order."""
 
     class FakeContainer:
-        def query_items(self, **kwargs: Any) -> list[dict[str, Any]]:
+        def query(self, sql: str, parameters: Any, partition_key: Any) -> list[dict[str, Any]]:
             offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
             utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
             return [offset, utc]  # string order: +02:00 first
 
-    from chart_manager.services.events import store as store_module
+    from chart_manager.shared.events import store as store_module
 
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
     monkeypatch.setattr(store_module, "get_container", lambda **kwargs: FakeContainer())

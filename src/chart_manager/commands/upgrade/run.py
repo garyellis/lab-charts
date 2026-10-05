@@ -24,7 +24,7 @@ from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 _LOG = logging.getLogger(__name__)

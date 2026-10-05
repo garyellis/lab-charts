@@ -9,16 +9,16 @@ what makes DESIGN.md's "duration from renovate PR propagation to all envs"
 uncomputable.
 
 This module holds the promotion wiring. The *failure policy* it used to own
-now lives in `services/events/failure.py`, which grew a fourth caller (the
+now lives in `shared/events/failure.py`, which grew a fourth caller (the
 upgrade service) and no longer belongs to this domain.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.lifecycle import PromotionPhase
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.model import PromotionPhase
+from chart_manager.shared.events.writer import EventWriter
 
 from .state import START_PHASE, TERMINAL_PHASES, Stage, Verdict
 

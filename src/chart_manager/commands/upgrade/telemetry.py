@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.lifecycle import BuildPhase
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.model import BuildPhase
+from chart_manager.shared.events.writer import EventWriter
 
 from .models import UpgradeResult, UpgradeStatus
 

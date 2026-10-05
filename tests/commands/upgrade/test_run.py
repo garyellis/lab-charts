@@ -13,9 +13,9 @@ from chart_manager.commands.upgrade import (
 )
 from chart_manager.commands.upgrade.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.services.events.lifecycle import BuildPhase, PlatformLifecycleEvent
-from chart_manager.services.events.store import EventQuery
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
+from chart_manager.shared.events.store import EventQuery
+from chart_manager.shared.events.writer import EventWriter
 from tests.conftest import FakeCommandRunner, Reply, workspace_for
 
 _BRANCH = "renovate/my-chart/my-chart"
@@ -95,7 +95,7 @@ def _upgrade(
         UpgradeRequest(chart_path=chart, dry_run=dry_run),
         workspace=workspace_for(tmp_path),
         runner=runner,
-        events=EventWriter(events if events is not None else _EventLog()),
+        events=EventWriter(source="chart-manager", store=lambda: events if events is not None else _EventLog()),
     )
 
 

@@ -21,11 +21,11 @@ from chart_manager.integrations.helm import Helm, PackageResult
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.semver import SemVer, parse_semver
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.lifecycle import BuildPhase
-from chart_manager.services.events.writer import EventWriter
 from chart_manager.shared.charts import dependencies
 from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.model import BuildPhase
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 

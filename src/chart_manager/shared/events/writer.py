@@ -1,32 +1,32 @@
 """EventWriter: the capability layer that builds lifecycle events and writes them to a store."""
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from chart_manager.services.events.lifecycle import (
+from chart_manager.shared.events.model import (
     BuildPhase,
     PlatformLifecycleEvent,
     PromotionPhase,
 )
-from chart_manager.services.events.store import EventStore, get_event_store
+from chart_manager.shared.events.store import EventStore
 
 
 class EventWriter:
     """Assemble PlatformLifecycleEvents and persist them via a lazily-resolved EventStore."""
 
-    def __init__(
-        self,
-        store: EventStore | None = None,
-        *,
-        source: str = "chart-manager",
-    ) -> None:
-        """Optionally inject a store; otherwise it's resolved on first write."""
-        self._store = store    # resolved lazily so constructing is free
+    def __init__(self, source: str, store: Callable[[], EventStore]) -> None:
+        """Bind the event source and the store factory, called on the first write.
+
+        Resolving lazily means a run that never emits never touches the backend.
+        """
         self._source = source
+        self._store_factory = store
+        self._store: EventStore | None = None
 
     def _get_store(self) -> EventStore:
-        """Return the store, resolving it from EVENTS_BACKEND on first use."""
+        """Return the store, resolving it from the factory on first use."""
         if self._store is None:
-            self._store =  get_event_store()
+            self._store = self._store_factory()
         return self._store
 
     def compose_build(

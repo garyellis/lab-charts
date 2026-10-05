@@ -4,7 +4,7 @@ Before this module the vertical carried three disconnected vocabularies: two
 `Literal` verdict sets (`monitor.Verdict` and `test.TestVerdict`, overlapping
 by four members with no shared supertype), a free-form `reason: str` whose
 value set was implicit across ~24 literal call sites, and
-`events.lifecycle.PromotionPhase`, which nothing in monitor or test could
+`events.model.PromotionPhase`, which nothing in monitor or test could
 reach. Every consumer -- renderer, wire projection, CLI exit code -- then
 re-derived run state from those primitives independently, which is how "which
 verdicts count as success" ended up copy-pasted into six places across two
@@ -28,7 +28,7 @@ from enum import StrEnum
 
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.events.lifecycle import PromotionPhase
+from chart_manager.shared.events.model import PromotionPhase
 
 __all__ = [
     "DETAIL_MAX",

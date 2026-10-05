@@ -38,7 +38,7 @@ from chart_manager.plumbing.preflight import (
     probe_binary,
 )
 from chart_manager.services.doctor import COMMAND_REQUIREMENTS, DoctorService
-from chart_manager.services.events.store import preflight_event_store
+from chart_manager.shared.events.store import preflight_event_store
 
 from .conftest import FakeCommandRunner, _root_app
 

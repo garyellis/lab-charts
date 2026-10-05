@@ -12,8 +12,8 @@ from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.semver import parse_semver
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan

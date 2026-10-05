@@ -17,9 +17,9 @@ from chart_manager.commands.promote.state import (
     run_verdict,
 )
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.lifecycle import PromotionPhase
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.model import PromotionPhase
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
@@ -40,7 +40,7 @@ def _monitor(runner: FakeCommandRunner, events: EventLog, **request: Any) -> mon
         MonitorRequest(**{"chart_name": CHART, "version": VERSION, "environment": ENV, **request}),
         runner=runner,
         settings=Settings(),
-        events=EventWriter(events),
+        events=EventWriter(source="chart-manager", store=lambda: events),
         sleep=lambda _s: None,
         clock=lambda: 0.0,
         rand=lambda _lo, _hi: 0.0,
@@ -53,7 +53,7 @@ def _test(runner: FakeCommandRunner, events: EventLog, **request: Any) -> test.T
         TestRequest(per_hr_timeout_seconds=60.0, total_timeout_seconds=300.0, **fields),
         runner=runner,
         settings=Settings(),
-        events=EventWriter(events),
+        events=EventWriter(source="chart-manager", store=lambda: events),
         clock=lambda: 0.0,
     )
 

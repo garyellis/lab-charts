@@ -22,7 +22,7 @@ from typing import Any
 
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.events.ref import ChartSelector
+from chart_manager.shared.events.ref import ChartSelector
 
 __all__ = [
     "DEFAULT_LIMIT",

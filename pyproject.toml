@@ -165,7 +165,7 @@ directly (ADR-0001)."""
 # change the serialized shape of rows that already exist, so the exemption is
 # deliberate and belongs with the data, not in a lint backlog. Revisit only
 # alongside a migration of the stored events.
-"src/chart_manager/services/events/lifecycle.py" = ["UP042"]
+"src/chart_manager/shared/events/model.py" = ["UP042"]
 # ARG on signatures that are not ours to shorten. `NullEventStore.write` is
 # the EventStore protocol's do-nothing implementation -- dropping the event
 # *is* the behavior, and the parameter name is part of the contract it
@@ -174,7 +174,7 @@ directly (ADR-0001)."""
 # `dotenv_settings` from the returned tuple is the documented decision at
 # settings.py:110. Both are structural, not dead code, so they are exempted
 # by code rather than left as a standing lint backlog.
-"src/chart_manager/services/events/store.py" = ["ARG002"]
+"src/chart_manager/shared/events/store.py" = ["ARG002"]
 "src/chart_manager/shared/settings.py" = ["ARG003"]
 # TID251 lift: the layers that are *supposed* to reach for adapters.
 # integrations/ is the adapter layer itself; services/ owns the ports that
@@ -189,6 +189,8 @@ directly (ADR-0001)."""
 "src/chart_manager/commands/**/*.py" = ["TID251"]
 # shared/cluster provisions and installs into clusters for test and local (ADR-0001).
 "src/chart_manager/shared/cluster/**/*.py" = ["TID251"]
+# shared/events builds its event stores on the Cosmos and DynamoDB integrations (ADR-0001).
+"src/chart_manager/shared/events/**/*.py" = ["TID251"]
 "src/chart_manager/composition.py" = ["TID251"]
 
 [tool.ruff.format]

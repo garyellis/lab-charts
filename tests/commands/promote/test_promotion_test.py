@@ -12,7 +12,7 @@ from chart_manager.commands.promote.test import run
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout
 from chart_manager.plumbing.text import truncate_bytes
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
@@ -49,7 +49,7 @@ def _test(
         TestRequest(**fields),
         runner=runner,
         settings=Settings(kube_context="lab"),
-        events=EventWriter(EventLog()),
+        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
         clock=clock or Clock(),
         progress=progress,
     )

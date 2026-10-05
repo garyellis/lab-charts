@@ -10,8 +10,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from chart_manager.services.events.lifecycle import PlatformLifecycleEvent, PromotionPhase
-from chart_manager.services.events.store import EventQuery
+from chart_manager.shared.events.model import PlatformLifecycleEvent, PromotionPhase
+from chart_manager.shared.events.store import EventQuery
 from tests.conftest import FakeCommandRunner, Predicate, Reply, argv_prefix, plain_argv
 
 CHART = "loki"

@@ -16,7 +16,7 @@ from chart_manager.commands.promote.state import NO_MATCH_REF, Stage, Verdict
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import EventLog
 
 
@@ -162,7 +162,7 @@ def test_nothing_matched_reports_the_time_since_the_callers_start() -> None:
         total_deadline=1_000.0,
         concurrency=1,
         telemetry=PromotionTelemetry(
-            writer=EventWriter(events), chart_name="loki", version="0.2.0", environment="dev"
+            writer=EventWriter(source="chart-manager", store=lambda: events), chart_name="loki", version="0.2.0", environment="dev"
         ),
         stage=Stage.ROLLOUT,
         success=Verdict.READY,

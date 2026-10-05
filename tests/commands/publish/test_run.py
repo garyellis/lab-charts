@@ -15,9 +15,9 @@ from chart_manager.commands.publish import (
 )
 from chart_manager.commands.publish.run import run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
-from chart_manager.services.events.lifecycle import BuildPhase, PlatformLifecycleEvent
-from chart_manager.services.events.store import EventQuery
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
+from chart_manager.shared.events.store import EventQuery
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, MakeChart, plain_argv, workspace_for
 
@@ -68,7 +68,7 @@ def _run(
         workspace=workspace_for(root),
         runner=runner,
         settings=Settings(kube_context="lab"),
-        events=EventWriter(store or _Store()),
+        events=EventWriter(source="chart-manager", store=lambda: store or _Store()),
     )
 
 

@@ -17,6 +17,8 @@ from chart_manager.cli.streams import console, narration
 from chart_manager.commands.publish.models import PublishKind, PublishOutcome, PublishRequest
 from chart_manager.commands.publish.run import run
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.shared.events.store import get_event_store
+from chart_manager.shared.events.writer import EventWriter
 
 
 def register(app: typer.Typer) -> None:
@@ -102,7 +104,7 @@ def publish(
         workspace=container.workspace(),
         runner=container.command_runner(),
         settings=container.settings,
-        events=container.event_writer(),
+        events=EventWriter(source=container.settings.event_source, store=get_event_store),
     )
     if dry_run:
         _render_plan(result)

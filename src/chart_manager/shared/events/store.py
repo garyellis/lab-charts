@@ -30,14 +30,12 @@ from typing import Any, Protocol
 
 from chart_manager.integrations import cosmos as cosmos_client
 from chart_manager.integrations import dynamodb as dynamodb_client
-from chart_manager.integrations.cosmos import get_container
-from chart_manager.integrations.dynamodb import get_table
+from chart_manager.integrations.cosmos import CosmosContainer, get_container
+from chart_manager.integrations.dynamodb import DynamoDBTable, get_table
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
-from chart_manager.services.events.adapters.cosmos import CosmosEventStore
-from chart_manager.services.events.adapters.dynamodb import DynamoDBEventStore
-from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
-from chart_manager.services.events.query import (
+from chart_manager.shared.events.model import PlatformLifecycleEvent
+from chart_manager.shared.events.query import (
     EventQuery,
     EventsDisabledError,
     dynamodb_read_unsupported,
@@ -45,7 +43,7 @@ from chart_manager.services.events.query import (
 )
 
 # The attribute both backends partition on. Named once so the writer, the
-# adapters, and scripts/query-events cannot drift apart.
+# stores, and scripts/query-events cannot drift apart.
 PARTITION_KEY = "chart_name"
 
 # Where the events live, named once so `preflight_event_store` probes exactly
@@ -101,6 +99,94 @@ class NullEventStore:
             "events are disabled (EVENTS_BACKEND is unset or 'none'); "
             "set EVENTS_BACKEND=cosmos to record and read lifecycle events"
         )
+
+class CosmosEventStore:
+    """Read and write lifecycle events in a Cosmos container (chart_name partition key)."""
+
+    def __init__(self, container: CosmosContainer) -> None:
+        """Bind the Cosmos document container."""
+        self._container = container
+
+    def write(self, event: PlatformLifecycleEvent) -> None:
+        """Persist one event; requires chart_name (the partition key)."""
+        if not event.chart_name:
+            raise ValueError("chart_name is required (it is the partition key)")
+        item = event.to_dict()
+        # A stable id turns retrying an authoritative transition into an
+        # upsert. Events without one retain the append-only UUID behavior.
+        item["id"] = event.idempotency_key or item["uuid"]
+        self._container.write(item, upsert=event.idempotency_key is not None)
+
+    def query(self, query: EventQuery) -> list[dict[str, Any]]:
+        """Read events newest-first, optionally narrowed by chart / release.
+
+        A chart-scoped query is a single-partition read (`chart_name` is the
+        partition key, and `correlation_id` narrows *within* the partition);
+        the unfiltered view fans out across partitions, acceptable at this
+        ledger's write rate.
+
+        Indexing assumption: a single-field `ORDER BY c.timestamp` needs only
+        Cosmos's *default* indexing policy (every path range-indexed), which
+        is exactly what `integrations/cosmos.py::get_container` creates -- it
+        never customizes the policy. A future composite ORDER BY (say,
+        timestamp within chart) would need a composite index declared there.
+        """
+        clauses: list[str] = []
+        parameters: list[dict[str, Any]] = [{"name": "@limit", "value": query.limit}]
+        if query.chart_name is not None:
+            clauses.append("c.chart_name = @chart_name")
+            parameters.append({"name": "@chart_name", "value": query.chart_name})
+        if query.correlation_id is not None:
+            clauses.append("c.correlation_id = @correlation_id")
+            parameters.append({"name": "@correlation_id", "value": query.correlation_id})
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        return self._container.query(
+            f"SELECT * FROM c{where} ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit",
+            parameters,
+            partition_key=query.chart_name,
+        )
+
+
+class DynamoDBEventStore:
+    """Write lifecycle events to DynamoDB (chart_name HASH + synthesized sort key)."""
+
+    def __init__(self, table: DynamoDBTable, *, sort_key: str = "event_id") -> None:
+        """Bind the DynamoDB document table and the range-key attribute name."""
+        self._table = table
+        self._sort_key = sort_key
+
+    def write(self, event: PlatformLifecycleEvent) -> None:
+        """Persist one event; requires chart_name (the partition key)."""
+        if not event.chart_name:
+            raise ValueError("chart_name is required (it is the partition key)")
+        item = event.to_dict()
+
+        # Authoritative retry-safe transitions use a stable range key and
+        # overwrite their prior attempt. Events without a key remain an
+        # append-only, time-ordered stream.
+        item[self._sort_key] = (
+            f"idempotent#{event.idempotency_key}"
+            if event.idempotency_key is not None
+            else f"{item['timestamp']}#{item['uuid']}"
+        )
+
+        # boto3's resource serializer rejects tuples; images is a tuple
+        item["images"] = list(item["images"])
+
+        # put overwrites retry-safe transitions and appends UUID-backed
+        # events. The timestamp remains in the item for chronological reads.
+        self._table.put(item)
+
+    def query(self, query: EventQuery) -> list[dict[str, Any]]:
+        """Refuse with the Cosmos-only message; the write path is unaffected.
+
+        The all-charts view needs either a Scan or a `chart_name`/`timestamp`
+        GSI, and the sort key's `idempotent#` prefix breaks time-ordering
+        within a partition -- both deliberately deferred with the DynamoDB
+        read side. `scripts/query-events-dynamodb` remains the dev tool.
+        """
+        raise dynamodb_read_unsupported()
+
 
 def _build_cosmos_store() -> CosmosEventStore:
     """Wire a CosmosEventStore against the platform/lifecycle-events container."""

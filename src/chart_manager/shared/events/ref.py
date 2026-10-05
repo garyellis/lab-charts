@@ -2,7 +2,7 @@
 
 The token is not a CLI convenience. It is already the events wire format:
 `PlatformLifecycleEvent.correlation_id` is `f"{chart_name}@{chart_version}"`
-(`lifecycle.py`), the join key that makes one version's timeline a timeline.
+(`model.py`), the join key that makes one version's timeline a timeline.
 A surface that accepted `--chart` and `--version` separately would be
 splitting a token the system composes anyway, and would then own the rule for
 how the halves go back together -- in `cli/`, where a REST handler or a Slack
@@ -68,7 +68,7 @@ __all__ = [
 ]
 
 #: The one character that joins the two halves. Named so the schema comment
-#: in `lifecycle.py`, this grammar and any future formatter cannot drift.
+#: in `model.py`, this grammar and any future formatter cannot drift.
 SEPARATOR = "@"
 
 #: Quoted in every rejection, because a grammar error the caller cannot act

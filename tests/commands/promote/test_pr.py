@@ -14,8 +14,8 @@ from chart_manager.commands.promote.pr import run
 from chart_manager.commands.promote.state import PromoteStatus
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.events.lifecycle import PromotionPhase
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.model import PromotionPhase
+from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import EventLog, calls
 from tests.conftest import FakeCommandRunner, argv_prefix
 
@@ -90,7 +90,7 @@ def _promote(
             dry_run=dry_run,
         ),
         runner=runner,
-        events=EventWriter(events or EventLog()),
+        events=EventWriter(source="chart-manager", store=lambda: events or EventLog()),
         confirm_downgrade=confirm,
     )
 

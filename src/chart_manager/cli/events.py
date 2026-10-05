@@ -10,7 +10,7 @@ own outcome.
 
 The chart and version arrive as one `CHART@VERSION` positional (`event
 list` takes the optional-version `CHART[@VERSION]` selector), parsed by
-`services/events/ref.py`. Nothing here looks for an `@`: the token is the
+`shared/events/ref.py`. Nothing here looks for an `@`: the token is the
 event `correlation_id`, so its grammar is the events domain's, not the
 surface's (design commitment 6). The old `--chart` / `--version` flag pair
 stays accepted as a hidden alias and reaches the same resolver.
@@ -31,22 +31,22 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
 from chart_manager.cli.streams import console, errors, narration
 from chart_manager.plumbing.exit_codes import exit_code_for
-from chart_manager.services.events.failure import emit_non_fatal
-from chart_manager.services.events.lifecycle import BuildPhase, PromotionPhase
-from chart_manager.services.events.query import (
+from chart_manager.services.events.wire import events_to_dict
+from chart_manager.shared.events.failure import emit_non_fatal
+from chart_manager.shared.events.model import BuildPhase, PromotionPhase
+from chart_manager.shared.events.query import (
     DEFAULT_LIMIT,
     EventQuery,
     EventReadError,
 )
-from chart_manager.services.events.ref import (
+from chart_manager.shared.events.ref import (
     ChartRef,
     ChartRefError,
     parse_ref,
     parse_selector,
 )
-from chart_manager.services.events.store import query_events
-from chart_manager.services.events.wire import events_to_dict
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.store import get_event_store, query_events
+from chart_manager.shared.events.writer import EventWriter
 
 RefArgument = Annotated[
     str,
@@ -58,15 +58,8 @@ RefArgument = Annotated[
 
 
 def _make_event_writer() -> EventWriter:
-    """Build the lifecycle-event writer (module-level so tests can override).
-
-    Comes from the composition root rather than `EventWriter()` inline: the
-    container memoizes the writer, so the EventStore it lazily resolves (and
-    the Cosmos/DynamoDB client behind it) is built once per container instead
-    of once per emitted event. Harmless in a process-per-invocation CLI,
-    load-bearing for a long-lived server fronting the same capability.
-    """
-    return container().event_writer()
+    """Build the lifecycle-event writer (module-level so tests can override)."""
+    return EventWriter(source=container().settings.event_source, store=get_event_store)
 
 
 def _parse_at(at: str | None) -> datetime | None:

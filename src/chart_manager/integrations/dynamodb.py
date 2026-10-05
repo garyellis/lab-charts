@@ -1,13 +1,16 @@
 """DynamoDB access via boto3, with a DYNAMODB_ENDPOINT override for dynamodb-local."""
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.config import Config
 
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import PROBE_TIMEOUT, Check, first_line
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.service_resource import Table
 
 
 def _session_kwargs() -> dict[str, Any]:
@@ -37,7 +40,19 @@ def get_dynamodb_resource():
     return boto3.resource("dynamodb", **_session_kwargs())
 
 
-def get_table(table_name: str, partition_key: str, sort_key: str):
+class DynamoDBTable:
+    """One DynamoDB table, written as JSON documents."""
+
+    def __init__(self, table: "Table") -> None:
+        """Bind the boto3 Table."""
+        self._table = table
+
+    def put(self, item: dict[str, Any]) -> None:
+        """Write `item`, replacing any item with the same key."""
+        self._table.put_item(Item=item)
+
+
+def get_table(table_name: str, partition_key: str, sort_key: str) -> DynamoDBTable:
     """Create the table (string HASH+RANGE keys, on-demand billing) if missing; return it.
 
     If the table already exists, its key schema is NOT verified against the
@@ -63,7 +78,7 @@ def get_table(table_name: str, partition_key: str, sort_key: str):
         table = resource.Table(table_name)
 
     table.wait_until_exists()
-    return table
+    return DynamoDBTable(table)
 
 
 def preflight(table_name: str, *, timeout: float = PROBE_TIMEOUT) -> Check:

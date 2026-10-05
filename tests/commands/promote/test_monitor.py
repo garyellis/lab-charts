@@ -12,7 +12,7 @@ from chart_manager.commands.promote.monitor import run
 from chart_manager.commands.promote.state import DETAIL_MAX, Reason
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
@@ -49,7 +49,7 @@ def _monitor(
         MonitorRequest(**{"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}),
         runner=runner,
         settings=Settings(kube_context="lab", command_timeout=30.0),
-        events=EventWriter(EventLog()),
+        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
         sleep=sleep or clock.sleep,
         clock=clock,
         rand=rand,

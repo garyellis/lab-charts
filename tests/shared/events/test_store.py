@@ -1,4 +1,4 @@
-"""Backend selection and the partition key both stores are keyed on.
+"""The event stores' event -> document mapping, and backend selection.
 
 The partition key moved from `correlation_id` (`chart@version`) to
 `chart_name`. `correlation_id` remains the *join* key -- DESIGN.md's duration
@@ -7,10 +7,12 @@ key: a fresh partition per version turned "what happened to this chart?" into
 a cross-partition fan-out and scattered a chart's history across as many
 partitions as it had releases.
 
-These tests pin the key in both adapters and in the wiring, because nothing
+These tests pin the key in both stores and in the wiring, because nothing
 else does: a drift between the container's declared partition key and the
 attribute the writer populates does not fail at write time, it fails as a
-mis-partitioned document that queries silently miss.
+mis-partitioned document that queries silently miss. The stores are driven
+against fake document containers and tables, the shape `integrations/` hands
+them.
 """
 
 from __future__ import annotations
@@ -21,12 +23,13 @@ from typing import Any
 
 import pytest
 
-from chart_manager.services.events import store as store_module
-from chart_manager.services.events.adapters.cosmos import CosmosEventStore
-from chart_manager.services.events.adapters.dynamodb import DynamoDBEventStore
-from chart_manager.services.events.lifecycle import BuildPhase, PlatformLifecycleEvent
-from chart_manager.services.events.store import (
+from chart_manager.shared.events import store as store_module
+from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
+from chart_manager.shared.events.query import EventQuery, EventReadUnsupportedError
+from chart_manager.shared.events.store import (
     PARTITION_KEY,
+    CosmosEventStore,
+    DynamoDBEventStore,
     NullEventStore,
     get_event_store,
 )
@@ -55,23 +58,30 @@ def _event(*, chart_name: str = "loki", version: str | None = "1.2.4") -> Platfo
 
 
 class _FakeContainer:
-    def __init__(self) -> None:
+    """A document container: records writes and queries, replays scripted documents."""
+
+    def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
+        self.documents = documents or []
         self.items: list[dict[str, Any]] = []
         self.upserted: list[dict[str, Any]] = []
+        self.queries: list[tuple[str, list[dict[str, Any]], str | None]] = []
 
-    def create_item(self, item: dict[str, Any]) -> None:
-        self.items.append(item)
+    def write(self, item: dict[str, Any], *, upsert: bool) -> None:
+        (self.upserted if upsert else self.items).append(item)
 
-    def upsert_item(self, item: dict[str, Any]) -> None:
-        self.upserted.append(item)
+    def query(
+        self, sql: str, parameters: list[dict[str, Any]], partition_key: str | None
+    ) -> list[dict[str, Any]]:
+        self.queries.append((sql, parameters, partition_key))
+        return list(self.documents)
 
 
 class _FakeTable:
     def __init__(self) -> None:
         self.items: list[dict[str, Any]] = []
 
-    def put_item(self, *, Item: dict[str, Any]) -> None:  # boto3's own kwarg casing
-        self.items.append(Item)
+    def put(self, item: dict[str, Any]) -> None:
+        self.items.append(item)
 
 
 # ----- the partition key ---------------------------------------------------
@@ -125,7 +135,7 @@ def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
     ],
     ids=["cosmos", "dynamodb"],
 )
-def test_both_adapters_reject_an_event_without_a_partition_key(adapter: Any) -> None:
+def test_both_stores_reject_an_event_without_a_partition_key(adapter: Any) -> None:
     with pytest.raises(ValueError, match="chart_name"):
         adapter().write(_event(chart_name=""))
 
@@ -140,6 +150,51 @@ def test_a_versionless_event_is_still_writable() -> None:
     CosmosEventStore(container).write(_event(version=None))
 
     assert container.items[0][PARTITION_KEY] == "loki"
+
+
+# ----- the Cosmos query -----------------------------------------------------
+
+
+def test_the_all_charts_view_is_a_cross_partition_order_by() -> None:
+    container = _FakeContainer()
+
+    CosmosEventStore(container).query(EventQuery(limit=7))
+
+    (sql, parameters, partition_key) = container.queries[0]
+    assert sql == "SELECT * FROM c ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit"
+    assert partition_key is None
+    assert {"name": "@limit", "value": 7} in parameters
+
+
+def test_a_chart_query_is_a_single_partition_read() -> None:
+    """`chart_name` is the partition key; the query must address it as one
+    partition, not fan out and filter."""
+    container = _FakeContainer()
+
+    CosmosEventStore(container).query(EventQuery(chart_name="grafana"))
+
+    (sql, parameters, partition_key) = container.queries[0]
+    assert "WHERE c.chart_name = @chart_name" in sql
+    assert partition_key == "grafana"
+    assert {"name": "@chart_name", "value": "grafana"} in parameters
+
+
+def test_a_release_query_narrows_by_correlation_id_within_the_partition() -> None:
+    container = _FakeContainer()
+
+    CosmosEventStore(container).query(
+        EventQuery(chart_name="grafana", correlation_id="grafana@1.2.3")
+    )
+
+    (sql, parameters, partition_key) = container.queries[0]
+    assert "c.chart_name = @chart_name AND c.correlation_id = @correlation_id" in sql
+    assert partition_key == "grafana"
+    assert {"name": "@correlation_id", "value": "grafana@1.2.3"} in parameters
+
+
+def test_the_dynamodb_store_refuses_a_read_and_points_at_the_script() -> None:
+    with pytest.raises(EventReadUnsupportedError, match="query-events-dynamodb"):
+        DynamoDBEventStore(_FakeTable(), sort_key="event_id").query(EventQuery())
 
 
 # ----- backend selection ---------------------------------------------------

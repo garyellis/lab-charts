@@ -40,6 +40,8 @@ from chart_manager.commands.promote.test import run as run_test
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.shared.events.store import get_event_store
+from chart_manager.shared.events.writer import EventWriter
 
 # --- helpers --------------------------------------------------------------
 
@@ -175,7 +177,7 @@ def monitor(
 
     container = _container()
     runner = container.command_runner()
-    events = container.event_writer()
+    events = EventWriter(source=container.settings.event_source, store=get_event_store)
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
         with ProgressTable(narration) as table:
@@ -245,7 +247,7 @@ def test(
 
     container = _container()
     runner = container.command_runner()
-    events = container.event_writer()
+    events = EventWriter(source=container.settings.event_source, store=get_event_store)
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
         with ProgressTable(narration) as table:
@@ -364,7 +366,7 @@ def pr(
             dry_run=dry_run,
         ),
         runner=container.command_runner(),
-        events=container.event_writer(),
+        events=EventWriter(source=container.settings.event_source, store=get_event_store),
         confirm_downgrade=_confirm_downgrade,
     )
 

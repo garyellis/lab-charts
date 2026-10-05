@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from chart_manager.services.events.query import EventQuery
+from chart_manager.shared.events.query import EventQuery
 
 __all__ = [
     "events_to_dict",

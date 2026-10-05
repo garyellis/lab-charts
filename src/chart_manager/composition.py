@@ -24,20 +24,11 @@ per call, matching what the CLI does today. Anything that owns a real client or
 a cache is memoized on the container:
 
   * `command_runner()` -- stateless, shared by every adapter built here.
-  * `event_writer()`   -- memoized, so the EventStore it resolves lazily
-                          (and the Cosmos/DynamoDB SDK client behind it) is
-                          built at most once per container rather than once
-                          per emitted event.
 
 Everything addressed by a `root` stays per-call and unmemoized on purpose:
 `root` is a per-invocation argument rather than configuration, so a memo
 would need it as a key, and each of these constructions is path arithmetic
 with no I/O behind it.
-
-Note that store resolution stays *lazy* inside `EventWriter`: `EVENTS_BACKEND`
-is still read on first write, not at container construction. Building the
-store eagerly would move a failure that `cli/events.py` currently swallows as
-non-fatal telemetry to before its try/except, which would be a behavior change.
 
 Test seams
 ----------
@@ -67,10 +58,9 @@ from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.doctor import CheckProvider, DoctorService
-from chart_manager.services.events.store import preflight_event_store
-from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
 from chart_manager.shared.charts import dependencies as chart_deps
+from chart_manager.shared.events.store import preflight_event_store
 from chart_manager.shared.settings import Settings, load_settings
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
@@ -88,7 +78,6 @@ class Container:
         """Bind settings (defaults reproduce today's CLI behavior)."""
         self._settings = settings if settings is not None else load_settings()
         self._command_runner: CommandRunner | None = None
-        self._event_writer: EventWriter | None = None
         self._workspaces: dict[Path | None, RepositoryWorkspace] = {}
 
     @property
@@ -152,18 +141,6 @@ class Container:
         )
 
     # --- capabilities -----------------------------------------------------
-
-    def event_writer(self) -> EventWriter:
-        """The lifecycle-event writer (memoized: one EventStore per container).
-
-        Memoization is the point. `EventWriter` resolves its store lazily and
-        caches it per instance, so a fresh writer per call means a fresh
-        `EVENTS_BACKEND` read and a fresh SDK client per call -- invisible in
-        a process-per-invocation CLI, a per-request leak in a server.
-        """
-        if self._event_writer is None:
-            self._event_writer = EventWriter(source=self._settings.event_source)
-        return self._event_writer
 
     def doctor_service(self, root: Path | None = None) -> DoctorService:
         """Assemble the preflight providers, one per capability.

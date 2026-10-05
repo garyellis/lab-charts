@@ -1,6 +1,6 @@
 """The `CHART@VERSION` grammar, which the surface is not allowed to own.
 
-`services/events/ref.py` exists so that parsing the token is a domain rule
+`shared/events/ref.py` exists so that parsing the token is a domain rule
 (design commitment 6). These tests pin the rules the module docstring states,
 including the ones that are deliberate *rejections* -- a grammar that silently
 accepts `a@b@c` by guessing a split would write a wrong partition key into a
@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 import pytest
 
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.events.lifecycle import PlatformLifecycleEvent
-from chart_manager.services.events.ref import (
+from chart_manager.shared.events.model import PlatformLifecycleEvent
+from chart_manager.shared.events.ref import (
     ChartRef,
     ChartRefError,
     ChartSelector,
