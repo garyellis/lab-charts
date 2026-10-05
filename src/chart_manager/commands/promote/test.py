@@ -1,10 +1,7 @@
-"""Concurrent `helm test` runner for matched Flux HelmReleases.
+"""`promote test`: run `helm test` for matched Flux HelmReleases and aggregate the verdict.
 
-Read-mostly (deletes only stale test pods on the cluster; never mutates HR
-specs). Caller owns kube context. Fan-out is bounded by `concurrency`;
-each `helm test` invocation creates test pods on the cluster -- tune
-`concurrency` for small clusters. Service is rendering-agnostic; callers
-format `TestResult`.
+Read-mostly: deletes only stale test pods, never HelmRelease specs. Each `helm test`
+creates test pods, so tune `concurrency` down on small clusters.
 """
 from __future__ import annotations
 
@@ -37,11 +34,13 @@ from chart_manager.integrations.helmrelease import (
     HelmReleaseStatus,
 )
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.plumbing.commands import CommandResult
+from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.charts import dependencies
+from chart_manager.shared.settings import Settings
 
 _LOG = logging.getLogger(__name__)
 
@@ -183,7 +182,7 @@ class _RunContext:
     started_mono: float
     total_deadline: float
     cancel_event: threading.Event
-    # `deque(maxlen=)` rather than a hand-rolled slice-off: MonitorService's
+    # `deque(maxlen=)` rather than a hand-rolled slice-off: monitor's
     # ring already worked this way, and two implementations of "keep the last
     # N transitions" is one more than the concept needs.
     phase_log: deque[Transition] = field(
@@ -191,108 +190,108 @@ class _RunContext:
     )
 
 
-class TestService:
-    """Run `helm test` across matching HelmReleases concurrently, with reaping + diagnostics."""
+def run(
+    request: TestRequest,
+    *,
+    runner: CommandRunner,
+    settings: Settings,
+    events: EventWriter,
+    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> TestResult:
+    """Test every matching HelmRelease in parallel; return an aggregate TestResult.
 
-    def __init__(
-        self,
-        client: HelmReleaseClient | None = None,
-        helm: Helm | None = None,
-        *,
-        kubectl: Kubectl | None = None,
-        clock: Callable[[], float] = time.monotonic,
-        now: Callable[[], datetime] = lambda: datetime.now(UTC),
-        progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
-        events: EventWriter | None = None,
-        strict_events: bool = False,
-    ) -> None:
-        """Wire the HelmRelease/kubectl/helm clients and injectable clock/now/progress hooks."""
-        self._client = client or HelmReleaseClient()
-        # Two cluster adapters, not one: HelmRelease queries are Flux domain
-        # knowledge; reaping test pods, scraping their logs and dumping
-        # namespace events are plain kubectl. Both must address the same
-        # cluster -- `Container` builds them from one `Settings.kube_context`.
-        self._kubectl = kubectl or Kubectl()
-        # verbose=False prevents 4 concurrent helm test stdout streams from
-        # interleaving into garbage; the service captures and returns
-        # stdout/stderr on the result instead.
-        self._helm = helm or Helm(verbose=False)
-        self._clock = clock
-        self._now = now
-        self._progress = progress
-        # Same non-fatal policy as PromoteService and MonitorService: the
-        # tests have already run by the time these are written, so an
-        # unconfigured events backend must not turn a green suite into a
-        # traceback. `strict` is for callers where the event is the deliverable.
-        self._events = events or EventWriter()
-        self._strict_events = strict_events
+    Yields a single `no-match` outcome when nothing matches. A worker
+    raising ExternalCommandError/ChartManagerError cancels the rest and
+    propagates; other crashes are wrapped as ChartManagerError. `progress`
+    hears each phase; the time sources are for tests.
+    """
+    # One kubectl serves the HelmRelease queries and the pod/event calls, so
+    # both address the same cluster.
+    kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
+    client = HelmReleaseClient(kubectl)
+    # verbose=False: concurrent `helm test` streams would interleave; the
+    # output is captured onto each outcome instead.
+    helm = Helm(
+        runner,
+        verbose=False,
+        context=settings.kube_context,
+        deps_are_fresh=dependencies.deps_are_fresh,
+        chart_has_dependencies=dependencies.chart_has_dependencies,
+    )
+    tester = _Tester(client, kubectl, helm, clock, now, progress)
+    start = clock()
+    matched = filter_matched_statuses(
+        client,
+        namespace=request.namespace,
+        chart_name=request.chart_name,
+        version=request.version,
+        per_poll=request.per_poll_timeout_seconds,
+    )
 
-    def test(self, request: TestRequest) -> TestResult:
-        """Test every matching HelmRelease in parallel; return an aggregate TestResult.
+    _LOG.info(
+        "helm test run started: chart=%s version=%s namespace=%s environment=%s "
+        "matched=%d concurrency=%d per_hr=%gs total=%gs per_poll=%gs",
+        request.chart_name,
+        request.version,
+        request.namespace or "(all)",
+        request.environment or "(none)",
+        len(matched),
+        request.concurrency,
+        request.per_hr_timeout_seconds,
+        request.total_timeout_seconds,
+        request.per_poll_timeout_seconds,
+    )
 
-        Yields a single `no-match` outcome when nothing matches. A worker
-        raising ExternalCommandError/ChartManagerError cancels the rest and
-        propagates; other crashes are wrapped as ChartManagerError.
-        """
-        start = self._clock()
-        matched = filter_matched_statuses(
-            self._client,
-            namespace=request.namespace,
-            chart_name=request.chart_name,
-            version=request.version,
-            per_poll=request.per_poll_timeout_seconds,
-        )
+    # Built unconditionally, but inert until `run_matched` finds a match:
+    # a run with nothing to test opens no HELM_TEST_RUN interval. Event
+    # writes are non-fatal: the tests have already run.
+    telemetry = PromotionTelemetry(
+        writer=events,
+        chart_name=request.chart_name,
+        version=request.version,
+        environment=request.environment,
+    )
+    total_deadline = start + request.total_timeout_seconds
+    return run_matched(
+        matched,
+        start=start,
+        clock=clock,
+        total_deadline=total_deadline,
+        concurrency=request.concurrency,
+        telemetry=telemetry,
+        stage=Stage.HELM_TEST,
+        success=Verdict.PASSED,
+        no_match=_no_match_outcome,
+        work=lambda status, cancel_event: tester.test_one(
+            status, request, total_deadline, cancel_event
+        ),
+        crash_label="test watcher",
+        # No `cancel_on`: unlike monitor there is no --fail-fast here.
+        # A failing chart's tests say nothing about its peers', and the
+        # operator wants the whole matrix, not the first red cell.
+        log_label="helm test",
+        chart_name=request.chart_name,
+        version=request.version,
+        namespace=request.namespace,
+    )
 
-        _LOG.info(
-            "helm test run started: chart=%s version=%s namespace=%s environment=%s "
-            "matched=%d concurrency=%d per_hr=%gs total=%gs per_poll=%gs",
-            request.chart_name,
-            request.version,
-            request.namespace or "(all)",
-            request.environment or "(none)",
-            len(matched),
-            request.concurrency,
-            request.per_hr_timeout_seconds,
-            request.total_timeout_seconds,
-            request.per_poll_timeout_seconds,
-        )
 
-        # Built unconditionally, but inert until `run_matched` finds a match:
-        # a run with nothing to test opens no HELM_TEST_RUN interval.
-        telemetry = PromotionTelemetry(
-            writer=self._events,
-            chart_name=request.chart_name,
-            version=request.version,
-            environment=request.environment,
-            strict=self._strict_events,
-        )
-        total_deadline = start + request.total_timeout_seconds
-        return run_matched(
-            matched,
-            start=start,
-            clock=self._clock,
-            total_deadline=total_deadline,
-            concurrency=request.concurrency,
-            telemetry=telemetry,
-            stage=Stage.HELM_TEST,
-            success=Verdict.PASSED,
-            no_match=_no_match_outcome,
-            work=lambda status, cancel_event: self._test_one(
-                status, request, total_deadline, cancel_event
-            ),
-            crash_label="test watcher",
-            # No `cancel_on`: unlike monitor there is no --fail-fast here.
-            # A failing chart's tests say nothing about its peers', and the
-            # operator wants the whole matrix, not the first red cell.
-            log_label="helm test",
-            chart_name=request.chart_name,
-            version=request.version,
-            namespace=request.namespace,
-        )
+@dataclass(frozen=True)
+class _Tester:
+    """Runs the per-HelmRelease pipeline; one instance serves every worker thread."""
+
+    client: HelmReleaseClient
+    kubectl: Kubectl
+    helm: Helm
+    clock: Callable[[], float]
+    now: Callable[[], datetime]
+    progress: Callable[[HelmReleaseRef, Transition], None] | None
 
     # --- per-HR pipeline ---------------------------------------------------
 
-    def _test_one(
+    def test_one(
         self,
         initial_status: HelmReleaseStatus,
         request: TestRequest,
@@ -304,7 +303,7 @@ class TestService:
             ref=initial_status.ref,
             initial_status=initial_status,
             request=request,
-            started_mono=self._clock(),
+            started_mono=self.clock(),
             total_deadline=total_deadline,
             cancel_event=cancel_event,
         )
@@ -318,7 +317,7 @@ class TestService:
         if reap is not None:
             return reap
 
-        if ctx.cancel_event.is_set() or self._clock() >= ctx.total_deadline:
+        if ctx.cancel_event.is_set() or self.clock() >= ctx.total_deadline:
             return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
 
         return self._run_helm(ctx)
@@ -348,7 +347,7 @@ class TestService:
                 reason=Reason.GENERATION_LAG,
                 last_status=s,
             )
-        if ctx.cancel_event.is_set() or self._clock() >= ctx.total_deadline:
+        if ctx.cancel_event.is_set() or self.clock() >= ctx.total_deadline:
             return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
         return None
 
@@ -359,7 +358,7 @@ class TestService:
         """
         self._fire(ctx, "Reaping", "checking for existing test pods")
         try:
-            pods = self._client.list_test_pods(
+            pods = self.client.list_test_pods(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
         except ExternalCommandError as exc:
@@ -390,7 +389,7 @@ class TestService:
         residual: list[str] = []
         for ns, name, _phase in [p for p in pods if p[2] in _STALE_PHASES]:
             try:
-                self._kubectl.delete_pod(ns, name, timeout=ctx.request.per_poll_timeout_seconds)
+                self.kubectl.delete_pod(ns, name, timeout=ctx.request.per_poll_timeout_seconds)
             except ExternalCommandError as exc:
                 # Carry the stderr, not just the pod name: "delete denied by
                 # RBAC", "apiserver unreachable" and "stuck on a finalizer"
@@ -425,7 +424,7 @@ class TestService:
         # The subprocess cap is bounded by the total deadline so a runaway
         # helm test can't outlive the global budget even if its own
         # --timeout claims another N minutes.
-        remaining_total = max(0.0, ctx.total_deadline - self._clock())
+        remaining_total = max(0.0, ctx.total_deadline - self.clock())
         subprocess_cap = min(
             ctx.request.per_hr_timeout_seconds + _SUBPROCESS_SLACK_SEC, remaining_total
         )
@@ -433,7 +432,7 @@ class TestService:
             return self._finalize_timed_out(ctx, Reason.TOTAL_BUDGET_EXHAUSTED)
 
         try:
-            result = self._helm.test(
+            result = self.helm.test(
                 ctx.ref.release_name,
                 namespace=ctx.ref.storage_namespace,
                 # helm's per-hook `--timeout` stays the uncapped per-HR budget;
@@ -447,7 +446,7 @@ class TestService:
             if "timed out" in msg:
                 reason = (
                     Reason.TOTAL_BUDGET_EXHAUSTED
-                    if self._clock() >= ctx.total_deadline
+                    if self.clock() >= ctx.total_deadline
                     else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
                 # Which budget tripped decides whether the operator raises
@@ -578,7 +577,7 @@ class TestService:
         # scrapes up to two log streams per pod plus namespace events, all on
         # the failure path. Folding that into the reported duration inflates
         # exactly the outcomes whose timing matters most.
-        duration_seconds = self._clock() - ctx.started_mono
+        duration_seconds = self.clock() - ctx.started_mono
 
         diagnostics: str | None = None
         test_pods: tuple[TestPodSnapshot, ...] = ()
@@ -653,7 +652,7 @@ class TestService:
         the pre-run status it falls back to, so the detail comes back with it.
         """
         try:
-            status = self._client.get_status(
+            status = self.client.get_status(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
             return status, None
@@ -731,7 +730,7 @@ class TestService:
             parts.append(
                 report.safe_events(
                     partial(
-                        self._kubectl.namespace_events,
+                        self.kubectl.namespace_events,
                         ctx.ref.target_namespace,
                         timeout=ctx.request.per_poll_timeout_seconds,
                     )
@@ -762,7 +761,7 @@ class TestService:
         empty list.
         """
         try:
-            pods = self._client.list_test_pods(
+            pods = self.client.list_test_pods(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
         except ExternalCommandError as exc:
@@ -781,7 +780,7 @@ class TestService:
             log_error: str | None = None
             logs = ""
             try:
-                logs = self._kubectl.pod_logs(
+                logs = self.kubectl.pod_logs(
                     pod_ns,
                     pod_name,
                     tail=ctx.request.pod_log_tail,
@@ -812,7 +811,7 @@ class TestService:
                     phase,
                 )
                 try:
-                    previous = self._kubectl.pod_logs(
+                    previous = self.kubectl.pod_logs(
                         pod_ns,
                         pod_name,
                         tail=ctx.request.pod_log_tail,
@@ -853,11 +852,11 @@ class TestService:
 
     def _fire(self, ctx: _RunContext, phase: str, detail: str) -> None:
         """Record a phase transition (ring-buffered) and fire the progress callback safely."""
-        t = Transition(at=self._now(), phase=phase, detail=detail)
+        t = Transition(at=self.now(), phase=phase, detail=detail)
         ctx.phase_log.append(t)
-        if self._progress is None:
+        if self.progress is None:
             return
         try:
-            self._progress(ctx.ref, t)
+            self.progress(ctx.ref, t)
         except Exception:
             _LOG.exception("test progress callback raised")

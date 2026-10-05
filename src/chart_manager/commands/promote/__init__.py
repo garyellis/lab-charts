@@ -26,7 +26,7 @@ than re-deciding either question.
 
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 
-from .monitor import MonitorOutcome, MonitorRequest, MonitorResult, MonitorService
+from .monitor import MonitorOutcome, MonitorRequest, MonitorResult
 from .pr import PromoteRequest, PromoteResult
 from .scanner import HelmReleaseMatch
 from .state import (
@@ -36,7 +36,7 @@ from .state import (
     PromoteStatus,
     Transition,
 )
-from .test import TestOutcome, TestRequest, TestResult, TestService
+from .test import TestOutcome, TestRequest, TestResult
 from .wire import (
     monitor_to_dict,
     promote_to_dict,
@@ -52,14 +52,12 @@ __all__ = [
     "MonitorOutcome",
     "MonitorRequest",
     "MonitorResult",
-    "MonitorService",
     "PromoteRequest",
     "PromoteResult",
     "PromoteStatus",
     "TestOutcome",
     "TestRequest",
     "TestResult",
-    "TestService",
     "Transition",
     "monitor_to_dict",
     "promote_to_dict",

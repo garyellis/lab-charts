@@ -1,6 +1,6 @@
-"""Promotion-lifecycle telemetry for the promotion services.
+"""Promotion-lifecycle telemetry for `promote monitor` and `promote test`.
 
-`MonitorService` and `TestService` are the only components that know when a
+`monitor.run` and `test.run` are the only components that know when a
 rollout starts, when it converges, and whether `helm test` went green -- but
 neither could reach `EventWriter`, so `PromotionPhase.WAITING_ROLLOUT`,
 `ROLLOUT_OK` and `HELM_TEST_*` were emitted nowhere. The promotion timeline
@@ -44,7 +44,6 @@ class PromotionTelemetry:
     chart_name: str
     version: str
     environment: str | None = None
-    strict: bool = False
 
     def started(self, stage: Stage, *, matched: int) -> None:
         """Open the interval for `stage` (WAITING_ROLLOUT / HELM_TEST_RUN)."""
@@ -85,6 +84,6 @@ class PromotionTelemetry:
                 phase=phase,
                 detail=detail,
             ),
-            strict=self.strict,
+            strict=False,
             what=f"promotion {phase.value}",
         )

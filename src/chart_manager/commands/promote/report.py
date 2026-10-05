@@ -1,6 +1,6 @@
 """The fragments of a failure report that monitor and test must render alike.
 
-Deliberately small. `MonitorService` and `TestService` produce genuinely
+Deliberately small. `monitor.run` and `test.run` produce genuinely
 different reports past the first two sections -- one lists workload rollouts
 and their events, the other lists test pods and their logs -- and folding
 those into one parameterised builder would trade a little duplication for a

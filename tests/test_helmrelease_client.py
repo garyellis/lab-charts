@@ -478,7 +478,7 @@ def test_list_test_pods_unions_hook_queries_dedupes_and_returns_phase() -> None:
 def test_get_json_non_json_stdout_raises_external_command_error() -> None:
     """A malformed payload must land in the same bucket as any tool failure.
 
-    MonitorService degrades on ExternalCommandError; while this raised the
+    The monitor degrades on ExternalCommandError; while this raised the
     broader ChartManagerError instead, a malformed kubectl payload escaped
     those handlers and aborted the whole watch rather than being recorded
     as a poll error.

@@ -1,6 +1,6 @@
 """Direct coverage for the pure rollout classifier.
 
-`classify` is the branch table `MonitorService._watch_one` used to inline.
+`classify` is the branch table the monitor watcher used to inline.
 Driving it through the watcher meant every rule cost a scripted cluster fake, a
 clock and a thread pool; here each rule is one status literal and one
 assertion, so the Flux condition semantics can be reviewed as a table.

@@ -104,9 +104,15 @@ def failure(stderr: str) -> Reply:
     return Reply(returncode=1, stderr=stderr)
 
 
-def cluster(*releases: dict[str, Any] | Sequence[dict[str, Any] | Reply]) -> FakeCommandRunner:
+EMPTY = json.dumps({"items": []})
+
+
+def cluster(
+    *releases: dict[str, Any] | Sequence[dict[str, Any] | Reply],
+    runner: FakeCommandRunner | None = None,
+) -> FakeCommandRunner:
     """Serve these HelmReleases; a sequence is one release's successive reads, the last repeating."""
-    runner = FakeCommandRunner(stdout=json.dumps({"items": []}))
+    runner = runner or FakeCommandRunner(stdout=EMPTY)
     reads = [[release] if isinstance(release, dict) else list(release) for release in releases]
     listed = [read[0] for read in reads if isinstance(read[0], dict)]
     runner.respond(argv_prefix("kubectl", "get", HR), stdout=json.dumps({"items": listed}))

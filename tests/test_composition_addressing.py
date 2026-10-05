@@ -43,14 +43,12 @@ def test_kube_context_reaches_kubectl_argv() -> None:
     assert container.runner.calls[0][-2:] == ("--context", "kind-b")
 
 
-def test_kube_context_reaches_helm_and_helmrelease_argv() -> None:
+def test_kube_context_reaches_helm_argv() -> None:
     container = _configured()
 
     container.helm().status("loki", namespace="loki")
-    container.helmrelease_client().list()
 
     assert container.runner.calls[0][-2:] == ("--kube-context", "kind-b")
-    assert container.runner.calls[1][-2:] == ("--context", "kind-b")
 
 
 def test_docker_host_reaches_the_kind_adapter() -> None:

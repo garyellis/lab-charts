@@ -6,7 +6,7 @@ alongside it, which is what makes the Flux condition semantics reviewable in
 one screen instead of spread across a polling loop that also owns backoff,
 transport-error triage, budget enforcement and outcome assembly.
 
-That mixing is what this module exists to undo: `MonitorService._watch_one`
+That mixing is what this module exists to undo: the monitor watcher
 was a 282-line function calling `_finalize` from eleven sites, each repeating
 an identical six-keyword block, with nesting five levels deep. The branch
 table below is the part a reviewer actually needs to check against Flux's

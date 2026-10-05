@@ -156,32 +156,19 @@ def _passed_test_outcome(ref: HelmReleaseRef) -> TestOutcome:
 
 
 @dataclass
-class _FakeMonitorService:
+class _FakeStage:
+    """Stands in for a stage's `run()`: records each request and progress callback."""
+
+    result: Any
+    raise_exc: BaseException | None = None
     captured_requests: list[Any] = field(default_factory=list)
     captured_progress: list[Any] = field(default_factory=list)
-    result: MonitorResult | None = None
-    raise_exc: BaseException | None = None
 
-    def monitor(self, request: Any) -> MonitorResult:
+    def __call__(self, request: Any, *, progress: Any, **_adapters: Any) -> Any:
         self.captured_requests.append(request)
+        self.captured_progress.append(progress)
         if self.raise_exc is not None:
             raise self.raise_exc
-        assert self.result is not None
-        return self.result
-
-
-@dataclass
-class _FakeTestService:
-    captured_requests: list[Any] = field(default_factory=list)
-    captured_progress: list[Any] = field(default_factory=list)
-    result: TestResult | None = None
-    raise_exc: BaseException | None = None
-
-    def test(self, request: Any) -> TestResult:
-        self.captured_requests.append(request)
-        if self.raise_exc is not None:
-            raise self.raise_exc
-        assert self.result is not None
         return self.result
 
 
@@ -190,17 +177,9 @@ def _install_fake_monitor(
     *,
     result: MonitorResult,
     raise_exc: BaseException | None = None,
-) -> _FakeMonitorService:
-    fake = _FakeMonitorService(result=result, raise_exc=raise_exc)
-    factory_calls: list[dict[str, Any]] = []
-
-    def _factory(*, progress: Any) -> _FakeMonitorService:
-        factory_calls.append({"progress": progress})
-        fake.captured_progress.append(progress)
-        return fake
-
-    monkeypatch.setattr(promote_cli, "_make_monitor_service", _factory)
-    fake.factory_calls = factory_calls  # type: ignore[attr-defined]
+) -> _FakeStage:
+    fake = _FakeStage(result, raise_exc)
+    monkeypatch.setattr(promote_cli, "run_monitor", fake)
     return fake
 
 
@@ -209,17 +188,9 @@ def _install_fake_test(
     *,
     result: TestResult,
     raise_exc: BaseException | None = None,
-) -> _FakeTestService:
-    fake = _FakeTestService(result=result, raise_exc=raise_exc)
-    factory_calls: list[dict[str, Any]] = []
-
-    def _factory(*, progress: Any) -> _FakeTestService:
-        factory_calls.append({"progress": progress})
-        fake.captured_progress.append(progress)
-        return fake
-
-    monkeypatch.setattr(promote_cli, "_make_test_service", _factory)
-    fake.factory_calls = factory_calls  # type: ignore[attr-defined]
+) -> _FakeStage:
+    fake = _FakeStage(result, raise_exc)
+    monkeypatch.setattr(promote_cli, "run_test", fake)
     return fake
 
 

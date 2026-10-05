@@ -1,11 +1,8 @@
-"""Concurrent HelmRelease monitor.
+"""`promote monitor`: watch matched HelmReleases until each converges, fails or times out.
 
-Read-only service that fans out across matched Flux HelmReleases, verifies
-HR Ready/Released + workload rollout under three-tier timeouts (per-poll,
-per-HR, total), and aggregates per-HR outcomes for the caller. Service is
-rendering-agnostic; callers (CLI, FastAPI) format MonitorResult themselves.
-Caller owns kube context and concurrency bounds (default concurrency=4 to
-be friendly to laptop EKS/GKE exec-auth caches; raise to 8 with care).
+Read-only. One watcher per matched Flux HelmRelease checks HR Ready/Released plus the
+workload rollout under three budgets (per-poll, per-HR, total). Concurrency defaults to 4,
+which suits laptop EKS/GKE exec-auth caches; raise it to 8 with care.
 """
 from __future__ import annotations
 
@@ -40,9 +37,11 @@ from chart_manager.integrations.helmrelease import (
     WorkloadRollout,
 )
 from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
+from chart_manager.shared.settings import Settings
 
 _LOG = logging.getLogger(__name__)
 
@@ -137,7 +136,7 @@ def _no_match_outcome(elapsed: float) -> MonitorOutcome:
 class _WatchState:
     """Mutable per-HelmRelease state threaded through one watcher's phases.
 
-    Mirrors `TestService._RunContext`: the polling loop, the classifier
+    Mirrors `test._RunContext`: the polling loop, the classifier
     plumbing and the finalizer all need the same five values, and passing
     them positionally is how `_finalize` acquired an eight-keyword call
     repeated at eleven sites.
@@ -162,104 +161,99 @@ def _fail_fast_predicate(request: MonitorRequest) -> Callable[[MonitorOutcome], 
     return lambda outcome: outcome.verdict in (Verdict.FAILED, Verdict.TIMED_OUT)
 
 
-class MonitorService:
-    """Fans out one polling watcher per matched HelmRelease."""
+def run(
+    request: MonitorRequest,
+    *,
+    runner: CommandRunner,
+    settings: Settings,
+    events: EventWriter,
+    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    rand: Callable[[float, float], float] = random.uniform,
+) -> MonitorResult:
+    """Watch every matching HelmRelease concurrently and aggregate the outcomes.
 
-    def __init__(
-        self,
-        client: HelmReleaseClient | None = None,
-        *,
-        kubectl: Kubectl | None = None,
-        sleep: Callable[[float], None] = time.sleep,
-        clock: Callable[[], float] = time.monotonic,
-        now: Callable[[], datetime] = lambda: datetime.now(UTC),
-        rand: Callable[[float, float], float] = random.uniform,
-        progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
-        events: EventWriter | None = None,
-        strict_events: bool = False,
-    ) -> None:
-        """Wire dependencies; sleep/clock/now/rand are injectable for tests."""
-        self._client = client or HelmReleaseClient()
-        # Two cluster adapters, not one: the HelmRelease queries are Flux
-        # domain knowledge, the diagnostics events are plain kubectl. Both
-        # must address the same cluster -- `Container` builds them from one
-        # `Settings.kube_context`.
-        self._kubectl = kubectl or Kubectl()
-        self._sleep = sleep
-        self._clock = clock
-        self._now = now
-        self._rand = rand
-        self._progress = progress
-        # Same non-fatal policy as PromoteService: the rollout has already
-        # happened by the time these are written, so an unconfigured events
-        # backend must not turn a converged run into a traceback. `strict`
-        # is for callers where the event is the deliverable.
-        self._events = events or EventWriter()
-        self._strict_events = strict_events
+    Per-HR failures come back as outcomes; only infrastructure errors
+    (kubectl/watcher crashes) raise, after cancelling peer watchers.
+    `progress` hears each recorded transition; the time sources are for tests.
+    """
+    # Both adapters share one kubectl, so the HelmRelease queries and the
+    # diagnostics events address the same cluster.
+    kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
+    client = HelmReleaseClient(kubectl)
+    watcher = _Watcher(client, kubectl, sleep, clock, now, rand, progress)
+    start = clock()
+    per_poll = request.per_poll_timeout_seconds
+    matched = filter_matched_statuses(
+        client,
+        namespace=request.namespace,
+        chart_name=request.chart_name,
+        version=request.version,
+        per_poll=per_poll,
+    )
 
-    def monitor(self, request: MonitorRequest) -> MonitorResult:
-        """Watch all matching HelmReleases concurrently and aggregate outcomes.
+    _LOG.info(
+        "monitor run started: chart=%s version=%s namespace=%s matched=%d "
+        "concurrency=%d fail_fast=%s per_poll=%gs per_hr=%gs total=%gs poll_interval=%.1fs",
+        request.chart_name,
+        request.version,
+        request.namespace or "(all)",
+        len(matched),
+        request.concurrency,
+        request.fail_fast,
+        request.per_poll_timeout_seconds,
+        request.per_hr_timeout_seconds,
+        request.total_timeout_seconds,
+        _POLL_INTERVAL_SEC,
+    )
 
-        Per-HR failures come back as outcomes; only infrastructure errors
-        (kubectl/watcher crashes) raise, after cancelling peer watchers.
-        """
-        start = self._clock()
-        per_poll = request.per_poll_timeout_seconds
-        matched = filter_matched_statuses(
-            self._client,
-            namespace=request.namespace,
-            chart_name=request.chart_name,
-            version=request.version,
-            per_poll=per_poll,
-        )
+    # Built unconditionally, but inert until `run_matched` finds a match:
+    # a run with nothing to watch opens no WAITING_ROLLOUT interval. Event
+    # writes are non-fatal: the rollout has already happened.
+    telemetry = PromotionTelemetry(
+        writer=events,
+        chart_name=request.chart_name,
+        version=request.version,
+        environment=request.environment,
+    )
+    total_deadline = start + request.total_timeout_seconds
+    return run_matched(
+        matched,
+        start=start,
+        clock=clock,
+        total_deadline=total_deadline,
+        concurrency=request.concurrency,
+        telemetry=telemetry,
+        stage=Stage.ROLLOUT,
+        success=Verdict.READY,
+        no_match=_no_match_outcome,
+        work=lambda status, cancel_event: watcher.watch(
+            status, request, per_poll, total_deadline, cancel_event
+        ),
+        crash_label="monitor watcher",
+        cancel_on=_fail_fast_predicate(request),
+        log_label="monitor",
+        chart_name=request.chart_name,
+        version=request.version,
+        namespace=request.namespace,
+    )
 
-        _LOG.info(
-            "monitor run started: chart=%s version=%s namespace=%s matched=%d "
-            "concurrency=%d fail_fast=%s per_poll=%gs per_hr=%gs total=%gs poll_interval=%.1fs",
-            request.chart_name,
-            request.version,
-            request.namespace or "(all)",
-            len(matched),
-            request.concurrency,
-            request.fail_fast,
-            request.per_poll_timeout_seconds,
-            request.per_hr_timeout_seconds,
-            request.total_timeout_seconds,
-            _POLL_INTERVAL_SEC,
-        )
 
-        # Built unconditionally, but inert until `run_matched` finds a match:
-        # a run with nothing to watch opens no WAITING_ROLLOUT interval.
-        telemetry = PromotionTelemetry(
-            writer=self._events,
-            chart_name=request.chart_name,
-            version=request.version,
-            environment=request.environment,
-            strict=self._strict_events,
-        )
-        total_deadline = start + request.total_timeout_seconds
-        return run_matched(
-            matched,
-            start=start,
-            clock=self._clock,
-            total_deadline=total_deadline,
-            concurrency=request.concurrency,
-            telemetry=telemetry,
-            stage=Stage.ROLLOUT,
-            success=Verdict.READY,
-            no_match=_no_match_outcome,
-            work=lambda status, cancel_event: self._watch_one(
-                status, request, per_poll, total_deadline, cancel_event
-            ),
-            crash_label="monitor watcher",
-            cancel_on=_fail_fast_predicate(request),
-            log_label="monitor",
-            chart_name=request.chart_name,
-            version=request.version,
-            namespace=request.namespace,
-        )
+@dataclass(frozen=True)
+class _Watcher:
+    """Polls one HelmRelease to a verdict; one instance serves every watcher thread."""
 
-    def _watch_one(
+    client: HelmReleaseClient
+    kubectl: Kubectl
+    sleep: Callable[[float], None]
+    clock: Callable[[], float]
+    now: Callable[[], datetime]
+    rand: Callable[[float, float], float]
+    progress: Callable[[HelmReleaseRef, Transition], None] | None
+
+    def watch(
         self,
         initial_status: HelmReleaseStatus,
         request: MonitorRequest,
@@ -268,7 +262,7 @@ class MonitorService:
         cancel_event: threading.Event,
     ) -> MonitorOutcome:
         """Poll one HR until ready/failed/suspended or a deadline expires."""
-        started_mono = self._clock()
+        started_mono = self.clock()
         state = _WatchState(
             ref=initial_status.ref,
             ring=deque(maxlen=_RECENT_TRANSITIONS_MAX),
@@ -321,7 +315,7 @@ class MonitorService:
 
         # Jittered start desynchronizes the pollers so N watchers don't hit
         # the apiserver in lockstep.
-        self._sleep(self._rand(0.0, _POLL_INTERVAL_SEC))
+        self.sleep(self.rand(0.0, _POLL_INTERVAL_SEC))
         if cancel_event.is_set():
             return self._cancelled(state)
 
@@ -337,13 +331,13 @@ class MonitorService:
 
             if cancel_event.is_set():
                 return self._cancelled(state)
-            if self._clock() >= hr_deadline:
+            if self.clock() >= hr_deadline:
                 # Which budget ran out changes what an operator should do:
                 # raise --per-hr-timeout, or accept that the run as a whole
                 # was too big for --total-timeout.
                 reason = (
                     Reason.TOTAL_BUDGET_EXHAUSTED
-                    if self._clock() >= total_deadline
+                    if self.clock() >= total_deadline
                     else Reason.PER_HR_BUDGET_EXHAUSTED
                 )
                 # WARNING, not DEBUG: a tripped deadline is the single most
@@ -360,7 +354,7 @@ class MonitorService:
                 )
                 return Verdict.TIMED_OUT, reason
 
-            self._sleep(_POLL_INTERVAL_SEC)
+            self.sleep(_POLL_INTERVAL_SEC)
             if cancel_event.is_set():
                 return self._cancelled(state)
 
@@ -429,7 +423,7 @@ class MonitorService:
         back as a Terminal rather than as another `None`.
         """
         try:
-            return self._client.get_status(state.ref, timeout=per_poll)
+            return self.client.get_status(state.ref, timeout=per_poll)
         except ExternalCommandError as exc:
             stderr = (exc.stderr or str(exc)).strip()
             if "NotFound" in stderr or "not found" in stderr:
@@ -459,7 +453,7 @@ class MonitorService:
         converge, and the budget is what decides how long we keep asking.
         """
         try:
-            return tuple(self._client.list_owned_workloads(state.ref, timeout=per_poll))
+            return tuple(self.client.list_owned_workloads(state.ref, timeout=per_poll))
         except ExternalCommandError as exc:
             stderr = (exc.stderr or str(exc)).strip()
             self._record_deduped(
@@ -491,16 +485,16 @@ class MonitorService:
 
     def _record(self, state: _WatchState, phase: str, detail: str) -> None:
         """Append a transition to the ring buffer and fire the progress callback."""
-        transition = Transition(at=self._now(), phase=phase, detail=detail)
+        transition = Transition(at=self.now(), phase=phase, detail=detail)
         state.ring.append(transition)
         self._fire_progress(state.ref, transition)
 
     def _fire_progress(self, ref: HelmReleaseRef, transition: Transition) -> None:
         """Invoke the progress callback if set; swallow+log any exception it raises."""
-        if self._progress is None:
+        if self.progress is None:
             return
         try:
-            self._progress(ref, transition)
+            self.progress(ref, transition)
         except Exception:
             _LOG.exception("monitor progress callback raised")
 
@@ -522,7 +516,7 @@ class MonitorService:
         only ever on the failure path. Failed promotions are precisely the
         ones whose duration we care about.
         """
-        duration_seconds = self._clock() - started_mono
+        duration_seconds = self.clock() - started_mono
         diagnostics: str | None = None
         if not verdict.is_passing:
             # One line per failed release, carrying the pair (verdict, reason)
@@ -600,7 +594,7 @@ class MonitorService:
         # Events come from where the workloads run, not where the HelmRelease
         # object lives. Those differ whenever `spec.targetNamespace` is set,
         # and this used `ref.namespace` -- reporting events from a namespace
-        # containing none of the resources listed above. TestService already
+        # containing none of the resources listed above. `promote test` already
         # keys on target_namespace; this matches it.
         events_namespace = ref.target_namespace or ref.namespace
         if events_namespace:
@@ -608,7 +602,7 @@ class MonitorService:
             parts.append(
                 report.safe_events(
                     partial(
-                        self._kubectl.namespace_events,
+                        self.kubectl.namespace_events,
                         events_namespace,
                         timeout=per_poll,
                     )
@@ -627,7 +621,7 @@ class MonitorService:
                         # now means the callable cannot depend on when
                         # `safe_events` gets around to invoking it.
                         partial(
-                            self._kubectl.workload_events,
+                            self.kubectl.workload_events,
                             kind,
                             ns,
                             name,

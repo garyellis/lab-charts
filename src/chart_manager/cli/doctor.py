@@ -65,9 +65,8 @@ _STATUS_STYLE: dict[CheckStatus, tuple[str, str]] = {
 def _make_doctor_service() -> DoctorService:
     """Build the default DoctorService (module-level so tests can override).
 
-    Same seam as `commands/promote/cli.py::_make_promote_service`: adapter wiring
-    lives in the composition root, and this function exists only so a test
-    can inject fake providers without a real helm on the developer's PATH.
+    Adapter wiring lives in the composition root; this function exists only so
+    a test can inject fake providers without a real helm on the developer's PATH.
     """
     return container().doctor_service()
 

@@ -1,7 +1,7 @@
 """How `run_fanout` classifies a worker that raised, and how `run_matched` reports.
 
-The interesting axis is not the happy path -- `MonitorService` and
-`TestService` cover that end to end -- but the boundary between "a release
+Beyond running workers in parallel, the interesting axis is not the happy path --
+`monitor.run` and `test.run` cover that end to end -- but the boundary between "a release
 failed", "this run's infrastructure failed", and "the operator pressed
 Ctrl-C". The third used to be indistinguishable from the second: it was
 caught as a `BaseException` and reborn as `ChartManagerError`, so both
@@ -84,6 +84,29 @@ def _run(work: Callable[[HelmReleaseStatus], _Outcome]) -> threading.Event:
     return cancel_event
 
 
+def test_workers_run_concurrently_up_to_the_bound() -> None:
+    # Three workers that each wait for the other two can only finish in parallel.
+    barrier = threading.Barrier(3, timeout=5)
+
+    def work(status: HelmReleaseStatus) -> _Outcome:
+        barrier.wait()
+        return _Outcome(status.ref)
+
+    outcomes: list[_Outcome] = []
+    run_fanout(
+        [_status(_ref(f"r{i}")) for i in range(3)],
+        concurrency=3,
+        clock=lambda: 0.0,
+        total_deadline=1_000.0,
+        cancel_event=threading.Event(),
+        outcomes=outcomes,
+        work=work,
+        crash_label="test watcher",
+    )
+
+    assert len(outcomes) == 3
+
+
 def test_keyboard_interrupt_propagates_unwrapped_and_cancels_peers() -> None:
     """Ctrl-C must stay Ctrl-C all the way out of the fan-out.
 
@@ -137,7 +160,7 @@ def test_sorted_by_ref_orders_by_namespace_then_name() -> None:
 
 # ----- run_matched: the telemetry bracket around the fan-out ----------------
 #
-# `MonitorService` and `TestService` both delegate here, so these cases are
+# `monitor.run` and `test.run` both delegate here, so these cases are
 # the single place the no-match, crash and Ctrl-C contracts are pinned for
 # both stages. The service suites (and tests/commands/promote/test_telemetry.py)
 # cover the same paths end to end through each service.

@@ -1,8 +1,7 @@
 """`chart-manager promote pr|monitor|test` subcommand handlers.
 
-Thin CLI shell: argument shape, safety guard, output-mode resolution,
-service construction (via overrideable factories), and renderer dispatch.
-Business logic lives in the `pr`, `monitor` and `test` modules.
+Flags, the downgrade guard, output mode and rendering; each handler calls its stage's
+`run()` in the `pr`, `monitor` and `test` modules.
 """
 from __future__ import annotations
 
@@ -10,6 +9,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Annotated
 
@@ -22,18 +22,13 @@ from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.commands.promote import (
     PROMOTE_OUTCOME,
     HelmReleaseMatch,
-    HelmReleaseRef,
     MonitorRequest,
-    MonitorResult,
-    MonitorService,
     PromoteRequest,
     PromoteResult,
     PromoteStatus,
     TestRequest,
-    TestResult,
-    TestService,
-    Transition,
 )
+from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import run as run_pr
 from chart_manager.commands.promote.render import (
     _PrettyProgressDriver,
@@ -43,29 +38,10 @@ from chart_manager.commands.promote.render import (
     render_test_json,
     render_test_pretty,
 )
+from chart_manager.commands.promote.test import run as run_test
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-
-ProgressCb = Callable[[HelmReleaseRef, Transition], None]
-
-
-# --- factories (overrideable in tests) ------------------------------------
-#
-# Adapter wiring lives in `chart_manager.composition`; these stay as
-# module-level functions purely as a test seam -- `tests/commands/promote/test_cli.py`
-# monkeypatches them to inject fakes without touching the container.
-
-
-def _make_monitor_service(*, progress: ProgressCb | None) -> MonitorService:
-    """Build the default MonitorService (module-level so tests can override)."""
-    return _container().monitor_service(progress=progress)
-
-
-def _make_test_service(*, progress: ProgressCb | None) -> TestService:
-    """Build the default TestService (module-level so tests can override)."""
-    return _container().test_service(progress=progress)
-
 
 # --- helpers --------------------------------------------------------------
 
@@ -142,7 +118,7 @@ def _make_narration_console(no_color: bool) -> Console:
 def _duration_option(value: str, *, flag: str) -> float:
     """Parse a duration option; a bad value is a usage error naming the flag.
 
-    Parsed once, here, so services only ever see seconds. Cross-field
+    Parsed once, here, so the stages only ever see seconds. Cross-field
     ordering stays with the request's own validation (exit 1).
     """
     try:
@@ -202,7 +178,7 @@ def monitor(
         environment=environment,
     )
 
-    result = _run_monitor(mode, narration, request)
+    result = _run_stage(run_monitor, request, mode, narration)
 
     if mode == output_mod.TABLE:
         render_monitor_pretty(result, console, chart=chart, version=version)
@@ -213,20 +189,24 @@ def monitor(
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
-def _run_monitor(
-    mode: str,
-    narration: Console,
-    request: MonitorRequest,
-) -> MonitorResult:
-    """Run the monitor service, wiring a live progress table only in pretty mode.
+def _run_stage[R](run: Callable[..., R], request: object, mode: str, narration: Console) -> R:
+    """Run a monitor or test stage, with a live progress table only in table mode.
 
     The driver renders onto the narration console: progress is never the
     selected projection.
     """
+    container = _container()
+    stage = partial(
+        run,
+        request,
+        runner=container.command_runner(),
+        settings=container.settings,
+        events=container.event_writer(),
+    )
     if mode == output_mod.TABLE:
         with _PrettyProgressDriver(narration) as driver:
-            return _make_monitor_service(progress=driver).monitor(request)
-    return _make_monitor_service(progress=None).monitor(request)
+            return stage(progress=driver)
+    return stage(progress=None)
 
 
 def test(
@@ -272,7 +252,7 @@ def test(
         environment=environment,
     )
 
-    result = _run_test(mode, narration, request)
+    result = _run_stage(run_test, request, mode, narration)
 
     if mode == output_mod.TABLE:
         render_test_pretty(result, console, chart=chart, version=version)
@@ -281,22 +261,6 @@ def test(
 
     if not result.ok:
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
-
-
-def _run_test(
-    mode: str,
-    narration: Console,
-    request: TestRequest,
-) -> TestResult:
-    """Run the test service, wiring a live progress table only in pretty mode.
-
-    The driver renders onto the narration console: progress is never the
-    selected projection.
-    """
-    if mode == output_mod.TABLE:
-        with _PrettyProgressDriver(narration) as driver:
-            return _make_test_service(progress=driver).test(request)
-    return _make_test_service(progress=None).test(request)
 
 
 def promote(

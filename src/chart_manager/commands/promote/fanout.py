@@ -1,6 +1,6 @@
 """One home for how a promotion stage parallelises, cancels, and reports.
 
-`MonitorService` and `TestService` each fan one worker out per matched
+`monitor.run` and `test.run` each fan one worker out per matched
 HelmRelease, collect outcomes as they land, and cancel their peers when the
 budget runs out or a worker dies. That shell was written twice, verbatim down
 to the `except BaseException` wrapper -- which meant the answer to "what
@@ -18,7 +18,7 @@ close, and the aggregate result. `run_matched` owns that whole sequence and
 `RunResult` is the one aggregate type. What still differs per service is a
 parameter, not a code path: the synthetic no-match outcome is a `no_match`
 factory, the lifecycle stage and the verdict that counts as success are
-arguments, and the log lines are built from `log_label`. The services keep
+arguments, and the log lines are built from `log_label`. The stages keep
 only what really is theirs -- parsing their request, matching, and the
 "run started" line whose fields differ.
 """

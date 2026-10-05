@@ -53,7 +53,7 @@ __all__ = [
 class Verdict(StrEnum):
     """Terminal state of one watched or tested HelmRelease.
 
-    One enum for both services. `READY` is what a converged rollout reports
+    One enum for both stages. `READY` is what a converged rollout reports
     and `PASSED` is what a green `helm test` reports -- the deliberate rename
     that previously forced two disjoint types; everything else is shared.
     """
@@ -116,7 +116,7 @@ class Reason(StrEnum):
     """The reason values this codebase authors itself.
 
     Deliberately NOT the closed set of everything a `reason` field can hold:
-    `MonitorService` passes Flux's `Ready` condition reason straight through
+    `monitor.run` passes Flux's `Ready` condition reason straight through
     from the CRD, so the field is typed `ReasonLike` and unknown values stay
     raw strings. Modelling that explicitly is the point -- pretending the set
     is closed would invite an exhaustive `match` that silently mis-handles
@@ -187,11 +187,11 @@ def coerce_reason(value: str) -> ReasonLike:
 class Stage(StrEnum):
     """Which half of the promotion lifecycle produced a verdict.
 
-    `Verdict.FAILED` means "the rollout never converged" from `MonitorService`
-    and "helm test exited non-zero" from `TestService` -- two different
+    `Verdict.FAILED` means "the rollout never converged" from `monitor.run`
+    and "helm test exited non-zero" from `test.run` -- two different
     `PromotionPhase` values. Keying the phase tables on (stage, verdict)
     keeps that ambiguity visible instead of resolving it by accident, and it
-    is why one `PromotionTelemetry` can serve both services.
+    is why one `PromotionTelemetry` can serve both stages.
     """
 
     ROLLOUT = "rollout"
