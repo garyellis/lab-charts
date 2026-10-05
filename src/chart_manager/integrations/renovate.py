@@ -66,17 +66,11 @@ class RenovateResult:
 class Renovate:
     """Run self-hosted Renovate through the shared subprocess seam."""
 
-    def __init__(
-        self,
-        runner: CommandRunner,
-        *,
-        timeout: float | None = None,
-    ) -> None:
-        """Bind the runner and optional wall-clock timeout."""
+    def __init__(self, runner: CommandRunner) -> None:
+        """Bind the runner."""
         self.runner = runner
         self._binary = "renovate"
         self._validator_binary = "renovate-config-validator"
-        self.timeout = timeout
 
     def preflight(self) -> tuple[Check, ...]:
         """Report both Renovate binaries and whether a token is configured.
@@ -150,7 +144,6 @@ class Renovate:
                 [self._binary, request.repository],
                 cwd=repo_root,
                 check=False,
-                timeout=self.timeout,
                 env=env,
             )
         stdout = _redact_token(result.stdout, request.token)

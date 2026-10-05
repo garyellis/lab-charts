@@ -53,7 +53,7 @@ def test_run_scopes_argv_cwd_and_all_config_layers(
     runner = FakeCommandRunner(stdout="done\n")
 
     with caplog.at_level("DEBUG"):
-        result = Renovate(runner=runner, timeout=45).run(
+        result = Renovate(runner=runner).run(
             RenovateRequest(
                 repo_root=tmp_path,
                 repository="garyellis/lab-charts",
@@ -71,7 +71,6 @@ def test_run_scopes_argv_cwd_and_all_config_layers(
     assert record.args == ("renovate", "garyellis/lab-charts")
     assert record.cwd == tmp_path.resolve()
     assert record.check is False
-    assert record.timeout == 45
     assert record.env is not None
     assert record.env["RENOVATE_CONFIG_FILE"] == str(global_config.resolve())
     assert record.env["RENOVATE_ADDITIONAL_CONFIG_FILE"] == str(additional_config.resolve())
