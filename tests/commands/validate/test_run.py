@@ -538,13 +538,6 @@ def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) 
     assert outcome.rows[0].checks["render"].status == "error"
 
 
-class _NoHelm(FakeCommandRunner):
-    def run(self, args, **kwargs):  # type: ignore[no-untyped-def]
-        if args[0] == "helm":
-            raise MissingToolError("required tool not found on PATH: helm")
-        return super().run(args, **kwargs)
-
-
 def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
 
@@ -552,7 +545,10 @@ def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
         validate.run(
             validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
             workspace=workspace_for(tmp_path),
-            runner=_NoHelm(),
+            runner=FakeCommandRunner().respond(
+                lambda argv: argv[0] == "helm",
+                raises=MissingToolError("required tool not found on PATH: helm"),
+            ),
         )
 
 

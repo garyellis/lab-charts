@@ -567,11 +567,12 @@ Matcher = Predicate | tuple[str, ...]
 
 @dataclass(frozen=True)
 class Reply:
-    """One scripted subprocess outcome."""
+    """One scripted subprocess outcome; `raises` is raised instead of returning."""
 
     returncode: int = 0
     stdout: str = ""
     stderr: str = ""
+    raises: Exception | None = None
 
 
 @dataclass(frozen=True)
@@ -646,10 +647,11 @@ class FakeCommandRunner:
         returncode: int = 0,
         stdout: str = "",
         stderr: str = "",
+        raises: Exception | None = None,
     ) -> FakeCommandRunner:
-        """Answer every argv matching `matcher` with this reply. Chainable."""
+        """Answer every argv matching `matcher` with this reply, or raise `raises`. Chainable."""
         return self.respond_each(
-            matcher, Reply(returncode=returncode, stdout=stdout, stderr=stderr)
+            matcher, Reply(returncode=returncode, stdout=stdout, stderr=stderr, raises=raises)
         )
 
     def respond_each(self, matcher: Matcher, *replies: Reply) -> FakeCommandRunner:
@@ -701,6 +703,8 @@ class FakeCommandRunner:
             )
         )
         reply = self._reply_for(argv)
+        if reply.raises is not None:
+            raise reply.raises
         result = CommandResult(
             args=argv,
             returncode=reply.returncode,

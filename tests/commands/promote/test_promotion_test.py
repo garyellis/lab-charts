@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -10,14 +10,12 @@ import pytest
 from chart_manager.commands.promote import TestRequest, TestResult, Transition
 from chart_manager.commands.promote.test import run
 from chart_manager.integrations.helmrelease import HelmReleaseRef
-from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
-    EMPTY,
     HR,
     VERSION,
     Clock,
@@ -35,19 +33,6 @@ from tests.conftest import FakeCommandRunner, Reply, argv_prefix, plain_argv
 
 HELM_TEST = ("helm", "test", "loki", "--namespace", "loki")
 TEST_FAILED = failure("Error: bare failure")
-
-
-class _Raising(FakeCommandRunner):
-    """Raises `exc` for argv starting with `prefix`, as `SubprocessRunner` does on a timeout."""
-
-    def __init__(self, prefix: tuple[str, ...], exc: Exception) -> None:
-        super().__init__(stdout=EMPTY)
-        self.prefix, self.exc = prefix, exc
-
-    def run(self, args: Sequence[str], **kwargs: Any) -> CommandResult:
-        if plain_argv(tuple(args))[: len(self.prefix)] == self.prefix:
-            raise self.exc
-        return super().run(args, **kwargs)
 
 
 def _test(
@@ -292,7 +277,7 @@ def test_unlistable_test_pods_are_distinguished_from_no_test_pods() -> None:
 
 def test_unreadable_events_do_not_break_the_report() -> None:
     timeout = CommandTimeout("command timed out")
-    runner = cluster(helmrelease(), runner=_Raising(("kubectl", "get", "events"), timeout))
+    runner = cluster(helmrelease()).respond(argv_prefix("kubectl", "get", "events"), raises=timeout)
     _helm(runner, TEST_FAILED)
 
     [outcome] = _test(runner).outcomes
@@ -303,7 +288,7 @@ def test_unreadable_events_do_not_break_the_report() -> None:
 
 def test_a_helm_timeout_spends_the_per_hr_budget() -> None:
     timeout = CommandTimeout("command timed out")
-    runner = cluster(helmrelease(), runner=_Raising(("helm", "test"), timeout))
+    runner = cluster(helmrelease()).respond(argv_prefix("helm", "test"), raises=timeout)
 
     [outcome] = _test(runner).outcomes
 
