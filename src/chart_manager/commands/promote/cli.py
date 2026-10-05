@@ -178,13 +178,13 @@ def monitor(
     events = container.event_writer()
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
-        with ProgressTable(narration) as driver:
+        with ProgressTable(narration) as table:
             result = run_monitor(
                 request,
                 runner=runner,
                 settings=container.settings,
                 events=events,
-                progress=driver,
+                progress=table,
             )
     else:
         result = run_monitor(
@@ -248,13 +248,13 @@ def test(
     events = container.event_writer()
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
-        with ProgressTable(narration) as driver:
+        with ProgressTable(narration) as table:
             result = run_test(
                 request,
                 runner=runner,
                 settings=container.settings,
                 events=events,
-                progress=driver,
+                progress=table,
             )
     else:
         result = run_test(

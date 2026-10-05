@@ -70,17 +70,40 @@ def test_monitor_brackets_a_converged_rollout() -> None:
     assert closed.detail == {"stage": "rollout", "verdict": "ready", "total": 1, "failures": 0}
 
 
-def test_monitor_closes_a_partly_failed_rollout_with_abandoned() -> None:
-    events = EventLog()
-    runner = cluster(helmrelease("good", "ns"), helmrelease("bad", "ns", conditions=FAILED))
+def _failing_rollout() -> FakeCommandRunner:
+    return cluster(helmrelease("good", "ns"), helmrelease("bad", "ns", conditions=FAILED))
 
-    result = _monitor(runner, events)
+
+def _failing_helm_test() -> FakeCommandRunner:
+    runner = cluster(helmrelease("good", "ns"), helmrelease("bad", "ns"))
+    return runner.respond(argv_prefix("helm", "test", "bad"), returncode=1, stderr="pod failed")
+
+
+@pytest.mark.parametrize(
+    ("stage", "runner", "name", "phases"),
+    [
+        (_monitor, _failing_rollout, "rollout",
+         [PromotionPhase.WAITING_ROLLOUT, PromotionPhase.ABANDONED]),
+        (_test, _failing_helm_test, "helm-test",
+         [PromotionPhase.HELM_TEST_RUN, PromotionPhase.HELM_TEST_FAILED]),
+    ],
+    ids=["rollout", "helm-test"],
+)  # fmt: skip
+def test_one_failure_among_two_releases_closes_the_run_as_failed(
+    stage: Callable[..., Any],
+    runner: Callable[[], FakeCommandRunner],
+    name: str,
+    phases: list[PromotionPhase],
+) -> None:
+    events = EventLog()
+
+    result = stage(runner(), events)
 
     assert [o.ref.name for o in result.failures] == ["bad"]
-    assert events.phases == [PromotionPhase.WAITING_ROLLOUT, PromotionPhase.ABANDONED]
-    assert events.events[1].detail == {
-        "stage": "rollout", "verdict": "failed", "total": 2, "failures": 1,
-    }  # fmt: skip
+    assert events.phases == phases
+    opened, closing = events.events
+    assert opened.detail == {"stage": name, "matched": 2}
+    assert closing.detail == {"stage": name, "verdict": "failed", "total": 2, "failures": 1}
 
 
 def test_a_crashed_run_still_closes_and_counts_the_unreported_release_as_failed() -> None:
@@ -92,6 +115,7 @@ def test_a_crashed_run_still_closes_and_counts_the_unreported_release_as_failed(
         _monitor(runner, events, concurrency=1)
 
     assert events.phases == [PromotionPhase.WAITING_ROLLOUT, PromotionPhase.ABANDONED]
+    # `failures: 1` relies on fan-out submitting in order under concurrency=1: "a" reports first.
     assert events.events[1].detail == {
         "stage": "rollout", "verdict": "failed", "total": 2, "failures": 1,
     }  # fmt: skip

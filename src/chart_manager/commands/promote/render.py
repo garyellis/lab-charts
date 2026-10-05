@@ -1,4 +1,4 @@
-"""Terminal renderers and live progress driver for `promote monitor/test`.
+"""Terminal renderers and the progress table for `promote monitor/test`.
 
 Module-level functions, no Renderer protocol/ABC -- the CLI handler picks one
 of four functions based on (command, mode). ProgressTable is the
@@ -236,7 +236,7 @@ def _verdict_style(verdict: str) -> str:
 
 
 class ProgressTable:
-    """Thread-safe live progress driver. Used as a context manager.
+    """Thread-safe progress table. Used as a context manager.
 
     Holds a Rich Live table that re-renders per-HR transitions. The lock
     guards both the per-HR state map and the Live.update call so concurrent

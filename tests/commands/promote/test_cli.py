@@ -22,7 +22,7 @@ from chart_manager.commands.promote import (
     Transition,
 )
 from chart_manager.commands.promote import cli as promote_cli
-from chart_manager.commands.promote.state import NO_MATCH_REF
+from chart_manager.commands.promote.state import NO_MATCH_REF, PROMOTE_OUTCOME
 from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
@@ -219,14 +219,12 @@ def test_json_mode_emits_parseable_payload(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_table_mode_renders_progress_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
-        # Watchers report from their own threads.
-        threads = [
-            threading.Thread(
-                target=progress,
-                args=(_ref(f"hr{i}", "ns"), Transition(datetime.now(UTC), "Polling", "")),
-            )
-            for i in range(5)
-        ]
+        # Watchers report from their own threads, 20 transitions each.
+        def watch(i: int) -> None:
+            for j in range(20):
+                progress(_ref(f"hr{i}", "ns"), Transition(datetime.now(UTC), "Polling", f"d{j}"))
+
+        threads = [threading.Thread(target=watch, args=(i,)) for i in range(5)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -527,6 +525,11 @@ def test_promote_exit_code_and_json_ok_per_status(
     expected = 1 if status is PromoteStatus.ABORTED else 0
     assert res.exit_code == expected, res.output
     assert json.loads(res.stdout)["ok"] is (expected == 0)
+
+
+def test_promote_outcome_covers_every_status() -> None:
+    """A new PromoteStatus without an outcome must fail here, not exit 0 at runtime."""
+    assert set(PROMOTE_OUTCOME) == set(PromoteStatus)
 
 
 def test_promote_aborted_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:

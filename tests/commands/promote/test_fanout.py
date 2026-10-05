@@ -13,8 +13,11 @@ import pytest
 
 from chart_manager.commands.promote.fanout import run_fanout, run_matched
 from chart_manager.commands.promote.state import NO_MATCH_REF, Stage, Verdict
+from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.services.events.writer import EventWriter
+from tests.commands.promote.conftest import EventLog
 
 
 def _ref(name: str, namespace: str = "loki") -> HelmReleaseRef:
@@ -146,6 +149,7 @@ class _Verdicted:
 def test_nothing_matched_reports_the_time_since_the_callers_start() -> None:
     # `start` precedes listing and matching, which `run()` can't make take time.
     elapsed_seen: list[float] = []
+    events = EventLog()
 
     def no_match(elapsed: float) -> _Verdicted:
         elapsed_seen.append(elapsed)
@@ -157,7 +161,9 @@ def test_nothing_matched_reports_the_time_since_the_callers_start() -> None:
         clock=lambda: 10.0,
         total_deadline=1_000.0,
         concurrency=1,
-        telemetry=None,  # type: ignore[arg-type]  # nothing matched: never touched
+        telemetry=PromotionTelemetry(
+            writer=EventWriter(events), chart_name="loki", version="0.2.0", environment="dev"
+        ),
         stage=Stage.ROLLOUT,
         success=Verdict.READY,
         no_match=no_match,
@@ -171,3 +177,4 @@ def test_nothing_matched_reports_the_time_since_the_callers_start() -> None:
 
     assert elapsed_seen == [6.0]
     assert result.total_duration_seconds == 6.0
+    assert events.events == []  # nothing matched opens no interval

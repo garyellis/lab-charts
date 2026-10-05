@@ -9,7 +9,7 @@ import pytest
 
 from chart_manager.commands.promote import MonitorRequest, MonitorResult, Transition
 from chart_manager.commands.promote.monitor import run
-from chart_manager.commands.promote.state import DETAIL_MAX
+from chart_manager.commands.promote.state import DETAIL_MAX, Reason
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
@@ -211,6 +211,13 @@ WAITED = ("timed-out", "PerHRBudgetExhausted")
          "obs-gen=1/1 history=0.2.0 requested=0.2.0 ready=True(ReconciliationSucceeded) "
          "pending=[Deployment/loki/a,Deployment/loki/b]"),
     ],
+    ids=[
+        "suspended", "suspended-outranks-stalled", "stalled", "stalled-detail-truncated",
+        "install-failed", "upgrade-failed", "reconciliation-failed", "artifact-failed",
+        "retry-exhausted", "test-failed", "test-failed-no-reason", "test-reason-unmodelled",
+        "test-failed-before-released", "ready-workloads-converged", "ready-no-workloads",
+        "generation-lag", "ready-false-progressing", "no-conditions", "workloads-pending",
+    ],
 )  # fmt: skip
 def test_the_release_status_decides_the_verdict(
     release: dict[str, Any],
@@ -225,6 +232,8 @@ def test_the_release_status_decides_the_verdict(
     [result] = _monitor(runner, per_hr_timeout_seconds=3.0).outcomes
 
     assert (result.verdict, result.reason) == outcome
+    # A reason the model names comes back as `Reason`; an unmodelled one as a plain string.
+    assert isinstance(result.reason, Reason) is (outcome[1] in {r.value for r in Reason})
     first = result.recent_transitions[0]
     assert (first.phase, first.detail) == (phase, detail)
 
