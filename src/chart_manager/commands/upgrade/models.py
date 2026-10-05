@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from chart_manager.plumbing.errors import ChartManagerError
+
+
+class UpgradeError(ChartManagerError):
+    """An upgrade request is unsafe or inconsistent with repository state."""
+
 
 @dataclass(frozen=True)
 class UpgradeRequest:

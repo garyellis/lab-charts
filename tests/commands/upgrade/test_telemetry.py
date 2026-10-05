@@ -21,9 +21,9 @@ from typing import Any
 
 import pytest
 
+from chart_manager.commands.upgrade.models import UpgradeResult
+from chart_manager.commands.upgrade.telemetry import OUTCOME_PHASE, UpgradeTelemetry
 from chart_manager.services.events.lifecycle import BuildPhase
-from chart_manager.services.upgrader.models import UpgradeResult
-from chart_manager.services.upgrader.telemetry import OUTCOME_PHASE, UpgradeTelemetry
 
 CHART = "loki"
 BASELINE = "1.2.3"

@@ -4,15 +4,11 @@ from typing import Any, cast
 
 import pytest
 
+from chart_manager.commands.upgrade import UpgradeError, UpgradeRequest
+from chart_manager.commands.upgrade.run import UpgradeService, build_upgrade_plan
+from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
+from chart_manager.commands.upgrade.wire import upgrade_to_dict
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.services.upgrader import (
-    UpgradeError,
-    UpgradeRequest,
-    UpgradeService,
-    UpgradeTelemetry,
-    build_upgrade_plan,
-)
-from chart_manager.services.upgrader.wire import upgrade_to_dict
 from tests.conftest import CHARTS_DIR, workspace_for
 
 
@@ -329,7 +325,7 @@ def test_service_rejects_relevant_uncommitted_inputs_before_renovate(tmp_path: P
 
 # ----- build-lifecycle telemetry ------------------------------------------
 #
-# The mapping itself is covered in test_upgrader_telemetry.py. What matters
+# The mapping itself is covered in test_telemetry.py. What matters
 # here is that the service emits from the *fully projected* result and only
 # after the upgrade is already pushed -- so these tests assert the seam, the
 # payload's provenance, and that emission cannot break the run.

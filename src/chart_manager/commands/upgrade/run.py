@@ -7,17 +7,17 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from chart_manager.plumbing.errors import ChartManagerError, YamlError
-from chart_manager.plumbing.semver import parse_bare_version
-from chart_manager.plumbing.yaml_files import parse_yaml_mapping
-from chart_manager.services.upgrader.errors import UpgradeError
-from chart_manager.services.upgrader.models import (
+from chart_manager.commands.upgrade.models import (
+    UpgradeError,
     UpgradePlan,
     UpgradeRequest,
     UpgradeResult,
 )
-from chart_manager.services.upgrader.paths import resolve_chart_path
-from chart_manager.services.upgrader.telemetry import UpgradeTelemetry
+from chart_manager.commands.upgrade.paths import resolve_chart_path
+from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
+from chart_manager.plumbing.semver import parse_bare_version
+from chart_manager.plumbing.yaml_files import parse_yaml_mapping
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 _LOG = logging.getLogger(__name__)

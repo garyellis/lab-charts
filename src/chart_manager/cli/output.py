@@ -3,7 +3,7 @@
 Before this module the surface had three unrelated answers to "how do I ask
 for machine-readable output?":
 
-    cli/upgrade.py    --format text|json
+    commands/upgrade/cli.py    --format text|json
     cli/validate.py   --format text|md|json|all
     cli/main.py       plan -o table|json|yaml|github
     commands/promote/cli.py --output pretty|json|auto     (the only correct one)

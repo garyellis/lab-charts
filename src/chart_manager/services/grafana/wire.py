@@ -34,7 +34,7 @@ def lint_result_to_dict(result: LintResult) -> dict[str, Any]:
 
     Paths are emitted as POSIX strings so a report produced on one platform
     is comparable to one produced on another, matching
-    `services/upgrader/wire.py`.
+    `commands/upgrade/wire.py`.
     """
     return {
         "ok": result.ok,

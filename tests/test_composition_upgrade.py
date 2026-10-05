@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.upgrade import FinalizeRequest, UpgradeRequest
 from chart_manager.composition import Container
 from chart_manager.plumbing.yaml_files import dump_yaml
-from chart_manager.services.upgrader import FinalizeRequest, UpgradeRequest
 from tests.conftest import FakeCommandRunner, Reply
 
 pytestmark = pytest.mark.usefixtures("tmp_workspace")

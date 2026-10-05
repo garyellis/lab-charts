@@ -9,8 +9,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from chart_manager.cli import upgrade as upgrade_cli
-from chart_manager.services.upgrader import FinalizeResult, UpgradeResult
+from chart_manager.commands.upgrade import FinalizeResult, UpgradeResult
+from chart_manager.commands.upgrade import cli as upgrade_cli
 
 pytestmark = pytest.mark.usefixtures("tmp_workspace")
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from chart_manager.commands.upgrade.models import UpgradeError
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.services.upgrader.errors import UpgradeError
 
 
 def _reject_symlinks(path: Path, stop: Path) -> None:

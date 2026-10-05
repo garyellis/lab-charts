@@ -1,6 +1,6 @@
 """Contract tests for the upgrade wire projections.
 
-These exercise `services/upgrader/wire.py` directly, with no Typer and no
+These exercise `commands/upgrade/wire.py` directly, with no Typer and no
 CliRunner in sight -- which is the point of the module existing. A REST
 handler or a Slack app calls exactly what these tests call.
 """
@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from chart_manager.services.upgrader import FinalizeResult, UpgradeResult
-from chart_manager.services.upgrader.wire import (
+from chart_manager.commands.upgrade import FinalizeResult, UpgradeResult
+from chart_manager.commands.upgrade.wire import (
     finalize_to_dict,
     upgrade_to_dict,
 )

@@ -2,13 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.upgrader import (
-    FinalizeRequest,
-    UpdateMetadata,
-    UpgradeError,
-    UpgradeFinalizer,
-    load_update_data,
-)
+from chart_manager.commands.upgrade import FinalizeRequest, UpdateMetadata, UpgradeError
+from chart_manager.commands.upgrade.finalize import UpgradeFinalizer, load_update_data
 from tests.conftest import workspace_for
 
 

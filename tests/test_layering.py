@@ -398,7 +398,7 @@ def _probe(modules: list[str], forbidden: tuple[str, ...] = _FORBIDDEN_ROOTS) ->
 def test_service_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
-    assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
+    assert len(modules) > 10, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.chart_catalog_wire" in modules
     assert "chart_manager.services.doctor" in modules
 
@@ -590,7 +590,7 @@ def _cli_modules() -> list[Path]:
 def test_cli_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make both (f) checks vacuous."""
     paths = _cli_modules()
-    assert len(paths) > 10, f"suspiciously few cli modules: {len(paths)}"
+    assert len(paths) > 5, f"suspiciously few cli modules: {len(paths)}"
     assert _CLI / "_container.py" in paths
     # The module that used to construct services inline. If it is renamed
     # away, the scan must be updated deliberately rather than quietly losing

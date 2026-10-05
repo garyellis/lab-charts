@@ -42,7 +42,7 @@ non-fatal telemetry to before its try/except, which would be a behavior change.
 Test seams
 ----------
 Surfaces keep their module-level `_make_*` factories (see
-`cli/upgrade.py`, `cli/doctor.py`) and delegate the body to a
+`commands/upgrade/cli.py`, `cli/doctor.py`) and delegate the body to a
 container. Tests that `monkeypatch.setattr(module, "_make_x_service", ...)`
 keep working unchanged; tests that want real services with fake adapters can
 subclass `Container` or pass a `Settings`.
@@ -56,6 +56,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+from chart_manager.commands.upgrade.finalize import GitBaselineReader, UpgradeFinalizer
+from chart_manager.commands.upgrade.models import UpgradePlan
+from chart_manager.commands.upgrade.run import PullRequestLike, UpgradeService
+from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
 from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
@@ -74,14 +78,6 @@ from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.events.store import preflight_event_store
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
-from chart_manager.services.upgrader import (
-    GitBaselineReader,
-    PullRequestLike,
-    UpgradeFinalizer,
-    UpgradePlan,
-    UpgradeService,
-    UpgradeTelemetry,
-)
 from chart_manager.shared.charts import dependencies as chart_deps
 from chart_manager.shared.settings import Settings, load_settings
 from chart_manager.shared.workspace import (

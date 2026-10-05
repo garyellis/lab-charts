@@ -19,7 +19,7 @@ a surface that owns the contract.
 Deliberately I/O-free and format-free: these functions return plain,
 JSON-ready dicts. They take no `file`, no `format=`, no `console=`. Choosing an
 encoder (`json.dumps` options, YAML, an HTTP response body) and rendering for
-humans is the surface's job -- see `cli/upgrade.py`.
+humans is the surface's job -- see `commands/upgrade/cli.py`.
 """
 
 from __future__ import annotations

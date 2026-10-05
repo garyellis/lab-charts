@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.services.upgrader import UpgradeError, resolve_chart_path
+from chart_manager.commands.upgrade import UpgradeError
+from chart_manager.commands.upgrade.paths import resolve_chart_path
 from tests.conftest import CHARTS_DIR
 
 

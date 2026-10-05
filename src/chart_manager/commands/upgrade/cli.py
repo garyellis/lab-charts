@@ -1,7 +1,7 @@
 """CLI surface for Renovate-driven wrapper-chart upgrades.
 
 The service owns discovery, preflight, isolated worktree mutation, and PR
-idempotency. `services/upgrader/wire.py` owns the machine-readable
+idempotency. `commands/upgrade/wire.py` owns the machine-readable
 contract. This module owns only Typer's flag shape, the encoder settings, and
 the human-readable rendering.
 """
@@ -18,15 +18,15 @@ import typer
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._container import repository_root
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.upgrader import (
+from chart_manager.commands.upgrade.finalize import load_update_data
+from chart_manager.commands.upgrade.models import (
     FinalizeRequest,
     FinalizeResult,
     UpgradeRequest,
     UpgradeResult,
-    load_update_data,
 )
-from chart_manager.services.upgrader.wire import finalize_to_dict, upgrade_to_dict
+from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import resolve_chart_target
 
 #: `upgrade-finalize`'s vocabulary, and ONLY its vocabulary.
@@ -39,7 +39,7 @@ from chart_manager.shared.charts.chart import resolve_chart_target
 #: anchored right after `--path <dir>`, so Renovate only ever passes `--path`
 #: and lets `--data-file` arrive via the callback env var -- but "the regex
 #: does not currently cover it" is a thin reason to move a frozen command's
-#: surface, and the flag is exercised by `tests/test_cli_upgrade.py`.
+#: surface, and the flag is exercised by `tests/commands/upgrade/test_cli.py`.
 #:
 #: The public `chart upgrade` moved to the unified `-o/--output`; these two
 #: commands share a service and a wire contract but no longer share a flag.
