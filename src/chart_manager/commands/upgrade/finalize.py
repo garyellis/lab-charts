@@ -7,6 +7,7 @@ import logging
 import re
 import stat
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,7 @@ def _updates_from_data(data: Mapping[str, Any]) -> tuple[UpdateMetadata, ...]:
                 update_type=str(item.get("updateType", "")),
             )
         )
-    return tuple(updates)
+    return tuple(dict.fromkeys(updates))
 
 
 def load_update_data(
@@ -113,6 +114,16 @@ def load_update_data(
     if not isinstance(value, Mapping):
         raise UpgradeError("Renovate data file must contain a JSON object")
     return value
+
+
+@dataclass(frozen=True)
+class _Bump:
+    """The wrapper version finalize moves to, and the updates that justify it."""
+
+    previous: SemVer
+    target: SemVer
+    major: bool
+    updates: tuple[UpdateMetadata, ...]
 
 
 def run(
@@ -151,12 +162,10 @@ def run(
         raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
     baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
     current_version = _semver(current.get("version"), source="current wrapper version")
-    updates = tuple(dict.fromkeys(_updates_from_data(request.update_data)))
+    updates = _updates_from_data(request.update_data)
     if not updates:
-        # Renovate passed no callback metadata, so the update set is
-        # reconstructed from the Chart.yaml diff. That inference decides the
-        # bump and the changelog body, and it cannot see an image update
-        # made outside `dependencies:` -- worth a line when it fires.
+        # The inferred set decides the bump and changelog but cannot see an image
+        # update outside `dependencies:`, so say when it fires.
         updates = _chart_dependency_diff(baseline_doc, current)
         _LOG.warning(
             "no Renovate update metadata; inferring updates from the Chart.yaml "
@@ -164,19 +173,8 @@ def run(
             chart_path.name,
             len(updates),
         )
-    qualifying = tuple(update for update in updates if update.qualifies)
-    for update in qualifying:
-        if not update.dependency or not update.current_version or not update.new_version:
-            raise UpgradeError(
-                "qualifying Renovate updates require dependency, currentValue, "
-                "and newValue metadata"
-            )
-    if not qualifying:
-        if current_version != baseline_version:
-            raise UpgradeError(
-                "wrapper version diverged from baseline without a qualifying "
-                f"image or Helm dependency update: {current_version}"
-            )
+    bump = _decide(baseline_version, current_version, updates)
+    if bump is None:
         _LOG.info(
             "upgrade finalize finished: chart=%s version=%s bump=none changed=False "
             "(no qualifying update)",
@@ -189,29 +187,70 @@ def run(
             version=str(current_version),
             changed=False,
         )
-    major = any(_is_major(update) for update in qualifying)
-    target_version = (
-        SemVer(baseline_version.major + 1, 0, 0)
-        if major
-        else SemVer(baseline_version.major, baseline_version.minor, baseline_version.patch + 1)
+    chart_changed, changelog_changed = _write(chart_path, current_version, bump)
+    _LOG.info(
+        "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
+        "changed=%s files=%d qualifying=%d dry_run=False",
+        chart_path.name,
+        bump.previous,
+        bump.target,
+        "major" if bump.major else "patch",
+        chart_changed or changelog_changed,
+        chart_changed + changelog_changed,
+        len(bump.updates),
     )
-    baseline_value = str(baseline_version)
-    target = str(target_version)
-    if current_version not in {baseline_version, target_version}:
+    return FinalizeResult(
+        chart=chart_path.name,
+        previous_version=str(bump.previous),
+        version=str(bump.target),
+        changed=chart_changed or changelog_changed,
+    )
+
+
+def _decide(
+    baseline: SemVer, current: SemVer, updates: Sequence[UpdateMetadata]
+) -> _Bump | None:
+    """Pick the target version from the qualifying updates; None when nothing qualifies."""
+    qualifying = tuple(update for update in updates if update.qualifies)
+    for update in qualifying:
+        if not update.dependency or not update.current_version or not update.new_version:
+            raise UpgradeError(
+                "qualifying Renovate updates require dependency, currentValue, "
+                "and newValue metadata"
+            )
+    if not qualifying:
+        if current != baseline:
+            raise UpgradeError(
+                "wrapper version diverged from baseline without a qualifying "
+                f"image or Helm dependency update: {current}"
+            )
+        return None
+    major = any(_is_major(update) for update in qualifying)
+    target = (
+        SemVer(baseline.major + 1, 0, 0)
+        if major
+        else SemVer(baseline.major, baseline.minor, baseline.patch + 1)
+    )
+    if current not in {baseline, target}:
         raise UpgradeError(
-            f"wrapper version diverged from baseline {baseline_value} and target {target}: "
-            f"{current_version}"
+            f"wrapper version diverged from baseline {baseline} and target {target}: "
+            f"{current}"
         )
+    return _Bump(previous=baseline, target=target, major=major, updates=qualifying)
+
+
+def _write(chart_path: Path, current: SemVer, bump: _Bump) -> tuple[bool, bool]:
+    """Write the target version and its changelog section; report which files changed."""
+    target = str(bump.target)
     heading = f"## {target}"
-    chart_changed = current_version != target_version
+    chart_changed = current != bump.target
     chart_file = safe_output_path(chart_path, "Chart.yaml")
     changelog_file = safe_output_path(chart_path, "changelog.md")
     old_changelog = (
         changelog_file.read_text(encoding="utf-8") if changelog_file.exists() else ""
     )
-    entry = _changelog_entry(heading, qualifying)
+    entry = _changelog_entry(heading, bump.updates)
     new_changelog = _apply_changelog_entry(old_changelog, heading, entry)
-    changelog_changed = new_changelog != old_changelog
     if chart_changed:
         def update_version(documents: list[Any]) -> None:
             if len(documents) != 1 or not isinstance(documents[0], dict):
@@ -222,25 +261,9 @@ def run(
             edit_yaml_documents(chart_file, update_version)
         except YamlError as exc:
             raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
-    if changelog_changed:
+    if new_changelog != old_changelog:
         changelog_file.write_text(new_changelog, encoding="utf-8")
-    _LOG.info(
-        "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
-        "changed=%s files=%d qualifying=%d dry_run=False",
-        chart_path.name,
-        baseline_value,
-        target,
-        "major" if major else "patch",
-        chart_changed or changelog_changed,
-        chart_changed + changelog_changed,
-        len(qualifying),
-    )
-    return FinalizeResult(
-        chart=chart_path.name,
-        previous_version=baseline_value,
-        version=target,
-        changed=chart_changed or changelog_changed,
-    )
+    return chart_changed, new_changelog != old_changelog
 
 
 def _is_major(update: UpdateMetadata) -> bool:
