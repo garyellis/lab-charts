@@ -39,6 +39,7 @@ _LOG = logging.getLogger(__name__)
 _HEADING = re.compile(r"^##\s")
 _BASELINE_REF = "HEAD"
 _CHANGELOG_FILE = "changelog.md"
+_MAX_DATA_FILE_BYTES = 1024 * 1024
 
 
 def wrapper_version(value: object, *, source: str) -> SemVer:
@@ -86,11 +87,7 @@ def _updates_from_data(data: Mapping[str, Any]) -> tuple[UpdateMetadata, ...]:
     return tuple(dict.fromkeys(updates))
 
 
-def load_update_data(
-    path: Path,
-    *,
-    max_bytes: int = 1024 * 1024,
-) -> Mapping[str, Any]:
+def load_update_data(path: Path) -> Mapping[str, Any]:
     """Load Renovate's callback data file, rejecting symlinks, non-regular and oversized files.
 
     Renovate writes it in its own temporary directory, so it is not checked against the checkout.
@@ -104,9 +101,9 @@ def load_update_data(
         raise UpgradeError(f"Renovate data file must not be a symlink: {path}")
     if not stat.S_ISREG(metadata.st_mode):
         raise UpgradeError(f"Renovate data file must be a regular file: {path}")
-    if metadata.st_size > max_bytes:
+    if metadata.st_size > _MAX_DATA_FILE_BYTES:
         raise UpgradeError(
-            f"Renovate data file exceeds {max_bytes} byte safety limit: {path}"
+            f"Renovate data file exceeds {_MAX_DATA_FILE_BYTES} byte safety limit: {path}"
         )
     try:
         value = json.loads(resolved.read_text(encoding="utf-8"))

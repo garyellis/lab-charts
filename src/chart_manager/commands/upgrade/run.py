@@ -30,6 +30,7 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 _LOG = logging.getLogger(__name__)
 
 _GLOBAL_CONFIG = "renovate-global.json"
+_RENOVATE_CONFIG = "renovate.json"
 _BRANCH_PREFIX = "renovate/{chart}/"
 _GROUP = "chart-manager:{chart}"
 #: Renovate's stdout log-level prefixes.
@@ -49,7 +50,7 @@ def run(
     git = Git(root, runner)
     github = Github(root, runner)
     repository = _repository(git)
-    plan = build_upgrade_plan(
+    plan = _build_upgrade_plan(
         root,
         request.chart_path,
         charts_dir=workspace.spec.charts_dir,
@@ -60,7 +61,7 @@ def run(
     diagnostics: list[str] = []
     _LOG.debug("Checking upgrade inputs for uncommitted changes")
     _require_relevant_files_clean(plan, git)
-    chart_config = plan.chart_path / "renovate.json"
+    chart_config = plan.chart_path / _RENOVATE_CONFIG
     renovate_request = RenovateRequest(
         repo_root=plan.repo_root,
         repository=repository,
@@ -205,7 +206,7 @@ def _require_relevant_files_clean(plan: UpgradePlan, git: Git) -> None:
     paths = (
         plan.chart_path,
         plan.repo_root / _GLOBAL_CONFIG,
-        plan.repo_root / "renovate.json",
+        plan.repo_root / _RENOVATE_CONFIG,
     )
     changed = git.status_paths(tuple(path.relative_to(git.root) for path in paths))
     if changed:
@@ -275,7 +276,7 @@ def _renovate_warnings(output: str) -> tuple[str, ...]:
     )
 
 
-def build_upgrade_plan(
+def _build_upgrade_plan(
     root: Path,
     chart_path: Path,
     *,

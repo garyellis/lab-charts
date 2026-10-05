@@ -7,7 +7,6 @@ The package exports the request and result types. `chart upgrade` runs in
 from chart_manager.commands.upgrade.models import (
     FinalizeRequest,
     FinalizeResult,
-    UpdateMetadata,
     UpgradeError,
     UpgradeRequest,
     UpgradeResult,
@@ -17,7 +16,6 @@ from chart_manager.commands.upgrade.models import (
 __all__ = [
     "FinalizeRequest",
     "FinalizeResult",
-    "UpdateMetadata",
     "UpgradeError",
     "UpgradeRequest",
     "UpgradeResult",
