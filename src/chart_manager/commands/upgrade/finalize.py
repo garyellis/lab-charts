@@ -187,9 +187,7 @@ def run(
             chart=chart_path.name,
             previous_version=str(baseline_version),
             version=str(current_version),
-            bump=None,
             changed=False,
-            updates=updates,
         )
     major = any(_is_major(update) for update in qualifying)
     target_version = (
@@ -226,14 +224,6 @@ def run(
             raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
     if changelog_changed:
         changelog_file.write_text(new_changelog, encoding="utf-8")
-    files = tuple(
-        path
-        for changed, path in (
-            (chart_changed, chart_file),
-            (changelog_changed, changelog_file),
-        )
-        if changed
-    )
     _LOG.info(
         "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
         "changed=%s files=%d qualifying=%d dry_run=False",
@@ -241,18 +231,15 @@ def run(
         baseline_value,
         target,
         "major" if major else "patch",
-        bool(files),
-        len(files),
+        chart_changed or changelog_changed,
+        chart_changed + changelog_changed,
         len(qualifying),
     )
     return FinalizeResult(
         chart=chart_path.name,
         previous_version=baseline_value,
         version=target,
-        bump="major" if major else "patch",
-        changed=bool(files),
-        files=files,
-        updates=qualifying,
+        changed=chart_changed or changelog_changed,
     )
 
 

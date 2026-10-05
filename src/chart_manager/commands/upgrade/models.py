@@ -50,11 +50,6 @@ class UpgradeResult:
     pr_url: str | None = None
     pr_number: int | None = None
 
-    @property
-    def changed(self) -> bool:
-        """Whether an update proposal was produced."""
-        return self.proposed_version is not None
-
 
 @dataclass(frozen=True)
 class UpdateMetadata:
@@ -106,10 +101,7 @@ class FinalizeResult:
     chart: str
     previous_version: str
     version: str
-    bump: str | None
     changed: bool
-    files: tuple[Path, ...] = ()
-    updates: tuple[UpdateMetadata, ...] = ()
 
 
 @dataclass(frozen=True)

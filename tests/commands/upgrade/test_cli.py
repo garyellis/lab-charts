@@ -29,10 +29,10 @@ OPENED = UpgradeResult(
     repository="owner/repository",
 )
 UPDATED = FinalizeResult(
-    chart="loki", previous_version="1.2.3", version="2.0.0", bump="major", changed=True
+    chart="loki", previous_version="1.2.3", version="2.0.0", changed=True
 )
 UNCHANGED = FinalizeResult(
-    chart="loki", previous_version="1.2.3", version="1.2.3", bump=None, changed=False
+    chart="loki", previous_version="1.2.3", version="1.2.3", changed=False
 )
 
 

@@ -62,11 +62,6 @@ class RenovateResult:
     stdout: str
     stderr: str
 
-    @property
-    def ok(self) -> bool:
-        """Whether Renovate exited successfully."""
-        return self.returncode == 0
-
 
 class Renovate:
     """Run self-hosted Renovate through the shared subprocess seam."""
@@ -75,16 +70,12 @@ class Renovate:
         self,
         runner: CommandRunner | None = None,
         *,
-        binary: str | Path | None = None,
-        validator_binary: str | Path | None = None,
         timeout: float | None = None,
     ) -> None:
-        """Bind the runner, CLI paths, and optional wall-clock timeout."""
+        """Bind the runner and optional wall-clock timeout."""
         self.runner = runner or SubprocessRunner()
-        self._binary = str(binary) if binary is not None else "renovate"
-        self._validator_binary = (
-            str(validator_binary) if validator_binary is not None else "renovate-config-validator"
-        )
+        self._binary = "renovate"
+        self._validator_binary = "renovate-config-validator"
         self.timeout = timeout
 
     def preflight(self) -> tuple[Check, ...]:

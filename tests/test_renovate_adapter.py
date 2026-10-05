@@ -65,7 +65,7 @@ def test_run_scopes_argv_cwd_and_all_config_layers(
             )
         )
 
-    assert result.ok is True
+    assert result.returncode == 0
     assert result.stdout == "done\n"
     record = runner.records[0]
     assert record.args == ("renovate", "garyellis/lab-charts")
@@ -118,7 +118,6 @@ def test_nonzero_exit_is_a_result_for_service_owned_reporting(tmp_path: Path) ->
         )
     )
 
-    assert result.ok is False
     assert (result.returncode, result.stdout, result.stderr) == (
         2,
         "partial",
