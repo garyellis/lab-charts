@@ -12,12 +12,12 @@ from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.semver import parse_semver
-from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
 from .state import PROMOTE_PHASE, PromoteStatus
+from .telemetry import emit_promotion
 
 _LOG = logging.getLogger(__name__)
 
@@ -127,17 +127,15 @@ def _emit_promotion(request: PromoteRequest, result: PromoteResult, events: Even
     if phase is None:
         return
     pr = result.pull_request
-    emit_non_fatal(
-        lambda: events.promote(
-            chart_name=request.chart_name,
-            chart_version=request.version,
-            environment=request.environment,
-            phase=phase,
-            pr_url=pr.url if pr else None,
-            promotion_correlation_id=pr.url if pr else None,
-        ),
-        strict=False,
+    emit_promotion(
+        events,
+        chart_name=request.chart_name,
+        chart_version=request.version,
+        environment=request.environment,
+        phase=phase,
         what="promotion",
+        pr_url=pr.url if pr else None,
+        promotion_correlation_id=pr.url if pr else None,
     )
 
 

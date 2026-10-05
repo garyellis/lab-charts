@@ -17,7 +17,7 @@ from chart_manager.commands.upgrade.models import (
     UpgradeStatus,
 )
 from chart_manager.commands.upgrade.paths import CHART_FILE, resolve_chart_path
-from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
+from chart_manager.commands.upgrade.telemetry import emit_pr_open
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
@@ -109,9 +109,7 @@ def run(
         pr_number=current_pr.number if current_pr is not None else None,
     )
     # Emitted last: the upgrade is already pushed, so telemetry can only cost latency.
-    UpgradeTelemetry(writer=events).completed(
-        upgrade_result, previously_proposed=previously_proposed
-    )
+    emit_pr_open(events, upgrade_result, previously_proposed=previously_proposed)
     _LOG.info(
         "Upgrade result for %s: outcome=%s current=%s proposed=%s branch=%s pr=%s "
         "diagnostics=%d",

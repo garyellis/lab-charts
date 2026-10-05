@@ -16,6 +16,7 @@ from chart_manager.commands.promote.state import (
     Verdict,
     run_verdict,
 )
+from chart_manager.commands.promote.telemetry import emit_promotion
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import PromotionPhase
@@ -207,6 +208,26 @@ def test_the_swallow_records_the_exception_type_not_only_its_text(
     assert record.levelname == "WARNING"
     assert "promotion event emission failed (non-fatal)" in record.getMessage()
     assert "KeyError" in record.getMessage()
+
+
+def test_emit_promotion_logs_a_failed_write_under_its_label(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events = EventLog(raises=KeyError("COSMOS_ENDPOINT"))
+    writer = EventWriter(source="chart-manager", store=lambda: events)
+
+    with caplog.at_level("WARNING"):
+        emit_promotion(
+            writer,
+            chart_name=CHART,
+            chart_version=VERSION,
+            environment=ENV,
+            phase=PromotionPhase.ROLLOUT_OK,
+            what="promotion rollout_complete",
+        )
+
+    assert events.phases == [PromotionPhase.ROLLOUT_OK]
+    assert "promotion rollout_complete event emission failed (non-fatal)" in caplog.text
 
 
 def test_every_terminal_phase_pair_is_reachable_from_a_run_verdict() -> None:

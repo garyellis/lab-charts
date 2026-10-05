@@ -1,16 +1,18 @@
-"""Promotion-lifecycle telemetry for `promote monitor` and `promote test`.
+"""Promotion-lifecycle telemetry for `promote pr`, `promote monitor` and `promote test`.
+
+`emit_promotion` is the single write path for promotion events: every stage
+reaches `EventWriter.promote` through it, under the non-fatal failure policy.
 
 `monitor.run` and `test.run` are the only components that know when a
 rollout starts, when it converges, and whether `helm test` went green -- but
 neither could reach `EventWriter`, so `PromotionPhase.WAITING_ROLLOUT`,
 `ROLLOUT_OK` and `HELM_TEST_*` were emitted nowhere. The promotion timeline
-had a start (`FLUX_PR_OPEN`, from `promote.py`) and no end, which is exactly
-what makes DESIGN.md's "duration from renovate PR propagation to all envs"
-uncomputable.
+had a start (`FLUX_PR_OPEN`, from `commands/promote/pr.py`) and no end, which
+is exactly what makes DESIGN.md's "duration from renovate PR propagation to
+all envs" uncomputable.
 
-This module holds the promotion wiring. The *failure policy* it used to own
-now lives in `shared/events/failure.py`, which grew a fourth caller (the
-upgrade service) and no longer belongs to this domain.
+The *failure policy* itself lives in `shared/events/failure.py`, shared with
+the other event emitters.
 """
 from __future__ import annotations
 
@@ -22,7 +24,35 @@ from chart_manager.shared.events.writer import EventWriter
 
 from .state import START_PHASE, TERMINAL_PHASES, Stage, Verdict
 
-__all__ = ["PromotionTelemetry"]
+__all__ = ["PromotionTelemetry", "emit_promotion"]
+
+
+def emit_promotion(
+    writer: EventWriter,
+    *,
+    chart_name: str,
+    chart_version: str,
+    environment: str,
+    phase: PromotionPhase,
+    what: str,
+    pr_url: str | None = None,
+    promotion_correlation_id: str | None = None,
+    detail: dict[str, object] | None = None,
+) -> None:
+    """Write one promotion event; a failed write is logged under `what`, not raised."""
+    emit_non_fatal(
+        lambda: writer.promote(
+            chart_name=chart_name,
+            chart_version=chart_version,
+            environment=environment,
+            phase=phase,
+            pr_url=pr_url,
+            promotion_correlation_id=promotion_correlation_id,
+            detail=detail,
+        ),
+        strict=False,
+        what=what,
+    )
 
 
 @dataclass(frozen=True)
@@ -70,20 +100,17 @@ class PromotionTelemetry:
         """Write one event, honoring the enabled check and the failure policy."""
         if self.environment is None:
             return
-        environment = self.environment
 
         # detail carries only str/int/bool: the DynamoDB adapter hands the
         # item straight to boto3, whose serializer rejects float. Durations
         # are deliberately absent -- they are the difference between two
         # event timestamps, which is the whole reason these events exist.
-        emit_non_fatal(
-            lambda: self.writer.promote(
-                chart_name=self.chart_name,
-                chart_version=self.version,
-                environment=environment,
-                phase=phase,
-                detail=detail,
-            ),
-            strict=False,
+        emit_promotion(
+            self.writer,
+            chart_name=self.chart_name,
+            chart_version=self.version,
+            environment=self.environment,
+            phase=phase,
             what=f"promotion {phase.value}",
+            detail=detail,
         )
