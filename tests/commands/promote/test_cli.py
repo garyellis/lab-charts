@@ -22,7 +22,7 @@ from chart_manager.commands.promote import (
     Transition,
 )
 from chart_manager.commands.promote import cli as promote_cli
-from chart_manager.commands.promote.render import _PrettyProgressDriver
+from chart_manager.commands.promote.render import ProgressTable
 from chart_manager.commands.promote.state import NO_MATCH_REF, PROMOTE_OUTCOME
 from chart_manager.commands.promote.wire import promote_to_dict
 from chart_manager.integrations.github import PullRequest
@@ -545,7 +545,7 @@ def test_pretty_progress_driver_thread_safety() -> None:
 
     from rich.console import Console as _Console
 
-    driver = _PrettyProgressDriver(_Console(quiet=True))
+    driver = ProgressTable(_Console(quiet=True))
     errors: list[BaseException] = []
 
     def fire(i: int) -> None:

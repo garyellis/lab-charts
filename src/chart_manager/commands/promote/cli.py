@@ -28,7 +28,7 @@ from chart_manager.commands.promote import (
 from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import run as run_pr
 from chart_manager.commands.promote.render import (
-    _PrettyProgressDriver,
+    ProgressTable,
     render_monitor_json,
     render_monitor_pretty,
     render_promote_json,
@@ -50,7 +50,7 @@ OutputOption = Annotated[
     output_mod.output_option(output_mod.TABLE, output_mod.JSON),
 ]
 
-_HR_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
+_PROMOTE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
 def _setup_logging_for_mode(mode: str) -> None:
@@ -158,7 +158,7 @@ def monitor(
     """Wait for matched HelmReleases to converge on chart@version."""
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
+    mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     request = MonitorRequest(
@@ -178,7 +178,7 @@ def monitor(
     events = container.event_writer()
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
-        with _PrettyProgressDriver(narration) as driver:
+        with ProgressTable(narration) as driver:
             result = run_monitor(
                 request,
                 runner=runner,
@@ -228,7 +228,7 @@ def test(
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
+    mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     request = TestRequest(
@@ -248,7 +248,7 @@ def test(
     events = container.event_writer()
     # Progress renders onto the narration console: it is never the projection.
     if mode == output_mod.TABLE:
-        with _PrettyProgressDriver(narration) as driver:
+        with ProgressTable(narration) as driver:
             result = run_test(
                 request,
                 runner=runner,
@@ -323,7 +323,7 @@ def pr(
     # The one thing on stdout is the json projection, written at the end.
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
-    mode = output_mod.resolve(output, ctx, allowed=_HR_OUTPUTS, console=console)
+    mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
     _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:

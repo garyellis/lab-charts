@@ -1,7 +1,7 @@
 """Terminal renderers and live progress driver for `promote monitor/test`.
 
 Module-level functions, no Renderer protocol/ABC -- the CLI handler picks one
-of four functions based on (command, mode). _PrettyProgressDriver is the
+of four functions based on (command, mode). ProgressTable is the
 only stateful piece, used as a context manager during pretty runs to hold a
 Rich Live table; thread-safe under the monitor/test executor.
 
@@ -235,7 +235,7 @@ def _verdict_style(verdict: str) -> str:
     return "red"
 
 
-class _PrettyProgressDriver:
+class ProgressTable:
     """Thread-safe live progress driver. Used as a context manager.
 
     Holds a Rich Live table that re-renders per-HR transitions. The lock
@@ -256,7 +256,7 @@ class _PrettyProgressDriver:
         self._Live = Live
         self._live: Any | None = None
 
-    def __enter__(self) -> _PrettyProgressDriver:
+    def __enter__(self) -> ProgressTable:
         """Start the Rich Live table."""
         self._live = self._Live(
             self._render(),
