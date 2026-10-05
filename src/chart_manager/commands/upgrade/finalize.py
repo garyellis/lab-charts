@@ -38,7 +38,8 @@ _HEADING = re.compile(r"^##\s")
 _BASELINE_REF = "HEAD"
 
 
-def _semver(value: object, *, source: str) -> SemVer:
+def wrapper_version(value: object, *, source: str) -> SemVer:
+    """Parse a wrapper chart version, which must be a strict x.y.z."""
     try:
         return parse_bare_version(value)
     except ValueError as exc:
@@ -160,8 +161,10 @@ def run(
         current = load_yaml_file(chart_path / "Chart.yaml")
     except YamlError as exc:
         raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
-    baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
-    current_version = _semver(current.get("version"), source="current wrapper version")
+    baseline_version = wrapper_version(
+        baseline_doc.get("version"), source="baseline wrapper version"
+    )
+    current_version = wrapper_version(current.get("version"), source="current wrapper version")
     updates = _updates_from_data(request.update_data)
     if not updates:
         # The inferred set decides the bump and changelog but cannot see an image

@@ -8,7 +8,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
-from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE
+from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE, wrapper_version
 from chart_manager.commands.upgrade.models import (
     UpgradeError,
     UpgradePlan,
@@ -23,7 +23,6 @@ from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
-from chart_manager.plumbing.semver import parse_bare_version
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
 from chart_manager.services.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -298,13 +297,7 @@ def build_upgrade_plan(
         chart_path,
         charts_dir=charts_dir,
     )
-    raw_version = chart.get("version")
-    try:
-        version = str(parse_bare_version(raw_version))
-    except ValueError as exc:
-        raise UpgradeError(
-            f"Chart.yaml version must be a strict x.y.z version, got {raw_version!r}"
-        ) from exc
+    version = str(wrapper_version(chart.get("version"), source="Chart.yaml version"))
     name = resolved.name
     group = f"chart-manager:{name}"
     # Renovate's stale-branch pruning is scoped by `branchPrefix` alone, while
