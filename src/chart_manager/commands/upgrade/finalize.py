@@ -17,7 +17,11 @@ from chart_manager.commands.upgrade.models import (
     UpdateMetadata,
     UpgradeError,
 )
-from chart_manager.commands.upgrade.paths import resolve_chart_path, safe_output_path
+from chart_manager.commands.upgrade.paths import (
+    CHART_FILE,
+    resolve_chart_path,
+    safe_output_path,
+)
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, YamlError
@@ -36,6 +40,7 @@ _LOG = logging.getLogger(__name__)
 
 _HEADING = re.compile(r"^##\s")
 _BASELINE_REF = "HEAD"
+_CHANGELOG_FILE = "changelog.md"
 
 
 def wrapper_version(value: object, *, source: str) -> SemVer:
@@ -146,7 +151,7 @@ def run(
         chart_rel.as_posix(),
         _BASELINE_REF,
     )
-    baseline_file = chart_rel / "Chart.yaml"
+    baseline_file = chart_rel / CHART_FILE
     try:
         baseline_text = Git(root, runner).show(_BASELINE_REF, baseline_file)
     except MissingToolError:
@@ -158,7 +163,7 @@ def run(
         ) from exc
     try:
         baseline_doc = parse_yaml_mapping(baseline_text, source="baseline Chart.yaml")
-        current = load_yaml_file(chart_path / "Chart.yaml")
+        current = load_yaml_file(chart_path / CHART_FILE)
     except YamlError as exc:
         raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
     baseline_version = wrapper_version(
@@ -247,8 +252,8 @@ def _write(chart_path: Path, current: SemVer, bump: _Bump) -> tuple[bool, bool]:
     target = str(bump.target)
     heading = f"## {target}"
     chart_changed = current != bump.target
-    chart_file = safe_output_path(chart_path, "Chart.yaml")
-    changelog_file = safe_output_path(chart_path, "changelog.md")
+    chart_file = safe_output_path(chart_path, CHART_FILE)
+    changelog_file = safe_output_path(chart_path, _CHANGELOG_FILE)
     old_changelog = (
         changelog_file.read_text(encoding="utf-8") if changelog_file.exists() else ""
     )

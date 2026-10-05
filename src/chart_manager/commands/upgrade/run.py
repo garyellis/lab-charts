@@ -16,7 +16,7 @@ from chart_manager.commands.upgrade.models import (
     UpgradeResult,
     UpgradeStatus,
 )
-from chart_manager.commands.upgrade.paths import resolve_chart_path
+from chart_manager.commands.upgrade.paths import CHART_FILE, resolve_chart_path
 from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
@@ -28,6 +28,13 @@ from chart_manager.services.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 _LOG = logging.getLogger(__name__)
+
+_GLOBAL_CONFIG = "renovate-global.json"
+_BRANCH_PREFIX = "renovate/{chart}/"
+_GROUP = "chart-manager:{chart}"
+#: Renovate's stdout log-level prefixes.
+_ERROR_LEVELS = ("ERROR:", "FATAL:")
+_WARN_LEVEL = "WARN:"
 
 
 def run(
@@ -57,7 +64,7 @@ def run(
     renovate_request = RenovateRequest(
         repo_root=plan.repo_root,
         repository=repository,
-        global_config_path=root / "renovate-global.json",
+        global_config_path=root / _GLOBAL_CONFIG,
         additional_config_path=chart_config if chart_config.is_file() else None,
         runtime_overlay=plan.runtime_overlay,
         dry_run="full" if request.dry_run else None,
@@ -174,7 +181,7 @@ def _proposed_version(
     if pull_request is None or not pull_request.branch:
         return None, None
     branch = pull_request.branch
-    chart_file = f"{plan.chart_path.relative_to(plan.repo_root).as_posix()}/Chart.yaml"
+    chart_file = f"{plan.chart_path.relative_to(plan.repo_root).as_posix()}/{CHART_FILE}"
     try:
         text = github.read_file_at_ref(chart_file, branch)
     except ChartManagerError as exc:
@@ -197,7 +204,7 @@ def _proposed_version(
 def _require_relevant_files_clean(plan: UpgradePlan, git: Git) -> None:
     paths = (
         plan.chart_path,
-        plan.repo_root / "renovate-global.json",
+        plan.repo_root / _GLOBAL_CONFIG,
         plan.repo_root / "renovate.json",
     )
     changed = git.status_paths(tuple(path.relative_to(git.root) for path in paths))
@@ -254,7 +261,7 @@ def _chart_version(text: str) -> str | None:
 def _renovate_reported_error(output: str) -> bool:
     """Detect repository failures Renovate logged despite returning zero."""
     return any(
-        line.lstrip().startswith(("ERROR:", "FATAL:"))
+        line.lstrip().startswith(_ERROR_LEVELS)
         for line in output.splitlines()
     )
 
@@ -264,7 +271,7 @@ def _renovate_warnings(output: str) -> tuple[str, ...]:
     return tuple(
         line.strip()
         for line in output.splitlines()
-        if line.lstrip().startswith("WARN:")
+        if line.lstrip().startswith(_WARN_LEVEL)
     )
 
 
@@ -282,14 +289,14 @@ def build_upgrade_plan(
     )
     version = str(wrapper_version(chart.get("version"), source="Chart.yaml version"))
     name = resolved.name
-    group = f"chart-manager:{name}"
+    group = _GROUP.format(chart=name)
     # Renovate's stale-branch pruning is scoped by `branchPrefix` alone, while
     # this run's extraction is scoped to one chart by `includePaths`. A shared
     # "renovate/" prefix would therefore make every run look like the complete
     # truth for the whole namespace and autoclose every other chart's PR. A
     # per-chart prefix makes the two scopes agree, so pruning stays enabled and
     # only ever reaches this chart's own branches.
-    branch_prefix = f"renovate/{name}/"
+    branch_prefix = _BRANCH_PREFIX.format(chart=name)
     relative = resolved.relative_to(repo_root).as_posix()
     overlay: Mapping[str, object] = {
         # `force` is global-only config that Renovate re-applies at the end of

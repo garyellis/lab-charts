@@ -9,6 +9,8 @@ from chart_manager.commands.upgrade.models import UpgradeError
 from chart_manager.plumbing.errors import YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
+CHART_FILE = "Chart.yaml"
+
 
 def _reject_symlinks(path: Path, stop: Path) -> None:
     current = path
@@ -47,7 +49,7 @@ def resolve_chart_path(
         raise UpgradeError(f"chart path must resolve inside repository root: {chart_path}") from exc
     if not resolved.is_dir():
         raise UpgradeError(f"chart path is not a directory: {resolved}")
-    chart_file = resolved / "Chart.yaml"
+    chart_file = resolved / CHART_FILE
     if chart_file.is_symlink():
         raise UpgradeError(f"Chart.yaml must not be a symlink: {chart_file}")
     if not chart_file.is_file():
