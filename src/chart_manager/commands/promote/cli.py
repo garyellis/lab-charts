@@ -1,8 +1,8 @@
-"""`chart-manager helmrelease` subcommand handlers.
+"""`chart-manager promote pr|monitor|test` subcommand handlers.
 
 Thin CLI shell: argument shape, safety guard, output-mode resolution,
 service construction (via overrideable factories), and renderer dispatch.
-Business logic lives entirely in services/helmrelease.
+Business logic lives in the `pr`, `monitor` and `test` modules.
 """
 from __future__ import annotations
 
@@ -18,19 +18,8 @@ from rich.console import Console
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli.helmrelease_render import (
-    _PrettyProgressDriver,
-    render_monitor_json,
-    render_monitor_pretty,
-    render_promote_json,
-    render_test_json,
-    render_test_pretty,
-)
 from chart_manager.cli.streams import data_console, narration_console
-from chart_manager.plumbing.duration import parse_duration
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.helmrelease import (
+from chart_manager.commands.promote import (
     PROMOTE_OUTCOME,
     HelmReleaseMatch,
     HelmReleaseRef,
@@ -46,6 +35,17 @@ from chart_manager.services.helmrelease import (
     TestService,
     Transition,
 )
+from chart_manager.commands.promote.render import (
+    _PrettyProgressDriver,
+    render_monitor_json,
+    render_monitor_pretty,
+    render_promote_json,
+    render_test_json,
+    render_test_pretty,
+)
+from chart_manager.plumbing.duration import parse_duration
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
 ProgressCb = Callable[[HelmReleaseRef, Transition], None]
 
@@ -53,7 +53,7 @@ ProgressCb = Callable[[HelmReleaseRef, Transition], None]
 # --- factories (overrideable in tests) ------------------------------------
 #
 # Adapter wiring lives in `chart_manager.composition`; these stay as
-# module-level functions purely as a test seam -- `tests/test_cli_helmrelease.py`
+# module-level functions purely as a test seam -- `tests/commands/promote/test_cli.py`
 # monkeypatches them to inject fakes without touching the container.
 
 
@@ -454,8 +454,8 @@ def promote(
 
 
 def register(app: typer.Typer) -> None:
-    """Attach the helmrelease subcommands to the given Typer app."""
-    app.command("promote")(promote)
+    """Attach `pr`, `monitor` and `test` to the `promote` Typer group."""
+    app.command("pr")(promote)
     app.command("monitor")(monitor)
     app.command("test")(test)
 

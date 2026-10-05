@@ -29,13 +29,13 @@ from chart_manager.cli import chart as chart_cli
 from chart_manager.cli import doctor as doctor_cli
 from chart_manager.cli import events as events_cli
 from chart_manager.cli import grafana as grafana_cli
-from chart_manager.cli import helmrelease as helmrelease_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli import upgrade as upgrade_cli
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
 from chart_manager.commands.local import cli as local_cli
 from chart_manager.commands.plan import cli as plan_cli
+from chart_manager.commands.promote import cli as promote_cli
 from chart_manager.commands.publish import cli as publish_cli
 from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.commands.validate.schemas.errors import (
@@ -72,7 +72,7 @@ local_app = typer.Typer(
     no_args_is_help=True,
     help="Create, inspect, stop, and reset local Kubernetes chart development environments.",
 )
-helmrelease_app = typer.Typer(
+promote_app = typer.Typer(
     no_args_is_help=True,
     help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
 )
@@ -160,7 +160,7 @@ def global_options(
     Deliberately absent, and not an oversight:
 
     * **No global `--version` flag.** `--version` already means the *chart*
-      version on `chart publish` and all three `helmrelease` commands. One
+      version on `chart publish` and all three `promote` commands. One
       flag, two meanings by position, is a bad flag -- so the CLI's own
       version is the `version` command (8.6).
     """
@@ -182,7 +182,7 @@ def global_options(
     # asked for and `errors` carries why it failed; `-q` must not swallow
     # either, or `-q` becomes indistinguishable from `2>/dev/null`.
     #
-    # Process-wide rather than `narration.quiet = quiet`: `cli/helmrelease.py`
+    # Process-wide rather than `narration.quiet = quiet`: `commands/promote/cli.py`
     # builds a narration console per invocation, so assigning only to the
     # shared one would leave `-q` a no-op there.
     set_narration_quiet(quiet)
@@ -245,7 +245,7 @@ chart_cli.register(chart_app)
 
 local_cli.register(local_app)
 grafana_cli.register(grafana_dashboard_app)
-helmrelease_cli.register(helmrelease_app)
+promote_cli.register(promote_app)
 
 chart_app.add_typer(chart_cache_app, name="cache")
 grafana_app.add_typer(grafana_dashboard_app, name="dashboard")
@@ -253,7 +253,7 @@ grafana_app.add_typer(grafana_dashboard_app, name="dashboard")
 app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
 app.add_typer(grafana_app, name="grafana")
-app.add_typer(helmrelease_app, name="helmrelease")
+app.add_typer(promote_app, name="promote")
 app.add_typer(schemas_app, name="schemas")
 
 

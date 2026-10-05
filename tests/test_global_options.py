@@ -17,7 +17,7 @@ not. There is deliberately no CLI `--root` spelling.
 Also pinned here: the global `-o/--output` reaches commands through
 `ctx.obj` and never through `default_map`, and there is deliberately no
 global `--version`, which would collide with the *chart* `--version` on
-`publish`, `events`, and `helmrelease`. Both are asserted so neither
+`publish`, `events`, and `promote`. Both are asserted so neither
 property is lost by accident.
 """
 

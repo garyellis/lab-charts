@@ -1,4 +1,4 @@
-"""Terminal renderers and live progress driver for `helmrelease monitor/test`.
+"""Terminal renderers and live progress driver for `promote monitor/test`.
 
 Module-level functions, no Renderer protocol/ABC -- the CLI handler picks one
 of four functions based on (command, mode). _PrettyProgressDriver is the
@@ -8,7 +8,7 @@ Rich Live table; thread-safe under the monitor/test executor.
 Everything here is terminal-shaped: Rich tables, color styles, panels, and
 the encoder settings for the CLI's JSON stream. The *payload* those JSON
 writers emit is not defined here -- it is a wire contract owned by
-`services.helmrelease.wire`, so an HTTP/Slack/RPC surface can return the same
+`commands.promote.wire`, so an HTTP/Slack/RPC surface can return the same
 bytes without importing anything under `cli/`.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from chart_manager.services.helmrelease import (
+from chart_manager.commands.promote import (
     NO_MATCH_REF,
     PASSING_VERDICTS,
     HelmReleaseRef,
@@ -132,7 +132,7 @@ def render_monitor_json(
 ) -> None:
     """Write the monitor result as a single JSON line to `file`.
 
-    Transport only: the payload comes from `services.helmrelease.wire`.
+    Transport only: the payload comes from `commands.promote.wire`.
     """
     json.dump(monitor_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
     file.write("\n")
@@ -201,7 +201,7 @@ def render_test_json(
 ) -> None:
     """Write the test result as a single JSON line to `file`.
 
-    Transport only: the payload comes from `services.helmrelease.wire`.
+    Transport only: the payload comes from `commands.promote.wire`.
     """
     json.dump(test_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
     file.write("\n")
@@ -219,7 +219,7 @@ def render_promote_json(
 ) -> None:
     """Write the promote result as a single JSON line to `file`.
 
-    Transport only: the payload comes from `services.helmrelease.wire`.
+    Transport only: the payload comes from `commands.promote.wire`.
     """
     json.dump(
         promote_to_dict(
@@ -257,7 +257,7 @@ class _PrettyProgressDriver:
         self._console = console
         self._lock = threading.Lock()
         self._state: dict[tuple[str, str], Transition] = {}
-        # Lazy-imported so importing helmrelease_render in non-pretty paths
+        # Lazy-imported so importing this module in non-pretty paths
         # (CI logs, tests) doesn't drag rich.live into the process.
         from rich.live import Live
 

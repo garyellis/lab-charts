@@ -399,7 +399,7 @@ def test_service_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
     assert len(modules) > 20, f"suspiciously few service modules found: {modules}"
-    assert "chart_manager.services.helmrelease.wire" in modules
+    assert "chart_manager.services.chart_catalog_wire" in modules
     assert "chart_manager.services.doctor" in modules
 
 
@@ -407,7 +407,7 @@ def test_no_service_module_imports_rich_or_typer() -> None:
     """The service layer must be usable where there is no terminal.
 
     Rendering belongs to the surface: Rich widgets live in
-    `cli/helmrelease_render.py`, `cli/validate_render.py` and
+    `commands/promote/render.py`, `cli/validate_render.py` and
     `cli/validate_progress.py`; services narrate through injected callbacks
     (`shared/cluster/progress.py`, `services/manifest_validation/progress.py`) and return
     plain result objects plus versioned wire projections

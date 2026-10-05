@@ -1,4 +1,4 @@
-"""Wire contract for `helmrelease monitor` / `test` / `promote`.
+"""Wire contract for `promote monitor` / `test` / `promote`.
 
 This module is the single source of truth for the machine-readable shape of
 monitor, test, and promote results. Every surface -- the CLI's `--output
@@ -8,7 +8,7 @@ json`, a REST endpoint, a Slack app, a CI step -- projects through
 Deliberately I/O-free and format-free: these functions return plain dicts.
 They take no `file`, no `format=`, no `console=`. Choosing an encoder
 (`json.dump` options, YAML, a HTTP response body) and performing the write is
-the surface's job -- see `cli/helmrelease_render.py` for the CLI's encoder
+the surface's job -- see `commands/promote/render.py` for the CLI's encoder
 settings.
 """
 from __future__ import annotations
@@ -19,11 +19,11 @@ from typing import Any
 
 from chart_manager.plumbing.exit_codes import Outcome
 
-from .helm_test import TestOutcome, TestResult
 from .monitor import MonitorOutcome, MonitorResult
-from .promote import PromoteResult
+from .pr import PromoteResult
 from .scanner import HelmReleaseMatch
 from .state import PROMOTE_OUTCOME, Transition
+from .test import TestOutcome, TestResult
 
 __all__ = [
     "monitor_to_dict",

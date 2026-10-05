@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.promote.scanner import scan
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.helmrelease.scanner import scan
 
 _LOKI_HR = """\
 ---

@@ -113,7 +113,7 @@ The loader also rejects layout paths that resolve outside the root and a
 <chart>`, `chart validate <chart>`) re-points `chartsDir` at the chart's parent
 with `workspace.with_charts_dir(path)`, which re-runs the same checks.
 
-`version`, `event`, `helmrelease`, `grafana dashboard export`, and
+`version`, `event`, `promote`, `grafana dashboard export`, and
 `grafana dashboard lint --path` never ask for the workspace. Without one,
 `doctor` skips its schema checks with the reason; an invalid `workspace.yaml`
 fails it with exit 3.

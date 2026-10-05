@@ -272,7 +272,7 @@ def test_the_confirmation_names_the_ref_in_its_wire_form(
 
 
 def test_the_group_is_singular_and_nests_emit() -> None:
-    """`event`, matching `chart` and `helmrelease` (design commitment 1)."""
+    """`event`, matching `chart` and `promote` (design commitment 1)."""
     result = cli("event", "--help")
 
     assert result.exit_code == 0

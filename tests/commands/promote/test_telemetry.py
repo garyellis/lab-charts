@@ -21,6 +21,16 @@ from typing import Any
 
 import pytest
 
+from chart_manager.commands.promote.monitor import MonitorRequest, MonitorService
+from chart_manager.commands.promote.state import (
+    PROMOTE_PHASE,
+    TERMINAL_PHASES,
+    PromoteStatus,
+    Stage,
+    Verdict,
+    run_verdict,
+)
+from chart_manager.commands.promote.test import TestRequest, TestService
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
@@ -30,16 +40,6 @@ from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import PromotionPhase
-from chart_manager.services.helmrelease.helm_test import TestRequest, TestService
-from chart_manager.services.helmrelease.monitor import MonitorRequest, MonitorService
-from chart_manager.services.helmrelease.state import (
-    PROMOTE_PHASE,
-    TERMINAL_PHASES,
-    PromoteStatus,
-    Stage,
-    Verdict,
-    run_verdict,
-)
 
 CHART = "loki"
 VERSION = "0.2.0"
@@ -268,7 +268,7 @@ def test_monitor_brackets_a_converged_rollout() -> None:
 
 
 def test_monitor_emits_nothing_without_an_environment() -> None:
-    # The default for an ad-hoc `helmrelease monitor`. Inventing a placeholder
+    # The default for an ad-hoc `promote monitor`. Inventing a placeholder
     # environment would put an unattached interval on a real timeline.
     events = _RecordingEvents()
     _monitor(_one_ready_hr(), events).monitor(_monitor_req(environment=None))

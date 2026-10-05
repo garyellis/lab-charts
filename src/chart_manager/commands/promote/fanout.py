@@ -1,4 +1,4 @@
-"""One home for how a helmrelease run parallelises, cancels, and reports.
+"""One home for how a promotion stage parallelises, cancels, and reports.
 
 `MonitorService` and `TestService` each fan one worker out per matched
 HelmRelease, collect outcomes as they land, and cancel their peers when the
@@ -31,15 +31,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Protocol
 
-from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease.state import (
+from chart_manager.commands.promote.state import (
     PASSING_VERDICTS,
     Stage,
     Verdict,
     run_verdict,
 )
-from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
+from chart_manager.commands.promote.telemetry import PromotionTelemetry
+from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 
 __all__ = ["RunResult", "run_fanout", "run_matched", "sorted_by_ref"]
 

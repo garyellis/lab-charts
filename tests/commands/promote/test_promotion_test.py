@@ -1,4 +1,4 @@
-"""Coverage for the helmrelease TestService.
+"""Coverage for the promotion test service (`TestService`).
 
 Drives concurrent helm-test execution across matched Flux HelmReleases.
 All cluster/helm interactions are faked; clock/now are injected so the
@@ -15,6 +15,11 @@ from typing import Any
 
 import pytest
 
+from chart_manager.commands.promote.state import Transition
+from chart_manager.commands.promote.test import (
+    TestRequest,
+    TestService,
+)
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
@@ -23,11 +28,6 @@ from chart_manager.integrations.helmrelease import (
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
-from chart_manager.services.helmrelease.helm_test import (
-    TestRequest,
-    TestService,
-)
-from chart_manager.services.helmrelease.state import Transition
 
 CHART = "loki"
 VERSION = "0.2.0"

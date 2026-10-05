@@ -532,7 +532,7 @@ class Helm:
         """Run `helm test <release>`. Returns the CommandResult unconditionally.
 
         `check=False` so a failed test (rc != 0) returns a result rather than
-        raising; the helmrelease test service classifies the verdict from
+        raising; the promotion test classifies the verdict from
         stdout/stderr/rc. `logs=True` plumbs `--logs` so helm streams pod
         logs into the result; `subprocess_timeout` is the wall-clock cap
         (falls back to the instance default).

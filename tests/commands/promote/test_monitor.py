@@ -10,6 +10,11 @@ from typing import Any
 
 import pytest
 
+from chart_manager.commands.promote.monitor import (
+    MonitorRequest,
+    MonitorService,
+    Transition,
+)
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
@@ -18,11 +23,6 @@ from chart_manager.integrations.helmrelease import (
     WorkloadRollout,
 )
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease.monitor import (
-    MonitorRequest,
-    MonitorService,
-    Transition,
-)
 
 CHART = "loki"
 VERSION = "0.2.0"

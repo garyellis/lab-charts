@@ -9,7 +9,7 @@ owns its own preflight (`MY_COMMENTS.md`, and the design doc's P0 bullet);
 things a surface owns: argument shape, projection, and the exit code.
 
 The exit code is the interesting one. `doctor` is the second consumer of
-`plumbing/exit_codes.py` after `cli/helmrelease.py`, and it consumes it the
+`plumbing/exit_codes.py` after `commands/promote/cli.py`, and it consumes it the
 same way: the layer below reports a semantic `Outcome`, this layer turns it
 into a number with `exit_code_for`, and no integer literal appears in
 between. That is what keeps "a missing binary is 127" a fact stated once,
@@ -65,7 +65,7 @@ _STATUS_STYLE: dict[CheckStatus, tuple[str, str]] = {
 def _make_doctor_service() -> DoctorService:
     """Build the default DoctorService (module-level so tests can override).
 
-    Same seam as `cli/helmrelease.py::_make_promote_service`: adapter wiring
+    Same seam as `commands/promote/cli.py::_make_promote_service`: adapter wiring
     lives in the composition root, and this function exists only so a test
     can inject fake providers without a real helm on the developer's PATH.
     """

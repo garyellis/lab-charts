@@ -1,4 +1,4 @@
-"""CLI tests for `chart-manager helmrelease monitor|test|promote`."""
+"""CLI tests for `chart-manager promote monitor|test|promote`."""
 from __future__ import annotations
 
 import json
@@ -11,18 +11,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from chart_manager.cli import helmrelease as helmrelease_cli
-from chart_manager.cli.helmrelease_render import (
-    _PrettyProgressDriver,
-)
-from chart_manager.integrations.github import PullRequest
-from chart_manager.integrations.helmrelease import (
-    ConditionSnapshot,
-    HelmReleaseRef,
-    HelmReleaseStatus,
-)
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.helmrelease import (
+from chart_manager.commands.promote import (
     NO_MATCH_REF,
     PROMOTE_OUTCOME,
     HelmReleaseMatch,
@@ -35,6 +24,17 @@ from chart_manager.services.helmrelease import (
     Transition,
     promote_to_dict,
 )
+from chart_manager.commands.promote import cli as promote_cli
+from chart_manager.commands.promote.render import (
+    _PrettyProgressDriver,
+)
+from chart_manager.integrations.github import PullRequest
+from chart_manager.integrations.helmrelease import (
+    ConditionSnapshot,
+    HelmReleaseRef,
+    HelmReleaseStatus,
+)
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
 # ----- helpers ------------------------------------------------------------
 
@@ -50,7 +50,7 @@ def _build_app() -> typer.Typer:
     from chart_manager.plumbing.errors import ChartManagerError
 
     inner = typer.Typer()
-    helmrelease_cli.register(inner)
+    promote_cli.register(inner)
 
     def _wrap(fn):  # type: ignore[no-untyped-def]
         import functools
@@ -199,7 +199,7 @@ def _install_fake_monitor(
         fake.captured_progress.append(progress)
         return fake
 
-    monkeypatch.setattr(helmrelease_cli, "_make_monitor_service", _factory)
+    monkeypatch.setattr(promote_cli, "_make_monitor_service", _factory)
     fake.factory_calls = factory_calls  # type: ignore[attr-defined]
     return fake
 
@@ -218,7 +218,7 @@ def _install_fake_test(
         fake.captured_progress.append(progress)
         return fake
 
-    monkeypatch.setattr(helmrelease_cli, "_make_test_service", _factory)
+    monkeypatch.setattr(promote_cli, "_make_test_service", _factory)
     fake.factory_calls = factory_calls  # type: ignore[attr-defined]
     return fake
 
@@ -601,13 +601,9 @@ def test_pretty_progress_driver_thread_safety() -> None:
 # ----- promote relocation smoke -------------------------------------------
 
 
-def test_promote_command_registered() -> None:
-    app = _build_app()
-    # Inspect typer's registered_commands to confirm promote moved cleanly.
-    names = {cmd.name for cmd in app.registered_commands}
-    assert "promote" in names
-    assert "monitor" in names
-    assert "test" in names
+def test_promote_registers_pr_monitor_and_test() -> None:
+    names = {cmd.name for cmd in _build_app().registered_commands}
+    assert names == {"pr", "monitor", "test"}
 
 
 # ----- no-match outcome rendering -----------------------------------------
@@ -646,7 +642,7 @@ def test_no_match_outcome_pretty_message(
 
 
 _PROMOTE_BASE = [
-    "promote",
+    "pr",
     "--flux-repo", "git@github.com:org/lab-fluxcd.git",
     "--path", "prod",
     "--env", "prod",
@@ -745,7 +741,7 @@ def _install_fake_promote(
         fake.confirm = confirm_downgrade
         return fake
 
-    monkeypatch.setattr(helmrelease_cli, "_make_promote_service", _factory)
+    monkeypatch.setattr(promote_cli, "_make_promote_service", _factory)
     return fake
 
 
@@ -881,7 +877,7 @@ def test_promote_still_prompts_when_interactive(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Guard the guard: the interactive path is gated, not deleted."""
-    monkeypatch.setattr(helmrelease_cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(promote_cli, "_is_interactive", lambda: True)
     monkeypatch.setattr(typer, "confirm", lambda *a, **k: True)
     _install_fake_promote(
         monkeypatch,
@@ -897,7 +893,7 @@ def test_promote_interactive_decline_exits_1(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A human who says no gets exit 1 -- the state that used to exit 0."""
-    monkeypatch.setattr(helmrelease_cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(promote_cli, "_is_interactive", lambda: True)
     monkeypatch.setattr(typer, "confirm", lambda *a, **k: False)
     _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
     res = runner.invoke(_build_app(), _PROMOTE_BASE)
@@ -948,7 +944,7 @@ def test_promote_auto_json_keeps_narration_on_stderr(
     CliRunner's stdout is not a terminal, so no `--output` flag resolves to
     json here -- the same thing that happens for every command in CI. The
     projection must still be clean, and the operator commentary must still be
-    on stderr: `helmrelease promote` reports a *mutation*, and a CI log that
+    on stderr: `promote pr` reports a *mutation*, and a CI log that
     shows the PR was opened is the reason that narration exists.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
@@ -989,7 +985,7 @@ def test_promote_pretty_writes_nothing_to_stdout(
 ) -> None:
     """Promote narrates a mutation; it has no human *document*.
 
-    So `helmrelease promote --output table >/dev/null` still shows the
+    So `promote pr --output table >/dev/null` still shows the
     operator what happened, and no status line is ever piped to a consumer
     that asked for data.
     """

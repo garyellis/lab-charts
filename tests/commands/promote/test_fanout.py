@@ -16,15 +16,15 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.services.helmrelease.fanout import (
+from chart_manager.commands.promote.fanout import (
     RunResult,
     run_fanout,
     run_matched,
     sorted_by_ref,
 )
-from chart_manager.services.helmrelease.state import NO_MATCH_REF, Stage, Verdict
+from chart_manager.commands.promote.state import NO_MATCH_REF, Stage, Verdict
+from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 
 
 def _ref(name: str, namespace: str = "loki") -> HelmReleaseRef:
@@ -139,7 +139,7 @@ def test_sorted_by_ref_orders_by_namespace_then_name() -> None:
 #
 # `MonitorService` and `TestService` both delegate here, so these cases are
 # the single place the no-match, crash and Ctrl-C contracts are pinned for
-# both stages. The service suites (and tests/test_helmrelease_telemetry.py)
+# both stages. The service suites (and tests/commands/promote/test_telemetry.py)
 # cover the same paths end to end through each service.
 
 

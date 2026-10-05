@@ -1,4 +1,4 @@
-"""Promotion-lifecycle telemetry for the helmrelease services.
+"""Promotion-lifecycle telemetry for the promotion services.
 
 `MonitorService` and `TestService` are the only components that know when a
 rollout starts, when it converges, and whether `helm test` went green -- but
@@ -35,7 +35,7 @@ class PromotionTelemetry:
 
     Disabled -- every method a silent no-op -- when `environment` is None.
     `EventWriter.promote` requires an environment, and a run invoked without
-    one (the default for an ad-hoc `helmrelease monitor`) is not part of any
+    one (the default for an ad-hoc `promote monitor`) is not part of any
     promotion, so inventing a placeholder would corrupt the timeline it is
     meant to measure.
     """

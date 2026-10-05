@@ -9,7 +9,7 @@ where the build timeline starts.
 
 Why a table instead of an `if` in `upgrade()`
 ---------------------------------------------
-Same reason `helmrelease/state.py` has one: `UpgradeResult.outcome` is a
+Same reason `commands/promote/state.py` has one: `UpgradeResult.outcome` is a
 string with five values, three of which must emit *nothing*, and a printer
 already branches on it elsewhere. A table makes "which outcomes are events"
 reviewable in one place, and a new outcome fails loudly (absent from the map)

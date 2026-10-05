@@ -94,13 +94,13 @@ once parametrize expands them. Much of it is redundant, so treat test lines as a
 
 Consolidation examples from the current suite (`tests/`):
 
-- `test_helmrelease_monitor_service.py::test_request_validation_rejects_*`: near-identical
+- `commands/promote/test_monitor.py::test_request_validation_rejects_*`: near-identical
   `MonitorRequest` rejections that could be one parametrized table.
 - `test_kind_port_mappings.py::test_container_host_ports_*`: eight tests that differ only in
   the docker payload. Make it one parametrized table of (ps output, inspect output, expected).
 - Same behavior at several layers:
-  - `test_cli_helmrelease.py::test_wire_module_does_not_import_rich` repeats a layering rule.
-  - `test_cli_helmrelease.py::test_timeout_ordering_violation_is_a_clean_domain_error`
+  - `commands/promote/test_cli.py::test_wire_module_does_not_import_rich` repeats a layering rule.
+  - `commands/promote/test_cli.py::test_timeout_ordering_violation_is_a_clean_domain_error`
     re-tests the `MonitorRequest` validation.
   - `test_layering.py`: the `*_is_discoverable`, `*_fires_on_*`, `*_stays_quiet_*` and
     `*_allowlist_*` tests check the checker.

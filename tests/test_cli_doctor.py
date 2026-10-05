@@ -53,7 +53,7 @@ _UNREACHABLE = Check.failed(
 def fake_doctor(monkeypatch: pytest.MonkeyPatch):
     """Replace the container-built service with one over scripted checks.
 
-    Same seam as `tests/test_cli_helmrelease.py` uses for the promote
+    Same seam as `tests/commands/promote/test_cli.py` uses for the promote
     services: the command keeps its real body, only the wiring is faked.
     """
 

@@ -145,7 +145,7 @@ class PromoteService:
         """Map the terminal state to a PromotionPhase event.
 
         One table lookup, not an if-chain: the CLI printer decodes the same
-        status in `cli/helmrelease.py` and the two used to walk the flags in
+        status in `commands/promote/cli.py` and the two used to walk the flags in
         different orders, so a new terminal state could be handled by one and
         silently dropped by the other. Statuses mapping to None (dry-run, no
         changes) are not real transitions and must leave no mark.

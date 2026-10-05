@@ -94,7 +94,7 @@ def exit_if_failed(ok: bool) -> None:
     only outcome derivable from it -- "the thing you asked about failed",
     design §6.1's row 1. A command whose result can distinguish *why* it
     failed should map its own outcome instead of funnelling through here,
-    the way `cli/helmrelease.py::promote` maps `PROMOTE_OUTCOME`.
+    the way `commands/promote/cli.py::promote` maps `PROMOTE_OUTCOME`.
     """
     if not ok:
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))

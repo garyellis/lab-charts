@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.integrations.git import Git
-from chart_manager.integrations.github import Github, PullRequest
-from chart_manager.plumbing.commands import SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.services.events.lifecycle import PromotionPhase
-from chart_manager.services.helmrelease import (
+from chart_manager.commands.promote import (
     PromoteRequest,
     PromoteResult,
     PromoteService,
     PromoteStatus,
 )
+from chart_manager.integrations.git import Git
+from chart_manager.integrations.github import Github, PullRequest
+from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.services.events.lifecycle import PromotionPhase
 
 _HR_TEMPLATE = """\
 ---

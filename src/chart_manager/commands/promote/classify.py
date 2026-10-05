@@ -21,8 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from chart_manager.integrations.helmrelease import HelmReleaseStatus, WorkloadRollout
-from chart_manager.services.helmrelease.state import (
+from chart_manager.commands.promote.state import (
     DETAIL_MAX,
     TERMINAL_READY_REASONS,
     Reason,
@@ -30,6 +29,7 @@ from chart_manager.services.helmrelease.state import (
     Verdict,
     coerce_reason,
 )
+from chart_manager.integrations.helmrelease import HelmReleaseStatus, WorkloadRollout
 
 __all__ = [
     "Decision",

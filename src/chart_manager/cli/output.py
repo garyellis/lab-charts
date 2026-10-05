@@ -6,10 +6,10 @@ for machine-readable output?":
     cli/upgrade.py    --format text|json
     cli/validate.py   --format text|md|json|all
     cli/main.py       plan -o table|json|yaml|github
-    cli/helmrelease.py --output pretty|json|auto     (the only correct one)
+    commands/promote/cli.py --output pretty|json|auto     (the only correct one)
 
 Four spellings of the same idea, two of them (`text`, `pretty`) different
-words for one thing, and only `helmrelease` resolving `auto` from the
+words for one thing, and only `promote` resolving `auto` from the
 environment. This module collapses them onto one flag (`-o/--output`), one
 vocabulary, and one resolver.
 
@@ -35,7 +35,7 @@ The default is `auto`: `table` when stdout is a terminal and `CI` is not
 stderr or "is there a tty anywhere" -- the question `auto` answers is "is the
 data I am about to emit going to a human or to a pipe", and that is a
 property of the stream the projection lands on. Lifted from
-`cli/helmrelease.py`, which was the only command that got this right.
+`commands/promote/cli.py`, which was the only command that got this right.
 
 `json` implies `--quiet`
 ------------------------
@@ -248,8 +248,8 @@ def resolve(
     from a literal reading of 6.2. `auto` resolves to json whenever stdout is
     not a terminal -- which includes every command in CI. Silencing on
     `selected` would therefore delete *all* operator narration from CI logs:
-    `helmrelease promote`'s running commentary on a mutation (the thing
-    `cli/helmrelease.py` explicitly keeps on stderr so `promote >/dev/null`
+    `promote pr`'s running commentary on a mutation (the thing
+    `commands/promote/cli.py` explicitly keeps on stderr so `promote >/dev/null`
     still shows what happened), `chart validate`'s spec warnings, every
     "no dashboards found". The in-band-corruption problem 6.2 exists to
     prevent is already solved structurally by the stdout/stderr split

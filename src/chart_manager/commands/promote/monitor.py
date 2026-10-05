@@ -19,7 +19,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 
-import chart_manager.services.helmrelease.report as report
+import chart_manager.commands.promote.report as report
+from chart_manager.commands.promote.classify import Terminal, Waiting, classify
+from chart_manager.commands.promote.fanout import RunResult, run_matched
+from chart_manager.commands.promote.matching import filter_matched_statuses
+from chart_manager.commands.promote.state import (
+    DETAIL_MAX,
+    NO_MATCH_REF,
+    Reason,
+    ReasonLike,
+    Stage,
+    Transition,
+    Verdict,
+)
+from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helmrelease import (
     HelmReleaseClient,
     HelmReleaseRef,
@@ -30,19 +43,6 @@ from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
-from chart_manager.services.helmrelease.fanout import RunResult, run_matched
-from chart_manager.services.helmrelease.matching import filter_matched_statuses
-from chart_manager.services.helmrelease.state import (
-    DETAIL_MAX,
-    NO_MATCH_REF,
-    Reason,
-    ReasonLike,
-    Stage,
-    Transition,
-    Verdict,
-)
-from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
 _LOG = logging.getLogger(__name__)
 
@@ -71,8 +71,8 @@ class MonitorRequest:
     # remaining in-flight watchers; their outcomes carry `TotalBudgetExhausted`.
     fail_fast: bool = False
     # Which promotion target this rollout belongs to. None (the default, and
-    # what an ad-hoc `helmrelease monitor` passes) means the run emits no
-    # lifecycle events at all -- see services/helmrelease/telemetry.py.
+    # what an ad-hoc `promote monitor` passes) means the run emits no
+    # lifecycle events at all -- see commands/promote/telemetry.py.
     environment: str | None = None
 
     def __post_init__(self) -> None:

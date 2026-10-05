@@ -5,7 +5,7 @@ Driving it through the watcher meant every rule cost a scripted cluster fake, a
 clock and a thread pool; here each rule is one status literal and one
 assertion, so the Flux condition semantics can be reviewed as a table.
 
-The watcher-level tests in `test_helmrelease_monitor_service.py` still cover
+The watcher-level tests in `commands/promote/test_monitor.py` still cover
 the *loop* -- backoff, budgets, cancellation, dedupe across polls. This file
 covers only what a single status snapshot means.
 """
@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from chart_manager.commands.promote.classify import Terminal, Waiting, classify
+from chart_manager.commands.promote.state import DETAIL_MAX, Reason, Verdict
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
@@ -22,8 +24,6 @@ from chart_manager.integrations.helmrelease import (
     OwnedWorkload,
     WorkloadRollout,
 )
-from chart_manager.services.helmrelease.classify import Terminal, Waiting, classify
-from chart_manager.services.helmrelease.state import DETAIL_MAX, Reason, Verdict
 
 VERSION = "0.2.0"
 WALL = datetime(2026, 6, 16, 12, 0, 0, tzinfo=UTC)

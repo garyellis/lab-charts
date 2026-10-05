@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.services.helmrelease.editor import set_version
+from chart_manager.commands.promote.editor import set_version
 
 _HR = """\
 ---

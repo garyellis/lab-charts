@@ -18,7 +18,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 
-import chart_manager.services.helmrelease.report as report
+import chart_manager.commands.promote.report as report
+from chart_manager.commands.promote.fanout import RunResult, run_matched
+from chart_manager.commands.promote.matching import filter_matched_statuses
+from chart_manager.commands.promote.state import (
+    NO_MATCH_REF,
+    Reason,
+    ReasonLike,
+    Stage,
+    Transition,
+    Verdict,
+)
+from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helm import Helm, format_helm_duration
 from chart_manager.integrations.helmrelease import (
     HelmReleaseClient,
@@ -31,17 +42,6 @@ from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.services.events.writer import EventWriter
-from chart_manager.services.helmrelease.fanout import RunResult, run_matched
-from chart_manager.services.helmrelease.matching import filter_matched_statuses
-from chart_manager.services.helmrelease.state import (
-    NO_MATCH_REF,
-    Reason,
-    ReasonLike,
-    Stage,
-    Transition,
-    Verdict,
-)
-from chart_manager.services.helmrelease.telemetry import PromotionTelemetry
 
 _LOG = logging.getLogger(__name__)
 
@@ -93,8 +93,8 @@ class TestRequest:
     # against 4 HRs with multi-pod suites may create 8-16 pods concurrently
     # on the cluster; tune down on small clusters.
     # Which promotion target these tests verify. None (the default, and what
-    # an ad-hoc `helmrelease test` passes) means the run emits no lifecycle
-    # events at all -- see services/helmrelease/telemetry.py.
+    # an ad-hoc `promote test` passes) means the run emits no lifecycle
+    # events at all -- see commands/promote/telemetry.py.
     environment: str | None = None
 
     def __post_init__(self) -> None:
@@ -588,7 +588,7 @@ class TestService:
         elif verdict is Verdict.SKIPPED_NOT_READY:
             diagnostics = (
                 "HelmRelease has not been Released; "
-                "run `chart-manager helmrelease monitor` first."
+                "run `chart-manager promote monitor` first."
             )
         else:
             # One line per non-passing release, carrying the pair (verdict,

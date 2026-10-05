@@ -48,7 +48,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager plan --changed-file <path>` | Show the validation, chart-test and publish work a change selects, with reasons. |
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
 | `uv run chart-manager chart upgrade --path charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
-| `uv run chart-manager helmrelease promote\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
+| `uv run chart-manager promote pr\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
 | `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; `event emit --dry-run` previews a document without a backend. |
 | `uv run chart-manager grafana dashboard export <uid> --to <path>` | Export one dashboard from the kind Grafana as canonical JSON. `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
@@ -178,7 +178,7 @@ the invocation default; the command's own `-o` wins.
 `--dry-run` resolves the same plan the real run would execute and prints it
 without touching anything. `local up`/`down`/`reset`, `chart test`,
 `chart cache clean`, `chart publish`, `chart upgrade`, and
-`helmrelease promote` take it. On `chart test` and `chart cache clean` the
+`promote pr` take it. On `chart test` and `chart cache clean` the
 plan is the only document the command produces, so `-o` without `--dry-run`
 is a usage error.
 
@@ -360,7 +360,7 @@ remains the machine-specific override; it must point at the directory that
 holds the marker, since an explicit root is never walked up. There is no CLI
 `--root` option. The workspace is required: with no marker, a
 repository-bound command exits `5` and says to run from a chart repository
-checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `helmrelease`,
+checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `promote`,
 `grafana dashboard export`, and `grafana dashboard lint --path` work anywhere.
 `doctor` runs anywhere: without a workspace it skips the schema checks and
 says why; an invalid `workspace.yaml` exits `3`.

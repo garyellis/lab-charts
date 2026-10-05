@@ -17,7 +17,7 @@ caller holding a plain string), and `json.dump` writes the value verbatim.
 The three phase tables below are data, not code, on purpose: mapping a
 terminal state to a lifecycle event is the kind of decision that gets
 silently forked the moment it is expressed as an if-chain in each caller,
-which is exactly what `promote.py` and `cli/helmrelease.py` had done.
+which is exactly what `promote.py` and `commands/promote/cli.py` had done.
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class Verdict(StrEnum):
 
         The single home for the rule that used to be six hardcoded tuples --
         three in `monitor.py`, one in `helm_test.py`, and two more in
-        `cli/helmrelease_render.py` where `ok_count` re-implemented
+        `commands/promote/render.py` where `ok_count` re-implemented
         `MonitorResult.ok`'s predicate. A seventh verdict added to only some
         of them made the headline count and the process exit code disagree.
         """
@@ -313,7 +313,7 @@ PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
 #:
 #: This is the *only* place that answers "was this promote a success", and
 #: both consumers read it: `wire.promote_to_dict` publishes
-#: `ok = outcome is Outcome.SUCCESS`, and `cli/helmrelease.py` exits with
+#: `ok = outcome is Outcome.SUCCESS`, and `commands/promote/cli.py` exits with
 #: `exit_code_for(outcome)`. Splitting that judgement in two is how promote
 #: shipped a state (`ABORTED`) that printed a failure and exited 0.
 #:

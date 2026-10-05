@@ -1,7 +1,7 @@
 """Commands that are not about a chart repository work outside one.
 
 `.chart-manager/workspace.yaml` is required, but only by repository-bound
-commands. `version`, `event *`, `helmrelease *`, `grafana dashboard export`
+commands. `version`, `event *`, `promote *`, `grafana dashboard export`
 and `grafana dashboard lint --path` never load it, and `doctor` skips its
 schema checks without one.
 

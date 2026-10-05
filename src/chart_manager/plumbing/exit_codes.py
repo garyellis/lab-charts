@@ -29,7 +29,7 @@ Why the table is keyed on a semantic `Outcome` and not on each caller's own
 status enum
 ------------------------------------------------------------------------
 The obvious shape -- `Mapping[PromoteStatus, int]` living here -- would make
-`plumbing/` import `services.helmrelease.state`. That inverts the one
+`plumbing/` import `commands.promote.state`. That inverts the one
 dependency direction this codebase actually holds: ~30 modules under
 `services/` import `plumbing/`, and *no* module under `plumbing/` imports
 `services/` or `domain/`.

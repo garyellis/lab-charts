@@ -40,10 +40,10 @@ from rich.markup import escape
 from chart_manager.shared.cluster.progress import ProgressEvent
 
 #: Every narration console handed out, so `set_narration_quiet` can reach the
-#: ones built at import time here as well as the ones `helmrelease.py` builds
+#: ones built at import time here as well as the ones `commands/promote/cli.py` builds
 #: per invocation.
 #:
-#: A `WeakSet` rather than a list because `helmrelease.py` builds a console per
+#: A `WeakSet` rather than a list because `commands/promote/cli.py` builds a console per
 #: call: in a process-per-invocation CLI a list would be equivalent, but this
 #: module is the process-wide seam a long-lived surface would also use, and
 #: there a list is an unbounded leak.
@@ -51,7 +51,7 @@ _QUIETABLE: weakref.WeakSet[Console] = weakref.WeakSet()
 
 #: Applied to consoles built *after* a `set_narration_quiet` call. Needed
 #: because `--output json` is resolved inside a command, which is after this
-#: module built its three shared consoles but before `helmrelease.py` builds
+#: module built its three shared consoles but before `commands/promote/cli.py` builds
 #: its per-call ones.
 _QUIET = False
 

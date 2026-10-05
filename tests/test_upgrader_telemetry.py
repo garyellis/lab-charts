@@ -8,7 +8,7 @@ on the three outcomes that must stay *silent*, since a wrong phase on the
 timeline is worse than a documented gap.
 
 The `_RecordingEvents` double is local rather than imported from
-`test_helmrelease_telemetry.py`: it records `build` calls, not `promote`
+`commands/promote/test_telemetry.py`: it records `build` calls, not `promote`
 calls, and a shared double would couple two suites that assert different
 capabilities.
 """

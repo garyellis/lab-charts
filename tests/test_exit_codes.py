@@ -79,8 +79,8 @@ def test_named_constants_agree_with_the_table() -> None:
 def test_success_is_zero() -> None:
     """The hinge between the wire `ok` field and `$?`.
 
-    `services/helmrelease/wire.py` publishes `ok = outcome is SUCCESS` while
-    `cli/helmrelease.py` exits `exit_code_for(outcome)`. Those two agree only
+    `commands/promote/wire.py` publishes `ok = outcome is SUCCESS` while
+    `commands/promote/cli.py` exits `exit_code_for(outcome)`. Those two agree only
     because SUCCESS is 0 and nothing else is. Asserted here rather than left
     implicit, because the coupling is otherwise invisible from either side.
     """
@@ -169,9 +169,9 @@ def test_exit_scan_finds_the_call_sites_it_is_meant_to_check() -> None:
     found = _exit_call_sites()
     assert len(found) >= 8, f"suspiciously few exit sites: {found}"
 
-    files = {path.name for path, _ in found}
-    assert "main.py" in files, "the root app exits on domain errors"
-    assert "helmrelease.py" in files, "promote/monitor/test all exit nonzero"
+    files = {f"{path.parent.name}/{path.name}" for path, _ in found}
+    assert "cli/main.py" in files, "the root app exits on domain errors"
+    assert "promote/cli.py" in files, "promote pr/monitor/test all exit nonzero"
 
     # And that the check itself can see a literal: if `_literal_code` ever
     # stopped recognising one, the rule below would pass by blindness.

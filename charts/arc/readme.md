@@ -167,5 +167,5 @@ PAT or GitHub App credentials. Keep runner pods in a namespace separate from
 ```sh
 uv run chart-manager chart validate --chart arc --env ci --all
 uv run chart-manager charts spec arc
-uv run chart-manager helmrelease test --chart arc --version 0.1.0 --namespace arc-systems
+uv run chart-manager promote test --chart arc --version 0.1.0 --namespace arc-systems
 ```

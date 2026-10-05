@@ -5,7 +5,7 @@ with no behavior, it already appears on this package's public result types
 (`MonitorOutcome.ref`, `TestOutcome.ref`, `NO_MATCH_REF`) and in the progress-
 callback signature, and it is defined in `integrations/helmrelease.py` only
 because that is where it was first parsed. Surfaces that need to *name* the type --
-e.g. `cli/helmrelease_render.py` typing its progress driver -- import it from
+e.g. `commands/promote/render.py` typing its progress driver -- import it from
 here, so no surface has to reach into `integrations/` for a type annotation.
 
 The underlying question -- whether the Flux identity records `plumbing/` and
@@ -27,9 +27,8 @@ than re-deciding either question.
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 
 from .editor import EditResult, set_version
-from .helm_test import TestOutcome, TestPodSnapshot, TestRequest, TestResult, TestService
 from .monitor import MonitorOutcome, MonitorRequest, MonitorResult, MonitorService
-from .promote import PromoteRequest, PromoteResult, PromoteService
+from .pr import PromoteRequest, PromoteResult, PromoteService
 from .scanner import HelmReleaseMatch, scan
 from .state import (
     NO_MATCH_REF,
@@ -40,6 +39,7 @@ from .state import (
     Transition,
     Verdict,
 )
+from .test import TestOutcome, TestPodSnapshot, TestRequest, TestResult, TestService
 from .wire import (
     monitor_to_dict,
     promote_to_dict,
