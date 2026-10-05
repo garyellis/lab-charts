@@ -111,7 +111,7 @@ def cluster(
     *releases: dict[str, Any] | Sequence[dict[str, Any] | Reply],
     runner: FakeCommandRunner | None = None,
 ) -> FakeCommandRunner:
-    """Serve these HelmReleases; a sequence is one release's successive reads, the last repeating."""
+    """Serve these HelmReleases; a sequence is one release's reads in order, the last repeating."""
     runner = runner or FakeCommandRunner(stdout=EMPTY)
     reads = [[release] if isinstance(release, dict) else list(release) for release in releases]
     listed = [read[0] for read in reads if isinstance(read[0], dict)]

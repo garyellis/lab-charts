@@ -122,7 +122,9 @@ def test_an_all_suspended_run_opens_the_interval_but_never_closes_it(
 
 @pytest.mark.parametrize("stage", [_monitor, _test])
 @pytest.mark.parametrize("request_", [{"environment": None}, {"version": "9.9.9"}])
-def test_an_ad_hoc_or_unmatched_run_emits_nothing(stage: Callable[..., Any], request_: dict[str, Any]) -> None:
+def test_an_ad_hoc_or_unmatched_run_emits_nothing(
+    stage: Callable[..., Any], request_: dict[str, Any]
+) -> None:
     events = EventLog()
     stage(cluster(helmrelease()), events, **request_)
     assert events.events == []

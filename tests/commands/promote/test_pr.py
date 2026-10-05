@@ -107,7 +107,8 @@ def _mutations(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
 
 def test_drift_opens_one_promotion_pr(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"a/loki.yaml": "0.1.1", "b/loki.yaml": "0.1.1,0.1.1"})
-    (repo / "prod/grafana.yaml").write_text(_HR.format(name="grafana", chart="grafana", version="1"))
+    grafana = _HR.format(name="grafana", chart="grafana", version="1")
+    (repo / "prod/grafana.yaml").write_text(grafana)
     runner = _FluxRemote(repo)
 
     result = _promote(runner)

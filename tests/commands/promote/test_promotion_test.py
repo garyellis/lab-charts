@@ -191,8 +191,8 @@ def test_a_live_test_pod_refuses_the_run_and_deletes_nothing(phase: str) -> None
 def test_a_test_pod_that_will_not_delete_fails_the_reap_and_says_why() -> None:
     runner = cluster(helmrelease())
     runner.respond_each(hook_pods, items(pod("old", "Succeeded"), pod("old2", "Failed")))
-    runner.respond(argv_prefix("kubectl", "-n", "loki", "delete", "pod", "old2"), returncode=1,
-                   stderr="forbidden")  # fmt: skip
+    delete = argv_prefix("kubectl", "-n", "loki", "delete", "pod", "old2")
+    runner.respond(delete, returncode=1, stderr="forbidden")
 
     [outcome] = _test(runner).outcomes
 
@@ -229,7 +229,7 @@ def test_a_test_failure_report_carries_pod_logs_and_the_post_run_status() -> Non
     )
     runner = _helm(cluster([helmrelease(), after]), TEST_FAILED)
     runner.respond_each(hook_pods, items(), items(pod("loki-test", "Failed")))
-    runner.respond_each(argv_prefix("kubectl", "-n", "loki", "logs", "loki-test"), Reply(stdout="boom"))
+    runner.respond(argv_prefix("kubectl", "-n", "loki", "logs", "loki-test"), stdout="boom")
     runner.respond(argv_prefix("kubectl", "get", "events", "-n", "loki"), stdout="ns event")
 
     [outcome] = _test(runner).outcomes
@@ -254,7 +254,8 @@ def test_empty_logs_are_retried_with_previous_only_for_a_finished_pod(
     [outcome] = _test(runner).outcomes
 
     assert ("previous boom" in (outcome.diagnostics or "")) is retried
-    assert len([a for a in calls(runner, "kubectl", "-n", "loki", "logs") if "--previous" in a]) == int(retried)
+    previous = [a for a in calls(runner, "kubectl", "-n", "loki", "logs") if "--previous" in a]
+    assert len(previous) == int(retried)
 
 
 def test_a_swallowed_cluster_read_says_so_in_the_report_and_the_log(
@@ -262,7 +263,8 @@ def test_a_swallowed_cluster_read_says_so_in_the_report_and_the_log(
 ) -> None:
     runner = _helm(cluster([helmrelease(), failure("refresh boom")]), TEST_FAILED)
     runner.respond_each(hook_pods, items(), items(pod("loki-test", "Failed")))
-    runner.respond(argv_prefix("kubectl", "-n", "loki", "logs"), returncode=1, stderr="logs forbidden")
+    logs = argv_prefix("kubectl", "-n", "loki", "logs")
+    runner.respond(logs, returncode=1, stderr="logs forbidden")
 
     with caplog.at_level("WARNING"):
         [outcome] = _test(runner).outcomes
