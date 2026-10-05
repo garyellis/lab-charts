@@ -13,6 +13,7 @@ from chart_manager.commands.upgrade.models import (
     UpgradePlan,
     UpgradeRequest,
     UpgradeResult,
+    UpgradeStatus,
 )
 from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
@@ -96,19 +97,19 @@ def run(
     )
     lookup_failed = not (found_existing and found_current)
     if request.dry_run:
-        outcome = "dry_run"
+        outcome = UpgradeStatus.DRY_RUN
     elif lookup_failed:
-        outcome = "status_unknown"
+        outcome = UpgradeStatus.STATUS_UNKNOWN
     elif current_pr is None:
-        outcome = "no_changes"
+        outcome = UpgradeStatus.NO_CHANGES
         diagnostics.append(
             f"Renovate completed without an open pull request under "
             f"{plan.branch_prefix}; no eligible update was proposed"
         )
     elif existing_pr is None:
-        outcome = "pr_open"
+        outcome = UpgradeStatus.PR_OPEN
     else:
-        outcome = "pr_updated"
+        outcome = UpgradeStatus.PR_UPDATED
     upgrade_result = UpgradeResult(
         chart=plan.chart,
         chart_path=plan.chart_path,

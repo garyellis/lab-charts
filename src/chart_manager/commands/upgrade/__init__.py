@@ -11,6 +11,7 @@ from chart_manager.commands.upgrade.models import (
     UpgradeError,
     UpgradeRequest,
     UpgradeResult,
+    UpgradeStatus,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "UpgradeError",
     "UpgradeRequest",
     "UpgradeResult",
+    "UpgradeStatus",
 ]

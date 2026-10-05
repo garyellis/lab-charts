@@ -4,7 +4,12 @@ from typing import Any, cast
 
 import pytest
 
-from chart_manager.commands.upgrade import UpgradeError, UpgradeRequest, UpgradeResult
+from chart_manager.commands.upgrade import (
+    UpgradeError,
+    UpgradeRequest,
+    UpgradeResult,
+    UpgradeStatus,
+)
 from chart_manager.commands.upgrade.run import build_upgrade_plan, run
 from chart_manager.commands.upgrade.wire import upgrade_to_dict
 from chart_manager.plumbing.errors import ExternalCommandError
@@ -137,7 +142,7 @@ def test_dry_run_drives_git_and_renovate_through_the_runner(
 
     result = _upgrade(tmp_path, runner, dry_run=True)
 
-    assert result.outcome == "dry_run"
+    assert result.outcome is UpgradeStatus.DRY_RUN
     assert result.current_version == "0.4.2"
     assert upgrade_to_dict(result)["path"] == (tmp_path / "charts/my-chart").resolve().as_posix()
     assert runner.calls[0] == ("git", "remote", "get-url", "origin")
@@ -161,7 +166,7 @@ def test_projects_new_and_existing_pull_request_status(tmp_path: Path) -> None:
 
     opened = _upgrade(tmp_path, runner)
 
-    assert opened.outcome == "pr_open"
+    assert opened.outcome is UpgradeStatus.PR_OPEN
     assert opened.pr_url == "https://example.test/pull/7"
     assert opened.pr_number == 7
     assert opened.repository == "owner/repository"
@@ -220,7 +225,7 @@ def test_unreadable_branch_file_degrades_to_a_diagnostic(tmp_path: Path) -> None
 
     assert result.proposed_version is None
     # A failed read is a reporting gap, not an unknown pull-request status.
-    assert result.outcome == "pr_updated"
+    assert result.outcome is UpgradeStatus.PR_UPDATED
     assert any("proposed wrapper version unavailable" in line for line in result.diagnostics)
 
 
@@ -229,7 +234,7 @@ def test_no_branch_read_without_a_pull_request(tmp_path: Path) -> None:
 
     result = _upgrade(tmp_path, runner)
 
-    assert result.outcome == "no_changes"
+    assert result.outcome is UpgradeStatus.NO_CHANGES
     assert result.proposed_version is None
     assert _branch_reads(runner) == []
     assert result.diagnostics == (
@@ -260,7 +265,7 @@ def test_reports_drift_when_a_chart_holds_more_than_one_branch(tmp_path: Path) -
 
     result = _upgrade(tmp_path, _runner(prs=(both,), branch_files=(_chart_at("0.4.3"),)))
 
-    assert result.outcome == "pr_updated"
+    assert result.outcome is UpgradeStatus.PR_UPDATED
     assert any("multiple open pull requests" in line for line in result.diagnostics)
 
 
@@ -269,7 +274,7 @@ def test_does_not_report_no_changes_when_pr_status_is_unavailable(tmp_path: Path
 
     result = _upgrade(tmp_path, _runner(prs=(unavailable,)))
 
-    assert result.outcome == "status_unknown"
+    assert result.outcome is UpgradeStatus.STATUS_UNKNOWN
     assert result.diagnostics == (
         "pull-request status unavailable: gh unavailable",
         "pull-request status unavailable: gh unavailable",
@@ -317,7 +322,7 @@ def test_emits_nothing_when_the_version_read_failed(tmp_path: Path) -> None:
         tmp_path, _runner(prs=(_prs(_BRANCH),), branch_files=(unavailable,)), events=events
     )
 
-    assert result.outcome == "pr_updated"
+    assert result.outcome is UpgradeStatus.PR_UPDATED
     assert events.events == []
 
 
@@ -347,7 +352,7 @@ def test_rerun_against_an_unchanged_pull_request_emits_nothing(tmp_path: Path) -
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome == "pr_updated"
+    assert result.outcome is UpgradeStatus.PR_UPDATED
     assert result.proposed_version == "0.4.3"
     # Read twice: once before Renovate for the baseline proposal, once after.
     assert len(_branch_reads(runner)) == 2
@@ -365,7 +370,7 @@ def test_rerun_that_retargets_the_version_still_emits(tmp_path: Path) -> None:
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome == "pr_updated"
+    assert result.outcome is UpgradeStatus.PR_UPDATED
     assert result.proposed_version == "1.0.0"
     assert len(events.events) == 1
     assert events.events[0]["chart_version"] == "1.0.0"
@@ -378,6 +383,6 @@ def test_no_pre_read_when_no_pull_request_is_open(tmp_path: Path) -> None:
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome == "pr_open"
+    assert result.outcome is UpgradeStatus.PR_OPEN
     assert len(_branch_reads(runner)) == 1  # only the post-Renovate read
     assert len(events.events) == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,16 @@ class UpgradeRequest:
     dry_run: bool = False
 
 
+class UpgradeStatus(StrEnum):
+    """What one `chart upgrade` run left on GitHub."""
+
+    DRY_RUN = "dry_run"
+    NO_CHANGES = "no_changes"
+    PR_OPEN = "pr_open"
+    PR_UPDATED = "pr_updated"
+    STATUS_UNKNOWN = "status_unknown"
+
+
 @dataclass(frozen=True)
 class UpgradeResult:
     """Stable service outcome; adapter-specific output stays diagnostic-only."""
@@ -33,7 +44,7 @@ class UpgradeResult:
     proposed_version: str | None
     branch: str | None
     group: str
-    outcome: str
+    outcome: UpgradeStatus
     diagnostics: tuple[str, ...] = ()
     repository: str | None = None
     base: str | None = None
