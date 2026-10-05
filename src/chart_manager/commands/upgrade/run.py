@@ -76,10 +76,8 @@ def run(
             token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
         )
     )
-    returncode = int(getattr(result, "returncode", 1))
-    stdout = str(getattr(result, "stdout", ""))
-    stderr = str(getattr(result, "stderr", ""))
-    if returncode:
+    stdout, stderr = result.stdout, result.stderr
+    if result.returncode:
         raise UpgradeError(
             f"Renovate failed for chart {plan.chart}: {stderr.strip() or stdout.strip()}"
         )

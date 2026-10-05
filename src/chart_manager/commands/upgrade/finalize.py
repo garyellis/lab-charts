@@ -345,6 +345,5 @@ def _changelog_entry(heading: str, updates: Sequence[UpdateMetadata]) -> str:
             item.new_version,
         ),
     ):
-        dependency = update.dependency or "dependency"
-        lines.append(f"- {dependency}: {update.current_version} -> {update.new_version}")
+        lines.append(f"- {update.dependency}: {update.current_version} -> {update.new_version}")
     return "\n".join(lines) + "\n\n"

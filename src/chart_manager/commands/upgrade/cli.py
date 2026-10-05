@@ -114,12 +114,11 @@ def _chart_path(chart: str | None, path: Path | None, *, workspace: RepositoryWo
     name means the same thing in all four -- and so this module contains no
     path heuristic and no configuration read of its own (design commitment 6).
     """
-    if (chart is None) == (path is None):
-        raise ChartManagerError("name exactly one chart, as the CHART argument or --path")
-    if path is not None:
+    if path is not None and chart is None:
         return path
-    assert chart is not None
-    return resolve_chart_target(workspace, chart).path.relative_to(workspace.root)
+    if chart is not None and path is None:
+        return resolve_chart_target(workspace, chart).path.relative_to(workspace.root)
+    raise ChartManagerError("name exactly one chart, as the CHART argument or --path")
 
 
 def upgrade_finalize(
@@ -165,18 +164,15 @@ def _emit(payload: Mapping[str, Any], *, as_json: bool) -> None:
 
 def _render_text(payload: Mapping[str, Any]) -> str:
     """Render every contract field in a fixed order, including absent values."""
-    pull_request = payload.get("pull_request")
-    if isinstance(pull_request, Mapping):
-        pr_url = pull_request.get("url")
-        pr_number = pull_request.get("number")
-        if pr_url and pr_number is not None:
-            pr = f"#{pr_number} {pr_url}"
-        else:
-            pr = str(pr_url or pr_number or "-")
-    else:
+    pull_request = payload["pull_request"]
+    if pull_request is None:
         pr = "-"
+    elif pull_request["url"] and pull_request["number"] is not None:
+        pr = f"#{pull_request['number']} {pull_request['url']}"
+    else:
+        pr = str(pull_request["url"] or pull_request["number"] or "-")
 
-    diagnostics = payload.get("diagnostics")
+    diagnostics = payload["diagnostics"]
     lines = [
         f"repository: {_shown(payload.get('repository'))}",
         f"base: {_shown(payload.get('base'))}",
@@ -189,7 +185,7 @@ def _render_text(payload: Mapping[str, Any]) -> str:
         f"pull request: {pr}",
         "diagnostics:",
     ]
-    if isinstance(diagnostics, (list, tuple)) and diagnostics:
+    if diagnostics:
         lines.extend(f"- {item}" for item in diagnostics)
     else:
         lines.append("- none")
