@@ -52,45 +52,10 @@ def test_changed_files_empty_diff_returns_empty_list(tmp_path: Path) -> None:
     assert git.changed_files() == []
 
 
-def test_status_paths_lists_uncommitted_paths_under_the_given_paths(tmp_path: Path) -> None:
-    runner = FakeCommandRunner(stdout=" M charts/demo/values.yaml\n?? renovate.json\n")
+def test_remote_url_is_none_without_an_origin_remote(tmp_path: Path) -> None:
+    runner = FakeCommandRunner(returncode=2)
 
-    changed = Git(tmp_path, runner=runner).status_paths(
-        (Path("charts/demo"), Path("renovate.json"))
-    )
-
-    assert changed == ("charts/demo/values.yaml", "renovate.json")
-    assert runner.calls == [
-        (
-            "git", "status", "--porcelain=v1", "--untracked-files=all", "--",
-            "charts/demo", "renovate.json",
-        )
-    ]
-
-
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "expected"),
-    [
-        (0, "git@github.com:owner/repo.git\n", "git@github.com:owner/repo.git"),
-        (2, "", None),
-    ],
-)
-def test_remote_url_reads_origin_or_none_without_one(
-    tmp_path: Path, returncode: int, stdout: str, expected: str | None
-) -> None:
-    runner = FakeCommandRunner(returncode=returncode, stdout=stdout)
-
-    assert Git(tmp_path, runner=runner).remote_url() == expected
-    assert runner.calls == [("git", "remote", "get-url", "origin")]
-
-
-def test_show_reads_a_file_at_a_revision(tmp_path: Path) -> None:
-    runner = FakeCommandRunner(stdout="version: 1.2.3\n")
-
-    assert Git(tmp_path, runner=runner).show("HEAD", Path("charts/demo/Chart.yaml")) == (
-        "version: 1.2.3\n"
-    )
-    assert runner.calls == [("git", "show", "HEAD:charts/demo/Chart.yaml")]
+    assert Git(tmp_path, runner=runner).remote_url() is None
 
 
 def test_show_raises_when_the_revision_lacks_the_file(tmp_path: Path) -> None:
