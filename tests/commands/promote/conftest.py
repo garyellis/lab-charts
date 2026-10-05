@@ -20,17 +20,17 @@ HR = "helmreleases.helm.toolkit.fluxcd.io"
 
 
 class Clock:
-    """Monotonic clock: `warmup` reads of 0.0, then advancing by `step` per read."""
+    """Monotonic clock: advances by `step` per read and by every `sleep`."""
 
-    def __init__(self, *, step: float = 0.0, warmup: int = 0) -> None:
-        self.step, self.warmup, self.reads, self.t = step, warmup, 0, 0.0
+    def __init__(self, *, step: float = 0.0) -> None:
+        self.step, self.t = step, 0.0
 
     def __call__(self) -> float:
-        self.reads += 1
-        if self.reads <= self.warmup:
-            return 0.0
         value, self.t = self.t, self.t + self.step
         return value
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
 
 
 class EventLog:

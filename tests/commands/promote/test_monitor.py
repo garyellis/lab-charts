@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 from collections.abc import Callable
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytest
 
 from chart_manager.commands.promote import MonitorRequest, MonitorResult, Transition
 from chart_manager.commands.promote.monitor import run
+from chart_manager.commands.promote.state import DETAIL_MAX
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.services.events.writer import EventWriter
@@ -29,7 +29,7 @@ from tests.commands.promote.conftest import (
     items,
     workloads,
 )
-from tests.conftest import FakeCommandRunner, argv_prefix
+from tests.conftest import FakeCommandRunner, Reply, argv_prefix
 
 PROGRESSING = (condition("Ready", "Unknown", "Progressing"),)
 INSTALL_FAILED = (condition("Ready", "False", "InstallFailed", "bad"),)
@@ -38,19 +38,20 @@ INSTALL_FAILED = (condition("Ready", "False", "InstallFailed", "bad"),)
 def _monitor(
     runner: FakeCommandRunner,
     *,
-    clock: Callable[[], float] | None = None,
-    sleep: Callable[[float], None] = lambda _s: None,
+    clock: Clock | None = None,
+    sleep: Callable[[float], None] | None = None,
     rand: Callable[[float, float], float] = lambda _lo, _hi: 0.0,
     progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
     **request: Any,
 ) -> MonitorResult:
+    clock = clock or Clock()
     return run(
         MonitorRequest(**{"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}),
         runner=runner,
         settings=Settings(kube_context="lab", command_timeout=30.0),
         events=EventWriter(EventLog()),
-        sleep=sleep,
-        clock=clock or Clock(),
+        sleep=sleep or clock.sleep,
+        clock=clock,
         rand=rand,
         progress=progress,
     )
@@ -122,17 +123,24 @@ def test_lagging_releases_are_polled_until_ready() -> None:
         ]
     )
     runner.respond_each(workloads(), items(deployment(converged=False)), items(deployment()))
+    clock = Clock()
     slept: list[float] = []
     jitter: list[tuple[float, float]] = []
     seen: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock.sleep(seconds)
 
     def rand(lo: float, hi: float) -> float:
         jitter.append((lo, hi))
         return 1.25
 
-    [outcome] = _monitor(
-        runner, sleep=slept.append, rand=rand, progress=lambda _r, t: seen.append(t.phase)
-    ).outcomes
+    result = _monitor(
+        runner, clock=clock, sleep=sleep, rand=rand, progress=lambda _r, t: seen.append(t.phase)
+    )
+
+    [outcome] = result.outcomes
 
     assert outcome.verdict == "ready"
     phases = [t.phase for t in outcome.recent_transitions]
@@ -144,6 +152,81 @@ def test_lagging_releases_are_polled_until_ready() -> None:
     # One jittered start inside the poll interval, then the fixed 3s interval.
     assert jitter == [(0.0, 3.0)]
     assert slept == [1.25, 3.0, 3.0, 3.0]
+    assert outcome.duration_seconds == result.total_duration_seconds == 10.25
+
+
+READY = condition("Ready", "True", "ReconciliationSucceeded")
+RELEASED = condition("Released", "True", "UpgradeSucceeded")
+STALLED = condition("Stalled", "True", message="stuck")
+WAITED = ("timed-out", "PerHRBudgetExhausted")
+
+
+@pytest.mark.parametrize(
+    ("release", "listed", "outcome", "phase", "detail"),
+    [
+        (helmrelease(suspend=True), (), ("skipped-suspended", "Suspended"), "Suspended",
+         "HR spec.suspend=true"),
+        # Suspension outranks the Stalled it was suspended because of.
+        (helmrelease(suspend=True, conditions=[STALLED]), (),
+         ("skipped-suspended", "Suspended"), "Suspended", "HR spec.suspend=true"),
+        (helmrelease(conditions=[STALLED]), (), ("failed", "Stalled"), "Stalled", "stuck"),
+        (helmrelease(conditions=[condition("Stalled", "True", message="x" * 500)]), (),
+         ("failed", "Stalled"), "Stalled", "x" * DETAIL_MAX),
+        # Flux's own reason passes through untranslated.
+        *[
+            (helmrelease(conditions=[condition("Ready", "False", reason, "bad")]), (),
+             ("failed", reason), f"Ready=False:{reason}", "bad")
+            for reason in ("InstallFailed", "UpgradeFailed", "ReconciliationFailed",
+                           "ArtifactFailed", "RetryExhausted")
+        ],
+        (helmrelease(conditions=[READY, RELEASED,
+                                 condition("TestSuccess", "False", "TestFailed", "probe died")]),
+         (), ("failed", "TestFailed"), "TestSuccess=False", "probe died"),
+        (helmrelease(conditions=[READY, RELEASED, condition("TestSuccess", "False")]), (),
+         ("failed", "TestFailed"), "TestSuccess=False", ""),
+        (helmrelease(conditions=[READY, RELEASED,
+                                 condition("TestSuccess", "False", "SomethingFluxShippedLater")]),
+         (), ("failed", "SomethingFluxShippedLater"), "TestSuccess=False", ""),
+        # TestSuccess=False before Released=True is the hook's pre-run state.
+        (helmrelease(conditions=[READY, condition("Released", "False"),
+                                 condition("TestSuccess", "False", "TestFailed")]),
+         (deployment(),), ("ready", "Ready"), "Ready",
+         "HR Ready=True and all workloads converged"),
+        (helmrelease(), (deployment(),), ("ready", "Ready"), "Ready",
+         "HR Ready=True and all workloads converged"),
+        # A release with no owned workloads reads as converged (discovery F12b).
+        (helmrelease(), (), ("ready", "Ready"), "Ready",
+         "HR Ready=True and all workloads converged"),
+        (helmrelease(generation=2, conditions=[condition("Stalled", "False")]), (), WAITED,
+         "GenerationLag", "obs-gen=1/2 history=0.2.0 requested=0.2.0"),
+        # Flux retries out of a non-terminal Ready=False.
+        (helmrelease(conditions=[condition("Ready", "False", "Progressing")]), (), WAITED,
+         "WaitingForReady:Progressing",
+         "obs-gen=1/1 history=0.2.0 requested=0.2.0 ready=False(Progressing)"),
+        (helmrelease(conditions=[]), (), WAITED, "WaitingForReady",
+         "obs-gen=1/1 history=0.2.0 requested=0.2.0"),
+        (helmrelease(),
+         (deployment("a", converged=False), deployment("b", converged=False), deployment("c")),
+         WAITED, "WaitingForWorkloads:2",
+         "obs-gen=1/1 history=0.2.0 requested=0.2.0 ready=True(ReconciliationSucceeded) "
+         "pending=[Deployment/loki/a,Deployment/loki/b]"),
+    ],
+)  # fmt: skip
+def test_the_release_status_decides_the_verdict(
+    release: dict[str, Any],
+    listed: tuple[dict[str, Any], ...],
+    outcome: tuple[str, str],
+    phase: str,
+    detail: str,
+) -> None:
+    runner = cluster(release)
+    runner.respond_each(workloads(), items(*listed))
+
+    [result] = _monitor(runner, per_hr_timeout_seconds=3.0).outcomes
+
+    assert (result.verdict, result.reason) == outcome
+    first = result.recent_transitions[0]
+    assert (first.phase, first.detail) == (phase, detail)
 
 
 def test_a_terminal_failure_ends_the_watch_and_reports_why() -> None:
@@ -177,10 +260,8 @@ def test_a_workload_that_never_converges_times_out_the_release() -> None:
     runner = cluster(helmrelease())
     runner.respond_each(workloads(), items(deployment(converged=False)))
     runner.respond(argv_prefix("kubectl", "get", "events"), stdout="BackOff pulling image")
-    # Hold the clock until the first poll is recorded, then pass per-HR but not total.
-    clock = Clock(step=400.0, warmup=5)
 
-    [outcome] = _monitor(runner, clock=clock, per_poll_timeout_seconds=7.0).outcomes
+    [outcome] = _monitor(runner, per_poll_timeout_seconds=7.0).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("timed-out", "PerHRBudgetExhausted")
     assert outcome.diagnostics is not None
@@ -197,9 +278,28 @@ def test_the_total_budget_times_out_the_releases_still_waiting() -> None:
         helmrelease("a2", "ns", generation=2, conditions=PROGRESSING),
     )
 
-    result = _monitor(runner, clock=Clock(step=500.0), concurrency=3)
+    result = _monitor(
+        runner, concurrency=3, per_hr_timeout_seconds=30.0, total_timeout_seconds=30.0
+    )
 
-    assert sorted(o.verdict for o in result.outcomes) == ["ready", "timed-out", "timed-out"]
+    assert [(o.verdict, o.reason) for o in result.outcomes] == [
+        ("ready", "Ready"),
+        ("timed-out", "TotalBudgetExhausted"),
+        ("timed-out", "TotalBudgetExhausted"),
+    ]
+    assert result.total_timed_out is True
+
+
+def test_outcomes_are_sorted_by_namespace_then_name() -> None:
+    runner = cluster(helmrelease("zeta", "a"), helmrelease("alpha", "b"), helmrelease("alpha", "a"))
+
+    result = _monitor(runner, concurrency=1)
+
+    assert [(o.ref.namespace, o.ref.name) for o in result.outcomes] == [
+        ("a", "alpha"),
+        ("a", "zeta"),
+        ("b", "alpha"),
+    ]
 
 
 def test_a_suspended_release_is_skipped_without_polling() -> None:
@@ -214,24 +314,50 @@ def test_a_suspended_release_is_skipped_without_polling() -> None:
     assert calls(runner, "kubectl", "get", "events") == []
 
 
-def test_repeated_polls_record_one_transition_per_change() -> None:
-    gen_lag = helmrelease(generation=2, conditions=PROGRESSING)
-    history_lag = helmrelease(generation=2, observed=2, history="old", conditions=PROGRESSING)
-    runner = cluster([gen_lag] * 10 + [history_lag] * 2)
+GEN_LAG = helmrelease(generation=2, conditions=PROGRESSING)
+HISTORY_LAG = helmrelease(generation=2, observed=2, history="old", conditions=PROGRESSING)
 
-    [outcome] = _monitor(runner, clock=Clock(step=400.0, warmup=50)).outcomes
 
-    phases = [t.phase for t in outcome.recent_transitions]
-    assert phases == ["GenerationLag", "HistoryLag"]
-    assert all(a != b for a, b in itertools.pairwise(phases))
+def _pending(*names: str) -> Reply:
+    return items(*(deployment(name, converged=False) for name in names))
+
+
+@pytest.mark.parametrize(
+    ("reads", "workload_reads", "phases"),
+    [
+        ([GEN_LAG] * 10 + [HISTORY_LAG] * 2, (), ["GenerationLag", "HistoryLag"]),
+        (
+            [helmrelease(generation=3, conditions=PROGRESSING),
+             helmrelease(generation=3, observed=2, conditions=PROGRESSING)],
+            (),
+            ["GenerationLag", "GenerationLag"],
+        ),
+        (
+            [helmrelease()],
+            (_pending("a"), _pending("a", "b")),
+            ["WaitingForWorkloads:1", "WaitingForWorkloads:2"],
+        ),
+        ([helmrelease()], (_pending("a", "b"), _pending("b", "a")), ["WaitingForWorkloads:2"]),
+    ],
+    ids=["same-phase-repeats", "observed-generation-moves", "pending-set-grows", "pending-reordered"],
+)  # fmt: skip
+def test_a_transition_is_recorded_only_when_the_situation_changes(
+    reads: list[dict[str, Any]], workload_reads: tuple[Reply, ...], phases: list[str]
+) -> None:
+    runner = cluster(reads)
+    if workload_reads:
+        runner.respond_each(workloads(), *workload_reads)
+
+    [outcome] = _monitor(runner, per_hr_timeout_seconds=60.0).outcomes
+
+    assert outcome.verdict == "timed-out"
+    assert [t.phase for t in outcome.recent_transitions] == phases
 
 
 def test_only_the_last_five_transitions_are_kept() -> None:
-    gen_lag = helmrelease(generation=2, conditions=PROGRESSING)
-    history_lag = helmrelease(generation=2, observed=2, history="old", conditions=PROGRESSING)
-    runner = cluster([gen_lag, history_lag] * 6)
+    runner = cluster([GEN_LAG, HISTORY_LAG] * 6)
 
-    [outcome] = _monitor(runner, clock=Clock(step=400.0, warmup=50)).outcomes
+    [outcome] = _monitor(runner).outcomes
 
     assert len(outcome.recent_transitions) == 5
 
@@ -248,7 +374,7 @@ def test_a_release_deleted_mid_watch_fails_as_disappeared() -> None:
 def test_a_flaky_poll_is_recorded_and_the_watch_continues() -> None:
     runner = cluster([helmrelease(generation=2, conditions=PROGRESSING), failure("flake")])
 
-    [outcome] = _monitor(runner, clock=Clock(step=200.0)).outcomes
+    [outcome] = _monitor(runner).outcomes
 
     assert outcome.verdict == "timed-out"
     assert "PollError" in [t.phase for t in outcome.recent_transitions]
@@ -274,3 +400,4 @@ def test_fail_fast_cancels_the_peers_of_a_failed_release(fail_fast: bool, peer: 
     assert by_name["zzz"].verdict == peer
     if fail_fast:
         assert by_name["zzz"].reason == "TotalBudgetExhausted"
+    assert result.total_timed_out is fail_fast
