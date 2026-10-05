@@ -572,7 +572,7 @@ class Reply:
     returncode: int = 0
     stdout: str = ""
     stderr: str = ""
-    raises: Exception | None = None
+    raises: BaseException | None = None
 
 
 @dataclass(frozen=True)
@@ -647,7 +647,7 @@ class FakeCommandRunner:
         returncode: int = 0,
         stdout: str = "",
         stderr: str = "",
-        raises: Exception | None = None,
+        raises: BaseException | None = None,
     ) -> FakeCommandRunner:
         """Answer every argv matching `matcher` with this reply, or raise `raises`. Chainable."""
         return self.respond_each(

@@ -16,6 +16,7 @@ from chart_manager.commands.promote.state import (
     Verdict,
     run_verdict,
 )
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.services.events.failure import emit_non_fatal
 from chart_manager.services.events.lifecycle import PromotionPhase
 from chart_manager.services.events.writer import EventWriter
@@ -28,7 +29,7 @@ from tests.commands.promote.conftest import (
     condition,
     helmrelease,
 )
-from tests.conftest import FakeCommandRunner, argv_prefix
+from tests.conftest import FakeCommandRunner, Reply, argv_prefix
 
 ENV = "dev"
 FAILED = (condition("Ready", "False", "InstallFailed"),)
@@ -69,15 +70,42 @@ def test_monitor_brackets_a_converged_rollout() -> None:
     assert closed.detail == {"stage": "rollout", "verdict": "ready", "total": 1, "failures": 0}
 
 
-def test_monitor_closes_a_failed_rollout_with_abandoned() -> None:
+def test_monitor_closes_a_partly_failed_rollout_with_abandoned() -> None:
     events = EventLog()
+    runner = cluster(helmrelease("good", "ns"), helmrelease("bad", "ns", conditions=FAILED))
 
-    assert _monitor(cluster(helmrelease(conditions=FAILED)), events).ok is False
+    result = _monitor(runner, events)
+
+    assert [o.ref.name for o in result.failures] == ["bad"]
+    assert events.phases == [PromotionPhase.WAITING_ROLLOUT, PromotionPhase.ABANDONED]
+    assert events.events[1].detail == {
+        "stage": "rollout", "verdict": "failed", "total": 2, "failures": 1,
+    }  # fmt: skip
+
+
+def test_a_crashed_run_still_closes_and_counts_the_unreported_release_as_failed() -> None:
+    events = EventLog()
+    crash = Reply(raises=ChartManagerError("kubectl exploded"))
+    runner = cluster(helmrelease("a", "ns"), [helmrelease("b", "ns", generation=2), crash])
+
+    with pytest.raises(ChartManagerError, match="kubectl exploded"):
+        _monitor(runner, events, concurrency=1)
 
     assert events.phases == [PromotionPhase.WAITING_ROLLOUT, PromotionPhase.ABANDONED]
     assert events.events[1].detail == {
-        "stage": "rollout", "verdict": "failed", "total": 1, "failures": 1,
+        "stage": "rollout", "verdict": "failed", "total": 2, "failures": 1,
     }  # fmt: skip
+
+
+def test_ctrl_c_leaves_the_interval_open() -> None:
+    # Closing it is a network write standing between Ctrl-C and the exit.
+    events = EventLog()
+    runner = cluster([helmrelease(generation=2), Reply(raises=KeyboardInterrupt())])
+
+    with pytest.raises(KeyboardInterrupt):
+        _monitor(runner, events)
+
+    assert events.phases == [PromotionPhase.WAITING_ROLLOUT]
 
 
 def test_helm_test_pass_also_reports_promoted() -> None:
