@@ -13,7 +13,7 @@ answer from an unfiltered one without re-deriving it from the rows.
 
 Deliberately I/O-free and format-free: this returns a plain, JSON-ready
 dict. Choosing an encoder and rendering for humans is the surface's job --
-see `cli/events.py`.
+see `commands/events/cli.py`.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ The emit path had no CLI coverage before P1.5, which is why the restructuring
 lands with it. Everything here goes through the real writer seam: the whole
 suite pins `EVENTS_BACKEND=none` (`conftest.hermetic_terminal`), and each test
 that cares about the payload substitutes a recording `EventWriter` at the
-module seam `cli/events.py::_make_event_writer` rather than reaching into the
+module seam `commands/events/cli.py::_make_event_writer` rather than reaching into the
 store.
 
 Alias equivalence for the old `events build|promote` spelling is not asserted
@@ -24,12 +24,11 @@ from typing import Any
 
 import pytest
 
-from chart_manager.cli import events as events_cli
+from chart_manager.commands.events import cli as events_cli
 from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
 from chart_manager.shared.events.ref import SEPARATOR
-
-from .conftest import cli
+from tests.conftest import cli
 
 
 class RecordingWriter:
@@ -160,7 +159,7 @@ def test_a_malformed_ref_is_a_usage_error(writer: RecordingWriter, token: str) -
 
 
 def _cli_events_ast() -> ast.Module:
-    """`cli/events.py` parsed, for the two structural assertions below."""
+    """`commands/events/cli.py` parsed, for the two structural assertions below."""
     assert events_cli.__file__ is not None
     return ast.parse(Path(events_cli.__file__).read_text(encoding="utf-8"))
 
@@ -195,7 +194,7 @@ def test_the_surface_never_names_the_separator() -> None:
     ]
 
     assert not offenders, (
-        f"cli/events.py handles the ref separator itself at line(s) {offenders}; "
+        f"commands/events/cli.py handles the ref separator itself at line(s) {offenders}; "
         "the grammar belongs to shared/events/ref.py"
     )
 

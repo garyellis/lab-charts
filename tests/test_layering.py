@@ -339,7 +339,7 @@ def test_settings_and_domain_do_not_import_each_other() -> None:
 def _modules_under(directory: Path) -> list[str]:
     """Every importable module under `directory`, as dotted names.
 
-    Package `__init__.py` files map to the package itself (`...services.events`)
+    Package `__init__.py` files map to the package itself (`...commands.events`)
     rather than being skipped: a package's `__init__` is its public surface and
     is exactly where a convenience re-export would smuggle Rich back in.
     """
@@ -398,7 +398,7 @@ def _probe(modules: list[str], forbidden: tuple[str, ...] = _FORBIDDEN_ROOTS) ->
 def test_service_modules_are_discoverable() -> None:
     """Guard the guard: an empty sweep would make the next test vacuously pass."""
     modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
-    assert len(modules) > 10, f"suspiciously few service modules found: {modules}"
+    assert len(modules) > 5, f"suspiciously few service modules found: {modules}"
     assert "chart_manager.services.chart_catalog_wire" in modules
     assert "chart_manager.services.doctor" in modules
 

@@ -30,8 +30,8 @@ from rich.table import Table
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
 from chart_manager.cli.streams import console, errors, narration
+from chart_manager.commands.events.wire import events_to_dict
 from chart_manager.plumbing.exit_codes import exit_code_for
-from chart_manager.services.events.wire import events_to_dict
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
 from chart_manager.shared.events.query import (
@@ -252,7 +252,7 @@ def promote(
 # --- the read side ---------------------------------------------------------
 
 #: The listing renders as a table, or as the wire document from
-#: `services/events/wire.py`.
+#: `commands/events/wire.py`.
 _LIST_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
 
 ListOutputOption = Annotated[str | None, output_mod.output_option(*_LIST_OUTPUTS)]

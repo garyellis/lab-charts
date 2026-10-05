@@ -27,11 +27,11 @@ from rich.markup import escape
 
 from chart_manager.cli import chart as chart_cli
 from chart_manager.cli import doctor as doctor_cli
-from chart_manager.cli import events as events_cli
 from chart_manager.cli import grafana as grafana_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.commands.events import cli as events_cli
 from chart_manager.commands.local import cli as local_cli
 from chart_manager.commands.plan import cli as plan_cli
 from chart_manager.commands.promote import cli as promote_cli

@@ -18,9 +18,9 @@ from typing import Any
 
 import pytest
 
-from chart_manager.cli import events as events_cli
 from chart_manager.cli import grafana as grafana_cli
 from chart_manager.cli import main
+from chart_manager.commands.events import cli as events_cli
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for

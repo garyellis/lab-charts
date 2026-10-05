@@ -3,7 +3,7 @@
 Telemetry is emitted *after* the work that produced it, so an unconfigured or
 unreachable events backend must never turn a successful run into a traceback.
 That rule was written three times independently -- `promote.py`, the
-promotion telemetry wiring, and `cli/events.py` -- before the upgrade
+promotion telemetry wiring, and `commands/events/cli.py` -- before the upgrade
 service became the fourth caller and made the duplication worth removing.
 
 It lives under `shared/events/` rather than beside any one consumer: the

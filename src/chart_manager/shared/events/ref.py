@@ -11,7 +11,7 @@ listener could not reach it.
 So the grammar lives here, and the surface passes through what the user typed
 (design commitment 6: *the surface never derives a request field from a
 heuristic -- it passes what the user typed to a service resolver*).
-`cli/events.py` calls `parse_ref`; nothing in `cli/`
+`commands/events/cli.py` calls `parse_ref`; nothing in `cli/`
 looks for an `@`.
 
 The rules, and why each is a *domain* rule rather than a CLI rule
@@ -80,7 +80,7 @@ class ChartRefError(ChartManagerError):
     """Raised when a chart ref does not parse.
 
     A `ChartManagerError` so a non-CLI surface gets a domain failure it can
-    map to its own status code. `cli/events.py` narrows it to
+    map to its own status code. `commands/events/cli.py` narrows it to
     `typer.BadParameter` (exit 2, usage), matching how `_parse_at` already
     reports a malformed `--at` on the same commands.
     """

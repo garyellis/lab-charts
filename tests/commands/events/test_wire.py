@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from chart_manager.services.events.wire import events_to_dict
+from chart_manager.commands.events.wire import events_to_dict
 from chart_manager.shared.events.query import EventQuery
 
 
