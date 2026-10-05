@@ -10,7 +10,6 @@ import pytest
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.errors import (
     ChartManagerError,
-    ExternalCommandError,
     MissingToolError,
 )
 from tests.conftest import FakeCommandRunner
@@ -213,40 +212,3 @@ def test_missing_config_and_invalid_overlay_use_expected_error_hierarchy(
                 runtime_overlay={"bad": object()},
             )
         )
-
-
-def test_validate_config_uses_repo_semantics_and_standard_failure_plumbing(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path, "renovate.json")
-    runner = FakeCommandRunner(returncode=1, stderr="invalid setting")
-
-    with pytest.raises(ExternalCommandError, match="invalid setting"):
-        Renovate(runner=runner).validate_config(
-            [Path("renovate.json")],
-            repo_root=tmp_path,
-            global_config=False,
-        )
-
-    assert runner.calls[0] == (
-        "renovate-config-validator",
-        "--strict",
-        "--no-global",
-        str(config.resolve()),
-    )
-    assert runner.records[0].cwd == tmp_path.resolve()
-
-
-def test_validate_global_config_omits_no_global_switch(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    runner = FakeCommandRunner(stdout="Config validated successfully")
-
-    result = Renovate(runner=runner).validate_config(
-        [config],
-        repo_root=tmp_path,
-        global_config=True,
-        strict=False,
-    )
-
-    assert result.ok is True
-    assert runner.calls[0] == ("renovate-config-validator", str(config.resolve()))

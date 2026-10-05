@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -185,40 +185,6 @@ class Renovate:
             returncode=result.returncode,
             stdout=stdout,
             stderr=stderr,
-        )
-
-    def validate_config(
-        self,
-        paths: Sequence[Path],
-        *,
-        repo_root: Path,
-        global_config: bool,
-        strict: bool = True,
-    ) -> RenovateResult:
-        """Validate explicit config files with Renovate's bundled validator.
-
-        Explicit paths are interpreted as self-hosted config by the validator.
-        ``global_config=False`` adds its documented ``--no-global`` switch for
-        repository config such as root ``renovate.json``.
-        """
-        root = _require_directory(repo_root, label="repository root")
-        if not paths:
-            raise ChartManagerError("Renovate validation needs at least one config path")
-        resolved = [
-            _require_file(path, relative_to=root, label="Renovate config") for path in paths
-        ]
-        args = [self._validator_binary]
-        if strict:
-            args.append("--strict")
-        if not global_config:
-            args.append("--no-global")
-        args.extend(str(path) for path in resolved)
-        with _installed(self._validator_binary):
-            result = self.runner.run(args, cwd=root, timeout=self.timeout)
-        return RenovateResult(
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
         )
 
 
