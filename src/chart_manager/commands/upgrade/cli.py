@@ -23,25 +23,11 @@ from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import resolve_chart_target
 from chart_manager.shared.workspace import RepositoryWorkspace
 
-#: `upgrade-finalize`'s vocabulary, and ONLY its vocabulary.
-#:
-#: This is the one place in `cli/` that still says `--format`, and it is
-#: deliberate. `upgrade-finalize` is frozen (design doc 9.5): Renovate invokes
-#: it from `renovate-global.json`'s `allowedCommands` allowlist, so its
-#: spelling is part of a security contract that lives outside this repo.
-#: Renaming the flag here would not break the allowlist match -- the regex is
-#: anchored right after `--path <dir>`, so Renovate only ever passes `--path`
-#: and lets `--data-file` arrive via the callback env var -- but "the regex
-#: does not currently cover it" is a thin reason to move a frozen command's
-#: surface, and the flag is exercised by `tests/commands/upgrade/test_cli.py`.
-#:
-#: The public `chart upgrade` moved to the unified `-o/--output`; these two
-#: commands share a service and a wire contract but no longer share a flag.
+#: `upgrade-finalize` keeps `--format text|json`: `renovate-global.json`'s allowlist pins the
+#: command Renovate runs, so its surface does not follow `chart upgrade`'s `-o`.
 _FINALIZE_FORMATS = ("text", "json")
 _CALLBACK_DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
 
-#: The public command's vocabulary, from the shared table in `cli/output.py`.
-#: `table` is what `text` was called.
 _UPGRADE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
@@ -54,7 +40,6 @@ def _format_choice(value: str) -> str:
     return value
 
 
-#: Frozen. See `_FINALIZE_FORMATS`. Used by `upgrade_finalize` only.
 FormatOption = Annotated[
     str,
     typer.Option(
@@ -105,15 +90,7 @@ def upgrade(
 
 
 def _chart_path(chart: str | None, path: Path | None, *, workspace: RepositoryWorkspace) -> Path:
-    """Resolve the one chart this invocation names, however it was spelled.
-
-    `--path` is the frozen-in-muscle-memory spelling and stays verbatim: it
-    is a repository-relative path and the service has always taken it as
-    one. The CHART argument goes through `resolve_chart_target`, the same
-    function `chart test`, `local up` and `chart validate` use, so a bare chart
-    name means the same thing in all four -- and so this module contains no
-    path heuristic and no configuration read of its own (design commitment 6).
-    """
+    """Resolve the one chart named by CHART (via `resolve_chart_target`) or by `--path` as given."""
     if path is not None and chart is None:
         return path
     if chart is not None and path is None:
@@ -148,14 +125,7 @@ def upgrade_finalize(
 
 
 def _emit(payload: Mapping[str, Any], *, as_json: bool) -> None:
-    """Encode one wire payload as machine or human output.
-
-    Takes a bool rather than a mode word because its two callers no longer
-    share a vocabulary: `upgrade` resolves `table`/`json` through
-    `cli/output.py` while the frozen `upgrade-finalize` still speaks
-    `text`/`json`. Passing either word down here would leak one command's
-    flag spelling into the other's rendering path.
-    """
+    """Encode one wire payload as JSON or as text."""
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         return
@@ -202,15 +172,7 @@ def register_upgrade(app: typer.Typer) -> None:
 
 
 def register_finalize(app: typer.Typer) -> None:
-    """Attach the Renovate-only hidden callback to the *root* Typer app.
-
-    Separate from `register_upgrade` because these two go to different
-    places and one of them may never move: `renovate-global.json` pins the
-    literal string `chart-manager upgrade-finalize --path <dir>` in an
-    allowlist regex, so this command is root-level and frozen. Registering
-    both from one function is what would make relocating `upgrade` quietly
-    relocate `upgrade-finalize` with it.
-    """
+    """Attach the hidden Renovate callback to the root app, where the allowlist expects it."""
     app.command("upgrade-finalize", hidden=True)(upgrade_finalize)
 
 

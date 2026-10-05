@@ -33,9 +33,7 @@ from chart_manager.plumbing.yaml_files import (
 )
 from chart_manager.shared.workspace import RepositoryWorkspace
 
-#: This runs as a Renovate post-upgrade task inside Renovate's own checkout,
-#: where nothing renders narration and the only surviving record of the run is
-#: whatever reached stderr.
+#: Inside Renovate's checkout, stderr is the only record of a finalize run.
 _LOG = logging.getLogger(__name__)
 
 _HEADING = re.compile(r"^##\s")
@@ -93,12 +91,9 @@ def load_update_data(
     *,
     max_bytes: int = 1024 * 1024,
 ) -> Mapping[str, Any]:
-    """Safely load an explicitly selected Renovate callback data file.
+    """Load Renovate's callback data file, rejecting symlinks, non-regular and oversized files.
 
-    Renovate legitimately creates this file in its temporary directory, so
-    containment by the checkout is neither required nor a useful trust
-    boundary. The caller supplies the exact path; this boundary rejects
-    symlinks, non-regular files, and unexpectedly large payloads.
+    Renovate writes it in its own temporary directory, so it is not checked against the checkout.
     """
     try:
         resolved = path.resolve(strict=True)
@@ -322,11 +317,8 @@ def _loose_major(value: str) -> int | None:
 def _apply_changelog_entry(old: str, heading: str, entry: str) -> str:
     """Return the changelog with ``heading``'s section replaced by ``entry``.
 
-    Replay must be keyed on the section's content, not on the heading alone.
-    A newer update can land on an open upgrade branch before it merges: the
-    baseline is unchanged, so the target version -- and therefore the heading
-    -- stays the same while the update set underneath it does not. Skipping on
-    a matching heading would leave Chart.yaml and the changelog disagreeing.
+    The section is rewritten, not skipped, because a newer update on an open branch keeps the
+    heading (same baseline, same target) but changes the updates under it.
     """
     lines = old.splitlines(keepends=True)
     start = next((index for index, line in enumerate(lines) if line.rstrip() == heading), None)

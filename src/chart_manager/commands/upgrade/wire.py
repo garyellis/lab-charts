@@ -1,25 +1,7 @@
-"""Wire contract for `upgrade` and `upgrade-finalize`.
+"""The machine-readable payload of `chart upgrade` and `upgrade-finalize`.
 
-This module is the single source of truth for the machine-readable shape of an
-upgrade outcome. Every surface -- the CLI's `-o json`, a REST endpoint, a
-Slack app, a CI step -- projects through `upgrade_to_dict` / `finalize_to_dict`
-so they cannot diverge.
-
-Both projections emit the *same* key set, because they describe the same event
-from two angles: `run` proposes a new wrapper-chart version and may
-open a PR for it; `ChartFinalizer` is the Renovate callback that applies one.
-The two result dataclasses spell the shared pair of versions differently --
-`UpgradeResult.current_version`/`proposed_version` versus
-`FinalizeResult.previous_version`/`version` -- so the mapping onto the contract
-names (`current_wrapper_version`/`proposed_wrapper_version`) is made explicitly
-here, once per dataclass. It is deliberately *not* a runtime key-fallback
-chain: a surface that guesses which of three spellings a result object uses is
-a surface that owns the contract.
-
-Deliberately I/O-free and format-free: these functions return plain,
-JSON-ready dicts. They take no `file`, no `format=`, no `console=`. Choosing an
-encoder (`json.dumps` options, YAML, an HTTP response body) and rendering for
-humans is the surface's job -- see `commands/upgrade/cli.py`.
+Both commands emit the same keys, mapped explicitly from each result type. These functions
+return plain dicts; encoding and rendering belong to `cli.py`.
 """
 
 from __future__ import annotations
@@ -54,15 +36,8 @@ def upgrade_to_dict(result: UpgradeResult) -> dict[str, Any]:
 def finalize_to_dict(result: FinalizeResult, *, chart_path: Path) -> dict[str, Any]:
     """Project a `FinalizeResult` onto the wire payload.
 
-    The finalizer runs inside Renovate's callback on an already-checked-out
-    branch: it resolves no repository, no base, and no branch, and it never
-    opens a PR, so those keys are always null. It also carries no diagnostics
-    channel of its own. `chart_path` is supplied by the caller because
-    `FinalizeResult` does not carry the chart path it acted on.
-
-    Unlike `UpgradeResult.proposed_version`, `FinalizeResult.version` is
-    populated even when nothing changed (it then equals `previous_version`);
-    `outcome` is the key that distinguishes the two cases.
+    Finalize runs inside Renovate's callback, so repository, branch and pull request are null.
+    `outcome` tells an unchanged run, whose version equals the previous one, from an updated one.
     """
     return _payload(
         repository=None,
@@ -105,12 +80,7 @@ def _payload(
 
 
 def _pull_request(*, url: str | None, number: int | None) -> dict[str, Any] | None:
-    """Nest the PR coordinates, or null when no PR exists.
-
-    A half-populated result (a URL with no number, or the reverse) still yields
-    an object: dropping it would report "no pull request" for a run that opened
-    one.
-    """
+    """Nest the PR coordinates, or null when there is neither a URL nor a number."""
     if url is None and number is None:
         return None
     return {"url": url, "number": number}

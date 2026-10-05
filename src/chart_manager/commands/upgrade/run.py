@@ -290,27 +290,17 @@ def build_upgrade_plan(
     version = str(wrapper_version(chart.get("version"), source="Chart.yaml version"))
     name = resolved.name
     group = _GROUP.format(chart=name)
-    # Renovate's stale-branch pruning is scoped by `branchPrefix` alone, while
-    # this run's extraction is scoped to one chart by `includePaths`. A shared
-    # "renovate/" prefix would therefore make every run look like the complete
-    # truth for the whole namespace and autoclose every other chart's PR. A
-    # per-chart prefix makes the two scopes agree, so pruning stays enabled and
-    # only ever reaches this chart's own branches.
+    # Renovate prunes stale branches by `branchPrefix` alone; a per-chart prefix keeps a
+    # one-chart run from autoclosing every other chart's pull request.
     branch_prefix = _BRANCH_PREFIX.format(chart=name)
     relative = resolved.relative_to(repo_root).as_posix()
     overlay: Mapping[str, object] = {
-        # `force` is global-only config that Renovate re-applies at the end of
-        # every config merge, including the repository's own renovate.json,
-        # which is otherwise merged as the child and wins. The chart scope and
-        # its matching branch namespace are the two keys that must survive that
-        # merge, so a stray branchPrefix in renovate.json cannot silently
-        # re-break cross-chart isolation.
+        # `force` survives the merge with the repository's renovate.json, so a stray
+        # branchPrefix there cannot break the per-chart scope.
         "force": {
             "includePaths": [f"{relative}/**"],
             "branchPrefix": branch_prefix,
-            # Defaults to "renovate/". Left alone, Renovate rewrites the branch
-            # name back onto the old prefix whenever the new branch does not
-            # exist yet, which would undo the scoping on every first run.
+            # Otherwise Renovate moves a new branch back under the default "renovate/".
             "branchPrefixOld": branch_prefix,
         },
         "enabledManagers": ["helmv3", "helm-values", "custom.regex"],

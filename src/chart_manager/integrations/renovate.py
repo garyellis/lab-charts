@@ -84,12 +84,6 @@ class Renovate:
         The validator is checked for *presence only*: it is a node bin stub
         with no version flag, so asking for one would report a working
         install as broken.
-
-        The token check is here rather than in the composition root that
-        reads the variable, because "what does Renovate need to be able to
-        run" is this adapter's knowledge. It is the case MY_COMMENTS.md
-        names explicitly -- required environment is a per-integration
-        preflight matter, not a surface one.
         """
         return (
             probe_binary(
@@ -111,9 +105,8 @@ class Renovate:
     def run(self, request: RenovateRequest) -> RenovateResult:
         """Run Renovate for exactly one repository.
 
-        Non-zero Renovate exits are returned to the service layer, which owns
-        the user-facing outcome. Local request/config errors are raised as
-        ``ChartManagerError`` so they follow the existing expected-error path.
+        A non-zero Renovate exit is returned for the caller to report; invalid local
+        request or config inputs raise ``ChartManagerError``.
         """
         repo_root = _require_directory(request.repo_root, label="repository root")
         global_config = _require_file(

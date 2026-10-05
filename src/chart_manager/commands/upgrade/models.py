@@ -1,4 +1,4 @@
-"""Public, serializable vocabulary for chart upgrades and their finalizer."""
+"""Requests, results and errors for `chart upgrade` and `upgrade-finalize`."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class UpgradeStatus(StrEnum):
 
 @dataclass(frozen=True)
 class UpgradeResult:
-    """Stable service outcome; adapter-specific output stays diagnostic-only."""
+    """What one `chart upgrade` run proposed; Renovate's own output stays in diagnostics."""
 
     chart: str
     chart_path: Path
@@ -96,7 +96,7 @@ class FinalizeRequest:
 
 @dataclass(frozen=True)
 class FinalizeResult:
-    """Files and version selected by one deterministic finalizer pass."""
+    """The wrapper version finalize chose, and whether it changed any file."""
 
     chart: str
     previous_version: str
