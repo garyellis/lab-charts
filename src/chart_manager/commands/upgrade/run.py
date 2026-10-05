@@ -50,7 +50,7 @@ def run(
     github = Github(root, runner)
     repository = _repository(git)
     plan = build_upgrade_plan(
-        request.root,
+        root,
         request.chart_path,
         charts_dir=workspace.spec.charts_dir,
     )

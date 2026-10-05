@@ -92,7 +92,6 @@ def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
         '"repository":"owner/repository"}\n'
     )
     (request,) = fake.requests
-    assert request.root == repo.resolve()
     assert request.chart_path == Path("charts/loki")
     assert request.dry_run is True
 
@@ -238,7 +237,6 @@ def test_finalize_is_hidden_and_reads_callback_data_from_outside_the_repository(
         '"repository":null}\n'
     )
     (request,) = fake.requests
-    assert request.repo_root == repo.resolve()
     assert request.chart_path == Path("charts/loki")
     assert request.update_data["updates"][0]["depName"] == "grafana"
 

@@ -92,7 +92,7 @@ def _upgrade(
     )
     (tmp_path / "renovate-global.json").write_text("{}\n", encoding="utf-8")
     return run(
-        UpgradeRequest(root=tmp_path, chart_path=chart, dry_run=dry_run),
+        UpgradeRequest(chart_path=chart, dry_run=dry_run),
         workspace=workspace_for(tmp_path),
         runner=runner,
         events=EventWriter(events if events is not None else _EventLog()),

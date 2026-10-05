@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,6 @@ class UpgradeError(ChartManagerError):
 class UpgradeRequest:
     """Ask Renovate to discover and apply updates for one wrapper chart."""
 
-    root: Path
     chart_path: Path
     dry_run: bool = False
 
@@ -89,7 +88,6 @@ class UpdateMetadata:
 class FinalizeRequest:
     """Finalize Renovate's edits to one chart against its Chart.yaml at HEAD."""
 
-    repo_root: Path
     chart_path: Path
     update_data: Mapping[str, Any]
 
@@ -114,4 +112,4 @@ class UpgradePlan:
     current_version: str
     branch_prefix: str
     group: str
-    runtime_overlay: Mapping[str, object] = field(default_factory=dict)
+    runtime_overlay: Mapping[str, object]

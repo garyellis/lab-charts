@@ -44,7 +44,6 @@ def _finalize(tmp_path: Path, baseline: str, *updates: dict[str, Any]) -> Finali
         ("git", "show", "HEAD:charts/demo/Chart.yaml"), stdout=baseline
     )
     request = FinalizeRequest(
-        repo_root=tmp_path,
         chart_path=tmp_path / "charts" / "demo",
         update_data={"updates": list(updates)},
     )
@@ -170,7 +169,7 @@ def test_an_unreadable_baseline_is_an_upgrade_error(tmp_path: Path) -> None:
 
     with pytest.raises(UpgradeError, match="cannot read baseline"):
         finalize.run(
-            FinalizeRequest(repo_root=tmp_path, chart_path=chart, update_data={"updates": []}),
+            FinalizeRequest(chart_path=chart, update_data={"updates": []}),
             workspace=workspace_for(tmp_path),
             runner=runner,
         )

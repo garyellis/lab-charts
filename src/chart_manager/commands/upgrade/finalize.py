@@ -135,7 +135,7 @@ def run(
 ) -> FinalizeResult:
     """Finalize Renovate's edits without trusting an upstream wrapper version."""
     root, chart_path, _ = resolve_chart_path(
-        request.repo_root,
+        workspace.root,
         request.chart_path,
         charts_dir=workspace.spec.charts_dir,
     )

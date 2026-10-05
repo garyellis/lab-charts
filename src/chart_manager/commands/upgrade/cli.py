@@ -78,7 +78,6 @@ def upgrade(
     workspace = container.workspace()
     result = run(
         UpgradeRequest(
-            root=workspace.root,
             chart_path=_chart_path(chart, path, workspace=workspace),
             dry_run=dry_run,
         ),
@@ -117,7 +116,7 @@ def upgrade_finalize(
     workspace = container.workspace()
     update_data = load_update_data(data_file)
     result = finalize.run(
-        FinalizeRequest(repo_root=workspace.root, chart_path=path, update_data=update_data),
+        FinalizeRequest(chart_path=path, update_data=update_data),
         workspace=workspace,
         runner=container.command_runner(),
     )
