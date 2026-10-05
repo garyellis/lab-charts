@@ -4,8 +4,8 @@
 turns the result into one repeatable pull request.
 
 ```bash
-uv run chart-manager chart upgrade --path charts/cert-manager
-uv run chart-manager chart upgrade --path charts/cert-manager --dry-run -o json
+uv run chart-manager chart upgrade charts/cert-manager
+uv run chart-manager chart upgrade charts/cert-manager --dry-run -o json
 ```
 
 Renovate performs its own platform checkout; it never switches branches in,

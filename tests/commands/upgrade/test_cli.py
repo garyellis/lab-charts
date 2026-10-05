@@ -50,9 +50,12 @@ class FakeRun:
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A workspace one level below tmp_path, so Renovate's data file can sit outside it."""
+    """A workspace with charts/loki, one level below tmp_path so Renovate's data file can sit outside it."""
     root = tmp_path / "repo"
-    root.mkdir()
+    (root / "charts" / "loki").mkdir(parents=True)
+    (root / "charts" / "loki" / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: loki\nversion: 1.2.3\n", encoding="utf-8"
+    )
     write_workspace(root)
     monkeypatch.chdir(root)
     return root
@@ -77,7 +80,7 @@ def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
 ) -> None:
     fake = _fake_upgrade(monkeypatch)
 
-    result = cli("chart", "upgrade", "--path", "charts/loki", "--dry-run", "--output", "json")
+    result = cli("chart", "upgrade", "charts/loki", "--dry-run", "--output", "json")
 
     assert result.exit_code == 0
     # Byte-identical: `-o json` is read by CI steps and jq, so key order,
@@ -100,7 +103,7 @@ def test_upgrade_table_renders_every_field_in_a_fixed_order(
 ) -> None:
     _fake_upgrade(monkeypatch)
 
-    result = cli("chart", "upgrade", "--path", "charts/loki", "--output", "table")
+    result = cli("chart", "upgrade", "charts/loki", "--output", "table")
 
     assert result.exit_code == 0
     assert result.stdout == (
@@ -135,7 +138,7 @@ def test_upgrade_with_nothing_to_propose_reports_null_proposal_and_pull_request(
         ),
     )
 
-    result = cli("chart", "upgrade", "--path", "charts/loki", "-o", "json")
+    result = cli("chart", "upgrade", "charts/loki", "-o", "json")
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -152,8 +155,8 @@ def test_a_pull_request_without_a_number_is_still_reported(
     """Reporting `"pull_request": null` for a run that opened one would be a lie."""
     _fake_upgrade(monkeypatch, UpgradeResult(**{**vars(OPENED), "pr_number": None}))
 
-    as_json = cli("chart", "upgrade", "--path", "charts/loki", "-o", "json")
-    as_table = cli("chart", "upgrade", "--path", "charts/loki", "-o", "table")
+    as_json = cli("chart", "upgrade", "charts/loki", "-o", "json")
+    as_table = cli("chart", "upgrade", "charts/loki", "-o", "table")
 
     assert json.loads(as_json.stdout)["pull_request"] == {
         "url": "https://example.test/pull/7",
@@ -162,34 +165,27 @@ def test_a_pull_request_without_a_number_is_still_reported(
     assert "pull request: https://example.test/pull/7\n" in as_table.stdout
 
 
-def test_the_chart_argument_names_its_chart_directory(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("chart", ["loki", "charts/loki"], ids=["name", "path"])
+def test_the_chart_argument_takes_a_name_or_a_repository_relative_path(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, chart: str
 ) -> None:
-    (repo / "charts" / "loki").mkdir(parents=True)
-    (repo / "charts" / "loki" / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: loki\nversion: 1.2.3\n", encoding="utf-8"
-    )
     fake = _fake_upgrade(monkeypatch)
 
-    result = cli("chart", "upgrade", "loki")
+    result = cli("chart", "upgrade", chart)
 
     assert result.exit_code == 0
     assert fake.requests[0].chart_path == Path("charts/loki")
 
 
-@pytest.mark.parametrize(
-    "argv", [(), ("loki", "--path", "charts/loki")], ids=["neither", "both"]
-)
-def test_upgrade_needs_exactly_one_chart(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]
+def test_upgrade_without_a_chart_is_a_usage_error(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _fake_upgrade(monkeypatch)
 
-    result = cli("chart", "upgrade", *argv)
+    result = cli("chart", "upgrade", "--dry-run")
 
-    # A ChartManagerError, which `main()` turns into an `error:` line and exit 1.
-    assert isinstance(result.exception, ChartManagerError)
-    assert "name exactly one chart" in str(result.exception)
+    assert result.exit_code == 2
+    assert "Missing argument 'CHART'" in result.output
     assert fake.requests == []
 
 
@@ -198,7 +194,7 @@ def test_unknown_output_is_rejected_before_run(
 ) -> None:
     fake = _fake_upgrade(monkeypatch)
 
-    result = cli("chart", "upgrade", "--path", "charts/loki", "--output", "yaml")
+    result = cli("chart", "upgrade", "charts/loki", "--output", "yaml")
 
     assert result.exit_code == 2
     assert "unknown output: yaml" in result.output

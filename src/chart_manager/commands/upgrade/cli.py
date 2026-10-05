@@ -21,7 +21,6 @@ from chart_manager.commands.upgrade.run import run
 from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import resolve_chart_target
-from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: `upgrade-finalize` keeps `--format text|json`: `renovate-global.json`'s allowlist pins the
 #: command Renovate runs, so its surface does not follow `chart upgrade`'s `-o`.
@@ -56,16 +55,8 @@ OutputOption = Annotated[str | None, output_mod.output_option(*_UPGRADE_OUTPUTS)
 def upgrade(
     ctx: typer.Context,
     chart: Annotated[
-        str | None,
-        typer.Argument(metavar="[CHART]", help="Chart name or repository-relative chart path."),
-    ] = None,
-    path: Annotated[
-        Path | None,
-        typer.Option(
-            "--path",
-            help="Repository-relative wrapper chart path. Retained alias for the CHART argument.",
-        ),
-    ] = None,
+        str, typer.Argument(help="Chart name or repository-relative chart path.")
+    ],
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Discover and plan without pushing or opening a PR."),
@@ -78,7 +69,7 @@ def upgrade(
     workspace = container.workspace()
     result = run(
         UpgradeRequest(
-            chart_path=_chart_path(chart, path, workspace=workspace),
+            chart_path=resolve_chart_target(workspace, chart).path.relative_to(workspace.root),
             dry_run=dry_run,
         ),
         workspace=workspace,
@@ -86,15 +77,6 @@ def upgrade(
         events=container.event_writer(),
     )
     _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
-
-
-def _chart_path(chart: str | None, path: Path | None, *, workspace: RepositoryWorkspace) -> Path:
-    """Resolve the one chart named by CHART (via `resolve_chart_target`) or by `--path` as given."""
-    if path is not None and chart is None:
-        return path
-    if chart is not None and path is None:
-        return resolve_chart_target(workspace, chart).path.relative_to(workspace.root)
-    raise ChartManagerError("name exactly one chart, as the CHART argument or --path")
 
 
 def upgrade_finalize(
