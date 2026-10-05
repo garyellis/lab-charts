@@ -12,8 +12,6 @@ import typer
 from typer.testing import CliRunner
 
 from chart_manager.commands.promote import (
-    NO_MATCH_REF,
-    PROMOTE_OUTCOME,
     HelmReleaseMatch,
     MonitorOutcome,
     MonitorResult,
@@ -22,12 +20,11 @@ from chart_manager.commands.promote import (
     TestOutcome,
     TestResult,
     Transition,
-    promote_to_dict,
 )
 from chart_manager.commands.promote import cli as promote_cli
-from chart_manager.commands.promote.render import (
-    _PrettyProgressDriver,
-)
+from chart_manager.commands.promote.render import _PrettyProgressDriver
+from chart_manager.commands.promote.state import NO_MATCH_REF, PROMOTE_OUTCOME
+from chart_manager.commands.promote.wire import promote_to_dict
 from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,

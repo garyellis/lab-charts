@@ -20,7 +20,6 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import data_console, narration_console
 from chart_manager.commands.promote import (
-    PROMOTE_OUTCOME,
     HelmReleaseMatch,
     MonitorRequest,
     PromoteRequest,
@@ -38,6 +37,7 @@ from chart_manager.commands.promote.render import (
     render_test_json,
     render_test_pretty,
 )
+from chart_manager.commands.promote.state import PROMOTE_OUTCOME
 from chart_manager.commands.promote.test import run as run_test
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
