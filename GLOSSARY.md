@@ -77,6 +77,24 @@ The single step in a chart test that runs `helm test`. `helmTest` is its name in
 `chart-lifecycle.yaml` only.
 _Avoid_: using "helm test" for the whole chart test
 
+### Upgrading a chart
+
+**Wrapper chart**:
+A chart in `charts/` that pins upstream charts and images and has its own version and
+`changelog.md`.
+
+**Renovate**:
+The dependency-update tool `chart upgrade` runs against one wrapper chart.
+
+**Upgrade**:
+`chart upgrade`: Renovate proposes one wrapper chart's dependency and image updates as one pull
+request on a `renovate/<chart>/` branch.
+_Avoid_: using "upgrade" for a Helm release (that is release converge)
+
+**Finalize**:
+`upgrade-finalize`, the hidden callback Renovate runs on the upgrade branch: it bumps the
+wrapper chart's version (major or patch) and writes its changelog entry.
+
 ### Promoting a chart
 
 **Environment**:

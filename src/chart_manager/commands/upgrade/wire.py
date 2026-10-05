@@ -6,7 +6,7 @@ Slack app, a CI step -- projects through `upgrade_to_dict` / `finalize_to_dict`
 so they cannot diverge.
 
 Both projections emit the *same* key set, because they describe the same event
-from two angles: `UpgradeService` proposes a new wrapper-chart version and may
+from two angles: `run` proposes a new wrapper-chart version and may
 open a PR for it; `ChartFinalizer` is the Renovate callback that applies one.
 The two result dataclasses spell the shared pair of versions differently --
 `UpgradeResult.current_version`/`proposed_version` versus

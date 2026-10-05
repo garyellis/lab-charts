@@ -1,6 +1,6 @@
 """Build-lifecycle telemetry for the upgrade service.
 
-`UpgradeService` is the only component that knows both halves of the fact a
+`run` is the only component that knows both halves of the fact a
 `BuildPhase.PR_OPEN` event asserts: the wrapper version the finalizer decided
 (read back off the pushed branch) and the pull request Renovate opened for it.
 The finalizer knows the version but runs before the PR exists; a Renovate
