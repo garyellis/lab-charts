@@ -83,7 +83,7 @@ class UpgradeTelemetry:
     strict: bool = False
 
     def completed(
-        self, result: UpgradeResult, *, previously_proposed: str | None = None
+        self, result: UpgradeResult, *, previously_proposed: str | None
     ) -> None:
         """Emit the phase for `result`, or nothing if it records no transition.
 

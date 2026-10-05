@@ -24,7 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, probe_binary
@@ -68,12 +68,12 @@ class Renovate:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         timeout: float | None = None,
     ) -> None:
         """Bind the runner and optional wall-clock timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._binary = "renovate"
         self._validator_binary = "renovate-config-validator"
         self.timeout = timeout
