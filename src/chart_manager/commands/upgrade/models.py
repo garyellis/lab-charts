@@ -66,34 +66,6 @@ class UpdateMetadata:
     manager: str = ""
     datasource: str = ""
     update_type: str = ""
-    # Repo-relative file the dependency was found in, e.g.
-    # "charts/grafana/values.yaml". Excluded from equality so that one
-    # dependency pinned across several values files still collapses to a single
-    # changelog line, exactly as it did before this field existed. A future
-    # multi-chart run must therefore filter by this field *before* de-duplicating,
-    # or one chart's entry would absorb another's.
-    package_file: str = field(default="", compare=False)
-
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> UpdateMetadata:
-        """Normalize Renovate's camelCase result fields."""
-
-        def text(*names: str) -> str:
-            for name in names:
-                item = value.get(name)
-                if item is not None:
-                    return str(item)
-            return ""
-
-        return cls(
-            dependency=text("dependency", "depName", "packageName"),
-            current_version=text("current_version", "currentVersion", "currentValue"),
-            new_version=text("new_version", "newVersion", "newValue"),
-            manager=text("manager"),
-            datasource=text("datasource"),
-            update_type=text("update_type", "updateType"),
-            package_file=text("package_file", "packageFile"),
-        )
 
     @property
     def is_chart_dependency(self) -> bool:

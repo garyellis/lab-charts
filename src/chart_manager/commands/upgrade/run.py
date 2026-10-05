@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE
 from chart_manager.commands.upgrade.models import (
     UpgradeError,
     UpgradePlan,
@@ -314,22 +315,6 @@ def build_upgrade_plan(
     # only ever reaches this chart's own branches.
     branch_prefix = f"renovate/{name}/"
     relative = resolved.relative_to(repo_root).as_posix()
-    # `packageFile` is repo-relative and always a file inside the chart
-    # directory, so it attributes a custom.regex match under templates/ as
-    # reliably as a Chart.yaml dependency. It is redundant while `includePaths`
-    # scopes a run to a single chart; it is carried now so that widening a run to
-    # several charts is a filtering change rather than a template change.
-    data_template = (
-        '{"updates":['
-        "{{#each upgrades}}"
-        '{"depName":"{{depName}}","currentValue":"{{currentValue}}",'
-        '"newValue":"{{newValue}}","manager":"{{manager}}",'
-        '"datasource":"{{datasource}}","updateType":"{{updateType}}",'
-        '"packageFile":"{{packageFile}}"}'
-        "{{#unless @last}},{{/unless}}"
-        "{{/each}}"
-        "]}"
-    )
     overlay: Mapping[str, object] = {
         # `force` is global-only config that Renovate re-applies at the end of
         # every config merge, including the repository's own renovate.json,
@@ -362,7 +347,7 @@ def build_upgrade_plan(
             "commands": [f"chart-manager upgrade-finalize --path {relative}"],
             "fileFilters": [f"{relative}/**"],
             "executionMode": "branch",
-            "dataFileTemplate": data_template,
+            "dataFileTemplate": DATA_FILE_TEMPLATE,
         },
     }
     return UpgradePlan(

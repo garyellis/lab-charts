@@ -44,17 +44,40 @@ def _semver(value: object, *, source: str) -> SemVer:
         raise UpgradeError(f"{source} must be a strict x.y.z version, got {value!r}") from exc
 
 
+#: The callback data Renovate writes for `_updates_from_data`; packageFile is
+#: carried for a future multi-chart run.
+DATA_FILE_TEMPLATE = (
+    '{"updates":['
+    "{{#each upgrades}}"
+    '{"depName":"{{depName}}","currentValue":"{{currentValue}}",'
+    '"newValue":"{{newValue}}","manager":"{{manager}}",'
+    '"datasource":"{{datasource}}","updateType":"{{updateType}}",'
+    '"packageFile":"{{packageFile}}"}'
+    "{{#unless @last}},{{/unless}}"
+    "{{/each}}"
+    "]}"
+)
+
+
 def _updates_from_data(data: Mapping[str, Any]) -> tuple[UpdateMetadata, ...]:
-    raw: object = data.get("updates", data.get("deps", data.get("dependencies", ())))
-    if isinstance(raw, Mapping):
-        raw = [raw]
+    """Parse the updates `DATA_FILE_TEMPLATE` renders."""
+    raw = data.get("updates", ())
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         raise UpgradeError("Renovate update data must contain an updates array")
     updates: list[UpdateMetadata] = []
     for item in raw:
         if not isinstance(item, Mapping):
             raise UpgradeError("each Renovate update entry must be an object")
-        updates.append(UpdateMetadata.from_mapping(item))
+        updates.append(
+            UpdateMetadata(
+                dependency=str(item.get("depName", "")),
+                current_version=str(item.get("currentValue", "")),
+                new_version=str(item.get("newValue", "")),
+                manager=str(item.get("manager", "")),
+                datasource=str(item.get("datasource", "")),
+                update_type=str(item.get("updateType", "")),
+            )
+        )
     return tuple(updates)
 
 

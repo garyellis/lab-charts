@@ -96,20 +96,19 @@ def test_newer_update_on_open_branch_rewrites_the_same_section(tmp_path: Path) -
     )
 
 
-def test_package_file_is_captured_without_changing_deduplication(tmp_path: Path) -> None:
+def test_an_update_found_in_two_values_files_is_one_changelog_line(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
 
     # Renovate emits one update per file, so a tag pinned in both values files
     # arrives twice. The two entries must still collapse to one changelog line.
-    result = _finalize(
+    _finalize(
         tmp_path,
         baseline,
         _image("api", "2.9.0", "2.10.0", packageFile="charts/demo/values.yaml"),
         _image("api", "2.9.0", "2.10.0", packageFile="charts/demo/values-prod.yaml"),
     )
 
-    assert [update.package_file for update in result.updates] == ["charts/demo/values.yaml"]
     assert _changelog(chart) == "## 1.2.4\n\n- api: 2.9.0 -> 2.10.0\n\n"
 
 
