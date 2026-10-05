@@ -20,7 +20,7 @@ class _Upgrade:
         self.result = result
         self.requests: list[Any] = []
 
-    def upgrade(self, request):  # type: ignore[no-untyped-def]
+    def __call__(self, request, **_):  # type: ignore[no-untyped-def]
         self.requests.append(request)
         return self.result
 
@@ -30,7 +30,7 @@ class _Finalize:
         self.result = result
         self.requests: list[Any] = []
 
-    def finalize(self, request):  # type: ignore[no-untyped-def]
+    def __call__(self, request, **_):  # type: ignore[no-untyped-def]
         self.requests.append(request)
         return self.result
 
@@ -70,7 +70,7 @@ def _upgrade_result(path: Path) -> UpgradeResult:
 def test_upgrade_json_is_stable_and_request_preserves_flags(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(tmp_path)
     service = _Upgrade(_upgrade_result(Path("charts/loki")))
-    monkeypatch.setattr(upgrade_cli, "_make_upgrade_service", lambda _root: service)
+    monkeypatch.setattr(upgrade_cli, "run", service)
 
     result = CliRunner().invoke(
         _app(),
@@ -98,7 +98,7 @@ def test_upgrade_json_is_stable_and_request_preserves_flags(tmp_path: Path, monk
 
 def test_upgrade_text_has_fixed_fields_and_diagnostics(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     service = _Upgrade(_upgrade_result(Path("charts/loki")))
-    monkeypatch.setattr(upgrade_cli, "_make_upgrade_service", lambda _root: service)
+    monkeypatch.setattr(upgrade_cli, "run", service)
 
     result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki", "--output", "table"])
 
@@ -137,7 +137,7 @@ def test_finalize_is_hidden_and_reads_callback_data_from_environment(
             changed=True,
         )
     )
-    monkeypatch.setattr(upgrade_cli, "_make_finalize_service", lambda _root: service)
+    monkeypatch.setattr(upgrade_cli.finalize, "run", service)
     runner = CliRunner()
 
     help_result = runner.invoke(_app(), ["--help"])
@@ -187,7 +187,7 @@ def test_finalize_text_renders_the_keys_the_finalizer_cannot_populate(
             changed=False,
         )
     )
-    monkeypatch.setattr(upgrade_cli, "_make_finalize_service", lambda _root: service)
+    monkeypatch.setattr(upgrade_cli.finalize, "run", service)
 
     result = CliRunner().invoke(
         _app(),
@@ -213,12 +213,12 @@ def test_finalize_text_renders_the_keys_the_finalizer_cannot_populate(
 def test_unknown_output_is_rejected_before_service_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     called = False
 
-    def make(_root):  # type: ignore[no-untyped-def]
+    def fake_run(request, **_):  # type: ignore[no-untyped-def]
         nonlocal called
         called = True
-        return _Upgrade(_upgrade_result(Path("charts/loki")))
+        return _upgrade_result(Path("charts/loki"))
 
-    monkeypatch.setattr(upgrade_cli, "_make_upgrade_service", make)
+    monkeypatch.setattr(upgrade_cli, "run", fake_run)
 
     result = CliRunner().invoke(_app(), ["upgrade", "--path", "charts/loki", "--output", "yaml"])
 

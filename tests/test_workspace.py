@@ -508,7 +508,6 @@ spec:
     )
     assert _local_targets(container, tmp_path).local_config == Path("ops/local.yaml")
     assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
-    assert container.upgrade_finalizer(tmp_path)._charts_dir == Path("helm/charts")
     assert workspace.spec.policies_dir == Path("compliance/policies")
 
 

@@ -300,7 +300,7 @@ def _log_subprocess_output(value: str, *, error: bool) -> None:
 def _token_check() -> Check:
     """Whether a credential Renovate can authenticate with is in the environment.
 
-    The same two names, in the same order, that `composition.Container`
+    The same two names, in the same order, that `commands/upgrade/run.py`
     hands to `RenovateRequest.token`: Renovate spells its own setting
     RENOVATE_TOKEN, while GitHub Actions exposes its repository token as
     GITHUB_TOKEN. Reported as ENVIRONMENT rather than SPEC -- nothing the

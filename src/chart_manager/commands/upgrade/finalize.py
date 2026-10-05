@@ -1,4 +1,4 @@
-"""Deterministic, replay-safe wrapper version and changelog finalization."""
+"""Run `upgrade-finalize`: bump the wrapper version and changelog after Renovate's edits."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import re
 import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from chart_manager.commands.upgrade.models import (
     FinalizeRequest,
@@ -17,8 +17,9 @@ from chart_manager.commands.upgrade.models import (
     UpgradeError,
 )
 from chart_manager.commands.upgrade.paths import resolve_chart_path, safe_output_path
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import YamlError
+from chart_manager.integrations.git import Git
+from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, YamlError
 from chart_manager.plumbing.semver import SemVer, parse_bare_version
 from chart_manager.plumbing.yaml_files import (
     edit_yaml_documents,
@@ -33,34 +34,6 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 _LOG = logging.getLogger(__name__)
 
 _HEADING = re.compile(r"^##\s")
-
-
-class BaselineReader(Protocol):
-    """Read repository files as they existed at a git revision."""
-
-    def read(self, root: Path, revision: str, relative_path: Path) -> str:
-        """Return file contents or raise ``UpgradeError``."""
-        ...
-
-
-class GitBaselineReader:
-    """Baseline reader backed by the repository's command-runner seam."""
-
-    def __init__(self, runner: CommandRunner | None = None) -> None:
-        self._runner = runner or SubprocessRunner()
-
-    def read(self, root: Path, revision: str, relative_path: Path) -> str:
-        result = self._runner.run(
-            ["git", "show", f"{revision}:{relative_path.as_posix()}"],
-            cwd=root,
-            check=False,
-        )
-        if result.returncode:
-            raise UpgradeError(
-                f"cannot read baseline {revision}:{relative_path.as_posix()}: "
-                f"{result.stderr.strip()}"
-            )
-        return result.stdout
 
 
 def _semver(value: object, *, source: str) -> SemVer:
@@ -120,149 +93,152 @@ def load_update_data(
     return value
 
 
-class UpgradeFinalizer:
+def run(
+    request: FinalizeRequest,
+    *,
+    workspace: RepositoryWorkspace,
+    runner: CommandRunner,
+) -> FinalizeResult:
     """Finalize Renovate's edits without trusting an upstream wrapper version."""
-
-    def __init__(
-        self,
-        baseline: BaselineReader | None = None,
-        *,
-        workspace: RepositoryWorkspace,
-    ) -> None:
-        self._baseline = baseline or GitBaselineReader()
-        self._charts_dir = workspace.spec.charts_dir
-
-    def finalize(self, request: FinalizeRequest) -> FinalizeResult:
-        root, chart_path, _ = resolve_chart_path(
-            request.repo_root,
-            request.chart_path,
-            charts_dir=self._charts_dir,
-        )
-        chart_rel = chart_path.relative_to(root)
-        _LOG.info(
-            "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=%d "
-            "dry_run=%s",
+    root, chart_path, _ = resolve_chart_path(
+        request.repo_root,
+        request.chart_path,
+        charts_dir=workspace.spec.charts_dir,
+    )
+    chart_rel = chart_path.relative_to(root)
+    _LOG.info(
+        "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=%d "
+        "dry_run=%s",
+        chart_path.name,
+        chart_rel.as_posix(),
+        request.baseline_ref,
+        len(request.updates),
+        request.dry_run,
+    )
+    baseline_file = chart_rel / "Chart.yaml"
+    try:
+        baseline_text = Git(root, runner).show(request.baseline_ref, baseline_file)
+    except MissingToolError:
+        raise
+    except ExternalCommandError as exc:
+        raise UpgradeError(
+            f"cannot read baseline {request.baseline_ref}:{baseline_file.as_posix()}: "
+            f"{exc.stderr.strip()}"
+        ) from exc
+    try:
+        baseline_doc = parse_yaml_mapping(baseline_text, source="baseline Chart.yaml")
+        current = load_yaml_file(chart_path / "Chart.yaml")
+    except YamlError as exc:
+        raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
+    baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
+    current_version = _semver(current.get("version"), source="current wrapper version")
+    updates = tuple(
+        dict.fromkeys(tuple(request.updates) + _updates_from_data(request.update_data))
+    )
+    if not updates:
+        # Renovate passed no callback metadata, so the update set is
+        # reconstructed from the Chart.yaml diff. That inference decides the
+        # bump and the changelog body, and it cannot see an image update
+        # made outside `dependencies:` -- worth a line when it fires.
+        updates = _chart_dependency_diff(baseline_doc, current)
+        _LOG.warning(
+            "no Renovate update metadata; inferring updates from the Chart.yaml "
+            "dependency diff: chart=%s inferred=%d",
             chart_path.name,
-            chart_rel.as_posix(),
-            request.baseline_ref,
-            len(request.updates),
-            request.dry_run,
+            len(updates),
         )
-        baseline_text = self._baseline.read(root, request.baseline_ref, chart_rel / "Chart.yaml")
-        try:
-            baseline_doc = parse_yaml_mapping(baseline_text, source="baseline Chart.yaml")
-            current = load_yaml_file(chart_path / "Chart.yaml")
-        except YamlError as exc:
-            raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
-        baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
-        current_version = _semver(current.get("version"), source="current wrapper version")
-        updates = tuple(
-            dict.fromkeys(tuple(request.updates) + _updates_from_data(request.update_data))
-        )
-        if not updates:
-            # Renovate passed no callback metadata, so the update set is
-            # reconstructed from the Chart.yaml diff. That inference decides the
-            # bump and the changelog body, and it cannot see an image update
-            # made outside `dependencies:` -- worth a line when it fires.
-            updates = _chart_dependency_diff(baseline_doc, current)
-            _LOG.warning(
-                "no Renovate update metadata; inferring updates from the Chart.yaml "
-                "dependency diff: chart=%s inferred=%d",
-                chart_path.name,
-                len(updates),
-            )
-        qualifying = tuple(update for update in updates if update.qualifies)
-        for update in qualifying:
-            if not update.dependency or not update.current_version or not update.new_version:
-                raise UpgradeError(
-                    "qualifying Renovate updates require dependency, currentValue, "
-                    "and newValue metadata"
-                )
-        if not qualifying:
-            if current_version != baseline_version:
-                raise UpgradeError(
-                    "wrapper version diverged from baseline without a qualifying "
-                    f"image or Helm dependency update: {current_version}"
-                )
-            _LOG.info(
-                "upgrade finalize finished: chart=%s version=%s bump=none changed=False "
-                "(no qualifying update)",
-                chart_path.name,
-                current_version,
-            )
-            return FinalizeResult(
-                chart=chart_path.name,
-                previous_version=str(baseline_version),
-                version=str(current_version),
-                bump=None,
-                changed=False,
-                updates=updates,
-            )
-        major = any(_is_major(update) for update in qualifying)
-        target_version = (
-            SemVer(baseline_version.major + 1, 0, 0)
-            if major
-            else SemVer(baseline_version.major, baseline_version.minor, baseline_version.patch + 1)
-        )
-        baseline_value = str(baseline_version)
-        target = str(target_version)
-        if current_version not in {baseline_version, target_version}:
+    qualifying = tuple(update for update in updates if update.qualifies)
+    for update in qualifying:
+        if not update.dependency or not update.current_version or not update.new_version:
             raise UpgradeError(
-                f"wrapper version diverged from baseline {baseline_value} and target {target}: "
-                f"{current_version}"
+                "qualifying Renovate updates require dependency, currentValue, "
+                "and newValue metadata"
             )
-        heading = request.target_heading or f"## {target}"
-        chart_changed = current_version != target_version
-        chart_file = safe_output_path(chart_path, "Chart.yaml")
-        changelog_file = safe_output_path(chart_path, "changelog.md")
-        old_changelog = (
-            changelog_file.read_text(encoding="utf-8") if changelog_file.exists() else ""
-        )
-        entry = _changelog_entry(heading, qualifying)
-        new_changelog = _apply_changelog_entry(old_changelog, heading, entry)
-        changelog_changed = new_changelog != old_changelog
-        if not request.dry_run:
-            if chart_changed:
-                def update_version(documents: list[Any]) -> None:
-                    if len(documents) != 1 or not isinstance(documents[0], dict):
-                        raise YamlError("current Chart.yaml must contain one mapping document")
-                    documents[0]["version"] = target
-
-                try:
-                    edit_yaml_documents(chart_file, update_version)
-                except YamlError as exc:
-                    raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
-            if changelog_changed:
-                changelog_file.write_text(new_changelog, encoding="utf-8")
-        files = tuple(
-            path
-            for changed, path in (
-                (chart_changed, chart_file),
-                (changelog_changed, changelog_file),
+    if not qualifying:
+        if current_version != baseline_version:
+            raise UpgradeError(
+                "wrapper version diverged from baseline without a qualifying "
+                f"image or Helm dependency update: {current_version}"
             )
-            if changed
-        )
         _LOG.info(
-            "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
-            "changed=%s files=%d qualifying=%d dry_run=%s",
+            "upgrade finalize finished: chart=%s version=%s bump=none changed=False "
+            "(no qualifying update)",
             chart_path.name,
-            baseline_value,
-            target,
-            "major" if major else "patch",
-            bool(files),
-            len(files),
-            len(qualifying),
-            request.dry_run,
+            current_version,
         )
         return FinalizeResult(
             chart=chart_path.name,
-            previous_version=baseline_value,
-            version=target,
-            bump="major" if major else "patch",
-            changed=bool(files),
-            files=files,
-            updates=qualifying,
+            previous_version=str(baseline_version),
+            version=str(current_version),
+            bump=None,
+            changed=False,
+            updates=updates,
         )
+    major = any(_is_major(update) for update in qualifying)
+    target_version = (
+        SemVer(baseline_version.major + 1, 0, 0)
+        if major
+        else SemVer(baseline_version.major, baseline_version.minor, baseline_version.patch + 1)
+    )
+    baseline_value = str(baseline_version)
+    target = str(target_version)
+    if current_version not in {baseline_version, target_version}:
+        raise UpgradeError(
+            f"wrapper version diverged from baseline {baseline_value} and target {target}: "
+            f"{current_version}"
+        )
+    heading = request.target_heading or f"## {target}"
+    chart_changed = current_version != target_version
+    chart_file = safe_output_path(chart_path, "Chart.yaml")
+    changelog_file = safe_output_path(chart_path, "changelog.md")
+    old_changelog = (
+        changelog_file.read_text(encoding="utf-8") if changelog_file.exists() else ""
+    )
+    entry = _changelog_entry(heading, qualifying)
+    new_changelog = _apply_changelog_entry(old_changelog, heading, entry)
+    changelog_changed = new_changelog != old_changelog
+    if not request.dry_run:
+        if chart_changed:
+            def update_version(documents: list[Any]) -> None:
+                if len(documents) != 1 or not isinstance(documents[0], dict):
+                    raise YamlError("current Chart.yaml must contain one mapping document")
+                documents[0]["version"] = target
+
+            try:
+                edit_yaml_documents(chart_file, update_version)
+            except YamlError as exc:
+                raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
+        if changelog_changed:
+            changelog_file.write_text(new_changelog, encoding="utf-8")
+    files = tuple(
+        path
+        for changed, path in (
+            (chart_changed, chart_file),
+            (changelog_changed, changelog_file),
+        )
+        if changed
+    )
+    _LOG.info(
+        "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
+        "changed=%s files=%d qualifying=%d dry_run=%s",
+        chart_path.name,
+        baseline_value,
+        target,
+        "major" if major else "patch",
+        bool(files),
+        len(files),
+        len(qualifying),
+        request.dry_run,
+    )
+    return FinalizeResult(
+        chart=chart_path.name,
+        previous_version=baseline_value,
+        version=target,
+        bump="major" if major else "patch",
+        changed=bool(files),
+        files=files,
+        updates=qualifying,
+    )
 
 
 def _is_major(update: UpdateMetadata) -> bool:

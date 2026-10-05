@@ -1,20 +1,25 @@
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-from chart_manager.commands.upgrade import FinalizeRequest, UpdateMetadata, UpgradeError
-from chart_manager.commands.upgrade.finalize import UpgradeFinalizer, load_update_data
-from tests.conftest import workspace_for
+from chart_manager.commands.upgrade import (
+    FinalizeRequest,
+    FinalizeResult,
+    UpdateMetadata,
+    UpgradeError,
+    finalize,
+)
+from chart_manager.commands.upgrade.finalize import load_update_data
+from tests.conftest import FakeCommandRunner, workspace_for
 
 
-class Baseline:
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-    def read(self, root: Path, revision: str, relative_path: Path) -> str:
-        assert revision == "abc123"
-        assert relative_path == Path("charts/demo/Chart.yaml")
-        return self.text
+def _finalize(tmp_path: Path, baseline: str, request: FinalizeRequest) -> FinalizeResult:
+    """Run finalize with `baseline` as the chart's Chart.yaml at revision abc123."""
+    runner = FakeCommandRunner(returncode=128, stderr="fatal: unexpected git call").respond(
+        ("git", "show", "abc123:charts/demo/Chart.yaml"), stdout=baseline
+    )
+    return finalize.run(request, workspace=workspace_for(tmp_path), runner=runner)
 
 
 def _write_chart(tmp_path: Path, *, version: str = "1.2.3", dependency: str = "2.4.0") -> Path:
@@ -49,7 +54,9 @@ def test_major_image_update_changes_only_the_quoted_wrapper_version(tmp_path: Pa
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("api", "2.9.0", "3.0.0", datasource="docker")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+    result = _finalize(
+        tmp_path,
+        baseline,
         _request(tmp_path, chart, (update,))
     )
     written = (chart / "Chart.yaml").read_text(encoding="utf-8")
@@ -65,10 +72,10 @@ def test_minor_update_bumps_patch_once_on_replay(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("api", "2.9.0", "2.10.0", datasource="docker")
-    finalizer = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path))
+    finalizer = partial(_finalize, tmp_path, baseline)
     request = _request(tmp_path, chart, (update,))
-    assert finalizer.finalize(request).version == "1.2.4"
-    replay = finalizer.finalize(request)
+    assert finalizer(request).version == "1.2.4"
+    replay = finalizer(request)
     assert replay.version == "1.2.4"
     assert replay.changed is False
     assert (chart / "changelog.md").read_text(encoding="utf-8").count("## 1.2.4") == 1
@@ -77,15 +84,15 @@ def test_minor_update_bumps_patch_once_on_replay(tmp_path: Path) -> None:
 def test_newer_update_on_open_branch_rewrites_the_same_section(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
-    finalizer = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path))
+    finalizer = partial(_finalize, tmp_path, baseline)
     (chart / "changelog.md").write_text("## 1.2.3\n\n- api: 2.8.0 -> 2.9.0\n\n", encoding="utf-8")
-    first = finalizer.finalize(
+    first = finalizer(
         _request(tmp_path, chart, (UpdateMetadata("api", "2.9.0", "2.10.0", datasource="docker"),))
     )
     assert first.version == "1.2.4"
     # Renovate commits a newer value onto the still-open branch. The baseline
     # has not moved, so the heading stays 1.2.4 and only the body changes.
-    second = finalizer.finalize(
+    second = finalizer(
         _request(tmp_path, chart, (UpdateMetadata("api", "2.9.0", "2.11.0", datasource="docker"),))
     )
     assert second.changed is True
@@ -117,7 +124,9 @@ def test_package_file_is_captured_without_changing_deduplication(tmp_path: Path)
             },
         ]
     }
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+    result = _finalize(
+        tmp_path,
+        baseline,
         FinalizeRequest(repo_root=tmp_path, chart_path=chart, update_data=data, baseline_ref="abc123")
     )
 
@@ -131,7 +140,9 @@ def test_package_file_is_captured_without_changing_deduplication(tmp_path: Path)
 def test_dependency_diff_is_reliable_fallback_and_major(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path, dependency="3.0.0")
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("3.0.0", "2.4.0")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+    result = _finalize(
+        tmp_path,
+        baseline,
         _request(tmp_path, chart, ())
     )
     assert result.version == "2.0.0"
@@ -142,7 +153,9 @@ def test_no_qualifying_change_does_not_bump(tmp_path: Path) -> None:
     chart = _write_chart(tmp_path)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("python", "1.0.0", "2.0.0", manager="pep621", datasource="pypi")
-    result = UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+    result = _finalize(
+        tmp_path,
+        baseline,
         _request(tmp_path, chart, (update,))
     )
     assert result.bump is None
@@ -155,7 +168,9 @@ def test_refuses_divergent_wrapper_version(tmp_path: Path) -> None:
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8").replace("9.9.9", "1.2.3")
     update = UpdateMetadata("api", "2.0.0", "2.1.0", datasource="docker")
     with pytest.raises(UpgradeError, match="diverged"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _finalize(
+        tmp_path,
+        baseline,
             _request(tmp_path, chart, (update,))
         )
 
@@ -165,7 +180,9 @@ def test_refuses_a_wrapper_version_with_leading_zeros(tmp_path: Path, version: s
     chart = _write_chart(tmp_path, version=version)
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _finalize(
+        tmp_path,
+        baseline,
             _request(tmp_path, chart, ())
         )
 
@@ -194,6 +211,21 @@ def test_rejects_incomplete_qualifying_update_metadata(tmp_path: Path) -> None:
     baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
     update = UpdateMetadata("", "1.0.0", "2.0.0", datasource="docker")
     with pytest.raises(UpgradeError, match="require dependency"):
-        UpgradeFinalizer(Baseline(baseline), workspace=workspace_for(tmp_path)).finalize(
+        _finalize(
+        tmp_path,
+        baseline,
             _request(tmp_path, chart, (update,))
         )
+
+
+def test_an_unreadable_baseline_is_an_upgrade_error(tmp_path: Path) -> None:
+    chart = _write_chart(tmp_path)
+    runner = FakeCommandRunner(returncode=128, stderr="fatal: invalid object name 'HEAD'")
+
+    with pytest.raises(UpgradeError, match="cannot read baseline"):
+        finalize.run(
+            FinalizeRequest(repo_root=tmp_path, chart_path=chart),
+            workspace=workspace_for(tmp_path),
+            runner=runner,
+        )
+    assert runner.calls == [("git", "show", "HEAD:charts/demo/Chart.yaml")]

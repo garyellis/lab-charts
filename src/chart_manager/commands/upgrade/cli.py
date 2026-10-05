@@ -1,9 +1,6 @@
-"""CLI surface for Renovate-driven wrapper-chart upgrades.
+"""`chart upgrade` and the hidden `upgrade-finalize`: flags, output encoding and rendering.
 
-The service owns discovery, preflight, isolated worktree mutation, and PR
-idempotency. `commands/upgrade/wire.py` owns the machine-readable
-contract. This module owns only Typer's flag shape, the encoder settings, and
-the human-readable rendering.
+`commands/upgrade/wire.py` owns the machine-readable contract.
 """
 
 from __future__ import annotations
@@ -11,23 +8,20 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any
 
 import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root
+from chart_manager.commands.upgrade import finalize
 from chart_manager.commands.upgrade.finalize import load_update_data
-from chart_manager.commands.upgrade.models import (
-    FinalizeRequest,
-    FinalizeResult,
-    UpgradeRequest,
-    UpgradeResult,
-)
+from chart_manager.commands.upgrade.models import FinalizeRequest, UpgradeRequest
+from chart_manager.commands.upgrade.run import run
 from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.shared.charts.chart import resolve_chart_target
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: `upgrade-finalize`'s vocabulary, and ONLY its vocabulary.
 #:
@@ -49,28 +43,6 @@ _CALLBACK_DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
 #: The public command's vocabulary, from the shared table in `cli/output.py`.
 #: `table` is what `text` was called.
 _UPGRADE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
-
-
-class _UpgradeService(Protocol):
-    def upgrade(self, request: UpgradeRequest) -> UpgradeResult:
-        """Plan and execute one chart upgrade."""
-        ...
-
-
-class _FinalizeService(Protocol):
-    def finalize(self, request: FinalizeRequest) -> FinalizeResult:
-        """Finalize a Renovate callback."""
-        ...
-
-
-def _make_upgrade_service(root: Path) -> _UpgradeService:
-    """Build the public upgrade service through the composition root."""
-    return _container().upgrade_service(root)
-
-
-def _make_finalize_service(root: Path) -> _FinalizeService:
-    """Build the internal callback service through the composition root."""
-    return _container().upgrade_finalizer(root)
 
 
 def _format_choice(value: str) -> str:
@@ -117,14 +89,22 @@ def upgrade(
 ) -> None:
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
     mode = output_mod.resolve(output, ctx, allowed=_UPGRADE_OUTPUTS)
-    root = repository_root()
-    result = _make_upgrade_service(root).upgrade(
-        UpgradeRequest(root=root, chart_path=_chart_path(chart, path, root=root), dry_run=dry_run)
+    container = _container()
+    workspace = container.workspace()
+    result = run(
+        UpgradeRequest(
+            root=workspace.root,
+            chart_path=_chart_path(chart, path, workspace=workspace),
+            dry_run=dry_run,
+        ),
+        workspace=workspace,
+        runner=container.command_runner(),
+        events=container.event_writer(),
     )
     _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
 
 
-def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
+def _chart_path(chart: str | None, path: Path | None, *, workspace: RepositoryWorkspace) -> Path:
     """Resolve the one chart this invocation names, however it was spelled.
 
     `--path` is the frozen-in-muscle-memory spelling and stays verbatim: it
@@ -139,7 +119,7 @@ def _chart_path(chart: str | None, path: Path | None, *, root: Path) -> Path:
     if path is not None:
         return path
     assert chart is not None
-    return resolve_chart_target(_container().workspace(root), chart).path.relative_to(root)
+    return resolve_chart_target(workspace, chart).path.relative_to(workspace.root)
 
 
 def upgrade_finalize(
@@ -157,10 +137,13 @@ def upgrade_finalize(
     """Finalize the Renovate callback (internal; invoked by trusted configuration)."""
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
-    root = repository_root()
+    container = _container()
+    workspace = container.workspace()
     update_data = load_update_data(data_file)
-    result = _make_finalize_service(root).finalize(
-        FinalizeRequest(repo_root=root, chart_path=path, update_data=update_data)
+    result = finalize.run(
+        FinalizeRequest(repo_root=workspace.root, chart_path=path, update_data=update_data),
+        workspace=workspace,
+        runner=container.command_runner(),
     )
     _emit(finalize_to_dict(result, chart_path=path), as_json=format == "json")
 
@@ -236,8 +219,6 @@ def register_finalize(app: typer.Typer) -> None:
 
 
 __all__ = [
-    "_make_finalize_service",
-    "_make_upgrade_service",
     "register_finalize",
     "register_upgrade",
     "upgrade",

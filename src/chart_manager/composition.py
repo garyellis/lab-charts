@@ -41,25 +41,17 @@ non-fatal telemetry to before its try/except, which would be a behavior change.
 
 Test seams
 ----------
-Surfaces keep their module-level `_make_*` factories (see
-`commands/upgrade/cli.py`, `cli/doctor.py`) and delegate the body to a
-container. Tests that `monkeypatch.setattr(module, "_make_x_service", ...)`
-keep working unchanged; tests that want real services with fake adapters can
-subclass `Container` or pass a `Settings`.
+Surfaces keep their module-level `_make_*` factories (see `cli/doctor.py`)
+and delegate the body to a container. Tests that
+`monkeypatch.setattr(module, "_make_x_service", ...)` keep working unchanged;
+tests that want real services with fake adapters can subclass `Container` or
+pass a `Settings`.
 """
 
 from __future__ import annotations
 
-import os
-import re
-from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
-from chart_manager.commands.upgrade.finalize import GitBaselineReader, UpgradeFinalizer
-from chart_manager.commands.upgrade.models import UpgradePlan
-from chart_manager.commands.upgrade.run import PullRequestLike, UpgradeService
-from chart_manager.commands.upgrade.telemetry import UpgradeTelemetry
 from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
@@ -70,9 +62,9 @@ from chart_manager.integrations.kubeconform import (
 )
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.integrations.kyverno import Kyverno
-from chart_manager.integrations.renovate import Renovate, RenovateRequest
+from chart_manager.integrations.renovate import Renovate
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import ChartManagerError, WorkspaceNotFoundError
+from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.events.store import preflight_event_store
@@ -226,86 +218,3 @@ class Container:
         `chart list` from a different directory than `plan` selected against.
         """
         return ChartCatalogService(workspace=self.workspace(root))
-
-    def upgrade_service(self, root: Path) -> UpgradeService:
-        """Build the chart-scoped Renovate orchestrator with one shared runner.
-
-        Gets the same memoized writer as the promotion services: `PR_OPEN` is
-        the *start* of the build timeline whose `merged`/`published` phases CI
-        emits through `chart-manager event emit build`, so it has to land on the
-        same store or the timeline is split across two backends.
-        """
-        workspace = self.workspace(root)
-        resolved_root = workspace.root
-        renovate = Renovate(self.command_runner())
-        repository = self._repository_slug(resolved_root)
-        github = Github(resolved_root, self.command_runner())
-
-        def request_factory(plan: UpgradePlan, *, dry_run: bool) -> RenovateRequest:
-            chart_config = plan.chart_path / "renovate.json"
-            return RenovateRequest(
-                repo_root=plan.repo_root,
-                repository=repository,
-                global_config_path=resolved_root / "renovate-global.json",
-                additional_config_path=chart_config if chart_config.is_file() else None,
-                runtime_overlay=plan.runtime_overlay,
-                dry_run="full" if dry_run else None,
-                # Renovate names this setting RENOVATE_TOKEN, while GitHub
-                # Actions exposes its repository token as GITHUB_TOKEN. Honor
-                # the explicit Renovate name first and use the standard CI
-                # token as the composition-boundary fallback.
-                token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
-            )
-
-        def relevant_changes(paths: Sequence[Path]) -> Sequence[str]:
-            args = ["git", "status", "--porcelain=v1", "--untracked-files=all", "--"]
-            args.extend(str(path.relative_to(resolved_root)) for path in paths)
-            result = self.command_runner().run(args, cwd=resolved_root)
-            return tuple(
-                line[3:].strip()
-                for line in result.stdout.splitlines()
-                if len(line) > 3 and line[3:].strip()
-            )
-
-        def pull_request_lookup(branch_prefix: str) -> Sequence[PullRequestLike]:
-            return cast(
-                Sequence[PullRequestLike],
-                github.find_open_prs_for_branch_prefix(branch_prefix),
-            )
-
-        return UpgradeService(
-            renovate=renovate,
-            request_factory=request_factory,
-            pull_request_lookup=pull_request_lookup,
-            relevant_changes=relevant_changes,
-            branch_file_reader=github.read_file_at_ref,
-            repository=repository,
-            telemetry=UpgradeTelemetry(writer=self.event_writer()),
-            workspace=workspace,
-        )
-
-    def upgrade_finalizer(self, root: Path) -> UpgradeFinalizer:
-        """Build the trusted callback finalizer with the shared git runner."""
-        return UpgradeFinalizer(
-            baseline=GitBaselineReader(self.command_runner()),
-            workspace=self.workspace(root),
-        )
-
-    def _repository_slug(self, root: Path) -> str:
-        """Read owner/repository from CI metadata or the configured origin."""
-        configured = os.environ.get("GITHUB_REPOSITORY")
-        if configured:
-            return configured
-        result = self.command_runner().run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=root,
-            check=False,
-        )
-        remote = result.stdout.strip()
-        match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", remote)
-        if result.returncode or match is None:
-            raise ChartManagerError(
-                "cannot determine Renovate repository; configure an origin remote "
-                "or set GITHUB_REPOSITORY"
-            )
-        return match.group(1)
