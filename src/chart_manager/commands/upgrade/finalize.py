@@ -34,6 +34,7 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 _LOG = logging.getLogger(__name__)
 
 _HEADING = re.compile(r"^##\s")
+_BASELINE_REF = "HEAD"
 
 
 def _semver(value: object, *, source: str) -> SemVer:
@@ -43,9 +44,7 @@ def _semver(value: object, *, source: str) -> SemVer:
         raise UpgradeError(f"{source} must be a strict x.y.z version, got {value!r}") from exc
 
 
-def _updates_from_data(data: Mapping[str, Any] | None) -> tuple[UpdateMetadata, ...]:
-    if data is None:
-        return ()
+def _updates_from_data(data: Mapping[str, Any]) -> tuple[UpdateMetadata, ...]:
     raw: object = data.get("updates", data.get("deps", data.get("dependencies", ())))
     if isinstance(raw, Mapping):
         raw = [raw]
@@ -107,22 +106,19 @@ def run(
     )
     chart_rel = chart_path.relative_to(root)
     _LOG.info(
-        "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=%d "
-        "dry_run=%s",
+        "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=0 dry_run=False",
         chart_path.name,
         chart_rel.as_posix(),
-        request.baseline_ref,
-        len(request.updates),
-        request.dry_run,
+        _BASELINE_REF,
     )
     baseline_file = chart_rel / "Chart.yaml"
     try:
-        baseline_text = Git(root, runner).show(request.baseline_ref, baseline_file)
+        baseline_text = Git(root, runner).show(_BASELINE_REF, baseline_file)
     except MissingToolError:
         raise
     except ExternalCommandError as exc:
         raise UpgradeError(
-            f"cannot read baseline {request.baseline_ref}:{baseline_file.as_posix()}: "
+            f"cannot read baseline {_BASELINE_REF}:{baseline_file.as_posix()}: "
             f"{exc.stderr.strip()}"
         ) from exc
     try:
@@ -132,9 +128,7 @@ def run(
         raise UpgradeError(f"invalid current or baseline Chart.yaml: {exc}") from exc
     baseline_version = _semver(baseline_doc.get("version"), source="baseline wrapper version")
     current_version = _semver(current.get("version"), source="current wrapper version")
-    updates = tuple(
-        dict.fromkeys(tuple(request.updates) + _updates_from_data(request.update_data))
-    )
+    updates = tuple(dict.fromkeys(_updates_from_data(request.update_data)))
     if not updates:
         # Renovate passed no callback metadata, so the update set is
         # reconstructed from the Chart.yaml diff. That inference decides the
@@ -187,7 +181,7 @@ def run(
             f"wrapper version diverged from baseline {baseline_value} and target {target}: "
             f"{current_version}"
         )
-    heading = request.target_heading or f"## {target}"
+    heading = f"## {target}"
     chart_changed = current_version != target_version
     chart_file = safe_output_path(chart_path, "Chart.yaml")
     changelog_file = safe_output_path(chart_path, "changelog.md")
@@ -197,19 +191,18 @@ def run(
     entry = _changelog_entry(heading, qualifying)
     new_changelog = _apply_changelog_entry(old_changelog, heading, entry)
     changelog_changed = new_changelog != old_changelog
-    if not request.dry_run:
-        if chart_changed:
-            def update_version(documents: list[Any]) -> None:
-                if len(documents) != 1 or not isinstance(documents[0], dict):
-                    raise YamlError("current Chart.yaml must contain one mapping document")
-                documents[0]["version"] = target
+    if chart_changed:
+        def update_version(documents: list[Any]) -> None:
+            if len(documents) != 1 or not isinstance(documents[0], dict):
+                raise YamlError("current Chart.yaml must contain one mapping document")
+            documents[0]["version"] = target
 
-            try:
-                edit_yaml_documents(chart_file, update_version)
-            except YamlError as exc:
-                raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
-        if changelog_changed:
-            changelog_file.write_text(new_changelog, encoding="utf-8")
+        try:
+            edit_yaml_documents(chart_file, update_version)
+        except YamlError as exc:
+            raise UpgradeError(f"invalid current Chart.yaml: {exc}") from exc
+    if changelog_changed:
+        changelog_file.write_text(new_changelog, encoding="utf-8")
     files = tuple(
         path
         for changed, path in (
@@ -220,7 +213,7 @@ def run(
     )
     _LOG.info(
         "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
-        "changed=%s files=%d qualifying=%d dry_run=%s",
+        "changed=%s files=%d qualifying=%d dry_run=False",
         chart_path.name,
         baseline_value,
         target,
@@ -228,7 +221,6 @@ def run(
         bool(files),
         len(files),
         len(qualifying),
-        request.dry_run,
     )
     return FinalizeResult(
         chart=chart_path.name,

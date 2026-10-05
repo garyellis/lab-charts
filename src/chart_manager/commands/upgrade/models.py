@@ -120,15 +120,11 @@ class UpdateMetadata:
 
 @dataclass(frozen=True)
 class FinalizeRequest:
-    """Finalize Renovate-authored files relative to a known baseline."""
+    """Finalize Renovate's edits to one chart against its Chart.yaml at HEAD."""
 
     repo_root: Path
     chart_path: Path
-    updates: tuple[UpdateMetadata, ...] = ()
-    update_data: Mapping[str, Any] | None = None
-    baseline_ref: str = "HEAD"
-    target_heading: str | None = None
-    dry_run: bool = False
+    update_data: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
