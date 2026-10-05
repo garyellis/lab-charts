@@ -138,7 +138,7 @@ def run(
     )
     chart_rel = chart_path.relative_to(root)
     _LOG.info(
-        "upgrade finalize started: chart=%s path=%s baseline_ref=%s updates=0 dry_run=False",
+        "upgrade finalize started: chart=%s path=%s baseline_ref=%s",
         chart_path.name,
         chart_rel.as_posix(),
         _BASELINE_REF,
@@ -190,7 +190,7 @@ def run(
     chart_changed, changelog_changed = _write(chart_path, current_version, bump)
     _LOG.info(
         "upgrade finalize finished: chart=%s previous=%s version=%s bump=%s "
-        "changed=%s files=%d qualifying=%d dry_run=False",
+        "changed=%s files=%d qualifying=%d",
         chart_path.name,
         bump.previous,
         bump.target,
