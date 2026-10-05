@@ -47,7 +47,6 @@ class UpgradeResult:
     outcome: UpgradeStatus
     diagnostics: tuple[str, ...] = ()
     repository: str | None = None
-    base: str | None = None
     pr_url: str | None = None
     pr_number: int | None = None
 

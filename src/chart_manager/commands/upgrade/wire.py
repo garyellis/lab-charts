@@ -40,7 +40,6 @@ def upgrade_to_dict(result: UpgradeResult) -> dict[str, Any]:
     """Project an `UpgradeResult` onto the wire payload."""
     return _payload(
         repository=result.repository,
-        base=result.base,
         chart=result.chart,
         path=result.chart_path,
         current_wrapper_version=result.current_version,
@@ -67,7 +66,6 @@ def finalize_to_dict(result: FinalizeResult, *, chart_path: Path) -> dict[str, A
     """
     return _payload(
         repository=None,
-        base=None,
         chart=result.chart,
         path=chart_path,
         current_wrapper_version=result.previous_version,
@@ -82,7 +80,6 @@ def finalize_to_dict(result: FinalizeResult, *, chart_path: Path) -> dict[str, A
 def _payload(
     *,
     repository: str | None,
-    base: str | None,
     chart: str,
     path: Path,
     current_wrapper_version: str | None,
@@ -95,7 +92,7 @@ def _payload(
     """Assemble the one payload shape both projections must produce."""
     return {
         "repository": repository,
-        "base": base,
+        "base": None,
         "chart": chart,
         "path": path.as_posix(),
         "current_wrapper_version": current_wrapper_version,

@@ -27,7 +27,6 @@ OPENED = UpgradeResult(
     pr_url="https://example.test/pull/7",
     pr_number=7,
     repository="owner/repository",
-    base="main",
 )
 UPDATED = FinalizeResult(
     chart="loki", previous_version="1.2.3", version="2.0.0", bump="major", changed=True
@@ -85,7 +84,7 @@ def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
     # Byte-identical: `-o json` is read by CI steps and jq, so key order,
     # separators and the trailing newline are all part of the contract.
     assert result.stdout == (
-        '{"base":"main","branch":"renovate/loki","chart":"loki",'
+        '{"base":null,"branch":"renovate/loki","chart":"loki",'
         '"current_wrapper_version":"1.2.3",'
         '"diagnostics":["registry lookup retried"],"outcome":"pr_open",'
         '"path":"charts/loki","proposed_wrapper_version":"1.2.4",'
@@ -108,7 +107,7 @@ def test_upgrade_table_renders_every_field_in_a_fixed_order(
     assert result.exit_code == 0
     assert result.stdout == (
         "repository: owner/repository\n"
-        "base: main\n"
+        "base: -\n"
         "chart: loki\n"
         "path: charts/loki\n"
         "current wrapper version: 1.2.3\n"
