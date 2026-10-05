@@ -513,8 +513,7 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
 
     Deliberately offers no `app=` override. `_COMMAND_PATHS` is expressed in
     *root-app* paths, and a module that assembles a partial app from a
-    `cli/*.py` `register()` function (`tests/test_cli_upgrade.py`,
-    `tests/commands/promote/test_cli.py`) registers
+    `cli/*.py` `register()` function (`tests/test_cli_upgrade.py`) registers
     those commands flat, with no group above them. Mid-migration, when an
     entry is non-identity, translating a root path into such an app would
     rewrite e.g. `publish` to `chart publish` against an app where only

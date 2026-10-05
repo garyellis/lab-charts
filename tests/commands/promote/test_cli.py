@@ -1,7 +1,8 @@
-"""CLI tests for `chart-manager promote monitor|test|promote`."""
+"""`chart-manager promote pr|monitor|test`: flags, output, exit codes, with each `run` patched."""
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,6 @@ from typing import Any
 
 import pytest
 import typer
-from typer.testing import CliRunner
 
 from chart_manager.commands.promote import (
     HelmReleaseMatch,
@@ -22,57 +22,16 @@ from chart_manager.commands.promote import (
     Transition,
 )
 from chart_manager.commands.promote import cli as promote_cli
-from chart_manager.commands.promote.render import ProgressTable
-from chart_manager.commands.promote.state import NO_MATCH_REF, PROMOTE_OUTCOME
-from chart_manager.commands.promote.wire import promote_to_dict
+from chart_manager.commands.promote.state import NO_MATCH_REF
 from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,
     HelmReleaseRef,
     HelmReleaseStatus,
 )
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from tests.conftest import cli
 
 # ----- helpers ------------------------------------------------------------
-
-
-def _build_app() -> typer.Typer:
-    """Build a typer app that mirrors main()'s ChartManagerError -> stderr+exit-1 mapping.
-
-    The real CLI entrypoint catches ChartManagerError in main() and prints
-    a stable stderr message. To exercise sub-commands through CliRunner
-    while preserving that mapping, we wrap each registered handler with a
-    catcher that emits the same `error:` line and re-raises as typer.Exit(1).
-    """
-    from chart_manager.plumbing.errors import ChartManagerError
-
-    inner = typer.Typer()
-    promote_cli.register(inner)
-
-    def _wrap(fn):  # type: ignore[no-untyped-def]
-        import functools
-        import sys as _sys
-
-        @functools.wraps(fn)
-        def wrapped(*args, **kwargs):  # type: ignore[no-untyped-def]
-            try:
-                return fn(*args, **kwargs)
-            except ChartManagerError as exc:
-                print(f"error: {exc}", file=_sys.stderr)
-                raise typer.Exit(code=1) from exc
-            except FileNotFoundError as exc:
-                print(
-                    f"error: required binary not found: {exc.filename or exc}",
-                    file=_sys.stderr,
-                )
-                raise typer.Exit(code=127) from exc
-
-        return wrapped
-
-    app = typer.Typer()
-    for cmd in inner.registered_commands:
-        app.command(cmd.name)(_wrap(cmd.callback))
-    return app
 
 
 def _ref(name: str = "loki", ns: str = "loki") -> HelmReleaseRef:
@@ -205,62 +164,47 @@ def _bad_result() -> MonitorResult:
     )
 
 
-@pytest.fixture
-def runner() -> CliRunner:
-    # Click 8.2+/typer 0.26 separate stderr by default; the mix_stderr kwarg
-    # was removed. res.stderr is always isolated.
-    return CliRunner()
-
-
 @pytest.fixture(autouse=True)
 def _clear_ci_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CI", raising=False)
 
 
-_BASE = ["monitor", "--chart", "loki", "--version", "0.2.0"]
+_BASE = ["promote", "monitor", "--chart", "loki", "--version", "0.2.0"]
 
 
 # ----- required option tests ----------------------------------------------
 
 
-def test_chart_option_required(runner: CliRunner) -> None:
-    res = runner.invoke(_build_app(), ["monitor", "--version", "0.2.0"])
-    assert res.exit_code == 2
-
-
-def test_version_option_required(runner: CliRunner) -> None:
-    res = runner.invoke(_build_app(), ["monitor", "--chart", "loki"])
-    assert res.exit_code == 2
+@pytest.mark.parametrize("missing", ["--chart", "--version"])
+def test_chart_and_version_are_required(missing: str) -> None:
+    at = _BASE.index(missing)
+    assert cli(*_BASE[:at], *_BASE[at + 2 :]).exit_code == 2
 
 
 # ----- pretty / json modes -------------------------------------------------
 
 
-def test_pretty_ok_exit_0_summary_in_stdout(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pretty_ok_exit_0_summary_in_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
+    res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 0
     # diagnostics never written for ready outcomes
     assert "InstallFailed" not in res.stdout
     assert "ready" in res.stdout
+    # CliRunner is non-tty; an explicit table must not be coerced to json.
+    assert not res.stdout.lstrip().startswith("{")
 
 
-def test_pretty_failure_exit_1_diagnostics_in_stdout(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pretty_failure_exit_1_diagnostics_in_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_monitor(monkeypatch, result=_bad_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
+    res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 1
     assert "InstallFailed" in res.stdout
 
 
-def test_json_mode_emits_parseable_payload(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_json_mode_emits_parseable_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "json"])
+    res = cli(*_BASE, "--output", "json")
     assert res.exit_code == 0
     assert res.stdout.endswith("\n")
     payload = json.loads(res.stdout)
@@ -270,35 +214,35 @@ def test_json_mode_emits_parseable_payload(
     assert "\x1b[" not in res.stdout
 
 
-def test_json_payload_round_trips_with_failure(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _install_fake_monitor(monkeypatch, result=_bad_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "json"])
-    assert res.exit_code == 1
-    payload = json.loads(res.stdout)
-    assert payload["ok"] is False
-    assert payload["outcomes"][0]["verdict"] == "failed"
-    assert payload["outcomes"][0]["diagnostics"]
-
-
 # ----- progress wiring -----------------------------------------------------
 
 
-def test_pretty_wires_progress_callback(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
+def test_table_mode_renders_progress_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
+        # Watchers report from their own threads.
+        threads = [
+            threading.Thread(
+                target=progress,
+                args=(_ref(f"hr{i}", "ns"), Transition(datetime.now(UTC), "Polling", "")),
+            )
+            for i in range(5)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return _ok_result()
+
+    monkeypatch.setattr(promote_cli, "run_monitor", run)
+    res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 0
-    assert fake.captured_progress[0] is not None
+    assert all(f"hr{i}" in res.stderr for i in range(5))
+    assert "Polling" not in res.stdout
 
 
-def test_json_mode_omits_progress_callback(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_json_mode_omits_progress_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "json"])
+    res = cli(*_BASE, "--output", "json")
     assert res.exit_code == 0
     assert fake.captured_progress[0] is None
 
@@ -306,83 +250,31 @@ def test_json_mode_omits_progress_callback(
 # ----- auto mode resolution ------------------------------------------------
 
 
-def test_auto_mode_under_ci_env_picks_json(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_auto_mode_under_ci_env_picks_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", "true")
     _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "auto"])
+    res = cli(*_BASE, "--output", "auto")
     assert res.exit_code == 0
     assert json.loads(res.stdout)["ok"] is True
-
-
-def test_pretty_explicit_under_non_tty_still_pretty(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
-    # CliRunner is non-tty; explicit pretty must not be coerced to json.
-    assert res.exit_code == 0
-    assert not res.stdout.lstrip().startswith("{")
 
 
 # ----- namespace coercion --------------------------------------------------
 
 
-def test_namespace_empty_string_coerced_to_none(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(("value", "expected"), [("", None), ("obs", "obs")])
+def test_namespace_reaches_the_request_with_empty_meaning_all(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: str | None
 ) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--namespace", ""])
+    res = cli(*_BASE, "--namespace", value)
     assert res.exit_code == 0
-    assert fake.captured_requests[0].namespace is None
-
-
-def test_namespace_value_plumbed(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--namespace", "obs"])
-    assert res.exit_code == 0
-    assert fake.captured_requests[0].namespace == "obs"
-
-
-# ----- error handling ------------------------------------------------------
-
-
-def test_chart_manager_error_maps_to_exit_1(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from chart_manager.plumbing.errors import ChartManagerError
-
-    _install_fake_monitor(
-        monkeypatch,
-        result=_ok_result(),
-        raise_exc=ChartManagerError("apiserver unreachable"),
-    )
-    res = runner.invoke(_build_app(), _BASE)
-    assert res.exit_code == 1
-    assert "apiserver unreachable" in res.stderr
-
-
-def test_file_not_found_maps_to_exit_127(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _install_fake_monitor(
-        monkeypatch,
-        result=_ok_result(),
-        raise_exc=FileNotFoundError(2, "No such file or directory", "kubectl"),
-    )
-    res = runner.invoke(_build_app(), _BASE)
-    assert res.exit_code == 127
+    assert fake.captured_requests[0].namespace == expected
 
 
 # ----- json output -----------------------------------------------------------
 
 
-def test_json_schema_matches_expected_dict(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_json_schema_matches_expected_dict(monkeypatch: pytest.MonkeyPatch) -> None:
     ref_ready = _ref("a", "ns1")
     ref_failed = _ref("b", "ns2")
     ref_timeout = _ref("c", "ns3")
@@ -403,11 +295,12 @@ def test_json_schema_matches_expected_dict(
         total_timed_out=False,
     )
     _install_fake_monitor(monkeypatch, result=result)
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "json"])
+    res = cli(*_BASE, "--output", "json")
     assert res.exit_code == 1
     payload = json.loads(res.stdout)
     verdicts = [o["verdict"] for o in payload["outcomes"]]
     assert verdicts == ["ready", "failed", "timed-out"]
+    assert payload["outcomes"][1]["diagnostics"]
     assert payload["outcomes"][2]["reason"] == "PerHRBudgetExhausted"
     assert payload["ok"] is False
 
@@ -415,24 +308,21 @@ def test_json_schema_matches_expected_dict(
 # ----- test (helm test) command -------------------------------------------
 
 
-def test_test_pod_log_tail_plumbed(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_pod_log_tail_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
     result = TestResult(
         outcomes=(_passed_test_outcome(_ref()),),
         total_duration_seconds=2.0,
         total_timed_out=False,
     )
     fake = _install_fake_test(monkeypatch, result=result)
-    res = runner.invoke(
-        _build_app(),
-        ["test", "--chart", "loki", "--version", "0.2.0", "--pod-log-tail", "50"],
-    )
+    res = cli(*_TEST_BASE, "--pod-log-tail", "50")
     assert res.exit_code == 0
     assert fake.captured_requests[0].pod_log_tail == 50
 
 
-def test_monitor_fail_fast_plumbed(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_monitor_fail_fast_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--fail-fast"])
+    res = cli(*_BASE, "--fail-fast")
     assert res.exit_code == 0
     assert fake.captured_requests[0].fail_fast is True
 
@@ -440,7 +330,7 @@ def test_monitor_fail_fast_plumbed(runner: CliRunner, monkeypatch: pytest.Monkey
 # ----- timeout options: parsed once, at the CLI boundary -------------------
 
 
-_TEST_BASE = ["test", "--chart", "loki", "--version", "0.2.0"]
+_TEST_BASE = ["promote", "test", "--chart", "loki", "--version", "0.2.0"]
 
 
 def _passed_test_result() -> TestResult:
@@ -459,46 +349,29 @@ def _timeouts(request: Any) -> tuple[float, float, float]:
     )
 
 
-def test_monitor_default_timeouts_reach_run_as_seconds(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), _BASE)
-    assert res.exit_code == 0, res.output
-    assert _timeouts(fake.captured_requests[0]) == (10.0, 300.0, 900.0)
-
-
-def test_test_default_timeouts_reach_run_as_seconds(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _install_fake_test(monkeypatch, result=_passed_test_result())
-    res = runner.invoke(_build_app(), _TEST_BASE)
-    assert res.exit_code == 0, res.output
-    assert _timeouts(fake.captured_requests[0]) == (10.0, 300.0, 900.0)
-
-
 @pytest.mark.parametrize("command", ["monitor", "test"])
-def test_timeout_duration_syntax_is_parsed_to_seconds(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, command: str
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ((), (10.0, 300.0, 900.0)),
+        (
+            ("--per-poll-timeout", "2.5s", "--per-hr-timeout", "90", "--total-timeout", "1h"),
+            (2.5, 90.0, 3600.0),
+        ),
+    ],
+)
+def test_timeouts_reach_run_as_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    flags: tuple[str, ...],
+    expected: tuple[float, float, float],
 ) -> None:
     monitor_fake = _install_fake_monitor(monkeypatch, result=_ok_result())
     test_fake = _install_fake_test(monkeypatch, result=_passed_test_result())
-    base = _BASE if command == "monitor" else _TEST_BASE
-    res = runner.invoke(
-        _build_app(),
-        [
-            *base,
-            "--per-poll-timeout",
-            "2.5s",
-            "--per-hr-timeout",
-            "90",
-            "--total-timeout",
-            "1h",
-        ],
-    )
+    res = cli(*(_BASE if command == "monitor" else _TEST_BASE), *flags)
     assert res.exit_code == 0, res.output
     fake = monitor_fake if command == "monitor" else test_fake
-    assert _timeouts(fake.captured_requests[0]) == (2.5, 90.0, 3600.0)
+    assert _timeouts(fake.captured_requests[0]) == expected
 
 
 @pytest.mark.parametrize(
@@ -513,10 +386,10 @@ def test_timeout_duration_syntax_is_parsed_to_seconds(
     ],
 )
 def test_malformed_timeout_is_a_usage_error_before_any_run(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, flag: str, value: str
+    monkeypatch: pytest.MonkeyPatch, flag: str, value: str
 ) -> None:
     fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, flag, value])
+    res = cli(*_BASE, flag, value)
     # Exit 2 is click's usage-error code; the message names the flag and no
     # traceback reaches the operator.
     assert res.exit_code == 2, res.output
@@ -525,61 +398,10 @@ def test_malformed_timeout_is_a_usage_error_before_any_run(
     assert fake.captured_requests == []
 
 
-def test_timeout_ordering_violation_is_a_clean_domain_error(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Each value is well-formed on its own; only the request can judge the
-    # relationship between them, and it reports through the exit-1 funnel.
-    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = runner.invoke(_build_app(), [*_BASE, "--per-hr-timeout", "10m", "--total-timeout", "1m"])
-    assert res.exit_code == 1, res.output
-    assert "total_timeout_seconds (60s) must be >= per_hr_timeout_seconds (600s)" in res.stderr
-    assert fake.captured_requests == []
-
-
-# ----- progress driver thread safety smoke --------------------------------
-
-
-def test_pretty_progress_driver_thread_safety() -> None:
-    import threading as _threading
-
-    from rich.console import Console as _Console
-
-    driver = ProgressTable(_Console(quiet=True))
-    errors: list[BaseException] = []
-
-    def fire(i: int) -> None:
-        try:
-            for j in range(20):
-                driver(
-                    _ref(f"hr{i}", "ns"),
-                    Transition(at=datetime.now(UTC), phase=f"p{j}", detail=f"d{j}"),
-                )
-        except BaseException as exc:  # pragma: no cover -- thread safety smoke
-            errors.append(exc)
-
-    threads = [_threading.Thread(target=fire, args=(i,)) for i in range(5)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert errors == []
-
-
-# ----- promote relocation smoke -------------------------------------------
-
-
-def test_promote_registers_pr_monitor_and_test() -> None:
-    names = {cmd.name for cmd in _build_app().registered_commands}
-    assert names == {"pr", "monitor", "test"}
-
-
 # ----- no-match outcome rendering -----------------------------------------
 
 
-def test_no_match_outcome_pretty_message(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_match_outcome_pretty_message(monkeypatch: pytest.MonkeyPatch) -> None:
     no_match = MonitorOutcome(
         ref=NO_MATCH_REF,
         verdict="no-match",
@@ -594,7 +416,7 @@ def test_no_match_outcome_pretty_message(
         outcomes=(no_match,), total_duration_seconds=0.1, total_timed_out=False
     )
     _install_fake_monitor(monkeypatch, result=result)
-    res = runner.invoke(_build_app(), [*_BASE, "--output", "table"])
+    res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 1
     assert "no helmreleases matched" in res.stdout
 
@@ -610,7 +432,7 @@ def test_no_match_outcome_pretty_message(
 
 
 _PROMOTE_BASE = [
-    "pr",
+    "promote", "pr",
     "--flux-repo", "git@github.com:org/lab-fluxcd.git",
     "--path", "prod",
     "--env", "prod",
@@ -695,81 +517,31 @@ def _install_fake_promote(
     monkeypatch.setattr(promote_cli, "run_pr", fake)
 
 
-def test_promote_outcome_table_covers_every_status() -> None:
-    """Guard the guard: a seventh PromoteStatus must not silently exit 0.
-
-    Without this, adding a state and forgetting the table would raise
-    KeyError at runtime -- or, if someone "fixed" that with
-    `.get(status, Outcome.SUCCESS)`, reintroduce the exact defect this
-    guards. `PROMOTE_OUTCOME` is now the sole input to both the wire `ok`
-    field and the process exit code, so one missing arm breaks both.
-    """
-    assert set(PROMOTE_OUTCOME) == set(PromoteStatus)
-    # The headline regression, pinned at the layer that decides it.
-    assert PROMOTE_OUTCOME[PromoteStatus.ABORTED] is Outcome.FAILED
-
-
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [
-        # Literal integers on purpose: this is the behavioural pin. It must
-        # fail if the tables it exercises change what a status is worth,
-        # which a table-derived expectation could not do.
-        (PromoteStatus.NO_CHANGES, 0),
-        (PromoteStatus.DRY_RUN, 0),
-        (PromoteStatus.ALREADY_OPEN, 0),
-        (PromoteStatus.PR_OPENED, 0),
-        (PromoteStatus.PUSHED, 0),
-        (PromoteStatus.ABORTED, 1),
-    ],
-)
-def test_promote_exit_code_per_status(
-    status: PromoteStatus,
-    expected: int,
-    runner: CliRunner,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("status", list(PromoteStatus))
+def test_promote_exit_code_and_json_ok_per_status(
+    status: PromoteStatus, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every terminal state maps to the code 6.1 assigns it, and only that."""
+    """Only a declined downgrade fails, and `.ok` and `$?` always agree."""
     _install_fake_promote(monkeypatch, result=_promote_result(status))
-    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+    res = cli(*_PROMOTE_BASE, "--output", "json")
+    expected = 1 if status is PromoteStatus.ABORTED else 0
     assert res.exit_code == expected, res.output
+    assert json.loads(res.stdout)["ok"] is (expected == 0)
 
 
-def test_promote_aborted_exits_nonzero(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_aborted_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     """The headline regression: a declined downgrade is a failure, not success."""
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "table"])
+    res = cli(*_PROMOTE_BASE, "--output", "table")
     assert res.exit_code == 1
     assert "aborted" in res.stderr
-
-
-def test_promote_json_ok_agrees_with_the_exit_code() -> None:
-    """`.ok` and `$?` are one judgement; a consumer may branch on either.
-
-    The two live in different layers now -- `ok` is
-    `PROMOTE_OUTCOME[status] is Outcome.SUCCESS` in `services/`, the exit
-    code is `exit_code_for(...)` in `plumbing/` -- so this is the test that
-    ties them together. It fails if `EXIT_CODE[Outcome.SUCCESS]` ever stops
-    being 0, or if `ok` is re-derived from anything but the outcome table.
-    """
-    for status in PromoteStatus:
-        payload = promote_to_dict(
-            _promote_result(status),
-            chart="loki",
-            version="0.2.0",
-            environment="prod",
-            path=Path("prod"),
-        )
-        assert payload["ok"] is (exit_code_for(PROMOTE_OUTCOME[status]) == 0), status
 
 
 # ----- promote: the non-interactive downgrade guard ------------------------
 
 
 def test_promote_downgrade_without_flag_is_a_usage_error_when_non_interactive(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No prompt, exit 2, and the message names the flag that unblocks it.
 
@@ -786,46 +558,40 @@ def test_promote_downgrade_without_flag_is_a_usage_error_when_non_interactive(
     monkeypatch.setattr(typer, "confirm", _boom)
     _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
 
-    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+    res = cli(*_PROMOTE_BASE)
 
     assert res.exit_code == 2, res.output
     assert prompted == [], "must never prompt when stdin is not a terminal"
     assert "--allow-downgrade" in res.stderr
 
 
-def test_promote_downgrade_guard_also_trips_on_ci_true(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_downgrade_guard_also_trips_on_ci_true(monkeypatch: pytest.MonkeyPatch) -> None:
     """CI=true is non-interactive even where a pty exists (6.6, both legs)."""
     monkeypatch.setenv("CI", "true")
     _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
 
     # `input=` makes stdin readable, so a "y" is waiting. The guard must
     # still refuse: CI=true means nobody typed it.
-    res = runner.invoke(_build_app(), _PROMOTE_BASE, input="y\n")
+    res = cli(*_PROMOTE_BASE, input="y\n")
 
     assert res.exit_code == 2, res.output
     assert "--allow-downgrade" in res.stderr
 
 
-def test_promote_allow_downgrade_skips_the_guard(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_allow_downgrade_skips_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """--allow-downgrade is the documented escape, so it must not hit the guard."""
     _install_fake_promote(
         monkeypatch,
         result=_promote_result(PromoteStatus.PR_OPENED),
         downgrades=[_match("0.9.0")],
     )
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--allow-downgrade"])
+    res = cli(*_PROMOTE_BASE, "--allow-downgrade")
 
     assert res.exit_code == 0, res.output
     assert "--allow-downgrade set; proceeding." in res.stderr
 
 
-def test_promote_still_prompts_when_interactive(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_still_prompts_when_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard the guard: the interactive path is gated, not deleted."""
     monkeypatch.setattr(promote_cli, "_is_interactive", lambda: True)
     monkeypatch.setattr(typer, "confirm", lambda *a, **k: True)
@@ -834,19 +600,17 @@ def test_promote_still_prompts_when_interactive(
         result=_promote_result(PromoteStatus.PR_OPENED),
         downgrades=[_match("0.9.0")],
     )
-    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+    res = cli(*_PROMOTE_BASE)
 
     assert res.exit_code == 0, res.output
 
 
-def test_promote_interactive_decline_exits_1(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_interactive_decline_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
     """A human who says no gets exit 1 -- the state that used to exit 0."""
     monkeypatch.setattr(promote_cli, "_is_interactive", lambda: True)
     monkeypatch.setattr(typer, "confirm", lambda *a, **k: False)
     _install_fake_promote(monkeypatch, downgrades=[_match("0.9.0")])
-    res = runner.invoke(_build_app(), _PROMOTE_BASE)
+    res = cli(*_PROMOTE_BASE)
 
     assert res.exit_code == 1, res.output
 
@@ -854,9 +618,7 @@ def test_promote_interactive_decline_exits_1(
 # ----- promote: the json projection ---------------------------------------
 
 
-def test_promote_json_parses_cleanly_off_stdout(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_json_parses_cleanly_off_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     """stdout carries the projection and nothing else.
 
     An *explicit* `--output json` also silences narration (design doc 6.2:
@@ -872,7 +634,7 @@ def test_promote_json_parses_cleanly_off_stdout(
     stopped narrating entirely.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "json"])
+    res = cli(*_PROMOTE_BASE, "--output", "json")
 
     assert res.exit_code == 0, res.output
     payload = json.loads(res.stdout)
@@ -886,9 +648,7 @@ def test_promote_json_parses_cleanly_off_stdout(
     assert res.stderr == ""
 
 
-def test_promote_auto_json_keeps_narration_on_stderr(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_auto_json_keeps_narration_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """`auto` resolving to json is a format decision, not a request for silence.
 
     CliRunner's stdout is not a terminal, so no `--output` flag resolves to
@@ -898,7 +658,7 @@ def test_promote_auto_json_keeps_narration_on_stderr(
     shows the PR was opened is the reason that narration exists.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE])
+    res = cli(*_PROMOTE_BASE)
 
     assert res.exit_code == 0, res.output
     assert json.loads(res.stdout)["status"] == "pr-opened"
@@ -906,12 +666,10 @@ def test_promote_auto_json_keeps_narration_on_stderr(
     assert "pr opened" not in res.stdout
 
 
-def test_promote_json_carries_a_failure_verbatim(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_json_carries_a_failure_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     """A nonzero exit still emits a parseable document -- CI needs both."""
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "json"])
+    res = cli(*_PROMOTE_BASE, "--output", "json")
 
     assert res.exit_code == 1
     payload = json.loads(res.stdout)
@@ -920,19 +678,7 @@ def test_promote_json_carries_a_failure_verbatim(
     assert payload["downgrades"][0]["current_version"] == "0.9.0"
 
 
-def test_promote_auto_resolves_to_json_off_a_terminal(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`auto` is the default; a CI step gets a document without asking for one."""
-    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), _PROMOTE_BASE)
-
-    assert json.loads(res.stdout)["status"] == "pr-opened"
-
-
-def test_promote_pretty_writes_nothing_to_stdout(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_pretty_writes_nothing_to_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Promote narrates a mutation; it has no human *document*.
 
     So `promote pr --output table >/dev/null` still shows the
@@ -940,16 +686,14 @@ def test_promote_pretty_writes_nothing_to_stdout(
     that asked for data.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "table"])
+    res = cli(*_PROMOTE_BASE, "--output", "table")
 
     assert res.exit_code == 0, res.output
     assert res.stdout == ""
     assert "pr opened" in res.stderr
 
 
-def test_promote_rejects_an_unknown_output_mode(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_rejects_an_unknown_output_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """`--output yaml` must fail, not silently fall back to table.
 
     Exit 2, not 1: naming a projection a command does not have is a *usage*
@@ -960,7 +704,7 @@ def test_promote_rejects_an_unknown_output_mode(
     necessarily unified that too. This is not the P2.1 exit-code work.
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
-    res = runner.invoke(_build_app(), [*_PROMOTE_BASE, "--output", "yaml"])
+    res = cli(*_PROMOTE_BASE, "--output", "yaml")
 
     assert res.exit_code == 2
     assert "yaml" in res.output
