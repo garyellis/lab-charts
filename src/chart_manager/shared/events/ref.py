@@ -5,14 +5,13 @@ The token is not a CLI convenience. It is already the events wire format:
 (`model.py`), the join key that makes one version's timeline a timeline.
 A surface that accepted `--chart` and `--version` separately would be
 splitting a token the system composes anyway, and would then own the rule for
-how the halves go back together -- in `cli/`, where a REST handler or a Slack
-listener could not reach it.
+how the halves go back together -- in `commands/events/cli.py`, where a REST
+handler or a Slack listener could not reach it.
 
 So the grammar lives here, and the surface passes through what the user typed
 (design commitment 6: *the surface never derives a request field from a
 heuristic -- it passes what the user typed to a service resolver*).
-`commands/events/cli.py` calls `parse_ref`; nothing in `cli/`
-looks for an `@`.
+`commands/events/cli.py` calls `parse_ref` and looks for no `@` itself.
 
 The rules, and why each is a *domain* rule rather than a CLI rule
 -----------------------------------------------------------------

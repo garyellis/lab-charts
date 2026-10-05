@@ -1,4 +1,4 @@
-"""The Cosmos container and DynamoDB table wrappers, against fake SDK handles."""
+"""The Cosmos container wrapper, against a fake SDK container proxy."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from chart_manager.integrations.cosmos import CosmosContainer
-from chart_manager.integrations.dynamodb import DynamoDBTable
 
 
 class _FakeProxy:
@@ -56,15 +55,3 @@ def test_cosmos_query_addresses_the_partition_and_strips_metadata(
     assert proxy.calls == [
         ("query", {"query": "SELECT * FROM c", "parameters": parameters, **addressing})
     ]
-
-
-def test_dynamodb_put_passes_the_item() -> None:
-    puts: list[dict[str, Any]] = []
-
-    class _FakeTable:
-        def put_item(self, *, Item: dict[str, Any]) -> None:  # boto3's own kwarg casing
-            puts.append(Item)
-
-    DynamoDBTable(_FakeTable()).put({"chart_name": "loki"})  # type: ignore[arg-type]
-
-    assert puts == [{"chart_name": "loki"}]

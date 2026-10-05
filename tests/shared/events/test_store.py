@@ -33,6 +33,7 @@ from chart_manager.shared.events.store import (
     NullEventStore,
     get_event_store,
 )
+from tests.conftest import FakeCosmosContainer
 
 
 def _event(*, chart_name: str = "loki", version: str | None = "1.2.4") -> PlatformLifecycleEvent:
@@ -57,25 +58,6 @@ def _event(*, chart_name: str = "loki", version: str | None = "1.2.4") -> Platfo
 # ----- doubles -------------------------------------------------------------
 
 
-class _FakeContainer:
-    """A document container: records writes and queries, replays scripted documents."""
-
-    def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
-        self.documents = documents or []
-        self.items: list[dict[str, Any]] = []
-        self.upserted: list[dict[str, Any]] = []
-        self.queries: list[tuple[str, list[dict[str, Any]], str | None]] = []
-
-    def write(self, item: dict[str, Any], *, upsert: bool) -> None:
-        (self.upserted if upsert else self.items).append(item)
-
-    def query(
-        self, sql: str, parameters: list[dict[str, Any]], partition_key: str | None
-    ) -> list[dict[str, Any]]:
-        self.queries.append((sql, parameters, partition_key))
-        return list(self.documents)
-
-
 class _FakeTable:
     def __init__(self) -> None:
         self.items: list[dict[str, Any]] = []
@@ -92,7 +74,7 @@ def test_partition_key_is_the_chart_name() -> None:
 
 
 def test_cosmos_store_writes_the_partition_attribute_and_a_string_id() -> None:
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
     CosmosEventStore(container).write(_event())
 
     item = container.items[0]
@@ -116,7 +98,7 @@ def test_dynamodb_store_writes_the_partition_attribute_and_a_sortable_key() -> N
 
 def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
     event = replace(_event(), idempotency_key="stable-publish-key")
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
     table = _FakeTable()
 
     CosmosEventStore(container).write(event)
@@ -128,16 +110,16 @@ def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
 
 
 @pytest.mark.parametrize(
-    "adapter",
+    "store",
     [
-        lambda: CosmosEventStore(_FakeContainer()),
+        lambda: CosmosEventStore(FakeCosmosContainer()),
         lambda: DynamoDBEventStore(_FakeTable(), sort_key="event_id"),
     ],
     ids=["cosmos", "dynamodb"],
 )
-def test_both_stores_reject_an_event_without_a_partition_key(adapter: Any) -> None:
+def test_both_stores_reject_an_event_without_a_partition_key(store: Any) -> None:
     with pytest.raises(ValueError, match="chart_name"):
-        adapter().write(_event(chart_name=""))
+        store().write(_event(chart_name=""))
 
 
 def test_a_versionless_event_is_still_writable() -> None:
@@ -146,7 +128,7 @@ def test_a_versionless_event_is_still_writable() -> None:
     Under the old `correlation_id` partition key this was the awkward case;
     partitioning on the chart makes it unremarkable.
     """
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
     CosmosEventStore(container).write(_event(version=None))
 
     assert container.items[0][PARTITION_KEY] == "loki"
@@ -156,7 +138,7 @@ def test_a_versionless_event_is_still_writable() -> None:
 
 
 def test_the_all_charts_view_is_a_cross_partition_order_by() -> None:
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
 
     CosmosEventStore(container).query(EventQuery(limit=7))
 
@@ -169,7 +151,7 @@ def test_the_all_charts_view_is_a_cross_partition_order_by() -> None:
 def test_a_chart_query_is_a_single_partition_read() -> None:
     """`chart_name` is the partition key; the query must address it as one
     partition, not fan out and filter."""
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
 
     CosmosEventStore(container).query(EventQuery(chart_name="grafana"))
 
@@ -180,7 +162,7 @@ def test_a_chart_query_is_a_single_partition_read() -> None:
 
 
 def test_a_release_query_narrows_by_correlation_id_within_the_partition() -> None:
-    container = _FakeContainer()
+    container = FakeCosmosContainer()
 
     CosmosEventStore(container).query(
         EventQuery(chart_name="grafana", correlation_id="grafana@1.2.3")
@@ -206,9 +188,9 @@ def test_cosmos_wiring_declares_the_partition_key_as_a_document_path(
     """Cosmos wants "/chart_name"; DynamoDB wants the bare attribute name."""
     seen: dict[str, Any] = {}
 
-    def fake_get_container(**kwargs: Any) -> _FakeContainer:
+    def fake_get_container(**kwargs: Any) -> FakeCosmosContainer:
         seen.update(kwargs)
-        return _FakeContainer()
+        return FakeCosmosContainer()
 
     monkeypatch.setattr(store_module, "get_container", fake_get_container)
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")

@@ -755,3 +755,22 @@ def plain_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
 def argv_prefix(*prefix: str) -> Callable[[tuple[str, ...]], bool]:
     """A `FakeCommandRunner` matcher on the start of `plain_argv`."""
     return lambda argv: plain_argv(argv)[: len(prefix)] == prefix
+
+
+class FakeCosmosContainer:
+    """Record-and-replay `CosmosContainer`: records writes and queries, returns `documents`."""
+
+    def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
+        self.documents = documents or []
+        self.items: list[dict[str, Any]] = []
+        self.upserted: list[dict[str, Any]] = []
+        self.queries: list[tuple[str, list[dict[str, Any]], str | None]] = []
+
+    def write(self, item: dict[str, Any], *, upsert: bool) -> None:
+        (self.upserted if upsert else self.items).append(item)
+
+    def query(
+        self, sql: str, parameters: list[dict[str, Any]], partition_key: str | None
+    ) -> list[dict[str, Any]]:
+        self.queries.append((sql, parameters, partition_key))
+        return list(self.documents)

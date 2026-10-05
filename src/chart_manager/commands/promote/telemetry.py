@@ -101,7 +101,7 @@ class PromotionTelemetry:
         if self.environment is None:
             return
 
-        # detail carries only str/int/bool: the DynamoDB adapter hands the
+        # detail carries only str/int/bool: `DynamoDBEventStore` hands the
         # item straight to boto3, whose serializer rejects float. Durations
         # are deliberately absent -- they are the difference between two
         # event timestamps, which is the whole reason these events exist.

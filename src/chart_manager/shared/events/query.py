@@ -64,9 +64,9 @@ class EventReadUnsupportedError(EventReadError):
 def dynamodb_read_unsupported() -> EventReadUnsupportedError:
     """The one wording for "reads are Cosmos-only".
 
-    Raised from two places -- the DynamoDB adapter's `query` and the
+    Raised from two places -- `DynamoDBEventStore.query` and the
     dispatch in `store.query_events` that refuses before building the
-    adapter -- which must not drift into two different instructions.
+    store -- which must not drift into two different instructions.
     """
     return EventReadUnsupportedError(
         "the events read side is Cosmos-only for now (EVENTS_BACKEND=dynamodb); "

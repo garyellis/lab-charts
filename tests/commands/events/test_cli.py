@@ -28,7 +28,7 @@ from chart_manager.commands.events import cli as events_cli
 from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
 from chart_manager.shared.events.ref import SEPARATOR
-from tests.conftest import cli
+from tests.conftest import FakeCosmosContainer, cli
 
 
 class RecordingWriter:
@@ -51,7 +51,7 @@ class RecordingWriter:
 
 @pytest.fixture
 def writer(monkeypatch: pytest.MonkeyPatch) -> RecordingWriter:
-    """Replace the composition-root writer with a recorder."""
+    """Replace the writer `_make_event_writer` builds with a recorder."""
     recorder = RecordingWriter()
     monkeypatch.setattr(events_cli, "_make_event_writer", lambda: recorder)
     return recorder
@@ -164,7 +164,7 @@ def _cli_events_ast() -> ast.Module:
     return ast.parse(Path(events_cli.__file__).read_text(encoding="utf-8"))
 
 
-def test_the_surface_delegates_the_grammar_to_the_service() -> None:
+def test_the_surface_delegates_the_grammar_to_shared_events_ref() -> None:
     """Design commitment 6, half one: the resolver is imported, not inlined."""
     imported = {
         alias.name
@@ -180,7 +180,7 @@ def test_the_surface_delegates_the_grammar_to_the_service() -> None:
 def test_the_surface_never_names_the_separator() -> None:
     """Design commitment 6, half two, and the part a reviewer would miss.
 
-    A bare `"@"` constant in `cli/` means the surface is composing or
+    A bare `"@"` constant in `commands/events/cli.py` means the surface is composing or
     splitting the ref itself -- and an f-string like `f"{chart}@{version}"`
     lowers to exactly that constant in the AST, so this catches the tempting
     shortcut as well as an explicit `.split("@")`. A second surface (REST,
@@ -499,16 +499,14 @@ def test_list_renders_newest_first_across_mixed_timezone_stamps(
     in real time must not lead the listing just because it string-sorts
     newer. The fake container returns the backend's string order."""
 
-    class FakeContainer:
-        def query(self, sql: str, parameters: Any, partition_key: Any) -> list[dict[str, Any]]:
-            offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
-            utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
-            return [offset, utc]  # string order: +02:00 first
+    offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
+    utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
+    container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
 
     from chart_manager.shared.events import store as store_module
 
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
-    monkeypatch.setattr(store_module, "get_container", lambda **kwargs: FakeContainer())
+    monkeypatch.setattr(store_module, "get_container", lambda **kwargs: container)
 
     result = cli("event", "list", "-o", "json")
 
