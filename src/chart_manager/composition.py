@@ -59,11 +59,9 @@ from typing import cast
 from chart_manager.commands.promote import (
     HelmReleaseRef,
     MonitorService,
-    PromoteService,
     TestService,
     Transition,
 )
-from chart_manager.commands.promote.pr import DowngradeConfirmFn
 from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github
@@ -269,21 +267,6 @@ class Container:
             kubectl=self.kubectl(),
             helm=self.helm(verbose=False),
             progress=progress,
-            events=self.event_writer(),
-        )
-
-    def promote_service(
-        self, *, confirm_downgrade: DowngradeConfirmFn | None = None
-    ) -> PromoteService:
-        """Build the chart-version promotion service.
-
-        `confirm_downgrade` is a surface decision, not configuration: the CLI
-        wires an interactive `typer.confirm`, an HTTP handler wires a
-        force-flag check. Passing the container's memoized writer keeps
-        promotion telemetry on the same store as `chart-manager events`.
-        """
-        return PromoteService(
-            confirm_downgrade=confirm_downgrade,
             events=self.event_writer(),
         )
 

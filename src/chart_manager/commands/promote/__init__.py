@@ -27,7 +27,7 @@ than re-deciding either question.
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 
 from .monitor import MonitorOutcome, MonitorRequest, MonitorResult, MonitorService
-from .pr import PromoteRequest, PromoteResult, PromoteService
+from .pr import PromoteRequest, PromoteResult
 from .scanner import HelmReleaseMatch
 from .state import (
     NO_MATCH_REF,
@@ -55,7 +55,6 @@ __all__ = [
     "MonitorService",
     "PromoteRequest",
     "PromoteResult",
-    "PromoteService",
     "PromoteStatus",
     "TestOutcome",
     "TestRequest",

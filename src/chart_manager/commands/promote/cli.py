@@ -28,13 +28,13 @@ from chart_manager.commands.promote import (
     MonitorService,
     PromoteRequest,
     PromoteResult,
-    PromoteService,
     PromoteStatus,
     TestRequest,
     TestResult,
     TestService,
     Transition,
 )
+from chart_manager.commands.promote.pr import run as run_pr
 from chart_manager.commands.promote.render import (
     _PrettyProgressDriver,
     render_monitor_json,
@@ -65,13 +65,6 @@ def _make_monitor_service(*, progress: ProgressCb | None) -> MonitorService:
 def _make_test_service(*, progress: ProgressCb | None) -> TestService:
     """Build the default TestService (module-level so tests can override)."""
     return _container().test_service(progress=progress)
-
-
-def _make_promote_service(
-    *, confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool]
-) -> PromoteService:
-    """Build the default PromoteService (module-level so tests can override)."""
-    return _container().promote_service(confirm_downgrade=confirm_downgrade)
 
 
 # --- helpers --------------------------------------------------------------
@@ -388,8 +381,8 @@ def promote(
             )
         return typer.confirm("Proceed with the downgrade?", default=False)
 
-    service = _make_promote_service(confirm_downgrade=_confirm_downgrade)
-    result = service.promote(
+    container = _container()
+    result = run_pr(
         PromoteRequest(
             flux_repo=flux_repo,
             path=path,
@@ -398,7 +391,10 @@ def promote(
             version=version,
             base_branch=base_branch,
             dry_run=dry_run,
-        )
+        ),
+        runner=container.command_runner(),
+        events=container.event_writer(),
+        confirm_downgrade=_confirm_downgrade,
     )
 
     # The three states that used to return before this loop leave

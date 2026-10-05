@@ -1,4 +1,4 @@
-"""Promote a chart to an environment: clone the flux repo, edit version drift, open a PR."""
+"""`promote pr`: clone the flux repo, bump the drifted chart version, open the Promotion PR."""
 from __future__ import annotations
 
 import logging
@@ -9,6 +9,7 @@ from pathlib import Path
 
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.semver import parse_semver
 from chart_manager.services.events.failure import emit_non_fatal
@@ -19,10 +20,6 @@ from .scanner import HelmReleaseMatch, scan
 from .state import PROMOTE_PHASE, PromoteStatus
 
 _LOG = logging.getLogger(__name__)
-
-CloneFn = Callable[[str, Path, str], None]
-DowngradeConfirmFn = Callable[[list[HelmReleaseMatch], str], bool]
-
 
 @dataclass(frozen=True)
 class PromoteRequest:
@@ -68,240 +65,211 @@ def _loggable_repo(url: str) -> str:
     return f"{scheme}://{rest.rsplit('@', 1)[1]}"
 
 
-def _default_clone(url: str, target: Path, branch: str) -> None:
-    """Default clone strategy: shallow `git clone` of one branch."""
-    Git.clone(url, target, branch=branch)
+def run(
+    request: PromoteRequest,
+    *,
+    runner: CommandRunner,
+    events: EventWriter,
+    confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool],
+) -> PromoteResult:
+    """Clone the flux repo, set the chart version where it drifts, and open the Promotion PR.
+
+    One call promotes one chart into one (path, environment); fanning out to several
+    environments, and waiting on cluster state between them, is the caller's job.
+    `confirm_downgrade` decides whether to go on when a HelmRelease is at a newer version.
+    """
+    # The clone target is a temp dir that is gone by the time anyone reads
+    # this, so the coordinates that matter are the repo and the path within
+    # it -- the two inputs that decide which HelmReleases get edited.
+    _LOG.info(
+        "promotion started: chart=%s version=%s environment=%s repo=%s path=%s "
+        "base=%s dry_run=%s",
+        request.chart_name,
+        request.version,
+        request.environment,
+        _loggable_repo(request.flux_repo),
+        request.path,
+        request.base_branch,
+        request.dry_run,
+    )
+    with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
+        workdir = Path(tmp) / "flux"
+        Git.clone(request.flux_repo, workdir, branch=request.base_branch, runner=runner)
+        result = _promote_in_workdir(request, workdir, runner, confirm_downgrade)
+    # `pr_url` doubles as the promotion correlation id (see
+    # `_emit_promotion`), which is what ties this line to the events store.
+    _LOG.info(
+        "promotion finished: chart=%s version=%s environment=%s status=%s "
+        "matched=%d changed_files=%d branch=%s pr=%s",
+        request.chart_name,
+        request.version,
+        request.environment,
+        result.status,
+        len(result.matches),
+        len(result.changed_files),
+        result.branch or "(none)",
+        result.pull_request.url if result.pull_request else "(none)",
+    )
+    _emit_promotion(request, result, events)
+    return result
 
 
-class PromoteService:
-    """Clone the flux repo, scan for the chart, edit drift, open a PR."""
+def _emit_promotion(request: PromoteRequest, result: PromoteResult, events: EventWriter) -> None:
+    """Map the terminal state to a PromotionPhase event.
 
-    def __init__(
-        self,
-        *,
-        git_factory: Callable[[Path], Git] = Git,
-        github_factory: Callable[[Path], Github] = Github,
-        clone_fn: CloneFn = _default_clone,
-        confirm_downgrade: DowngradeConfirmFn | None = None,
-        events: EventWriter | None = None,
-        strict_events: bool = False,
-    ) -> None:
-        """Wire git/github factories, clone + downgrade-confirm strategies, and event writer."""
-        self._git_factory = git_factory
-        self._github_factory = github_factory
-        self._clone_fn = clone_fn
-        # When the target version is older than what's on disk for any match,
-        # the service stops and asks this callback. None = fail closed (raise).
-        # The CLI wires a typer.confirm; a FastAPI handler wires a force-flag check.
-        self._confirm_downgrade = confirm_downgrade
+    One table lookup, not an if-chain: the CLI printer decodes the same
+    status in `commands/promote/cli.py` and the two used to walk the flags in
+    different orders, so a new terminal state could be handled by one and
+    silently dropped by the other. Statuses mapping to None (dry-run, no
+    changes) are not real transitions and must leave no mark. The event is
+    written after the PR is open, so a failed write is logged, not raised.
+    """
+    phase = PROMOTE_PHASE[result.status]
+    if phase is None:
+        return
+    pr = result.pull_request
+    emit_non_fatal(
+        lambda: events.promote(
+            chart_name=request.chart_name,
+            chart_version=request.version,
+            environment=request.environment,
+            phase=phase,
+            pr_url=pr.url if pr else None,
+            promotion_correlation_id=pr.url if pr else None,
+        ),
+        strict=False,
+        what="promotion",
+    )
 
-        # lazy store
-        self._events = events or EventWriter()
-        # Telemetry is non-fatal by default (mirrors `cli/events.py:_emit`):
-        # the emission happens *after* the PR is already open, so an
-        # unconfigured events backend must not turn a successful promotion
-        # into a traceback. Opt in to `strict_events` where the event is
-        # itself the deliverable (e.g. a backfill job).
-        self._strict_events = strict_events
 
-    def promote(self, request: PromoteRequest) -> PromoteResult:
-        """Clone into a temp dir, promote in-tree, emit the lifecycle event, and return."""
-        # The clone target is a temp dir that is gone by the time anyone reads
-        # this, so the coordinates that matter are the repo and the path within
-        # it -- the two inputs that decide which HelmReleases get edited.
-        _LOG.info(
-            "promotion started: chart=%s version=%s environment=%s repo=%s path=%s "
-            "base=%s dry_run=%s",
+def _promote_in_workdir(
+    request: PromoteRequest,
+    workdir: Path,
+    runner: CommandRunner,
+    confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool],
+) -> PromoteResult:
+    """Scan for drift, optionally confirm downgrades, edit files, and open a PR.
+
+    Returns early (no PR) for: path escape guard, no matches (raises),
+    no drift, dry-run, aborted downgrade, or an already-open PR.
+    """
+    workdir_resolved = workdir.resolve()
+    scan_root = (workdir_resolved / request.path).resolve()
+    # A `--path ../../` typo would silently scan (and edit) files outside
+    # the cloned tree. Fail fast with a clear message.
+    if not scan_root.is_relative_to(workdir_resolved):
+        raise ChartManagerError(f"--path escapes the cloned flux repo: {request.path}")
+
+    matches = scan(scan_root, chart_name=request.chart_name)
+    if not matches:
+        raise ChartManagerError(
+            f"chart {request.chart_name!r} not found under {str(request.path)!r}"
+        )
+    drift = [m for m in matches if m.current_version != request.version]
+    if not drift:
+        # NO_CHANGES wins over DRY_RUN even when --dry-run was passed:
+        # a dry run that found nothing to plan did not plan anything.
+        return PromoteResult(status=PromoteStatus.NO_CHANGES, matches=matches)
+
+    downgrades = [m for m in drift if _is_downgrade(m.current_version, request.version)]
+
+    # Dedupe by file path while preserving scan order; a multi-doc file with
+    # two HRs for the same chart would otherwise be edited twice.
+    changed_files_ordered: dict[Path, None] = {}
+    for match in drift:
+        changed_files_ordered.setdefault(match.path, None)
+    changed_files = list(changed_files_ordered)
+
+    branch = _branch_name(request)
+    title = _pr_title(request)
+    body = _pr_body(request, drift, workdir_resolved)
+
+    if request.dry_run:
+        return PromoteResult(
+            status=PromoteStatus.DRY_RUN,
+            matches=matches,
+            changed_files=changed_files,
+            branch=branch,
+            downgrades=downgrades,
+        )
+
+    if downgrades and not confirm_downgrade(downgrades, request.version):
+        _LOG.warning(
+            "promotion aborted, downgrade declined: chart=%s version=%s "
+            "environment=%s downgrades=%d",
+            request.chart_name,
+            request.version,
+            request.environment,
+            len(downgrades),
+        )
+        return PromoteResult(
+            status=PromoteStatus.ABORTED,
+            matches=matches,
+            branch=branch,
+            downgrades=downgrades,
+        )
+
+    git = Git(workdir, runner)
+    github = Github(workdir, runner)
+
+    existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
+    if existing is not None:
+        return PromoteResult(
+            status=PromoteStatus.ALREADY_OPEN,
+            matches=matches,
+            branch=branch,
+            pull_request=existing,
+            downgrades=downgrades,
+        )
+
+    for file_path in changed_files:
+        set_version(
+            file_path,
+            chart_name=request.chart_name,
+            new_version=request.version,
+        )
+
+    git.checkout_new_branch(branch, base=request.base_branch)
+    git.add(changed_files)
+    git.commit(title, body=body)
+    git.push(branch)
+    try:
+        pr = github.create_pr(
+            title=title,
+            body=body,
+            head=branch,
+            base=request.base_branch,
+        )
+    except ExternalCommandError as exc:
+        # Push has already succeeded; surface the branch so the operator
+        # can retry the PR step manually rather than guessing the state.
+        # Logged too, because this is the one promotion failure that leaves
+        # a real mutation behind and the exception text alone does not say
+        # which repo the orphan branch is on.
+        _LOG.error(
+            "promotion pushed but PR creation failed: chart=%s version=%s "
+            "environment=%s repo=%s branch=%s: %s",
             request.chart_name,
             request.version,
             request.environment,
             _loggable_repo(request.flux_repo),
-            request.path,
-            request.base_branch,
-            request.dry_run,
+            branch,
+            exc,
         )
-        with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
-            workdir = Path(tmp) / "flux"
-            self._clone_fn(request.flux_repo, workdir, request.base_branch)
-            result = self._promote_in_workdir(request, workdir)
-        # `pr_url` doubles as the promotion correlation id (see
-        # `_emit_promotion`), which is what ties this line to the events store.
-        _LOG.info(
-            "promotion finished: chart=%s version=%s environment=%s status=%s "
-            "matched=%d changed_files=%d branch=%s pr=%s",
-            request.chart_name,
-            request.version,
-            request.environment,
-            result.status,
-            len(result.matches),
-            len(result.changed_files),
-            result.branch or "(none)",
-            result.pull_request.url if result.pull_request else "(none)",
-        )
-        self._emit_promotion(request, result)
-        return result
-
-    def _emit_promotion(self, request: PromoteRequest, result: PromoteResult) -> None:
-        """Map the terminal state to a PromotionPhase event.
-
-        One table lookup, not an if-chain: the CLI printer decodes the same
-        status in `commands/promote/cli.py` and the two used to walk the flags in
-        different orders, so a new terminal state could be handled by one and
-        silently dropped by the other. Statuses mapping to None (dry-run, no
-        changes) are not real transitions and must leave no mark.
-        """
-        phase = PROMOTE_PHASE[result.status]
-        if phase is None:
-            return
-        pr = result.pull_request
-        emit_non_fatal(
-            lambda: self._events.promote(
-                chart_name=request.chart_name,
-                chart_version=request.version,
-                environment=request.environment,
-                phase=phase,
-                pr_url=pr.url if pr else None,
-                promotion_correlation_id=pr.url if pr else None,
-            ),
-            strict=self._strict_events,
-            what="promotion",
-        )
-
-    def _promote_in_workdir(
-        self, request: PromoteRequest, workdir: Path
-    ) -> PromoteResult:
-        """Scan for drift, optionally confirm downgrades, edit files, and open a PR.
-
-        Returns early (no PR) for: path escape guard, no matches (raises),
-        no drift, dry-run, aborted downgrade, or an already-open PR.
-        """
-        workdir_resolved = workdir.resolve()
-        scan_root = (workdir_resolved / request.path).resolve()
-        # A `--path ../../` typo would silently scan (and edit) files outside
-        # the cloned tree. Fail fast with a clear message.
-        if not scan_root.is_relative_to(workdir_resolved):
-            raise ChartManagerError(f"--path escapes the cloned flux repo: {request.path}")
-
-        matches = scan(scan_root, chart_name=request.chart_name)
-        if not matches:
-            raise ChartManagerError(
-                f"chart {request.chart_name!r} not found under {str(request.path)!r}"
-            )
-        drift = [m for m in matches if m.current_version != request.version]
-        if not drift:
-            # NO_CHANGES wins over DRY_RUN even when --dry-run was passed:
-            # a dry run that found nothing to plan did not plan anything.
-            return PromoteResult(status=PromoteStatus.NO_CHANGES, matches=matches)
-
-        downgrades = [
-            m for m in drift if _is_downgrade(m.current_version, request.version)
-        ]
-
-        # Dedupe by file path while preserving scan order; a multi-doc file with
-        # two HRs for the same chart would otherwise be edited twice.
-        changed_files_ordered: dict[Path, None] = {}
-        for match in drift:
-            changed_files_ordered.setdefault(match.path, None)
-        changed_files = list(changed_files_ordered)
-
-        branch = _branch_name(request)
-        title = _pr_title(request)
-        body = _pr_body(request, drift, workdir_resolved)
-
-        if request.dry_run:
-            return PromoteResult(
-                status=PromoteStatus.DRY_RUN,
-                matches=matches,
-                changed_files=changed_files,
-                branch=branch,
-                downgrades=downgrades,
-            )
-
-        if downgrades:
-            if self._confirm_downgrade is None:
-                raise ChartManagerError(
-                    f"refusing to downgrade {request.chart_name} to {request.version}: "
-                    f"{len(downgrades)} HelmRelease(s) currently at a newer version. "
-                    "Inject a confirm_downgrade callback (or pass --allow-downgrade)."
-                )
-            if not self._confirm_downgrade(downgrades, request.version):
-                _LOG.warning(
-                    "promotion aborted, downgrade declined: chart=%s version=%s "
-                    "environment=%s downgrades=%d",
-                    request.chart_name,
-                    request.version,
-                    request.environment,
-                    len(downgrades),
-                )
-                return PromoteResult(
-                    status=PromoteStatus.ABORTED,
-                    matches=matches,
-                    branch=branch,
-                    downgrades=downgrades,
-                )
-
-        git = self._git_factory(workdir)
-        github = self._github_factory(workdir)
-
-        existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
-        if existing is not None:
-            return PromoteResult(
-                status=PromoteStatus.ALREADY_OPEN,
-                matches=matches,
-                branch=branch,
-                pull_request=existing,
-                downgrades=downgrades,
-            )
-
-        for file_path in changed_files:
-            set_version(
-                file_path,
-                chart_name=request.chart_name,
-                new_version=request.version,
-            )
-
-        git.checkout_new_branch(branch, base=request.base_branch)
-        git.add(changed_files)
-        git.commit(title, body=body)
-        git.push(branch)
-        try:
-            pr = github.create_pr(
-                title=title,
-                body=body,
-                head=branch,
-                base=request.base_branch,
-            )
-        except ExternalCommandError as exc:
-            # Push has already succeeded; surface the branch so the operator
-            # can retry the PR step manually rather than guessing the state.
-            # Logged too, because this is the one promotion failure that leaves
-            # a real mutation behind and the exception text alone does not say
-            # which repo the orphan branch is on.
-            _LOG.error(
-                "promotion pushed but PR creation failed: chart=%s version=%s "
-                "environment=%s repo=%s branch=%s: %s",
-                request.chart_name,
-                request.version,
-                request.environment,
-                _loggable_repo(request.flux_repo),
-                branch,
-                exc,
-            )
-            raise ChartManagerError(
-                f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
-            ) from exc
-        # PUSHED vs PR_OPENED is decided here, once. The CLI used to derive
-        # it from `pull_request.url` being truthy, which put a second decoder
-        # of the same state in the surface layer.
-        return PromoteResult(
-            status=PromoteStatus.PR_OPENED if pr.url else PromoteStatus.PUSHED,
-            matches=matches,
-            changed_files=changed_files,
-            branch=branch,
-            pull_request=pr,
-            downgrades=downgrades,
-        )
-
+        raise ChartManagerError(
+            f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
+        ) from exc
+    # PUSHED vs PR_OPENED is decided here, once. The CLI used to derive
+    # it from `pull_request.url` being truthy, which put a second decoder
+    # of the same state in the surface layer.
+    return PromoteResult(
+        status=PromoteStatus.PR_OPENED if pr.url else PromoteStatus.PUSHED,
+        matches=matches,
+        changed_files=changed_files,
+        branch=branch,
+        pull_request=pr,
+        downgrades=downgrades,
+    )
 
 
 def _is_downgrade(current: str | None, target: str) -> bool:

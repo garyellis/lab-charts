@@ -664,7 +664,7 @@ def _match(current: str = "0.1.0") -> HelmReleaseMatch:
 def _promote_result(status: PromoteStatus) -> PromoteResult:
     """A plausible PromoteResult for each terminal state.
 
-    Shaped like what `PromoteService._promote_in_workdir` actually returns
+    Shaped like what `pr.run` actually returns
     for that state, so an exit-code assertion is not passing against a
     result the service could never produce.
     """
@@ -710,39 +710,21 @@ def _promote_result(status: PromoteStatus) -> PromoteResult:
             )
 
 
-@dataclass
-class _FakePromoteService:
-    """Stands in for PromoteService: replays a result, optionally via confirm."""
-
-    result: PromoteResult | None = None
-    downgrades: list[HelmReleaseMatch] = field(default_factory=list)
-    confirm: Any = None
-    requests: list[Any] = field(default_factory=list)
-
-    def promote(self, request: Any) -> PromoteResult:
-        self.requests.append(request)
-        # Mirrors PromoteService: consult the callback when a downgrade is
-        # detected, and treat a decline as ABORTED.
-        if self.downgrades and not self.confirm(self.downgrades, request.version):
-            return _promote_result(PromoteStatus.ABORTED)
-        assert self.result is not None
-        return self.result
-
-
 def _install_fake_promote(
     monkeypatch: pytest.MonkeyPatch,
     *,
     result: PromoteResult | None = None,
     downgrades: list[HelmReleaseMatch] | None = None,
-) -> _FakePromoteService:
-    fake = _FakePromoteService(result=result, downgrades=downgrades or [])
+) -> None:
+    """Patch `pr.run` to replay `result`, consulting the downgrade callback as it does."""
 
-    def _factory(*, confirm_downgrade: Any) -> _FakePromoteService:
-        fake.confirm = confirm_downgrade
-        return fake
+    def fake(request: Any, *, confirm_downgrade: Any, **_adapters: Any) -> PromoteResult:
+        if downgrades and not confirm_downgrade(downgrades, request.version):
+            return _promote_result(PromoteStatus.ABORTED)
+        assert result is not None
+        return result
 
-    monkeypatch.setattr(promote_cli, "_make_promote_service", _factory)
-    return fake
+    monkeypatch.setattr(promote_cli, "run_pr", fake)
 
 
 def test_promote_outcome_table_covers_every_status() -> None:
