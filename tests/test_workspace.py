@@ -7,26 +7,26 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from chart_manager import main
 from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
-from chart_manager.cli import main
-from chart_manager.cli._container import reset_invocation
-from chart_manager.composition import Container
-from chart_manager.domain.charts import ChartRepository
-from chart_manager.domain.workspace import (
+from chart_manager.cli._container import Container, reset_invocation
+from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
+from chart_manager.commands.local.targets import LocalTargetResolver
+from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
+from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
+from chart_manager.plumbing.exit_codes import exit_code_for
+from chart_manager.settings import Settings, load_settings
+from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.workspace import (
     SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
     discover_workspace_root,
     load_repository_workspace,
     resolve_repository_root,
 )
-from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
-from chart_manager.plumbing.exit_codes import exit_code_for
-from chart_manager.services.grafana.dashboard_lint import discover_dashboards
-from chart_manager.services.manifest_validation.paths import RenderOutputService
-from chart_manager.settings import Settings, load_settings
 
-from .conftest import RENDER_DIR, cli, workspace_for, write_workspace
+from .conftest import cli, workspace_for, write_workspace
 
 
 def _document(**spec: object) -> dict[str, object]:
@@ -375,12 +375,36 @@ def test_fanout_normalizes_dedupes_and_sorts() -> None:
         _document(
             fanout={
                 "validation": ["./z/**", "a/file", "z/**"],
-                "clusterTest": ["src/**/test.py"],
+                "chartTest": ["src/**/test.py"],
             }
         )
     )
 
     assert resource.spec.fanout.validation == ("a/file", "z/**")
+
+
+def test_chart_test_fanout_and_shared_charts_load_from_chart_test_keys(tmp_path: Path) -> None:
+    workspace = workspace_for(
+        tmp_path,
+        fanout={"chartTest": ["kind/**"]},
+        chartTest={"sharedCharts": ["base"]},
+    )
+
+    assert workspace.matching_chart_test_patterns("kind/config.yaml") == ("kind/**",)
+    assert workspace.matching_chart_test_patterns("charts/base/values.yaml") == ("charts/base",)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"fanout": {"clusterTest": ["kind/**"]}},
+        {"clusterTest": {"sharedPrerequisites": ["base"]}},
+        {"chartTest": {"sharedPrerequisites": ["base"]}},
+    ],
+)
+def test_the_old_workspace_keys_are_rejected(spec: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ChartWorkspace.model_validate(_document(**spec))
 
 
 @pytest.mark.parametrize(
@@ -410,7 +434,7 @@ def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
     assert workspace.matches_validation_fanout(path) is expected
 
 
-def test_implicit_fanout_includes_marker_policies_cluster_and_prerequisites(
+def test_implicit_fanout_includes_marker_policies_cluster_and_shared_charts(
     tmp_path: Path,
 ) -> None:
     local = tmp_path / ".chart-manager/local-cluster.yaml"
@@ -427,15 +451,15 @@ spec:
 """,
         encoding="utf-8",
     )
-    workspace = workspace_for(tmp_path, clusterTest={"sharedPrerequisites": ["base"]})
+    workspace = workspace_for(tmp_path, chartTest={"sharedCharts": ["base"]})
 
     assert workspace.matches_validation_fanout("policies/rule.yaml")
     assert workspace.matches_validation_fanout(WORKSPACE_FILE)
     assert workspace.matches_validation_fanout(SCHEMA_LOCK_FILE)
-    assert workspace.matches_cluster_test_fanout(WORKSPACE_FILE)
-    assert workspace.matches_cluster_test_fanout("kind/config.yaml")
-    assert workspace.matches_cluster_test_fanout("charts/cni/templates/cni.yaml")
-    assert workspace.matches_cluster_test_fanout("charts/base/templates/crd.yaml")
+    assert workspace.matching_chart_test_patterns(WORKSPACE_FILE)
+    assert workspace.matching_chart_test_patterns("kind/config.yaml")
+    assert workspace.matching_chart_test_patterns("charts/cni/templates/cni.yaml")
+    assert workspace.matching_chart_test_patterns("charts/base/templates/crd.yaml")
 
 
 def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
@@ -445,20 +469,21 @@ def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
     link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        RenderOutputService(tmp_path, render_dir=RENDER_DIR)
+        render_dir_state(workspace_for(tmp_path))
 
 
 def test_render_cleanup_rechecks_symlinks_created_after_construction(
     tmp_path: Path,
 ) -> None:
-    service = RenderOutputService(tmp_path, render_dir=RENDER_DIR)
+    workspace = workspace_for(tmp_path)
+    assert not render_dir_state(workspace).exists
     outside = tmp_path.parent / f"{tmp_path.name}-late-outside"
     outside.mkdir()
     marker = tmp_path / ".chart-manager"
     marker.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(SpecError, match="must not contain symlinks"):
-        service.clean()
+        clean_render_dir(workspace)
 
 
 def test_compiled_workspace_is_shared_across_composed_subsystems(tmp_path: Path) -> None:
@@ -477,22 +502,10 @@ spec:
     container = Container(Settings())
     workspace = container.workspace(tmp_path)
 
-    assert container.chart_catalog_service(tmp_path).repository.charts_dir == (
-        tmp_path / "helm/charts"
-    )
-    assert container.local_target_resolver(tmp_path).local_config == Path("ops/local.yaml")
-    assert container.render_output_service(tmp_path).path == tmp_path / "artifacts/rendered"
-    assert container.impact_service(tmp_path).workspace is workspace
-    assert container.ci_service(tmp_path).workspace is workspace
-    assert container.publish_service(tmp_path).repository.charts_dir == (
-        tmp_path / "helm/charts"
-    )
-    assert container.upgrade_finalizer(tmp_path)._charts_dir == Path("helm/charts")
-    validation = container.validate_app(root=tmp_path)
-    assert validation.workspace is workspace
-    assert validation.workspace.spec.charts_dir == Path("helm/charts")
-    assert validation.workspace.spec.policies_dir == Path("compliance/policies")
-    assert validation.workspace.spec.render_dir == Path("artifacts/rendered")
+    assert workspace.charts_root == tmp_path / "helm/charts"
+    assert _local_targets(container, tmp_path).local_config == Path("ops/local.yaml")
+    assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
+    assert workspace.spec.policies_dir == Path("compliance/policies")
 
 
 def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> None:
@@ -593,7 +606,7 @@ def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> No
     write_workspace(
         tmp_path,
         fanout={"validation": ["tooling/**"]},
-        clusterTest={"sharedPrerequisites": ["base"]},
+        chartTest={"sharedCharts": ["base"]},
     )
     original = load_repository_workspace(tmp_path)
     workspace = original.with_charts_dir(Path("vendor/helm"))
@@ -606,7 +619,7 @@ def test_with_charts_dir_repoints_only_the_chart_directory(tmp_path: Path) -> No
     assert workspace.chart_name_from_repo_path("vendor/helm/alpha/Chart.yaml") == "alpha"
     assert (workspace.root, workspace.name) == (original.root, original.name)
     assert workspace.spec.fanout == original.spec.fanout
-    assert workspace.spec.cluster_test == original.spec.cluster_test
+    assert workspace.spec.chart_test == original.spec.chart_test
     assert workspace.spec.render_dir == original.spec.render_dir
     assert original.spec.charts_dir == Path("charts")
 
@@ -621,7 +634,7 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
                 "catalog": {"repository": "datreeio/CRDs-catalog", "track": "main"},
             },
         },
-        fanout={"validation": ["tooling/**"], "clusterTest": ["kind/**"]},
+        fanout={"validation": ["tooling/**"], "chartTest": ["kind/**"]},
     )
     first = load_repository_workspace(tmp_path)
     second = load_repository_workspace(tmp_path)
@@ -633,3 +646,8 @@ def test_loaded_workspaces_compare_and_hash_by_value(tmp_path: Path) -> None:
     assert same_dir == first
     assert hash(same_dir) == hash(first)
     assert first.with_charts_dir(Path("other")) != first
+
+
+def _local_targets(container: Container, root: Path) -> LocalTargetResolver:
+    workspace = container.workspace(root)
+    return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)

@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.commands.validate.schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
-from chart_manager.services.kubeconform_schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
-from tests.conftest import FakeCommandRunner
+from tests.conftest import FakeCommandRunner, OnPath
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
 LOCAL_SCHEMA_TEMPLATE = "/cache/schemas/{{.ResourceKind}}.json"
@@ -297,3 +297,13 @@ def test_unknown_status_string_maps_to_error(tmp_path: Path) -> None:
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
     assert report.invalid()[0].status == "error"
+
+
+def test_kubeconform_owns_its_version_flag(on_path: OnPath) -> None:
+    """The surface must never learn that kubeconform spells it `-v`."""
+    on_path("kubeconform")
+    runner = FakeCommandRunner(stdout="v0.6.7\n")
+
+    Kubeconform(runner).preflight()
+
+    assert ("kubeconform", "-v") in runner.calls

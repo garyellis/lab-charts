@@ -55,9 +55,9 @@ class WorkspaceFanout(StrictApiModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     validation: tuple[str, ...] = ()
-    cluster_test: tuple[str, ...] = Field(default=(), alias="clusterTest")
+    chart_test: tuple[str, ...] = Field(default=(), alias="chartTest")
 
-    @field_validator("validation", "cluster_test", mode="before")
+    @field_validator("validation", "chart_test", mode="before")
     @classmethod
     def _patterns(cls, value: object, info) -> tuple[str, ...]:
         if not isinstance(value, (list, tuple)):
@@ -68,28 +68,20 @@ class WorkspaceFanout(StrictApiModel):
         return tuple(sorted(set(normalized)))
 
 
-class WorkspaceClusterTest(StrictApiModel):
-    """Repository-wide cluster-test policy."""
+class WorkspaceChartTest(StrictApiModel):
+    """Repository-wide chart-test policy."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    shared_prerequisites: tuple[str, ...] = Field(
-        default=(),
-        alias="sharedPrerequisites",
-    )
+    shared_charts: tuple[str, ...] = Field(default=(), alias="sharedCharts")
 
-    @field_validator("shared_prerequisites", mode="before")
+    @field_validator("shared_charts", mode="before")
     @classmethod
     def _chart_names(cls, value: object) -> tuple[str, ...]:
         if not isinstance(value, (list, tuple)):
-            raise ValueError("spec.clusterTest.sharedPrerequisites must be a list")
+            raise ValueError("spec.chartTest.sharedCharts must be a list")
         return tuple(
-            sorted(
-                {
-                    dns_label(name, field="spec.clusterTest.sharedPrerequisites[]")
-                    for name in value
-                }
-            )
+            sorted({dns_label(name, field="spec.chartTest.sharedCharts[]") for name in value})
         )
 
 
@@ -160,9 +152,9 @@ class ChartWorkspaceSpec(StrictApiModel):
     policies_dir: Path = Field(alias="policiesDir")
     validation: WorkspaceValidation | None = None
     fanout: WorkspaceFanout = Field(default_factory=WorkspaceFanout)
-    cluster_test: WorkspaceClusterTest = Field(
-        default_factory=WorkspaceClusterTest,
-        alias="clusterTest",
+    chart_test: WorkspaceChartTest = Field(
+        default_factory=WorkspaceChartTest,
+        alias="chartTest",
     )
 
     @field_validator("charts_dir", mode="before")
@@ -205,7 +197,7 @@ __all__ = [
     "ChartWorkspace",
     "ChartWorkspaceKind",
     "ChartWorkspaceSpec",
-    "WorkspaceClusterTest",
+    "WorkspaceChartTest",
     "WorkspaceFanout",
     "WorkspaceMetadata",
     "WorkspaceSchemaCatalog",

@@ -10,8 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import PROBE_TIMEOUT, CheckStatus
 from chart_manager.plumbing.yaml_files import parse_yaml
-from tests.conftest import FakeCommandRunner, Predicate
+from tests.conftest import FakeCommandRunner, OnPath, Predicate, checks_by_name
 
 
 def _is_docker_ps(running_only: bool) -> Predicate:
@@ -80,37 +82,6 @@ def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
     assert kind.stop_cluster("chart-manager") is False
 
 
-# ----- start_cluster --------------------------------------------------------
-
-
-def test_start_cluster_starts_stopped_containers() -> None:
-    runner = FakeCommandRunner()
-    # docker ps -a returns stopped containers too.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\nchart-manager-worker\n",
-    )
-    kind = Kind(runner=runner)
-
-    assert kind.start_cluster("chart-manager") is True
-
-    ps_calls = [c for c in runner.calls if c[:2] == ("docker", "ps")]
-    assert len(ps_calls) == 1
-    assert "-a" in ps_calls[0]
-
-    start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    assert start_calls == [
-        ("docker", "start", "chart-manager-control-plane", "chart-manager-worker"),
-    ]
-
-
-def test_start_cluster_returns_false_when_no_containers() -> None:
-    runner = FakeCommandRunner()
-    runner.respond(_is_docker_ps(running_only=False), stdout="")
-    kind = Kind(runner=runner)
-
-    assert kind.start_cluster("chart-manager") is False
-    assert not any(c[:2] == ("docker", "start") for c in runner.calls)
 
 
 # ----- ensure_cluster on stopped cluster ------------------------------------
@@ -249,7 +220,6 @@ def _exercise(kind: Kind) -> None:
     """Touch every kind/docker argv-building path."""
     kind.clusters()
     kind.stop_cluster("a")
-    kind.start_cluster("a")
     kind.delete_cluster("a")
     kind.container_host_ports("a")
 
@@ -299,5 +269,36 @@ def test_timeout_default_is_unbounded() -> None:
 
 
 def test_kind_context_is_the_one_home_for_the_naming_convention() -> None:
-    # Two services derived this with their own f-string before it lived here.
+    # Two modules derived this with their own f-string before it lived here.
     assert kind_context("chart-manager") == "kind-chart-manager"
+
+
+def test_a_stopped_docker_daemon_is_reported_not_a_missing_binary(on_path: OnPath) -> None:
+    """The common case a binary-only check calls healthy."""
+    on_path("kind", "docker")
+    runner = FakeCommandRunner()
+    runner.respond(("kind", "version"), stdout="kind v0.24.0\n")
+    runner.respond(("docker", "--version"), stdout="Docker version 27.3.1\n")
+    runner.respond(
+        ("docker", "version", "--format"),
+        returncode=1,
+        stderr="Cannot connect to the Docker daemon\n",
+    )
+
+    checks = checks_by_name(Kind(runner).preflight())
+
+    assert checks["kind"].status is CheckStatus.OK
+    assert checks["docker"].status is CheckStatus.OK
+    assert checks["docker-daemon"].outcome is Outcome.ENVIRONMENT
+
+
+def test_the_daemon_probe_is_scoped_to_the_configured_docker_host(on_path: OnPath) -> None:
+    """A preflight against the ambient daemon says nothing about the pinned one."""
+    on_path("kind", "docker")
+    runner = FakeCommandRunner(stdout="27.3.1\n")
+
+    Kind(runner, docker_host="tcp://remote:2375").preflight()
+
+    daemon_call = next(r for r in runner.records if r.args[:2] == ("docker", "version"))
+    assert daemon_call.env == {"DOCKER_HOST": "tcp://remote:2375"}
+    assert daemon_call.timeout == PROBE_TIMEOUT

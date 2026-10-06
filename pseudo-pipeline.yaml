@@ -9,7 +9,7 @@ stages:
     # updates for a wrapper chart and opens one idempotent PR, so the two
     # former steps collapse into a single invocation.
     renovate-deps:
-      chart-manager chart upgrade --path charts/cert-manager
+      chart-manager chart upgrade charts/cert-manager
 
     # waits for pull requests to be merged
     pull-requests-merged: # matrix of pull requests
@@ -17,20 +17,20 @@ stages:
 
   dev:
     promote:
-      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path dev/ --env DEV
+      chart-manager promote pr --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path dev/ --env DEV
 
     pull-requests-merged:
       cmg github pr wait --merged
 
-    # waits for helmrelease to dev
+    # waits for the HelmRelease in dev
     # must run on dev cluster harness delegate
     monitor-flux-rollout:
-      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+      chart-manager promote monitor --chart cert-manager --version 0.1.0
 
-    # helmrelease test
+    # promotion test
     # must run on dev cluster harness delegate
-    helmrelease-test:
-      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+    promotion-test:
+      chart-manager promote test --chart cert-manager --version 0.1.0
 
     #  Post-deploy SLO/metric gates
     soak:
@@ -39,18 +39,18 @@ stages:
   test:
     # promote to next stage
     promote:
-      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
+      chart-manager promote pr --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
 
     pull-requests-merged:
       cmg github pr wait --merged
 
     # must run on test cluster harness delegate
     montior-flux-rollout:
-      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+      chart-manager promote monitor --chart cert-manager --version 0.1.0
 
     # must run on test cluster harness delegate
-    helmrelease-test:
-      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+    promotion-test:
+      chart-manager promote test --chart cert-manager --version 0.1.0
 
     #  Post-deploy SLO/metric gates
     soak:
@@ -59,18 +59,18 @@ stages:
   prod:
     # promote to next stage
     promote:
-      chart-manager helmrelease promote --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
+      chart-manager promote pr --chart cert-manager --version 0.1.0 --flux-repo git@github.com:garyellis/lab-fluxcd.git --path test/ --env TEST
 
     pull-requests-merged:
       cmg github pr wait --merged
 
     # must run on prod cluster harness delegate
     montior-flux-rollout:
-      chart-manager helmrelease monitor --chart cert-manager --version 0.1.0
+      chart-manager promote monitor --chart cert-manager --version 0.1.0
 
     #must run on prod cluster harness delegate
-    helmrelease-test:
-      chart-manager helmrelease test --chart cert-manager --version 0.1.0
+    promotion-test:
+      chart-manager promote test --chart cert-manager --version 0.1.0
 
     #  Post-deploy SLO/metric gates
     soak:

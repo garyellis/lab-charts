@@ -1,7 +1,7 @@
 name: ci
 
 # Combined PR/main pipeline:
-#   layering     → architecture contract between cli/, services/, integrations/.
+#   layering     → import contracts ([tool.importlinter] in pyproject.toml).
 #   chart-contracts → offline rendered-chart source contracts.
 #   prep         → compute diff + sandbox chart matrix once.
 #   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
@@ -9,7 +9,7 @@ name: ci
 #   publish      → publish PR previews or final artifacts for merged chart changes.
 #
 # validate and sandbox-test run in parallel after prep — they're independent
-# signals. Chart Manager's lifecycle impact service owns both validation
+# signals. `chart-manager plan` owns both validation
 # selection and the sandbox chart/profile matrix, including repository-level
 # safety fanout for kind config, tool pins, and workflow changes.
 #
@@ -43,10 +43,8 @@ permissions:
   contents: read
 
 jobs:
-  # Enforce the surface/service/adapter layering so `cli/` stays thin enough
-  # that a REST, GraphQL, RPC, or Slack surface can front the same
-  # capabilities. Documented in tests/test_layering.py; the same two commands
-  # run locally via `mise run lint-layering`.
+  # Enforce the import contracts in pyproject.toml's [tool.importlinter]
+  # (ADR-0001, ADR-0002); `mise run lint-layering` runs the same command.
   #
   # Keep the fast Python and workflow quality gates together. Runtime chart
   # validation and cluster tests remain in their dedicated jobs below.
@@ -65,17 +63,8 @@ jobs:
       - name: Workflow syntax
         run: actionlint .github/workflows/ci.yaml
 
-      # (a) cli/ may import services/ + plumbing/ + the composition root,
-      #     never integrations/. Banned-api config lives in pyproject.toml
-      #     under [tool.ruff.lint.flake8-tidy-imports.banned-api]; the
-      #     per-file-ignores there name the layers allowed to lift it.
-      - name: Layer contract — cli/ must not import integrations/
-        run: uv run --extra dev ruff check --select TID251 src/
-
-      # (b) no module under services/ pulls rich/typer into the process.
-      # (c) sys.exit is a surface concern; nothing outside cli/ may exit.
-      - name: Layer contract — services/ stay headless, exits stay in cli/
-        run: uv run --extra dev pytest -q tests/test_layering.py
+      - name: Import contracts
+        run: uv run --extra dev lint-imports
 
       # The unit suite. Integration-marked tests are excluded by the addopts
       # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
@@ -472,8 +461,8 @@ jobs:
           # appending its markdown summary to $GITHUB_STEP_SUMMARY (which GHA
           # always sets for each step); without the flag the CLI ignores the
           # env var, so local invocations don't surprise-write to it.
-          # _emit_result writes the markdown summary BEFORE sys.exit(), so
-          # the PR Checks tab gets the failure detail regardless of exit code.
+          # The CLI writes the markdown summary before it exits, so the PR
+          # Checks tab gets the failure detail regardless of exit code.
           #
           # Mode dispatch mirrors prep:
           #   diff → --changed-files <tmp>   (existing default behavior)
@@ -496,7 +485,7 @@ jobs:
               ;;
           esac
           if [[ "$SCHEMAS_OUTCOME" != success ]]; then
-            args=(--all --phase render)
+            args=(--all --check render)
           fi
           mise run validate -- "${args[@]}" --output all --keep --github-step-summary
 

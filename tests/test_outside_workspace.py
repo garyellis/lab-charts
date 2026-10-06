@@ -1,7 +1,7 @@
 """Commands that are not about a chart repository work outside one.
 
 `.chart-manager/workspace.yaml` is required, but only by repository-bound
-commands. `version`, `event *`, `helmrelease *`, `grafana dashboard export`
+commands. `version`, `event *`, `promote *`, `grafana dashboard export`
 and `grafana dashboard lint --path` never load it, and `doctor` skips its
 schema checks without one.
 
@@ -13,18 +13,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from chart_manager.cli import events as events_cli
-from chart_manager.cli import grafana as grafana_cli
-from chart_manager.cli import main
-from chart_manager.composition import Container
-from chart_manager.domain.workspace import discover_workspace_root
+from chart_manager import main
+from chart_manager.cli._container import Container
+from chart_manager.commands.events import cli as events_cli
+from chart_manager.commands.grafana import dashboard_export
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
+from chart_manager.shared.workspace import discover_workspace_root
 
 from .conftest import FakeCommandRunner, cli
 
@@ -195,9 +194,8 @@ def test_grafana_dashboard_lint_without_a_path_needs_the_workspace() -> None:
 
 
 def test_grafana_dashboard_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    exporter = SimpleNamespace(fetch=lambda _request: dict(_PASSING_DASHBOARD))
     monkeypatch.setattr(
-        grafana_cli, "_container", lambda: SimpleNamespace(grafana_exporter=lambda: exporter)
+        dashboard_export, "export", lambda _request, _kubectl: dict(_PASSING_DASHBOARD)
     )
 
     result = cli("grafana", "dashboard", "export", "u", "-o", "json")

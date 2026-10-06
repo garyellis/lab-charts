@@ -16,16 +16,16 @@ spec:
         track: main
   fanout:
     validation:
-      - src/chart_manager/services/manifest_validation/**
+      - src/chart_manager/commands/validate/**
       - src/chart_manager/integrations/helm.py
-      - src/chart_manager/integrations/kubeconform.py
+      - src/chart_manager/integrations/kubeconform/**
       - src/chart_manager/integrations/kyverno.py
-    clusterTest:
+    chartTest:
       - src/chart_manager/**
       - .mise.toml
       - pyproject.toml
       - uv.lock
       - .github/workflows/ci.yaml
-  clusterTest:
-    sharedPrerequisites:
+  chartTest:
+    sharedCharts:
       - istio-base

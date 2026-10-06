@@ -10,10 +10,11 @@ import pytest
 from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.errors import (
     ChartManagerError,
-    ExternalCommandError,
     MissingToolError,
 )
-from tests.conftest import FakeCommandRunner
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import CheckStatus, probe_binary
+from tests.conftest import FakeCommandRunner, OnPath, checks_by_name
 
 
 def _config(root: Path, name: str = "renovate-global.json") -> Path:
@@ -54,7 +55,7 @@ def test_run_scopes_argv_cwd_and_all_config_layers(
     runner = FakeCommandRunner(stdout="done\n")
 
     with caplog.at_level("DEBUG"):
-        result = Renovate(runner=runner, timeout=45).run(
+        result = Renovate(runner=runner).run(
             RenovateRequest(
                 repo_root=tmp_path,
                 repository="garyellis/lab-charts",
@@ -66,13 +67,12 @@ def test_run_scopes_argv_cwd_and_all_config_layers(
             )
         )
 
-    assert result.ok is True
+    assert result.returncode == 0
     assert result.stdout == "done\n"
     record = runner.records[0]
     assert record.args == ("renovate", "garyellis/lab-charts")
     assert record.cwd == tmp_path.resolve()
     assert record.check is False
-    assert record.timeout == 45
     assert record.env is not None
     assert record.env["RENOVATE_CONFIG_FILE"] == str(global_config.resolve())
     assert record.env["RENOVATE_ADDITIONAL_CONFIG_FILE"] == str(additional_config.resolve())
@@ -119,7 +119,6 @@ def test_nonzero_exit_is_a_result_for_service_owned_reporting(tmp_path: Path) ->
         )
     )
 
-    assert result.ok is False
     assert (result.returncode, result.stdout, result.stderr) == (
         2,
         "partial",
@@ -215,38 +214,47 @@ def test_missing_config_and_invalid_overlay_use_expected_error_hierarchy(
         )
 
 
-def test_validate_config_uses_repo_semantics_and_standard_failure_plumbing(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path, "renovate.json")
-    runner = FakeCommandRunner(returncode=1, stderr="invalid setting")
+def test_presence_only_probes_skip_the_subprocess(on_path: OnPath) -> None:
+    """Some tools have no version flag; asking anyway would report them broken."""
+    on_path("renovate-config-validator")
+    runner = FakeCommandRunner(when_exhausted="raise")
 
-    with pytest.raises(ExternalCommandError, match="invalid setting"):
-        Renovate(runner=runner).validate_config(
-            [Path("renovate.json")],
-            repo_root=tmp_path,
-            global_config=False,
-        )
-
-    assert runner.calls[0] == (
+    check = probe_binary(
+        runner,
         "renovate-config-validator",
-        "--strict",
-        "--no-global",
-        str(config.resolve()),
-    )
-    assert runner.records[0].cwd == tmp_path.resolve()
-
-
-def test_validate_global_config_omits_no_global_switch(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    runner = FakeCommandRunner(stdout="Config validated successfully")
-
-    result = Renovate(runner=runner).validate_config(
-        [config],
-        repo_root=tmp_path,
-        global_config=True,
-        strict=False,
+        name="renovate-config-validator",
+        version_args=(),
+        remediation="npm install -g renovate",
     )
 
-    assert result.ok is True
-    assert runner.calls[0] == ("renovate-config-validator", str(config.resolve()))
+    assert check.status is CheckStatus.OK
+    assert runner.calls == []
+
+
+def test_renovate_reports_a_missing_token_as_environment(
+    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Required configuration is a per-integration preflight matter."""
+    on_path("renovate", "renovate-config-validator")
+    for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(variable, raising=False)
+
+    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
+    token = checks["renovate-token"]
+
+    assert token.status is CheckStatus.FAILED
+    assert token.outcome is Outcome.ENVIRONMENT
+
+
+def test_renovate_accepts_the_ci_token_it_actually_falls_back_to(
+    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`commands/upgrade/run.py` reads GITHUB_TOKEN as the fallback; so must the check."""
+    on_path("renovate", "renovate-config-validator")
+    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_fake")
+
+    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
+    token = checks["renovate-token"]
+
+    assert token.status is CheckStatus.OK

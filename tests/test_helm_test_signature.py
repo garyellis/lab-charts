@@ -1,6 +1,6 @@
 """Coverage for `Helm.test`'s extended signature.
 
-The helmrelease test service relies on a `check=False` Helm.test that
+The promotion test relies on a `check=False` Helm.test that
 returns a CommandResult so it can classify rc != 0 outcomes without
 catching ExternalCommandError. Existing ci/sandbox callers still pass
 only `(release, namespace=, timeout=)` and discard the return.

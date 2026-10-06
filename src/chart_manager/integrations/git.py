@@ -1,4 +1,4 @@
-"""git wrapper: clone, branch, add/commit/push, and changed-file detection."""
+"""git wrapper: clone, branch, add/commit/push, and working-tree and revision queries."""
 
 from __future__ import annotations
 
@@ -107,6 +107,34 @@ class Git:
             args.append("-u")
         args.extend([remote, branch])
         self.runner.run(args, cwd=self.root)
+
+    def status_paths(self, paths: Sequence[Path]) -> tuple[str, ...]:
+        """Return the modified or untracked files under `paths` (relative to `root`)."""
+        result = self.runner.run(
+            [
+                "git", "status", "--porcelain=v1", "--untracked-files=all", "--",
+                *(str(path) for path in paths),
+            ],
+            cwd=self.root,
+        )
+        return tuple(
+            line[3:].strip()
+            for line in result.stdout.splitlines()
+            if len(line) > 3 and line[3:].strip()
+        )
+
+    def remote_url(self) -> str | None:
+        """Return the `origin` remote's URL, or None when there is no such remote."""
+        result = self.runner.run(
+            ["git", "remote", "get-url", "origin"], cwd=self.root, check=False
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def show(self, revision: str, path: Path) -> str:
+        """Return `path` (relative to `root`) as it was at `revision`."""
+        return self.runner.run(
+            ["git", "show", f"{revision}:{path.as_posix()}"], cwd=self.root
+        ).stdout
 
     def changed_files(self, base: str = "origin/main") -> list[str]:
         """Return paths changed vs `base`, relative to `root`.

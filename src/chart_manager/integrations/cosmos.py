@@ -1,4 +1,4 @@
-"""Cosmos DB access: cached client and container handles, env-var configured."""
+"""Cosmos DB access: cached client and document containers, env-var configured."""
 
 import functools
 import os
@@ -55,9 +55,41 @@ def get_cosmos_client() -> CosmosClient:
     return _build_client(_CLIENT_TIMEOUT)
 
 
+class CosmosContainer:
+    """One Cosmos container, read and written as JSON documents."""
+
+    def __init__(self, proxy: ContainerProxy) -> None:
+        """Bind the SDK container handle."""
+        self._proxy = proxy
+
+    def write(self, item: dict[str, Any], *, upsert: bool) -> None:
+        """Upsert `item` (replacing a document with the same id), or create it."""
+        if upsert:
+            self._proxy.upsert_item(item)
+        else:
+            self._proxy.create_item(item)
+
+    def query(
+        self, sql: str, parameters: list[dict[str, Any]], partition_key: str | None
+    ) -> list[dict[str, Any]]:
+        """Run `sql` in one partition, or across all of them when `partition_key` is None."""
+        addressing: dict[str, Any] = (
+            {"enable_cross_partition_query": True}
+            if partition_key is None
+            else {"partition_key": partition_key}
+        )
+        items = self._proxy.query_items(query=sql, parameters=parameters, **addressing)
+        # `_`-prefixed keys are Cosmos bookkeeping (_rid, _etag, _ts, ...):
+        # transport metadata, not document content.
+        return [
+            {key: value for key, value in item.items() if not key.startswith("_")}
+            for item in items
+        ]
+
+
 @functools.cache
-def get_container(database: str, container: str, partition_key: str) -> ContainerProxy:
-    """Return a (cached) container handle, creating database/container if allowed.
+def get_container(database: str, container: str, partition_key: str) -> CosmosContainer:
+    """Return a (cached) container, creating database/container if allowed.
 
     On 403 (AAD data-plane auth can't create resources) falls back to plain
     get-client handles, assuming the resources were pre-provisioned.
@@ -65,9 +97,11 @@ def get_container(database: str, container: str, partition_key: str) -> Containe
     client = get_cosmos_client()
     try:
         db = client.create_database_if_not_exists(id=database)
-        return db.create_container_if_not_exists(
-            id=container,
-            partition_key=PartitionKey(path=partition_key),
+        return CosmosContainer(
+            db.create_container_if_not_exists(
+                id=container,
+                partition_key=PartitionKey(path=partition_key),
+            )
         )
     except exceptions.CosmosHttpResponseError as e:
         if e.status_code != 403:
@@ -77,7 +111,7 @@ def get_container(database: str, container: str, partition_key: str) -> Containe
         # pre-provisioned out-of-band (IaC/CLI). A genuine missing-resource or
         # permission error will still surface on the first item operation.
         db = client.get_database_client(database)
-        return db.get_container_client(container)
+        return CosmosContainer(db.get_container_client(container))
 
 
 def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) -> Check:

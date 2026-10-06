@@ -35,7 +35,7 @@ def test_real_schema_contracts_are_required_by_ci() -> None:
     ("diff", "tests/test_something.py\nrenovate.json", False),
     ("diff", "charts/demo/values.yaml", True),
     ("diff", ".chart-manager/workspace.yaml", True),
-    ("diff", "src/chart_manager/services/kubeconform_schemas/crd.py", True),
+    ("diff", "src/chart_manager/commands/validate/schemas/crd.py", True),
     ("diff", ".mise.toml", True),
     ("diff", ".github/workflows/ci.yaml", True),
     ("diff", "custom-schema/widget.json", True),
@@ -70,7 +70,7 @@ def test_failed_schema_preparation_runs_repository_render_diagnostics(tmp_path: 
              "SCHEMAS_OUTCOME": "failure"}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     args = result.stdout.splitlines()
-    assert args[:6] == ["run", "validate", "--", "--all", "--phase", "render"]
+    assert args[:6] == ["run", "validate", "--", "--all", "--check", "render"]
     assert "--keep" in args
     assert "--github-step-summary" in args
 

@@ -1,10 +1,8 @@
-"""Kyverno integration for the validate policy phase.
+"""Kyverno integration for `chart validate`'s policy check.
 
 Runs `kyverno apply` over a directory of rendered manifests, parses the
-JSON ClusterReport output, and surfaces a frozen report. Parse types live
-here (not in services/manifest_validation/models) — same convention as
-`integrations/kubeconform/runner.py:KubeconformReport`. Pipeline consumers go
-through `phases.policy()`, which collapses the report into a PhaseResult.
+JSON ClusterReport output, and returns a frozen report; `commands/validate`
+turns it into the policy check's result.
 
 Verified against kyverno CLI v1.18.1. The `apply --policy-report
 --output-format json` envelope is an openreports.io/v1alpha1
@@ -172,8 +170,7 @@ class Kyverno:
 def _discover_manifests(root: Path) -> list[Path]:
     """Walk `root` and return every .yaml/.yml regular file.
 
-    `followlinks=False` matches `services/manifest_validation/paths.has_manifests`
-    so a cyclic symlink in the rendered tree can't hang us.
+    `followlinks=False` so a cyclic symlink in the rendered tree can't hang us.
     """
     found: list[Path] = []
     if not root.exists():

@@ -1,10 +1,9 @@
 """Coverage for the M1c-added Kubectl helpers.
 
-  * `wait_certificate_ready` / `wait_deployment_available`: thin wrappers
-    around `kubectl wait`; we assert the argv shape and propagate the
+  * `wait_certificate_ready`: a thin wrapper around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservices` / `list_gateway_hosts`: best-effort
-    listings used by DevelopmentClusterService and access discovery. Empty list
+    listings used by `local status` and access discovery. Empty list
     on missing CRD / parse error is the contract -- callers treat that
     as "no VirtualServices / hosts yet" rather than as a hard error.
 """
@@ -18,7 +17,9 @@ import pytest
 from chart_manager.integrations import kubectl as kubectl_module
 from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ExternalCommandError
-from tests.conftest import FakeCommandRunner, Reply
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import CheckStatus
+from tests.conftest import FakeCommandRunner, OnPath, Reply, checks_by_name
 
 # ----- wait_certificate_ready -----------------------------------------------
 
@@ -66,36 +67,6 @@ def test_wait_certificate_ready_surfaces_timeout_as_external_error() -> None:
             "apps-wildcard", namespace="istio-ingress", timeout="1s"
         )
     assert "timed out" in str(excinfo.value)
-
-
-# ----- wait_deployment_available --------------------------------------------
-
-
-def test_wait_deployment_available_invokes_kubectl_with_expected_argv() -> None:
-    runner = FakeCommandRunner()
-    Kubectl(runner=runner).wait_deployment_available(
-        "cert-manager-webhook", namespace="cert-manager", timeout="120s"
-    )
-
-    assert runner.calls == [
-        (
-            "kubectl",
-            "-n",
-            "cert-manager",
-            "wait",
-            "--for=condition=Available",
-            "deployment/cert-manager-webhook",
-            "--timeout=120s",
-        )
-    ]
-
-
-def test_wait_deployment_available_surfaces_failure() -> None:
-    runner = FakeCommandRunner(returncode=1, stderr="not found")
-    with pytest.raises(ExternalCommandError):
-        Kubectl(runner=runner).wait_deployment_available(
-            "cert-manager-webhook", namespace="cert-manager", timeout="1s"
-        )
 
 
 # ----- list_virtualservices -------------------------------------------------
@@ -285,8 +256,8 @@ def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
 
 
 # ----- cluster addressing ---------------------------------------------------
-# `Kubectl` took no context at all until Wave 4, so `Settings.kube_context`
-# reached two of six adapters and the lab/sandbox/ci/expose services all read
+# `Kubectl` once took no context at all, so `Settings.kube_context`
+# reached two of six adapters and every other kubectl call read
 # the ambient kubeconfig. These pin both halves: pinned adds the flag
 # everywhere, unpinned is byte-identical to the old behavior.
 
@@ -295,7 +266,6 @@ def _kubectl_argvs(kubectl: Kubectl, runner: FakeCommandRunner) -> list[tuple[st
     """Exercise one call on every argv-building path and return what ran."""
     kubectl.create_namespace("obs")
     kubectl.wait_certificate_ready("apps-wildcard", namespace="istio-ingress")
-    kubectl.wait_deployment_available("webhook", namespace="cert-manager")
     kubectl.list_gateway_hosts()
     kubectl.list_virtualservices()
     kubectl.diagnostics("obs")
@@ -370,7 +340,7 @@ def test_port_forward_argv_uses_the_instance_context(monkeypatch: pytest.MonkeyP
     )
 
     assert captured[0][-2:] == ["--context", "kind-a"]
-    # A per-call context wins: one ExposeService fronts every cluster.
+    # A per-call context wins: one caller can address every cluster.
     assert captured[1][-2:] == ["--context", "kind-b"]
 
 
@@ -472,3 +442,55 @@ def test_get_json_non_object_payload_raises() -> None:
         Kubectl(runner=runner).get_json(["kubectl", "get", "pods", "-o", "json"])
 
     assert "kubectl JSON payload was not an object" in str(excinfo.value)
+
+
+def test_kubectl_reports_the_ambient_context(on_path: OnPath) -> None:
+    """No pin: the check answers with whatever the kubeconfig points at."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "current-context"), stdout="kind-lab\n")
+
+    checks = checks_by_name(Kubectl(runner).preflight())
+
+    assert checks["kubectl"].detail.startswith("v1.31.0")
+    assert checks["kube-context"].status is CheckStatus.OK
+    assert "kind-lab" in checks["kube-context"].detail
+
+
+def test_no_current_kubecontext_is_an_environment_failure(on_path: OnPath) -> None:
+    """Exit 5, per the table: nothing is missing, the environment is unset."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "current-context"), returncode=1)
+
+    context = checks_by_name(Kubectl(runner).preflight())["kube-context"]
+
+    assert context.status is CheckStatus.FAILED
+    assert context.outcome is Outcome.ENVIRONMENT
+
+
+def test_a_pinned_context_missing_from_the_kubeconfig_fails(on_path: OnPath) -> None:
+    """`CHART_MANAGER_KUBE_CONTEXT` naming a context nobody has is a real bug."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "get-contexts"), stdout="kind-lab\nprod\n")
+
+    context = checks_by_name(Kubectl(runner, context="kind-gone").preflight())["kube-context"]
+
+    assert context.status is CheckStatus.FAILED
+    assert context.outcome is Outcome.ENVIRONMENT
+    assert "kind-lab" in (context.remediation or ""), "say which contexts do exist"
+
+
+def test_the_context_check_is_skipped_when_kubectl_is_absent(on_path: OnPath) -> None:
+    """One broken install, one line of blame -- not two."""
+    on_path()
+
+    checks = checks_by_name(Kubectl(FakeCommandRunner()).preflight())
+
+    assert checks["kubectl"].outcome is Outcome.MISSING_BINARY
+    assert checks["kube-context"].status is CheckStatus.SKIPPED
+    assert checks["kube-context"].outcome is Outcome.SUCCESS, "a skip is not a failure"

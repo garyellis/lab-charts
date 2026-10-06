@@ -1,10 +1,8 @@
-"""Kubeconform integration for the validate schema phase.
+"""Kubeconform integration for `chart validate`'s schema check.
 
 Runs `kubeconform` over a directory of rendered manifests, parses the
-JSON output, and surfaces a frozen report. Parse types live here (not in
-services/manifest_validation/models) because they're integration-local: the rest of
-the pipeline consumes them via the schema phase, which collapses the
-report into a PhaseResult.
+JSON output, and returns a frozen report; `commands/validate` turns it into
+the schema check's result.
 """
 
 from __future__ import annotations

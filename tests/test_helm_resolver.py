@@ -67,6 +67,6 @@ def test_resolved_binary_is_used_in_commands() -> None:
     runner = FakeCommandRunner()
 
     instance = Helm(runner=runner, binary="/custom/helm")
-    instance.dependency_update(Path("charts/grafana"))
+    instance.dependency_update(Path("charts/grafana"), timeout=1.0)
 
     assert runner.calls == [("/custom/helm", "dependency", "update", "charts/grafana")]

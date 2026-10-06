@@ -15,13 +15,13 @@ warnings, access hints, deprecation notices, and error detail.
 Why this is worth a gate rather than a convention:
 
   (a) `.github/workflows/ci.yaml` captures CLI stdout into shell variables
-      (`publish_charts="$(... ci publish-charts ...)"`). A warning printed
+      (`publish_charts="$(... plan --for publish ...)"`). A warning printed
       on the same stream is silently absorbed into the value, and no exit
       code reveals it.
 
-  (b) `cli/validate.py --format json` writes a JSON document to stdout. It
+  (b) `chart validate -o json` writes a JSON document to stdout. It
       used to write its warnings to a stdout console too, so
-      `--format json --github-step-summary` with `$GITHUB_STEP_SUMMARY`
+      `-o json --github-step-summary` with `$GITHUB_STEP_SUMMARY`
       unset emitted a warning *inside* the JSON stream. That is the exact
       regression `test_json_projections_are_parseable_on_stdout` exists to
       catch, and it is why the behavioral leg below parses rather than
@@ -85,8 +85,8 @@ def _argv(name: str, root: Path) -> list[str]:
         ],
         # Deliberately does NOT name `--output json`: it lets `auto` resolve
         # to json, which is what happens off a terminal and therefore what
-        # happens in CI. An *explicit* `-o json` implies `--quiet` (design doc
-        # 6.2), which would suppress the very warning this case exists to
+        # happens in CI. An *explicit* `-o json` implies `--quiet`,
+        # which would suppress the very warning this case exists to
         # produce -- and the regression being guarded is a warning landing in
         # the JSON document, which only has teeth while the warning is emitted.
         # See `cli/output.resolve` for why auto-resolved json is not quiet.
@@ -94,7 +94,7 @@ def _argv(name: str, root: Path) -> list[str]:
             "chart", "validate", "--all",
             "--progress", "none", "--github-step-summary", "--root", str(root),
         ],
-        "cluster-test-matrix": [
+        "chart-test-matrix": [
             "plan", "-o", "github", "--all", "--root", str(root),
         ],
     }[name]
@@ -102,7 +102,7 @@ def _argv(name: str, root: Path) -> list[str]:
 
 @pytest.mark.parametrize(
     "command",
-    ["validate-json", "validate-json-with-warning", "cluster-test-matrix"],
+    ["validate-json", "validate-json-with-warning", "chart-test-matrix"],
 )
 def test_json_projections_are_parseable_on_stdout(
     command: str, root: Path, monkeypatch: pytest.MonkeyPatch
@@ -176,9 +176,11 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
 
 
 def _console_constructions() -> list[tuple[Path, ast.Call]]:
-    """Every `Console(...)` call site under cli/, as (path, node)."""
+    """Every `Console(...)` call site in main.py, cli/ and commands/, as (path, node)."""
     found: list[tuple[Path, ast.Call]] = []
-    for path in sorted(_CLI.rglob("*.py")):
+    for path in sorted(
+        [_CLI.parent / "main.py", *_CLI.rglob("*.py"), *(_CLI.parent / "commands").rglob("*.py")]
+    ):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -203,7 +205,7 @@ def test_console_scan_finds_the_constructions_it_is_meant_to_check() -> None:
 
     files = {path.name for path, _ in found}
     assert "streams.py" in files, "the shared seam should construct consoles"
-    assert "validate_progress.py" in files, "the progress displays construct their own"
+    assert "display.py" in files, "the progress displays construct their own"
 
 
 def test_every_console_in_cli_names_its_stream() -> None:

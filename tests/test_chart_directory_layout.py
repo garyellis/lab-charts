@@ -4,7 +4,7 @@
 chart root is configured. A nested value (`deploy/helm`) is the case that
 catches a subsystem quietly assuming `charts/`, so every consumer is
 asserted against one here: change mapping, git, the planner, upgrade path
-resolution, dashboard discovery, and the services the container builds.
+resolution, dashboard discovery, and the workspace the container reads.
 """
 
 from __future__ import annotations
@@ -13,13 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.composition import Container
-from chart_manager.domain.charts import ChartRepository
+from chart_manager.cli._container import Container
+from chart_manager.commands import validate
+from chart_manager.commands.catalog import run as catalog
+from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
+from chart_manager.commands.local.targets import LocalTargetResolver
+from chart_manager.commands.upgrade.paths import resolve_chart_path
+from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.integrations.git import Git
-from chart_manager.services.grafana.dashboard_lint import discover_dashboards
-from chart_manager.services.manifest_validation.planner import build_worklist
-from chart_manager.services.upgrader.paths import resolve_chart_path
 from chart_manager.settings import Settings
+from chart_manager.shared.charts.chart import ChartRepository
 from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
@@ -132,9 +135,9 @@ spec:
     )
     (chart / "values.yaml").write_text("", encoding="utf-8")
 
-    result = build_worklist(
+    result = validate.select(
+        ["deploy/helm/demo/values.yaml"],
         workspace=workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR),
-        changed_files=["deploy/helm/demo/values.yaml"],
     )
 
     assert [(row.chart, row.env) for row in result.rows] == [("demo", "dev")]
@@ -142,24 +145,26 @@ spec:
 
 
 def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path) -> None:
-    """One container's workspace answers for every service it builds.
+    """One container's workspace answers for every command that reads it.
 
-    Each of these four was once constructed at the surface from a layout of
+    Each of these three was once constructed at the surface from a layout of
     its own, so the container's configuration was not what answered the
-    question. Write a nested `chartsDir` once and `chart list`, `plan`,
-    `local up` and `chart cache clean` all address it.
+    question. Write a nested `chartsDir` once and `chart list`, `local up`
+    and `chart cache clean` all address it.
     """
     _write_chart(tmp_path, "demo")
     write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())
 
-    catalog = container.chart_catalog_service(tmp_path).list_entries()
-    assert [entry.name for entry in catalog] == ["demo"]
+    charts = catalog.list_charts(container.workspace(tmp_path))
+    assert [entry.name for entry in charts] == ["demo"]
 
-    impact = container.impact_service(tmp_path)
-    assert impact.workspace.spec.charts_dir == CUSTOM_CHARTS_DIR
-
-    resolved = container.local_target_resolver(tmp_path).resolve("deploy/helm/demo")
+    resolved = _local_targets(container, tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()
 
-    assert container.render_output_service(tmp_path).state().path.is_relative_to(tmp_path)
+    assert render_dir_state(container.workspace(tmp_path)).path.is_relative_to(tmp_path)
+
+
+def _local_targets(container: Container, root: Path) -> LocalTargetResolver:
+    workspace = container.workspace(root)
+    return LocalTargetResolver(workspace.root, local_config=workspace.spec.local_cluster)

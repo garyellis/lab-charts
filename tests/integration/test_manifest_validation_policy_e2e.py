@@ -1,9 +1,4 @@
-"""End-to-end manifest render -> schema -> policy integration test.
-
-Skips cleanly if helm, kubeconform, or kyverno are missing on PATH so
-unit-test runs on contributor machines without the validate tooling stay
-green. Local and CI tool installation is owned by mise.
-"""
+"""`run()` with real helm, kubeconform and kyverno against the repository policies."""
 
 from __future__ import annotations
 
@@ -12,116 +7,54 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.integrations.helm import Helm
-from chart_manager.integrations.kubeconform import Kubeconform
-from chart_manager.integrations.kyverno import Kyverno
+from chart_manager.commands import validate
+from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.services.manifest_validation.models import WorklistRow
-from chart_manager.services.manifest_validation.runner import ManifestValidationRunner, RowConfig
-from chart_manager.services.manifest_validation.validator_adapters import (
-    KubeconformValidator,
-    KyvernoValidator,
-)
-from chart_manager.services.manifest_validation.validators import (
-    KubeconformConfig,
-    KyvernoConfig,
-    ValidatorCategory,
-    ValidatorInvocation,
-)
+from chart_manager.shared.workspace import RepositoryWorkspace
+from tests.integration.conftest import FIXTURES, fixture_chart, require
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).parent.parent.parent
-FIXTURE_CHARTS = Path(__file__).parent.parent / "fixtures" / "charts"
-FIXTURE_SCHEMAS = Path(__file__).parent.parent / "fixtures" / "schemas"
-SCHEMA_LOCATION = str(
-    FIXTURE_SCHEMAS / "{{.Group}}" / "{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-)
-REPO_POLICIES = REPO_ROOT / "policies"
+REPO_POLICIES = Path(__file__).parent.parent.parent / "policies"
+SCHEMA_LOCATION = "schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 
-def _skip_if_missing(*tools: str) -> None:
-    missing = [t for t in tools if shutil.which(t) is None]
-    if missing:
-        pytest.skip(f"missing tools on PATH: {', '.join(missing)}")
-
-
-def _runner(out_root: Path) -> ManifestValidationRunner:
-    cmd_runner = SubprocessRunner()
-    helm = Helm(runner=cmd_runner)
-    return ManifestValidationRunner(
-        helm_factory=lambda _version, _binary: helm,
-        output_root=out_root,
-        validators={
-            "kubeconform": KubeconformValidator(Kubeconform(runner=cmd_runner)),
-            "kyverno": KyvernoValidator(Kyverno(runner=cmd_runner)),
-        },
-    )
-
-
-def _cfg(chart_dir: Path, *, env: str = "dev") -> RowConfig:
-    row = WorklistRow(
-        chart=chart_dir.name,
-        env=env,
-        release=chart_dir.name,
-        namespace=f"lab-{env}",
-    )
-    values = [chart_dir / "values.yaml"] if (chart_dir / "values.yaml").is_file() else []
-    return RowConfig(
-        row=row,
-        chart_path=chart_dir,
-        values=values,
-        validator_invocations=(
-            ValidatorInvocation(
-                validator_id="kubeconform",
-                category=ValidatorCategory.SCHEMA,
-                order=100,
-                enabled=True,
-                config=KubeconformConfig(None, (SCHEMA_LOCATION,)),
-            ),
-            ValidatorInvocation(
-                validator_id="kyverno",
-                category=ValidatorCategory.POLICY,
-                order=200,
-                enabled=True,
-                config=KyvernoConfig((REPO_POLICIES,)),
+@pytest.mark.parametrize(
+    ("chart", "policy", "findings"),
+    [
+        ("passing-app", "passed", ()),
+        (
+            "policy-violator",
+            "failed",
+            (
+                "require-non-root",
+                "Deployment/policy-violator",
+                "forbid-load-balancer",
+                "Service/policy-violator",
             ),
         ),
+    ],
+)
+def test_fixture_charts_meet_or_break_the_repository_policies(
+    tmp_path: Path,
+    schema_workspace: RepositoryWorkspace,
+    chart: str,
+    policy: str,
+    findings: tuple[str, ...],
+) -> None:
+    require("helm", "kubeconform", "kyverno", "git")
+    shutil.copytree(FIXTURES / "schemas", tmp_path / "schemas")
+    shutil.copytree(REPO_POLICIES, tmp_path / "policies")
+    fixture_chart(tmp_path, chart, schemaLocations=[SCHEMA_LOCATION])
+
+    outcome = run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=(chart,)),
+        workspace=schema_workspace,
+        runner=SubprocessRunner(),
     )
 
-
-def test_passing_app_renders_schema_passes_policy_passes(tmp_path: Path) -> None:
-    _skip_if_missing("helm", "kubeconform", "kyverno")
-    chart = FIXTURE_CHARTS / "passing-app"
-
-    result = _runner(tmp_path / "out").run([_cfg(chart)])
-
-    row = result.rows[0]
-    assert row.phases["render"].status == "PASS", row.phases["render"].detail
-    assert row.phases["schema"].status == "PASS", row.phases["schema"].detail
-    assert row.phases["policy"].status == "PASS", row.phases["policy"].detail
-    assert result.outcome() is Outcome.SUCCESS
-
-
-def test_policy_violator_passes_schema_fails_policy(tmp_path: Path) -> None:
-    _skip_if_missing("helm", "kubeconform", "kyverno")
-    chart = FIXTURE_CHARTS / "policy-violator"
-
-    result = _runner(tmp_path / "out").run([_cfg(chart)])
-
-    row = result.rows[0]
-    assert row.phases["render"].status == "PASS", row.phases["render"].detail
-    assert row.phases["schema"].status == "PASS", row.phases["schema"].detail
-    assert row.phases["policy"].status == "FAIL"
-    detail = row.phases["policy"].detail or ""
-    # Both authored policies should fire on this fixture:
-    #   - require-non-root: Deployment lacks runAsNonRoot
-    #   - forbid-load-balancer: Service is type LoadBalancer
-    # Asserting both keeps the fixture honest as a known-violator for the
-    # whole policy/ directory, not just one rule.
-    assert "require-non-root" in detail
-    assert "Deployment/policy-violator" in detail
-    assert "forbid-load-balancer" in detail
-    assert "Service/policy-violator" in detail
-    assert result.outcome() is Outcome.FAILED
+    (row,) = outcome.rows
+    assert row.checks["schema"].status == "passed", row.checks["schema"].detail
+    assert row.checks["policy"].status == policy, row.checks["policy"].detail
+    # Both repository policies fire on the violator, keeping it honest for the whole directory.
+    assert all(finding in row.checks["policy"].detail for finding in findings)

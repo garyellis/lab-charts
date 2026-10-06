@@ -1,4 +1,4 @@
-"""Process configuration. Repository layout lives in `domain.workspace`."""
+"""Process configuration. Repository layout lives in `shared.workspace`."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from chart_manager.plumbing.yaml_files import load_yaml_file
 
 DEFAULT_CONFIG_FILE = Path(".chart-manager/config.yaml")
 DEFAULT_ROOT = Path(".")
+DEFAULT_CLUSTER_NAME = "chart-manager"
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
 
@@ -27,7 +28,7 @@ LogFormat = Literal["text", "json"]
 #: resolves its sources from the *class*, not from per-instance kwargs --
 #: there is no `Settings(config=...)` to thread through, and `Container`
 #: builds its own default when no `Settings` is injected. The surface sets
-#: this once from `--config` in `cli/main.py`'s root callback, before
+#: this once from `--config` in `main.py`'s root callback, before
 #: anything constructs Settings; nothing else writes it.
 _config_file: Path = DEFAULT_CONFIG_FILE
 
@@ -122,6 +123,7 @@ def load_settings() -> Settings:
 
 
 __all__ = [
+    "DEFAULT_CLUSTER_NAME",
     "DEFAULT_CONFIG_FILE",
     "DEFAULT_ROOT",
     "LogFormat",

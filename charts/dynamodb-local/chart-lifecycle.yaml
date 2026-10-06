@@ -24,7 +24,7 @@ spec:
       "values-ci.yaml":  [ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     enabled: true
     profiles:
       minimal:

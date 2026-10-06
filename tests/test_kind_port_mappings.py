@@ -1,6 +1,6 @@
 """Coverage for `Kind.container_host_ports`.
 
-Used by DevelopmentClusterService.up's port-mapping drift check: if kind-config.yaml
+Used by `local up`'s port-mapping drift check: if kind-config.yaml
 declares extraPortMappings the user has since edited but the cluster was
 recreated only via `local down` + `local up`, the running container
 keeps the old port bindings. We surface the missing host ports as a

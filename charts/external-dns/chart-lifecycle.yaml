@@ -22,7 +22,7 @@ spec:
       "templates/**":         [ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     # The Designate webhook authenticates to Keystone during process startup.
     # A truthful cluster test therefore requires live OpenStack credentials and
     # belongs in edge-w acceptance, not an offline kind sandbox.

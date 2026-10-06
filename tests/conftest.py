@@ -14,9 +14,13 @@ docstring for why there is exactly one of it.
 `_COMMAND_PATHS` for why the suite never writes a group name into an
 `invoke()` call directly.
 """
+
 from __future__ import annotations
 
+import io
 import logging
+import shutil
+import tarfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,15 +33,16 @@ from typer.testing import CliRunner, Result
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspaceSpec
 from chart_manager.cli._container import reset_invocation
-from chart_manager.domain.workspace import RepositoryWorkspace
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.preflight import Check
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: The conventional layout, for domain loaders that take it explicitly.
+#: The conventional layout, for loaders that take it explicitly.
 CHARTS_DIR = Path("charts")
 LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 POLICIES_DIR = Path("policies")
@@ -70,6 +75,8 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_TOKEN",
         "RENOVATE_TOKEN",
         "FORCE_COLOR",
+        "CHART_MANAGER_OCI_REPOSITORY",
+        "CHART_MANAGER_OCI_CA_FILE",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")
@@ -91,7 +98,7 @@ def hermetic_logging() -> Iterator[None]:
     logs anything then writes into a closed stream, and `logging` swallows the
     result as "--- Logging error ---" on stderr.
 
-    That was invisible while `services/` emitted no log records. It is not
+    That was invisible while nothing below the CLI emitted log records. It is not
     invisible now, and the fix belongs here rather than in each test: the
     leaked state is global, and no test should have to know which earlier one
     configured logging.
@@ -119,6 +126,35 @@ def fresh_cli_invocation() -> Iterator[None]:
 def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep a developer's `CHART_MANAGER_ROOT` from redirecting CLI tests."""
     monkeypatch.delenv("CHART_MANAGER_ROOT", raising=False)
+
+
+#: Where the fake PATH lookup claims every binary lives.
+FAKE_BIN = "/opt/fake/bin"
+
+OnPath = Callable[..., None]
+
+
+@pytest.fixture
+def on_path(monkeypatch: pytest.MonkeyPatch) -> OnPath:
+    """Control what `probe_binary` finds on PATH: only the names passed are present."""
+
+    def install(*names: str) -> None:
+        present = set(names)
+
+        def which(binary: str, *args: Any, **kwargs: Any) -> str | None:
+            if binary not in present:
+                return None
+            # An absolute name (a mise-resolved helm) is already a path.
+            return binary if binary.startswith("/") else f"{FAKE_BIN}/{binary}"
+
+        monkeypatch.setattr(shutil, "which", which)
+
+    return install
+
+
+def checks_by_name(checks: Sequence[Check]) -> dict[str, Check]:
+    """Index a preflight result by check name."""
+    return {check.name: check for check in checks}
 
 
 @pytest.fixture
@@ -175,15 +211,15 @@ def chart_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_chart(chart_root: Path) -> MakeChart:
-    """Write a minimal Helm chart with enabled cluster tests into ``chart_root``.
+    """Write a minimal Helm chart with enabled chart tests into ``chart_root``.
 
-    `profiles` is the raw cluster-test profile mapping, so tests express
+    `profiles` is the raw chart-test profile mapping, so tests express
     requirements exactly as a chart author would:
 
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
 
     Every values file any profile references is created empty, since
-    `ClusterTestCatalog.value_paths` requires them to exist. A profile that
+    `ChartTestCatalog.value_paths` requires them to exist. A profile that
     names no `namespace` is written with `default`, because the lifecycle
     API requires one and most tests have no opinion about it.
     """
@@ -220,7 +256,7 @@ def make_chart(chart_root: Path) -> MakeChart:
                     "metadata": {"name": name},
                     "spec": {
                         "enabled": True,
-                        "clusterTest": {
+                        "chartTest": {
                             "enabled": True,
                             "profiles": spec_profiles,
                             "dependentTests": [],
@@ -235,11 +271,134 @@ def make_chart(chart_root: Path) -> MakeChart:
     return build
 
 
+def write_validation_chart(root: Path, name: str, **validation: Any) -> Path:
+    """Write a chart whose `spec.validation` is `validation` over a `dev` default."""
+    chart = root / "charts" / name
+    chart.mkdir(parents=True)
+    (chart / "Chart.yaml").write_text(
+        dump_yaml({"apiVersion": "v2", "name": name, "version": "0.1.0"})
+    )
+    (chart / "values.yaml").write_text("")
+    spec = {
+        "releaseName": name,
+        "namespaceTemplate": "lab-${env}",
+        "environments": {"dev": {"values": ["values.yaml"]}},
+        **validation,
+    }
+    (chart / "chart-lifecycle.yaml").write_text(
+        dump_yaml(
+            {
+                "apiVersion": "chartmanager.io/v1alpha1",
+                "kind": "ChartLifecycle",
+                "metadata": {"name": name},
+                "spec": {"validation": spec},
+            }
+        )
+    )
+    return chart
+
+
+def crd_manifest(*, nested_type: str = "string") -> str:
+    """A CustomResourceDefinition for example.io/v1 Widget."""
+    return f"""apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.io
+spec:
+  group: example.io
+  names:
+    kind: Widget
+    plural: widgets
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                name:
+                  type: {nested_type}
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                arbitrary:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+    - name: v1beta1
+      served: false
+      storage: false
+      schema:
+        openAPIV3Schema:
+          type: object
+"""
+
+
+#: Chart.lock for one `foo 1.0.0` dependency on https://example.test/charts.
+ONE_DEPENDENCY_LOCK = (
+    "dependencies:\n"
+    "  - name: foo\n"
+    "    version: 1.0.0\n"
+    "    repository: https://example.test/charts\n"
+    "digest: sha256:ac904eb48ba9649a9d5261dfc887cd08080cdddfd2e7bca3217ff88cfaadb27b\n"
+)
+
+
+def materialize_dependency(
+    chart: Path,
+    name: str = "foo",
+    version: str = "1.0.0",
+    *,
+    helm_gzip_extra: bool = False,
+) -> None:
+    """Create a minimal real Helm package under ``charts/``."""
+    chart_yaml = (f"apiVersion: v2\nname: {name}\nversion: {version}\n").encode()
+    info = tarfile.TarInfo(f"{name}/Chart.yaml")
+    info.size = len(chart_yaml)
+    package = chart / "charts" / f"{name}-{version}.tgz"
+    with tarfile.open(package, "w:gz") as archive:
+        archive.addfile(info, io.BytesIO(chart_yaml))
+    if helm_gzip_extra:
+        compressed = package.read_bytes()
+        # Helm's Go gzip writer includes FEXTRA. Insert a minimal valid extra
+        # field into Python's otherwise equivalent gzip header.
+        package.write_bytes(
+            compressed[:3]
+            + bytes([compressed[3] | 0x04])
+            + compressed[4:10]
+            + b"\x04\x00HELM"
+            + compressed[10:]
+        )
+
+
+@pytest.fixture
+def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryWorkspace:
+    """A workspace whose locked schema generation is synced into a tmp cache."""
+    from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+    from chart_manager.commands.validate.schemas.store import (
+        KubeconformSchemaStore,
+        default_schema_cache_root,
+    )
+    from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
+    from tests import schema_fixtures  # imports this module
+
+    lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots).sync(lock)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    return schema_fixtures.workspace(tmp_path)
+
+
 # --- the CLI argv seam -------------------------------------------------------
 #
 # Every test that drives the CLI names a command as a sequence of argv
 # tokens, and Typer resolves those tokens against the registered command
-# tree. A rename in `cli/main.py` therefore breaks every test that spelled
+# tree. A rename in `main.py` therefore breaks every test that spelled
 # the old name -- silently at the source level, loudly and in bulk at run
 # time. Before this seam existed, ~49 assertion sites across nine modules
 # each carried a literal group name, so renaming one group was a nine-file
@@ -289,7 +448,7 @@ _COMMAND_PATHS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("doctor",): ("doctor",),
     ("event",): ("event",),
     ("grafana",): ("grafana",),
-    ("helmrelease",): ("helmrelease",),
+    ("promote",): ("promote",),
     ("local",): ("local",),
     ("plan",): ("plan",),
     ("schemas",): ("schemas",),
@@ -307,11 +466,11 @@ def _root_app() -> typer.Typer:
 
     Lazily so that a conftest import -- which every test in the suite pays
     for, including the ones that never touch the surface -- does not drag
-    Rich, Typer's command tree and the whole service layer into the process,
+    Rich, Typer's command tree and every command package into the process,
     and so that an import error in `cli/` fails the CLI tests rather than
     collection of the entire suite.
     """
-    from chart_manager.cli.main import app
+    from chart_manager.main import app
 
     return app
 
@@ -383,16 +542,8 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
     Use this instead of `CliRunner().invoke(main.app, [...])` everywhere, so
     a command rename stays a `_COMMAND_PATHS` diff.
 
-    Deliberately offers no `app=` override. `_COMMAND_PATHS` is expressed in
-    *root-app* paths, and a module that assembles a partial app from a
-    `cli/*.py` `register()` function (`tests/test_cli_publish.py`,
-    `tests/test_cli_upgrade.py`, `tests/test_cli_helmrelease.py`) registers
-    those commands flat, with no group above them. Mid-migration, when an
-    entry is non-identity, translating a root path into such an app would
-    rewrite e.g. `publish` to `chart publish` against an app where only
-    `publish` exists. Those modules are already insulated --
-    `register()` owns the command name, `main.py` owns the group name -- so
-    they keep a plain `CliRunner` and need nothing from this table.
+    Deliberately offers no `app=` override: `_COMMAND_PATHS` is expressed in
+    *root-app* paths, and `main.py` owns the whole command tree.
     """
     # Historical tests addressed synthetic repositories with the removed
     # `--root` option. Translate that test-only spelling onto the supported
@@ -439,11 +590,12 @@ Matcher = Predicate | tuple[str, ...]
 
 @dataclass(frozen=True)
 class Reply:
-    """One scripted subprocess outcome."""
+    """One scripted subprocess outcome; `raises` is raised instead of returning."""
 
     returncode: int = 0
     stdout: str = ""
     stderr: str = ""
+    raises: BaseException | None = None
 
 
 @dataclass(frozen=True)
@@ -518,10 +670,11 @@ class FakeCommandRunner:
         returncode: int = 0,
         stdout: str = "",
         stderr: str = "",
+        raises: BaseException | None = None,
     ) -> FakeCommandRunner:
-        """Answer every argv matching `matcher` with this reply. Chainable."""
+        """Answer every argv matching `matcher` with this reply, or raise `raises`. Chainable."""
         return self.respond_each(
-            matcher, Reply(returncode=returncode, stdout=stdout, stderr=stderr)
+            matcher, Reply(returncode=returncode, stdout=stdout, stderr=stderr, raises=raises)
         )
 
     def respond_each(self, matcher: Matcher, *replies: Reply) -> FakeCommandRunner:
@@ -573,6 +726,8 @@ class FakeCommandRunner:
             )
         )
         reply = self._reply_for(argv)
+        if reply.raises is not None:
+            raise reply.raises
         result = CommandResult(
             args=argv,
             returncode=reply.returncode,
@@ -609,3 +764,37 @@ def _as_predicate(matcher: Matcher) -> Predicate:
         prefix = matcher
         return lambda argv: argv[: len(prefix)] == prefix
     return matcher
+
+
+def plain_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Argv with the binary reduced to its name and a pinned kube context dropped."""
+    head = (Path(argv[0]).name, *argv[1:])
+    for flag in ("--kube-context", "--context"):
+        if flag in head:
+            at = head.index(flag)
+            head = head[:at] + head[at + 2 :]
+    return head
+
+
+def argv_prefix(*prefix: str) -> Callable[[tuple[str, ...]], bool]:
+    """A `FakeCommandRunner` matcher on the start of `plain_argv`."""
+    return lambda argv: plain_argv(argv)[: len(prefix)] == prefix
+
+
+class FakeCosmosContainer:
+    """Record-and-replay `CosmosContainer`: records writes and queries, returns `documents`."""
+
+    def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
+        self.documents = documents or []
+        self.items: list[dict[str, Any]] = []
+        self.upserted: list[dict[str, Any]] = []
+        self.queries: list[tuple[str, list[dict[str, Any]], str | None]] = []
+
+    def write(self, item: dict[str, Any], *, upsert: bool) -> None:
+        (self.upserted if upsert else self.items).append(item)
+
+    def query(
+        self, sql: str, parameters: list[dict[str, Any]], partition_key: str | None
+    ) -> list[dict[str, Any]]:
+        self.queries.append((sql, parameters, partition_key))
+        return list(self.documents)

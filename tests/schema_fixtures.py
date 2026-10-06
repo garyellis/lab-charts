@@ -2,15 +2,15 @@
 
 from pathlib import Path
 
-from chart_manager.domain.workspace import RepositoryWorkspace
-from chart_manager.integrations.kubeconform.repository_snapshot import RepositorySnapshot
-from chart_manager.plumbing.commands import SubprocessRunner
-from chart_manager.services.kubeconform_schemas.models import (
+from chart_manager.commands.validate.schemas.models import (
     LockedSchemaPolicy,
     RepositoryPin,
     build_lock,
 )
-from chart_manager.services.kubeconform_schemas.store import KubeconformSchemaStore
+from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
+from chart_manager.integrations.kubeconform.repository_snapshot import RepositorySnapshot
+from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import workspace_for
 
 

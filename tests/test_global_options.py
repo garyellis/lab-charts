@@ -17,7 +17,7 @@ not. There is deliberately no CLI `--root` spelling.
 Also pinned here: the global `-o/--output` reaches commands through
 `ctx.obj` and never through `default_map`, and there is deliberately no
 global `--version`, which would collide with the *chart* `--version` on
-`publish`, `events`, and `helmrelease`. Both are asserted so neither
+`publish`, `events`, and `promote`. Both are asserted so neither
 property is lost by accident.
 """
 
@@ -29,8 +29,8 @@ import pytest
 import typer.main
 from typer.testing import CliRunner, Result
 
-from chart_manager import composition
-from chart_manager.cli import main
+from chart_manager import main
+from chart_manager.cli import _container
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
 from .conftest import cli, write_workspace
@@ -95,7 +95,7 @@ def test_non_repository_command_never_discovers_a_workspace(
     def fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("version must not load repository state")
 
-    monkeypatch.setattr(composition, "load_repository_workspace", fail)
+    monkeypatch.setattr(_container, "load_repository_workspace", fail)
 
     assert cli("version").exit_code == 0
 
@@ -112,13 +112,13 @@ def test_a_repository_command_loads_the_workspace_once_per_invocation(
     root = _repo_with_chart(tmp_path, "zeta")
     monkeypatch.chdir(root)
     loaded: list[Path] = []
-    real = composition.load_repository_workspace
+    real = _container.load_repository_workspace
 
     def counting(path: Path, **kwargs):  # type: ignore[no-untyped-def]
         loaded.append(path)
         return real(path, **kwargs)
 
-    monkeypatch.setattr(composition, "load_repository_workspace", counting)
+    monkeypatch.setattr(_container, "load_repository_workspace", counting)
 
     result = _charts("chart", "list")
 
@@ -273,11 +273,10 @@ def test_verbose_raises_the_log_level_and_silence_leaves_it_alone(
 def test_verbosity_is_a_count_not_a_boolean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`-vv` means more than `-v` (6.4: stream subprocess output).
+    """`-vv` means more than `-v` (stream subprocess output).
 
-    The behavioral half of that lives in services and is not in this commit,
-    so pin the count now: a later phase reads it, and a `bool` flag here
-    would have thrown the distinction away irrecoverably.
+    Pin the count: a `bool` flag here would throw the distinction away
+    irrecoverably.
     """
     monkeypatch.chdir(tmp_path)
     captured: list[dict[str, object]] = []
@@ -311,11 +310,8 @@ def _root_option_names() -> set[str]:
 
 
 def test_there_is_a_global_output_flag() -> None:
-    """P1.4 landed the root `-o`, together with the vocabulary unification.
-
-    It was deliberately held back from P0.10 (design doc 6.2 / plan 2.7)
-    until there was one vocabulary for it to name, so that no release ever
-    shipped `-o` meaning three different things.
+    """The root `-o` names the one output vocabulary every `--output` speaks,
+    so `-o` never means three different things.
     """
     assert "-o" in _root_option_names()
     assert "--output" in _root_option_names()

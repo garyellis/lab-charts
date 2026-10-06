@@ -66,7 +66,7 @@ def test_each_outcome_maps_to_the_code_design_6_1_assigns_it(
     outcome: Outcome,
     expected: int,
 ) -> None:
-    """Design §6.1's table, transcribed. Changing a row is a release event."""
+    """The exit-code table, transcribed. Changing a row is a release event."""
     assert exit_code_for(outcome) == expected
 
 
@@ -79,8 +79,8 @@ def test_named_constants_agree_with_the_table() -> None:
 def test_success_is_zero() -> None:
     """The hinge between the wire `ok` field and `$?`.
 
-    `services/helmrelease/wire.py` publishes `ok = outcome is SUCCESS` while
-    `cli/helmrelease.py` exits `exit_code_for(outcome)`. Those two agree only
+    `commands/promote/wire.py` publishes `ok = outcome is SUCCESS` while
+    `commands/promote/cli.py` exits `exit_code_for(outcome)`. Those two agree only
     because SUCCESS is 0 and nothing else is. Asserted here rather than left
     implicit, because the coupling is otherwise invisible from either side.
     """
@@ -88,40 +88,18 @@ def test_success_is_zero() -> None:
     assert [o for o in Outcome if exit_code_for(o) == 0] == [Outcome.SUCCESS]
 
 
-def test_plumbing_exit_codes_does_not_import_a_service() -> None:
-    """Keep the table keyed on `Outcome`, not on some vertical's status enum.
-
-    This is the constraint that produced the current shape: a
-    `Mapping[PromoteStatus, int]` here would make `plumbing/` depend on
-    `services/`, which nothing in `plumbing/` does today. See the module
-    docstring, and `test_layering.py::test_plumbing_does_not_import_service_domains`
-    for the general rule this specialises.
-    """
-    path = _SRC / "plumbing" / "exit_codes.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported.append(node.module)
-
-    offenders = [m for m in imported if m.startswith("chart_manager.services")]
-    assert not offenders, f"plumbing/exit_codes.py imports services: {offenders}"
-
-
 # --------------------------------------------------------------------------
 # the surface speaks Outcome, never a number
 # --------------------------------------------------------------------------
 #
-# Static, in the spirit of `test_layering.py` and `test_output_streams.py`:
+# Static, in the spirit of `test_output_streams.py`:
 # the behavioral tests below can only cover the exit sites they enumerate,
 # and the failure mode being guarded is a *new* command written by someone
 # who never read this module and reached for `typer.Exit(1)` because it is
 # shorter. That is how the table ended up with one consumer the first time.
 
 #: `raise typer.Exit(...)` and `sys.exit(...)` -- the two ways a Python CLI
-#: sets `$?`. Both are scanned, because `cli/validate.py` legitimately uses
+#: sets `$?`. Both are scanned, because `main.py` legitimately uses
 #: the second one and a gate that only knew the first would wave it through.
 _EXIT_CALLS = frozenset({"Exit", "exit"})
 
@@ -169,9 +147,9 @@ def test_exit_scan_finds_the_call_sites_it_is_meant_to_check() -> None:
     found = _exit_call_sites()
     assert len(found) >= 8, f"suspiciously few exit sites: {found}"
 
-    files = {path.name for path, _ in found}
-    assert "main.py" in files, "the root app exits on domain errors"
-    assert "helmrelease.py" in files, "promote/monitor/test all exit nonzero"
+    files = {f"{path.parent.name}/{path.name}" for path, _ in found}
+    assert "chart_manager/main.py" in files, "the root app exits on domain errors"
+    assert "promote/cli.py" in files, "promote pr/monitor/test all exit nonzero"
 
     # And that the check itself can see a literal: if `_literal_code` ever
     # stopped recognising one, the rule below would pass by blindness.
@@ -217,13 +195,13 @@ def test_no_module_outside_the_table_writes_a_nonzero_exit_literal() -> None:
 
 
 def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) -> int:
-    """Run `cli.main()` with an app that raises `exc`, and return its exit code.
+    """Run `main.main()` with an app that raises `exc`, and return its exit code.
 
     Driven through `main()` itself rather than `conftest.cli()`: CliRunner
     invokes the Typer app, so it never reaches the `except` arms that are
     the entire subject here.
     """
-    from chart_manager.cli import main as main_cli
+    from chart_manager import main as main_cli
 
     def _raise() -> None:
         raise exc
@@ -243,7 +221,7 @@ def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) ->
         (CommandTimeout("kubeconform timed out"), 4),
         (SpecError("chart-lifecycle.yaml is not valid"), 3),
         (DependencyCycleError("a -> b -> a"), 3),
-        (CapabilityUnavailableError("cluster tests are disabled"), 1),
+        (CapabilityUnavailableError("chart tests are disabled"), 1),
         (ChartNotFoundError("chart not found: nope"), 1),
         (ChartManagerError("something went wrong"), 1),
     ],
@@ -272,7 +250,7 @@ def test_a_domain_error_exits_with_the_code_its_type_earns(
 def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
     exc: OSError, expected: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Design doc 8.9's general case.
+    """The general case of an `OSError` escaping a command.
 
     `IsADirectoryError` is the one that was reported: `grafana
     lint-dashboards --path DIR` printed a Python traceback and exited on
@@ -284,7 +262,7 @@ def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
 
 def test_the_error_line_reads_like_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard the guard: a mapped exit code with no message is still a dead end."""
-    from chart_manager.cli import main as main_cli
+    from chart_manager import main as main_cli
 
     assert main_cli._os_error_text(IsADirectoryError(21, "Is a directory", "charts/")) == (
         "is a directory: charts/"

@@ -34,6 +34,7 @@ run = [
   "scripts/check-chart-source-contracts",
   "uv run --extra dev ruff check src/ tests/",
   "uv run --extra dev mypy src/chart_manager",
+  "uv run --extra dev lint-imports",
   "uv run --extra dev vulture",
   "scripts/check-drift",
   "uv run chart-manager grafana dashboard lint -o table",
@@ -41,11 +42,8 @@ run = [
 ]
 
 [tasks.lint-layering]
-description = "Enforce the cli/ -> services/ -> integrations/ layer contract (same commands as the CI `layering` job)."
-run = [
-  "uv run --extra dev ruff check --select TID251 src/",
-  "uv run --extra dev pytest -q tests/test_layering.py",
-]
+description = "Enforce the [tool.importlinter] contracts (same command as the CI `layering` job)."
+run = "uv run --extra dev lint-imports"
 
 [tasks.charts]
 description = "List known chart wrappers."

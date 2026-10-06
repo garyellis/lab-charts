@@ -21,7 +21,7 @@ spec:
       "dashboards/**":      [ci]
     unmatchedChanges: warn
 
-  clusterTest:
+  chartTest:
     enabled: true
     # Profiles for the grafana-dashboards chart.
     #

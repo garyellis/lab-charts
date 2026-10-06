@@ -13,7 +13,7 @@ not ask for as output: progress, warnings, hints, deprecation notices, and
 error detail.
 
 Getting this wrong is not cosmetic. `.github/workflows/ci.yaml` captures
-CLI stdout into shell variables, and `cli/validate.py -o json` writes
+CLI stdout into shell variables, and `chart validate -o json` writes
 a JSON document to stdout; a single stray warning on the same stream
 corrupts the value in band, where no exit code reveals it.
 
@@ -37,13 +37,13 @@ import weakref
 from rich.console import Console
 from rich.markup import escape
 
-from chart_manager.services.progress import ProgressEvent
+from chart_manager.shared.cluster.progress import ProgressEvent
 
 #: Every narration console handed out, so `set_narration_quiet` can reach the
-#: ones built at import time here as well as the ones `helmrelease.py` builds
+#: ones built at import time here as well as the ones `commands/promote/cli.py` builds
 #: per invocation.
 #:
-#: A `WeakSet` rather than a list because `helmrelease.py` builds a console per
+#: A `WeakSet` rather than a list because `commands/promote/cli.py` builds a console per
 #: call: in a process-per-invocation CLI a list would be equivalent, but this
 #: module is the process-wide seam a long-lived surface would also use, and
 #: there a list is an unbounded leak.
@@ -51,7 +51,7 @@ _QUIETABLE: weakref.WeakSet[Console] = weakref.WeakSet()
 
 #: Applied to consoles built *after* a `set_narration_quiet` call. Needed
 #: because `--output json` is resolved inside a command, which is after this
-#: module built its three shared consoles but before `helmrelease.py` builds
+#: module built its three shared consoles but before `commands/promote/cli.py` builds
 #: its per-call ones.
 _QUIET = False
 
@@ -84,7 +84,7 @@ def error_console(*, no_color: bool | None = None) -> Console:
 
     Split from `narration_console` because the two differ in exactly one
     respect and it is the one that matters: `-q` (and `--output json`, which
-    implies it -- design doc 6.2) suppress narration so a pipeline sees only
+    implies it) suppress narration so a pipeline sees only
     the projection. Suppressing *errors* along with it would make `-q`
     indistinguishable from `2>/dev/null`, and a failing command would exit
     nonzero having said nothing about why.
@@ -101,7 +101,7 @@ def set_narration_quiet(quiet: bool) -> None:
         including commands that have no `--output` at all (`local up`,
         `local down`), which is why `-q` cannot be left to the resolver.
       * `cli/output.resolve`, which folds `-q` together with an *explicitly*
-        requested `-o json` (design doc 6.2).
+        requested `-o json`.
 
     Both write on every invocation, including the `False` case, so the state
     stays derived from the current command rather than accumulating across
@@ -154,10 +154,10 @@ def narrate(message: str) -> None:
     narration.print(message)
 
 
-# --- service progress -------------------------------------------------------
+# --- progress ---------------------------------------------------------------
 
-#: Severity -> Rich style for the narration the long-running services emit.
-#: The service picks the severity; only this table knows it becomes markup.
+#: Severity -> Rich style for the narration long-running flows emit.
+#: The caller picks the severity; only this table knows it becomes markup.
 _PROGRESS_STYLES: dict[str, str | None] = {
     "step": "bold",
     "detail": "dim",
@@ -168,16 +168,16 @@ _PROGRESS_STYLES: dict[str, str | None] = {
 
 
 def print_progress(event: ProgressEvent) -> None:
-    """Render one service progress event to the narration console.
+    """Render one progress event to the narration console.
 
-    Here rather than in a command module because every long-running service
+    Here rather than in a command module because every long-running flow
     on this surface -- converge, ephemeral test, cluster lifecycle -- hands
     its `progress=` callback the same shape, and the severity-to-style table
     is the whole of the decision.
 
     The event's `label` carries the severity emphasis and `message` stays
     plain, which reproduces the `[bold]Applying[/bold] chart:profile` shape
-    the services used to build themselves. A label-less event emphasizes
+    the callers used to build themselves. A label-less event emphasizes
     the whole line.
 
     Both fields are escaped before they reach Rich. They carry subprocess

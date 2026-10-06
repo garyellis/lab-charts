@@ -5,15 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml_mapping
-from chart_manager.services.kubeconform_schemas.crd import generate_crd_schemas
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas.crd import generate_crd_schemas
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
 )
-from chart_manager.services.kubeconform_schemas.inventory import (
+from chart_manager.commands.validate.schemas.inventory import (
     scan_rendered_directory,
 )
-from chart_manager.services.kubeconform_schemas.models import SchemaScope
+from chart_manager.commands.validate.schemas.models import SchemaScope
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml_mapping
+from tests.conftest import crd_manifest
 
 
 @pytest.mark.parametrize("document", ["metadata: {}", "- bad", "kind: List\nitems: [bad]"])
@@ -23,48 +24,8 @@ def test_bad_rendered_document_blames_chart_scope(tmp_path: Path, document: str)
         scan_rendered_directory(tmp_path, scope=SchemaScope(chart="demo", environment="dev"))
 
 
-def _crd(*, nested_type: str = "string") -> str:
-    return f"""apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: widgets.example.io
-spec:
-  group: example.io
-  names:
-    kind: Widget
-    plural: widgets
-  scope: Namespaced
-  versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              properties:
-                name:
-                  type: {nested_type}
-                labels:
-                  type: object
-                  additionalProperties:
-                    type: string
-                arbitrary:
-                  type: object
-                  x-kubernetes-preserve-unknown-fields: true
-    - name: v1beta1
-      served: false
-      storage: false
-      schema:
-        openAPIV3Schema:
-          type: object
-"""
-
-
 def test_inventory_expands_kubernetes_lists_and_collects_only_crds(tmp_path: Path) -> None:
-    crd = parse_yaml_mapping(_crd())
+    crd = parse_yaml_mapping(crd_manifest())
     (tmp_path / "all.yaml").write_text(
         dump_yaml(
             {
@@ -94,7 +55,7 @@ def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "crd.yaml"
-    path.write_text(_crd())
+    path.write_text(crd_manifest())
     crds = scan_rendered_directory(
         tmp_path,
         scope=SchemaScope(chart="operator", environment="ci"),
@@ -117,7 +78,7 @@ def test_crd_generation_closes_objects_but_preserves_maps_and_unknown_fields(
 
 
 def test_inventory_reads_json_manifests(tmp_path: Path) -> None:
-    (tmp_path / "crd.json").write_text(json.dumps(parse_yaml_mapping(_crd())))
+    (tmp_path / "crd.json").write_text(json.dumps(parse_yaml_mapping(crd_manifest())))
 
     crds = scan_rendered_directory(
         tmp_path,
@@ -132,8 +93,8 @@ def test_inventory_reads_json_manifests(tmp_path: Path) -> None:
 def test_conflicting_crds_in_one_scope_fail_instead_of_winning_by_order(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "one.yaml").write_text(_crd(nested_type="string"))
-    (tmp_path / "two.yaml").write_text(_crd(nested_type="integer"))
+    (tmp_path / "one.yaml").write_text(crd_manifest(nested_type="string"))
+    (tmp_path / "two.yaml").write_text(crd_manifest(nested_type="integer"))
     crds = scan_rendered_directory(
         tmp_path,
         scope=SchemaScope(chart="operator", environment="ci"),
@@ -153,8 +114,8 @@ def test_identical_crds_are_shared_across_chart_scopes(tmp_path: Path) -> None:
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    (first / "crd.yaml").write_text(_crd())
-    (second / "crd.yaml").write_text(_crd())
+    (first / "crd.yaml").write_text(crd_manifest())
+    (second / "crd.yaml").write_text(crd_manifest())
     crds = (
         *scan_rendered_directory(first, scope=SchemaScope(chart="operator", environment="ci")),
         *scan_rendered_directory(second, scope=SchemaScope(chart="consumer", environment="dev")),
@@ -167,7 +128,7 @@ def test_identical_crds_are_shared_across_chart_scopes(tmp_path: Path) -> None:
 
 
 def test_strimzi_style_combinator_fragments_are_not_closed(tmp_path: Path) -> None:
-    text = _crd().replace(
+    text = crd_manifest().replace(
         "properties:\n                name:",
         "oneOf:\n                - properties:\n                    value: {type: string}\n"
         "                - properties:\n                    valueFrom:\n                      type: object\n"

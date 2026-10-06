@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.domain.cluster_tests import ClusterTestCatalog
-from chart_manager.domain.install_plan import DependencyResolver, InstallPlanEntry
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
     DependencyCycleError,
 )
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.shared.charts.chart_tests import ChartTestCatalog
+from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
 from tests.conftest import CHARTS_DIR
 
 from .conftest import REPO_ROOT, MakeChart
@@ -37,7 +37,7 @@ def test_install_plan_orders_requirements_before_target(
     make_chart("prometheus-operator")
     make_chart("alloy", profiles={"minimal": _requires("prometheus-operator")})
 
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "minimal"
     )
@@ -58,7 +58,7 @@ def test_install_plan_expands_nested_profiles(chart_root: Path, make_chart: Make
         },
     )
 
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "grafana", "with-deps"
     )
@@ -89,7 +89,7 @@ def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
         profiles={"ui-e2e": _requires("prometheus-operator", "grafana:with-deps")},
     )
 
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "ui-e2e"
     )
@@ -115,7 +115,7 @@ def test_a_shared_dependency_is_planned_once_before_both_dependents(
     make_chart("right", profiles={"minimal": _requires("base")})
     make_chart("app", profiles={"minimal": _requires("left", "right")})
 
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "app", "minimal"
     )
@@ -130,7 +130,7 @@ def test_the_same_chart_under_two_profiles_is_not_deduped(
     make_chart("base", profiles={"minimal": {}, "full": {}})
     make_chart("app", profiles={"minimal": _requires("base:minimal", "base:full")})
 
-    catalog = ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "app", "minimal"
     )
@@ -146,7 +146,7 @@ def test_cycle_detection(chart_root: Path, make_chart: MakeChart) -> None:
     make_chart("a", profiles={"minimal": _requires("b")})
     make_chart("b", profiles={"minimal": _requires("a")})
 
-    resolver = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
+    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
 
     with pytest.raises(DependencyCycleError):
         resolver.install_plan("a", "minimal")
@@ -163,7 +163,7 @@ def test_install_plan_rejects_a_disabled_required_chart(
     path.write_text(dump_yaml(config), encoding="utf-8")
     make_chart("app", profiles={"minimal": _requires("base")})
 
-    resolver = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
+    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
 
     with pytest.raises(
         CapabilityUnavailableError,
@@ -172,28 +172,28 @@ def test_install_plan_rejects_a_disabled_required_chart(
         resolver.install_plan("app", "minimal")
 
 
-def test_dependent_tests_rejects_a_disabled_cluster_test_section(
+def test_dependent_tests_rejects_a_disabled_chart_test_section(
     chart_root: Path,
     make_chart: MakeChart,
 ) -> None:
     chart = make_chart("source")
     path = chart / "chart-lifecycle.yaml"
     config = parse_yaml(path.read_text())
-    config["spec"]["clusterTest"]["enabled"] = False
+    config["spec"]["chartTest"]["enabled"] = False
     path.write_text(dump_yaml(config), encoding="utf-8")
 
-    resolver = DependencyResolver(ClusterTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
+    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
 
     with pytest.raises(
         CapabilityUnavailableError,
-        match="cluster tests are disabled for chart 'source'",
+        match="chart tests are disabled for chart 'source'",
     ):
         resolver.dependent_tests("source")
 
 
 def test_the_repo_dependency_graph_resolves() -> None:
     """Smoke test over the real charts/ tree: structure, not inventory."""
-    catalog = ClusterTestCatalog(REPO_ROOT, charts_dir=CHARTS_DIR)
+    catalog = ChartTestCatalog(REPO_ROOT, charts_dir=CHARTS_DIR)
     plan = DependencyResolver(catalog.get).install_plan(
         "alloy", "ui-e2e"
     )

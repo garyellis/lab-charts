@@ -6,14 +6,14 @@ else checks, because a table of strings is not type-checked and a stale
 entry fails as a wall of unrelated red rather than as one clear message:
 
   (a) **Every right-hand side names a command the app really registers.**
-      A rename that edits `cli/main.py` and mistypes the table -- `chrat`
+      A rename that edits `main.py` and mistypes the table -- `chrat`
       for `chart` -- would otherwise surface as "no such command" repeated
       across every migrated module, pointing at the call sites instead of
       at the one line that is wrong.
 
   (b) **Every command the app registers appears in the table**, as a key or
       as a value. This is the direction that keeps the seam from decaying:
-      a new group added to `cli/main.py` with no entry here can be invoked
+      a new group added to `main.py` with no entry here can be invoked
       by literal name from a test, and that literal is invisible until the
       day someone renames it. Keys count as coverage as well as values,
       because mid-migration the key is the old spelling and the value is the

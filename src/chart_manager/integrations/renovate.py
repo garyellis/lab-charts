@@ -17,14 +17,14 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, probe_binary
@@ -62,30 +62,15 @@ class RenovateResult:
     stdout: str
     stderr: str
 
-    @property
-    def ok(self) -> bool:
-        """Whether Renovate exited successfully."""
-        return self.returncode == 0
-
 
 class Renovate:
     """Run self-hosted Renovate through the shared subprocess seam."""
 
-    def __init__(
-        self,
-        runner: CommandRunner | None = None,
-        *,
-        binary: str | Path | None = None,
-        validator_binary: str | Path | None = None,
-        timeout: float | None = None,
-    ) -> None:
-        """Bind the runner, CLI paths, and optional wall-clock timeout."""
-        self.runner = runner or SubprocessRunner()
-        self._binary = str(binary) if binary is not None else "renovate"
-        self._validator_binary = (
-            str(validator_binary) if validator_binary is not None else "renovate-config-validator"
-        )
-        self.timeout = timeout
+    def __init__(self, runner: CommandRunner) -> None:
+        """Bind the runner."""
+        self.runner = runner
+        self._binary = "renovate"
+        self._validator_binary = "renovate-config-validator"
 
     def preflight(self) -> tuple[Check, ...]:
         """Report both Renovate binaries and whether a token is configured.
@@ -93,12 +78,6 @@ class Renovate:
         The validator is checked for *presence only*: it is a node bin stub
         with no version flag, so asking for one would report a working
         install as broken.
-
-        The token check is here rather than in the composition root that
-        reads the variable, because "what does Renovate need to be able to
-        run" is this adapter's knowledge. It is the case MY_COMMENTS.md
-        names explicitly -- required environment is a per-integration
-        preflight matter, not a surface one.
         """
         return (
             probe_binary(
@@ -120,9 +99,8 @@ class Renovate:
     def run(self, request: RenovateRequest) -> RenovateResult:
         """Run Renovate for exactly one repository.
 
-        Non-zero Renovate exits are returned to the service layer, which owns
-        the user-facing outcome. Local request/config errors are raised as
-        ``ChartManagerError`` so they follow the existing expected-error path.
+        A non-zero Renovate exit is returned for the caller to report; invalid local
+        request or config inputs raise ``ChartManagerError``.
         """
         repo_root = _require_directory(request.repo_root, label="repository root")
         global_config = _require_file(
@@ -166,7 +144,6 @@ class Renovate:
                 [self._binary, request.repository],
                 cwd=repo_root,
                 check=False,
-                timeout=self.timeout,
                 env=env,
             )
         stdout = _redact_token(result.stdout, request.token)
@@ -185,40 +162,6 @@ class Renovate:
             returncode=result.returncode,
             stdout=stdout,
             stderr=stderr,
-        )
-
-    def validate_config(
-        self,
-        paths: Sequence[Path],
-        *,
-        repo_root: Path,
-        global_config: bool,
-        strict: bool = True,
-    ) -> RenovateResult:
-        """Validate explicit config files with Renovate's bundled validator.
-
-        Explicit paths are interpreted as self-hosted config by the validator.
-        ``global_config=False`` adds its documented ``--no-global`` switch for
-        repository config such as root ``renovate.json``.
-        """
-        root = _require_directory(repo_root, label="repository root")
-        if not paths:
-            raise ChartManagerError("Renovate validation needs at least one config path")
-        resolved = [
-            _require_file(path, relative_to=root, label="Renovate config") for path in paths
-        ]
-        args = [self._validator_binary]
-        if strict:
-            args.append("--strict")
-        if not global_config:
-            args.append("--no-global")
-        args.extend(str(path) for path in resolved)
-        with _installed(self._validator_binary):
-            result = self.runner.run(args, cwd=root, timeout=self.timeout)
-        return RenovateResult(
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
         )
 
 
@@ -300,7 +243,7 @@ def _log_subprocess_output(value: str, *, error: bool) -> None:
 def _token_check() -> Check:
     """Whether a credential Renovate can authenticate with is in the environment.
 
-    The same two names, in the same order, that `composition.Container`
+    The same two names, in the same order, that `commands/upgrade/run.py`
     hands to `RenovateRequest.token`: Renovate spells its own setting
     RENOVATE_TOKEN, while GitHub Actions exposes its repository token as
     GITHUB_TOKEN. Reported as ENVIRONMENT rather than SPEC -- nothing the

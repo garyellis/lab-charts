@@ -6,24 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.plumbing.yaml_files import dump_yaml
-from chart_manager.services.kubeconform_schemas import generated
-from chart_manager.services.kubeconform_schemas.errors import (
+from chart_manager.commands.validate.schemas import generated
+from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaRenderError,
 )
-from chart_manager.services.manifest_validation.models import (
-    PhaseResult,
-    RowResult,
-    RunOutcome,
-    RunResult,
-    WorklistRow,
-)
-from tests.conftest import CHARTS_DIR
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.yaml_files import dump_yaml
+from tests.conftest import crd_manifest
 
 from .schema_fixtures import workspace
-from .test_kubeconform_schema_inventory_crd import _crd
 
 
 def chart(root, name, payload):
@@ -57,42 +49,26 @@ def chart(root, name, payload):
 
 
 class Renderer:
+    """Render each chart's templates verbatim into <out>/<chart>/dev, as `run()` would."""
+
     def __init__(self):
         self.calls = []
-        self.error_type = None
         self.fail = False
+        self.hydrate = None
 
-    def prepare_schema_dependencies(self, targets):
-        pass
-
-    def run(self, request):
-        assert request.phases == frozenset({"render"})
-        assert request.include_crds
-        self.calls.extend(request.charts)
-        rows = []
-        for name in request.charts:
-            output = request.out / name / "dev"
+    def __call__(self, charts, out):
+        failures = []
+        for chart in charts:
+            self.calls.append(chart.name)
+            if self.hydrate:
+                self.hydrate(chart.path)
+            output = out / chart.name / "dev"
             output.mkdir(parents=True)
-            for path in (request.root / "charts" / name / "templates").glob("*.yaml"):
+            for path in (chart.path / "templates").glob("*.yaml"):
                 (output / path.name).write_bytes(path.read_bytes())
-            rows.append(
-                RowResult(
-                    row=WorklistRow(chart=name, env="dev", release=name, namespace="default"),
-                    phases={
-                        "render": PhaseResult(
-                            phase="render",
-                            status="FAIL" if self.fail else "PASS",
-                            detail="specific failure" if self.fail else None,
-                            error_type=self.error_type,
-                        )
-                    },
-                )
-            )
-        return RunOutcome(
-            result=RunResult(rows=tuple(rows), rendered_root=request.out),
-            out_dir=request.out,
-            keep=True,
-        )
+            if self.fail:
+                failures.append(f"{chart.name}/dev: specific failure")
+        return failures
 
 
 @pytest.fixture
@@ -104,9 +80,7 @@ def env(tmp_path, monkeypatch):
     renderer = Renderer()
 
     def prepare():
-        return generated.prepare_generated_schemas(
-            workspace(tmp_path), renderer, cache_root=tmp_path / "cache"
-        )
+        return generated.prepare(workspace(tmp_path), render=renderer, cache_root=tmp_path / "cache")
 
     return SimpleNamespace(root=tmp_path, renderer=renderer, prepare=prepare, binary=binary)
 
@@ -116,13 +90,13 @@ def schema_at(locations):
 
 
 def test_unchanged_charts_reuse_cache_but_modified_crd_is_immediately_current(env):
-    provider = chart(env.root, "provider", _crd(nested_type="string"))
+    provider = chart(env.root, "provider", crd_manifest(nested_type="string"))
     first = env.prepare()
     assert len(env.renderer.calls) == 1
     assert schema_at(first).is_file()
     assert env.prepare() == first
     assert len(env.renderer.calls) == 1
-    (provider / "templates/resources.yaml").write_text(_crd(nested_type="integer"))
+    (provider / "templates/resources.yaml").write_text(crd_manifest(nested_type="integer"))
     second = env.prepare()
     assert second != first
     assert len(env.renderer.calls) == 2
@@ -132,36 +106,36 @@ def test_unchanged_charts_reuse_cache_but_modified_crd_is_immediately_current(en
 
 
 def test_only_changed_chart_is_rendered_and_new_chart_is_discovered(env):
-    chart(env.root, "provider", _crd())
+    chart(env.root, "provider", crd_manifest())
     app = chart(env.root, "app", "apiVersion: v1\nkind: ConfigMap\n")
     first = env.prepare()
     assert env.renderer.calls == ["provider"]
     (app / "templates/new.yaml").write_text("apiVersion: apps/v1\nkind: Deployment\n")
     assert env.prepare() == first
     assert env.renderer.calls == ["provider"]
-    chart(env.root, "new-provider", _crd())
+    chart(env.root, "new-provider", crd_manifest())
     env.prepare()
     assert env.renderer.calls[-1] == "new-provider"
     assert env.renderer.calls.count("provider") == 1
 
 
 def test_provider_removal_never_retains_stale_generated_schemas(env):
-    provider = chart(env.root, "provider", _crd())
+    provider = chart(env.root, "provider", crd_manifest())
     env.prepare()
     (provider / "templates/resources.yaml").write_text("apiVersion: v1\nkind: ConfigMap\n")
     assert env.prepare() == ()
 
 
 def test_conflicting_providers_fail_even_if_one_is_cached(env):
-    chart(env.root, "first", _crd())
+    chart(env.root, "first", crd_manifest())
     env.prepare()
-    chart(env.root, "second", _crd(nested_type="integer"))
+    chart(env.root, "second", crd_manifest(nested_type="integer"))
     with pytest.raises(KubeconformSchemaConfigurationError, match="first; second"):
         env.prepare()
 
 
 def test_corrupt_derived_cache_is_rebuilt(env):
-    chart(env.root, "provider", _crd())
+    chart(env.root, "provider", crd_manifest())
     env.prepare()
     cache = next((env.root / "cache/v3/derived/charts").glob("*.json"))
     cache.write_text("{broken")
@@ -170,36 +144,26 @@ def test_corrupt_derived_cache_is_rebuilt(env):
 
 
 def test_helm_binary_change_invalidates_derived_cache(env):
-    chart(env.root, "provider", _crd())
+    chart(env.root, "provider", crd_manifest())
     env.prepare()
     env.binary.write_text("new-helm")
     env.prepare()
     assert len(env.renderer.calls) == 2
 
 
-@pytest.mark.parametrize(
-    "error_type,expected",
-    [
-        (None, Outcome.FAILED),
-        ("spec", Outcome.SPEC),
-        ("environment", Outcome.ENVIRONMENT),
-        ("tool", Outcome.TOOL),
-    ],
-)
-def test_provider_render_retains_original_failure_outcome(env, error_type, expected):
-    chart(env.root, "provider", _crd())
+def test_a_failed_provider_render_raises_and_caches_nothing(env):
+    chart(env.root, "provider", crd_manifest())
     env.renderer.fail = True
-    env.renderer.error_type = error_type
     with pytest.raises(
         KubeconformSchemaRenderError, match="provider/dev: specific failure"
     ) as caught:
         env.prepare()
-    assert caught.value.outcome is expected
+    assert caught.value.outcome is Outcome.FAILED
     assert not list((env.root / "cache").rglob("charts/*.json"))
 
 
 def test_extra_schema_in_derived_output_is_removed(env):
-    chart(env.root, "provider", _crd())
+    chart(env.root, "provider", crd_manifest())
     first = env.prepare()
     extra = schema_at(first).with_name("stale_v1.json")
     extra.write_text("{}")
@@ -209,7 +173,7 @@ def test_extra_schema_in_derived_output_is_removed(env):
 
 
 def test_symlinked_chart_inputs_disable_cache(env):
-    provider = chart(env.root, "provider", _crd())
+    provider = chart(env.root, "provider", crd_manifest())
     external = env.root / "external"
     external.mkdir()
     (provider / "linked").symlink_to(external, target_is_directory=True)
@@ -219,8 +183,8 @@ def test_symlinked_chart_inputs_disable_cache(env):
 
 
 def test_shared_tool_bytes_are_read_once_per_preparation(env, monkeypatch):
-    chart(env.root, "first", _crd())
-    chart(env.root, "second", _crd())
+    chart(env.root, "first", crd_manifest())
+    chart(env.root, "second", crd_manifest())
     read_bytes = Path.read_bytes
     observed = {env.binary: 0, Path(generated.__file__).resolve(): 0}
 
@@ -237,23 +201,21 @@ def test_shared_tool_bytes_are_read_once_per_preparation(env, monkeypatch):
     assert env.renderer.calls == ["first", "second"]
 
 
-def test_uncached_providers_render_in_one_batch(env, monkeypatch):
-    chart(env.root, "first", _crd())
-    chart(env.root, "second", _crd())
-    original = env.renderer.run
+def test_uncached_providers_render_in_one_batch(env):
+    chart(env.root, "first", crd_manifest())
+    chart(env.root, "second", crd_manifest())
     batches = []
 
-    def render(request):
-        batches.append(request.charts)
-        return original(request)
+    def render(charts, out):
+        batches.append(tuple(chart.name for chart in charts))
+        return env.renderer(charts, out)
 
-    monkeypatch.setattr(env.renderer, "run", render)
-    env.prepare()
+    generated.prepare(workspace(env.root), render=render, cache_root=env.root / "cache")
     assert batches == [("first", "second")]
 
 
 def test_unrelated_nonprovider_values_and_lifecycle_errors_are_not_loaded(env):
-    chart(env.root, "provider", _crd())
+    chart(env.root, "provider", crd_manifest())
     unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
     (unrelated / "values.yaml").write_text("[broken YAML")
     (unrelated / "chart-lifecycle.yaml").write_text("[broken YAML")
@@ -261,8 +223,8 @@ def test_unrelated_nonprovider_values_and_lifecycle_errors_are_not_loaded(env):
     assert env.renderer.calls == ["provider"]
 
 
-def test_dependencies_hydrate_before_provider_scan_and_cache_on_first_run(env, monkeypatch):
-    provider = chart(env.root, "provider", _crd())
+def test_stale_dependencies_render_once_then_cache(env, monkeypatch):
+    provider = chart(env.root, "provider", crd_manifest())
     unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
     dependency = {"name": "dep", "version": "1.0.0", "repository": "https://example.test"}
     for directory in (provider, unrelated):
@@ -280,18 +242,18 @@ def test_dependencies_hydrate_before_provider_scan_and_cache_on_first_run(env, m
     fresh = set()
     monkeypatch.setattr(generated, "deps_are_fresh", lambda path: path in fresh)
 
-    def hydrate(targets):
-        for target in targets:
-            (target.path / "charts").mkdir(exist_ok=True)
-            (target.path / "charts/dep.txt").write_text("dependency bytes")
-            fresh.add(target.path)
+    def hydrate(path):
+        (path / "charts").mkdir(exist_ok=True)
+        (path / "charts/dep.txt").write_text("dependency bytes")
+        fresh.add(path)
 
-    monkeypatch.setattr(env.renderer, "prepare_schema_dependencies", hydrate)
+    # Stale dependencies make both possible providers; rendering hydrates them.
+    env.renderer.hydrate = hydrate
     first = env.prepare()
-    assert env.renderer.calls == ["provider"]
+    assert env.renderer.calls == ["provider", "unrelated"]
     assert list((env.root / "cache/v3/derived/charts").glob("*.json"))
     assert env.prepare() == first
-    assert env.renderer.calls == ["provider"]
+    assert env.renderer.calls == ["provider", "unrelated"]
 
 
 @pytest.mark.parametrize(
@@ -327,7 +289,7 @@ def test_nested_archives_are_scanned_without_extracting(env):
             archive.addfile(member, io.BytesIO(content))
         return data.getvalue()
 
-    nested = package("dep/crds/widget.yaml", _crd().encode())
+    nested = package("dep/crds/widget.yaml", crd_manifest().encode())
     outer = package("wrapper/charts/dep.tgz", nested)
     provider = chart(env.root, "provider", "apiVersion: v1\nkind: ConfigMap\n")
     (provider / "charts").mkdir()
@@ -337,7 +299,7 @@ def test_nested_archives_are_scanned_without_extracting(env):
 
 
 def test_active_cache_manifest_drops_removed_provider_entries(env):
-    provider = chart(env.root, "provider", _crd())
+    provider = chart(env.root, "provider", crd_manifest())
     env.prepare()
     manifest = env.root / "cache/v3/derived/current-charts.json"
     active = json.loads(manifest.read_text())
@@ -361,53 +323,6 @@ def test_mixed_templates_keep_chained_multiline_and_variable_output(expansion):
     assert generated._possible_crd_bytes(
         "templates/resources.yaml", b"kind: ConfigMap\n---\n" + expansion
     )
-
-
-@pytest.mark.parametrize(
-    "failure,expected",
-    [
-        ("network", Outcome.ENVIRONMENT),
-        ("missing-tool", Outcome.TOOL),
-        ("spec", Outcome.SPEC),
-    ],
-)
-def test_dependency_preparation_retains_failure_classification(env, monkeypatch, failure, expected):
-    from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, SpecError
-    from chart_manager.services.manifest_validation import app
-    from chart_manager.services.manifest_validation.catalog import build_catalog
-
-    provider = chart(env.root, "provider", _crd())
-    (provider / "Chart.yaml").write_text(
-        dump_yaml(
-            {
-                "apiVersion": "v2",
-                "name": "provider",
-                "version": "0.1.0",
-                "dependencies": [
-                    {"name": "dep", "version": "1.0.0", "repository": "https://example.test"}
-                ],
-            }
-        )
-    )
-    errors = {
-        "network": ExternalCommandError("offline"),
-        "missing-tool": MissingToolError("helm"),
-        "spec": SpecError("bad chart"),
-    }
-
-    class FakeHelm:
-        def __init__(self, **kwargs):
-            pass
-
-        def dependency_update_if_stale(self, path, *, timeout):
-            assert path == provider
-            raise errors[failure]
-
-    monkeypatch.setattr(app, "Helm", FakeHelm)
-    service = app.ManifestValidationService(workspace=workspace(env.root))
-    with pytest.raises(KubeconformSchemaRenderError) as caught:
-        service.prepare_schema_dependencies(build_catalog(env.root, charts_dir=CHARTS_DIR).targets)
-    assert caught.value.outcome is expected
 
 
 def test_helm_notes_do_not_make_plain_charts_potential_providers():

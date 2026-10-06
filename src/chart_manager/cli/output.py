@@ -1,17 +1,7 @@
 """The one place `cli/` decides what `--output` means.
 
-Before this module the surface had three unrelated answers to "how do I ask
-for machine-readable output?":
-
-    cli/upgrade.py    --format text|json
-    cli/validate.py   --format text|md|json|all
-    cli/main.py       plan -o table|json|yaml|github
-    cli/helmrelease.py --output pretty|json|auto     (the only correct one)
-
-Four spellings of the same idea, two of them (`text`, `pretty`) different
-words for one thing, and only `helmrelease` resolving `auto` from the
-environment. This module collapses them onto one flag (`-o/--output`), one
-vocabulary, and one resolver.
+Every command asks for machine-readable output the same way: one flag
+(`-o/--output`), one vocabulary, and one resolver.
 
 The vocabulary
 --------------
@@ -35,7 +25,7 @@ The default is `auto`: `table` when stdout is a terminal and `CI` is not
 stderr or "is there a tty anywhere" -- the question `auto` answers is "is the
 data I am about to emit going to a human or to a pipe", and that is a
 property of the stream the projection lands on. Lifted from
-`cli/helmrelease.py`, which was the only command that got this right.
+`commands/promote/cli.py`, which was the only command that got this right.
 
 `json` implies `--quiet`
 ------------------------
@@ -240,7 +230,7 @@ def resolve(
     `is_terminal`. Callers that already hold their stdout console pass it so
     the decision and the writing cannot disagree.
 
-    On `json` implying `--quiet` (design doc 6.2), note *`requested`*, not
+    On `json` implying `--quiet`, note *`requested`*, not
     `selected`: narration is silenced only when the caller actually asked for
     json, never when `auto` merely resolved to it.
 
@@ -248,8 +238,8 @@ def resolve(
     from a literal reading of 6.2. `auto` resolves to json whenever stdout is
     not a terminal -- which includes every command in CI. Silencing on
     `selected` would therefore delete *all* operator narration from CI logs:
-    `helmrelease promote`'s running commentary on a mutation (the thing
-    `cli/helmrelease.py` explicitly keeps on stderr so `promote >/dev/null`
+    `promote pr`'s running commentary on a mutation (the thing
+    `commands/promote/cli.py` explicitly keeps on stderr so `promote >/dev/null`
     still shows what happened), `chart validate`'s spec warnings, every
     "no dashboards found". The in-band-corruption problem 6.2 exists to
     prevent is already solved structurally by the stdout/stderr split
@@ -277,7 +267,7 @@ def require_dry_run(value: str | None, *, dry_run: bool) -> None:
     `chart test` and `chart cache clean` emit no projection when they run
     for real -- one narrates progress, the other prints a status line. Their
     `-o` therefore names the form of the *plan*, and accepting it on a real
-    run would be the accepted-and-ignored flag design doc 6.3 forbids: the
+    run would be an accepted-and-ignored flag: the
     caller asked for json, got a cluster install, and nothing said
     otherwise. Exit 2 naming the missing flag instead.
 
@@ -296,13 +286,8 @@ def require_dry_run(value: str | None, *, dry_run: bool) -> None:
 def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
     """Write one wire document in the resolved `--output` form.
 
-    The single emitter for the surface. It replaced four near-identical
-    helpers in `cli/main.py` alone (`_emit_json`, `_emit_yaml`,
-    `_emit_document`, `_emit_machine_document` -- the last being the third
-    minus its table arm) plus open-coded `json.dumps`/`yaml.safe_dump` pairs
-    in `cli/validate.py` and `cli/main.py::plan`. Every one of them had to
-    agree on `indent=2, sort_keys=True` and on `nl=False` for yaml, and
-    nothing made them.
+    The single emitter for the surface, so every command agrees on
+    `indent=2, sort_keys=True` for json and `nl=False` for yaml.
 
     The caller builds the terminal projection because only it knows what the
     columns mean; the machine projections are the same two encoders every

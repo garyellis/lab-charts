@@ -4,23 +4,23 @@ from __future__ import annotations
 
 from chart_manager.api.v1alpha1.chart_lifecycle import CHART_LIFECYCLE_KIND
 from chart_manager.api.v1alpha1.common import API_VERSION
-from chart_manager.domain.lifecycle_policy import (
+from chart_manager.plumbing.yaml_files import parse_yaml
+from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
-    cluster_test_status,
+    chart_test_status,
     load_chart_lifecycle,
     validation_status,
 )
-from chart_manager.plumbing.yaml_files import parse_yaml
 
 from .conftest import REPO_ROOT
 
-#: Charts that author `clusterTest` as disabled. An offline kind sandbox
+#: Charts that author `chartTest` as disabled. An offline kind sandbox
 #: cannot produce a truthful signal for these, so the invariant below is
 #: relaxed for exactly the names listed here -- and only here, so that
-#: skipping cluster tests stays a deliberate, reviewed act instead of
+#: skipping chart tests stays a deliberate, reviewed act instead of
 #: something a new chart can quietly drift into.
-CLUSTER_TEST_OPT_OUTS = {
+CHART_TEST_OPT_OUTS = {
     # The preview Cosmos DB emulator can remain unready for more than twenty
     # minutes on hosted runners, so its live test is quarantined while static
     # render, schema, and policy validation remain enabled.
@@ -42,7 +42,7 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
     assert chart_dirs == lifecycle_dirs
     # An opt-out naming a chart that no longer exists would silently weaken
     # nothing, but it would still be a lie about the repository.
-    assert CLUSTER_TEST_OPT_OUTS.issubset(chart_dir.name for chart_dir in chart_dirs)
+    assert CHART_TEST_OPT_OUTS.issubset(chart_dir.name for chart_dir in chart_dirs)
     for chart_dir in sorted(chart_dirs):
         config_path = chart_dir / LIFECYCLE_FILENAME
         document = parse_yaml(config_path.read_text(encoding="utf-8"))
@@ -53,21 +53,21 @@ def test_every_production_chart_has_one_valid_enabled_config() -> None:
         assert list(document["spec"]) == [
             "enabled",
             "validation",
-            "clusterTest",
+            "chartTest",
         ], chart_dir.name
 
         lifecycle = load_chart_lifecycle(config_path)
         assert lifecycle.spec.enabled, chart_dir.name
         assert validation_status(lifecycle) is CapabilityStatus.ENABLED, chart_dir.name
         # Asserted as an exact status, not merely "not enabled": an opt-out
-        # for a chart that later gains a real cluster test fails here too, so
+        # for a chart that later gains a real chart test fails here too, so
         # the list above cannot go stale in the permissive direction either.
-        expected_cluster_test = (
+        expected_chart_test = (
             CapabilityStatus.DISABLED
-            if chart_dir.name in CLUSTER_TEST_OPT_OUTS
+            if chart_dir.name in CHART_TEST_OPT_OUTS
             else CapabilityStatus.ENABLED
         )
-        assert cluster_test_status(lifecycle) is expected_cluster_test, chart_dir.name
+        assert chart_test_status(lifecycle) is expected_chart_test, chart_dir.name
 
 
 def test_no_helmignore_excludes_chart_lifecycle_configuration() -> None:

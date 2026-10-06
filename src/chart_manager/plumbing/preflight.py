@@ -8,8 +8,7 @@ Ownership, stated once so it is never re-derived:
     too. `doctor` is a *surface* that aggregates the results -- it does not
     know what `kubeconform` is called or which flag prints its version.
 
-That position is recorded in `MY_COMMENTS.md` and in the design doc's P0
-bullet, and it is why this module holds only the shared *shape* of a result
+That position is why this module holds only the shared *shape* of a result
 plus the one probe every adapter would otherwise hand-roll. Nothing here
 knows about any specific tool.
 
@@ -17,8 +16,8 @@ Why the result carries an `Outcome` rather than an exit code
 ------------------------------------------------------------
 `Check.outcome` is the semantic vocabulary from `plumbing/exit_codes.py`, so
 an adapter states "this is a missing binary" or "this is an environment
-problem" and never "this is 127". The number is `cli/doctor.py`'s call,
-looked up through `exit_code_for` exactly like `cli/helmrelease.py` looks up
+problem" and never "this is 127". The number is `commands/doctor/cli.py`'s call,
+looked up through `exit_code_for` exactly like `commands/promote/cli.py` looks up
 a promote outcome. An adapter that wrote an integer here would be the second
 place in the codebase that decides what a failure is worth, which is the
 thing `exit_codes.py` exists to prevent.

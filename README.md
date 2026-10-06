@@ -19,13 +19,12 @@ git clone <repo> lab-charts
 cd lab-charts
 mise trust && mise install
 mise run setup
-uv run chart-manager doctor --for 'chart validate'
+uv run chart-manager doctor
 uv run chart-manager chart validate grafana --env dev
 ```
 
 `doctor` checks that the binaries, kubecontext, container runtime, and
-backends a command needs are usable; `--for` narrows it to one command's
-prerequisites. The last command renders `grafana` for `dev`, validates the
+backends chart-manager uses are usable. The last command renders `grafana` for `dev`, validates the
 manifests against the Kubernetes schema, and runs the policies declared in
 the chart's `chart-lifecycle.yaml`.
 
@@ -33,7 +32,7 @@ the chart's `chart-lifecycle.yaml`.
 
 | Command | What it does |
 | --- | --- |
-| `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. `--for '<command>'` narrows to one command. |
+| `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. |
 | `uv run chart-manager chart validate <name> --env <env>` | Render one chart for one environment, then run its validators. `--all` validates every environment; with no chart named, the worklist comes from `git diff` against `origin/main`. |
 | `mise run validate -- --all` | Validate every chart and environment in the repo. |
 | `mise run schemas` | Verify or cache pinned upstream schema repositories. Chart changes only need validate; use `--update` to move upstream pins. |
@@ -45,10 +44,10 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager local reset --chart <name>` | Destroy and recreate the cluster, then converge. Required after changing creation-time kind settings. |
 | `uv run chart-manager chart list` | List charts with lifecycle capability status. Same as `mise run charts`. |
 | `uv run chart-manager chart show <name>` | Print one chart's normalized `ChartLifecycle` intent. |
-| `uv run chart-manager plan --changed-file <path>` | Show the validation and cluster-test work a change selects, with reasons. |
+| `uv run chart-manager plan --changed-file <path>` | Show the validation, chart-test and publish work a change selects, with reasons. |
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
-| `uv run chart-manager chart upgrade --path charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
-| `uv run chart-manager helmrelease promote\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
+| `uv run chart-manager chart upgrade charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
+| `uv run chart-manager promote pr\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
 | `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; `event emit --dry-run` previews a document without a backend. |
 | `uv run chart-manager grafana dashboard export <uid> --to <path>` | Export one dashboard from the kind Grafana as canonical JSON. `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
@@ -60,7 +59,7 @@ Four authored kinds share the `chartmanager.io/v1alpha1` API under
 
 - `ChartWorkspace` (`.chart-manager/workspace.yaml`) — the checkout-owned
   chart, local-cluster, render, and policy locations, plus repository-wide
-  validation and cluster-test fanout. Its validation policy pins the one
+  validation and chart-test fanout. Its validation policy pins the one
   Kubernetes release used by every chart in a validation run.
 - `LocalCluster` (`.chart-manager/local-cluster.yaml`) — the kind config path
   and an ordered, fail-fast bootstrap sequence. Entries may be a local
@@ -178,7 +177,7 @@ the invocation default; the command's own `-o` wins.
 `--dry-run` resolves the same plan the real run would execute and prints it
 without touching anything. `local up`/`down`/`reset`, `chart test`,
 `chart cache clean`, `chart publish`, `chart upgrade`, and
-`helmrelease promote` take it. On `chart test` and `chart cache clean` the
+`promote pr` take it. On `chart test` and `chart cache clean` the
 plan is the only document the command produces, so `-o` without `--dry-run`
 is a usage error.
 
@@ -218,7 +217,7 @@ the named snapshot and syncing again.
 
 Ordinary chart work only needs `chart-manager chart validate`: adding a chart,
 resource, or catalog-backed kind does not change the lock or require another
-sync. `chart-manager doctor --for 'chart validate'` checks whether the pinned
+sync. `chart-manager doctor` checks whether the pinned
 snapshots are ready without writing to the cache. Use
 `chart-manager schemas sync --update` to resolve moving upstream refs and write
 the lock after successful hydration. The lock contains policy and two commit
@@ -311,7 +310,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 - Validate failure: run `mise run schemas`, then
   `uv run chart-manager chart validate <name> --env <env>`.
 - Sandbox failure: `uv run chart-manager chart test <name> --profile minimal`.
-- If it looks environmental, run `uv run chart-manager doctor --for 'chart test'`
+- If it looks environmental, run `uv run chart-manager doctor`
   first — it names the missing binary or unreachable backend.
 
 ## Adding or editing a chart
@@ -319,7 +318,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 Each managed chart owns one `charts/<name>/chart-lifecycle.yaml` with
 `apiVersion: chartmanager.io/v1alpha1`, `kind: ChartLifecycle`.
 `spec.validation` declares environments, composed values, triggers, and
-policies; `spec.clusterTest` declares install profiles and their Helm test
+policies; `spec.chartTest` declares install profiles and their Helm test
 gates, plus `dependentTests` — chart/profile tests to rerun when this chart
 changes. Either capability can be absent or disabled; `spec.enabled: false`
 pauses both. See
@@ -344,12 +343,12 @@ environment instead.
 `chartsDir`, `localCluster`, `renderDir`, and `policiesDir` values are
 repository-relative, use `/`, and cannot escape the checkout. `chartsDir`
 alone may be `.`. The two `fanout` lists select the complete validation or
-cluster-test matrix when an additional shared input changes; they do not
+chart-test matrix when an additional shared input changes; they do not
 publish, deploy, or mutate chart dependencies.
 
 Policy changes automatically fan out validation. The workspace marker,
 selected `LocalCluster`, its kind config and repository bootstrap charts, and
-`clusterTest.sharedPrerequisites` automatically fan out cluster tests. A
+`chartTest.sharedCharts` automatically fan out chart tests. A
 plain fanout path matches itself and descendants, `*` matches within one path
 segment, and `**` matches zero or more segments.
 
@@ -360,7 +359,7 @@ remains the machine-specific override; it must point at the directory that
 holds the marker, since an explicit root is never walked up. There is no CLI
 `--root` option. The workspace is required: with no marker, a
 repository-bound command exits `5` and says to run from a chart repository
-checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `helmrelease`,
+checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `promote`,
 `grafana dashboard export`, and `grafana dashboard lint --path` work anywhere.
 `doctor` runs anywhere: without a workspace it skips the schema checks and
 says why; an invalid `workspace.yaml` exits `3`.
@@ -394,7 +393,7 @@ but broken tool, `3` invalid configuration.
 ## More
 
 - [`docs/architecture.md`](docs/architecture.md) — where a type belongs:
-  authored API contract vs domain, services, and execution.
+  the package layout and what stays out of the authored API contract.
 - [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — the
   `ChartLifecycle` resource and the plan/execute model behind the commands.
 - [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — how

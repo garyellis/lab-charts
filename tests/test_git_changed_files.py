@@ -1,4 +1,4 @@
-"""Unit coverage for `Git.changed_files`."""
+"""Unit coverage for `Git` queries."""
 from __future__ import annotations
 
 import shutil
@@ -50,6 +50,20 @@ def test_changed_files_empty_diff_returns_empty_list(tmp_path: Path) -> None:
     git = Git(tmp_path, runner=runner)
 
     assert git.changed_files() == []
+
+
+def test_remote_url_is_none_without_an_origin_remote(tmp_path: Path) -> None:
+    runner = FakeCommandRunner(returncode=2)
+
+    assert Git(tmp_path, runner=runner).remote_url() is None
+
+
+def test_show_raises_when_the_revision_lacks_the_file(tmp_path: Path) -> None:
+    runner = FakeCommandRunner(returncode=128, stderr="fatal: path does not exist")
+
+    with pytest.raises(ExternalCommandError) as raised:
+        Git(tmp_path, runner=runner).show("HEAD", Path("charts/demo/Chart.yaml"))
+    assert raised.value.stderr == "fatal: path does not exist"
 
 
 def _git(cwd: Path, *args: str) -> str:
