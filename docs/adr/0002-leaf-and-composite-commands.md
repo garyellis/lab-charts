@@ -8,7 +8,9 @@ ADR-0001 made command packages independent, with two exceptions: `plan` may impo
 command's `select()` and `doctor` each command's `requirements()`. We name that exception
 instead of listing it. A **leaf** command never imports another command. A **composite**
 command answers a question about several commands by asking each leaf through its interface.
-Today the composites are `plan` and `doctor`.
+Today the composites are `plan` (each leaf's `select()` and selection type) and `doctor` (only
+validate's schema check: `doctor --for` and its per-command requirements table are removed, so
+doctor runs every check).
 
 Rules, enforced by import-linter:
 
@@ -18,6 +20,14 @@ Rules, enforced by import-linter:
    validate`, then `validate.select`), never a leaf's submodules. The leaf's `__init__.py` is
    its interface.
 3. Composites are named in the contract, so becoming one is a reviewed change.
+4. A leaf's package root is a cheap interface: it re-exports what composites and `main.py`
+   read (models, `select`), never `run` or `cli`, and loads no `integrations.*`. A `forbidden`
+   contract checks the root `__init__` files only (`as_packages = false`). One counted
+   exception: validate's root loads `integrations.kubeconform` for the schema check doctor runs.
+
+`main.py` is the composition root and owns the command tree: it mounts every leaf's Typer
+callbacks and sub-apps in `--help` order. Leaves don't register themselves, so a leaf never
+needs to know its neighbours' place in the help.
 
 ```toml
 [[tool.importlinter.contracts]]
@@ -41,6 +51,12 @@ leaves (`plan.**` does not match `plan`), and a name that is also a submodule mu
 as an attribute (`validate.select`), not imported (`from ... validate import select`).
 
 ## Considered options
+
+- Lazy leaf roots (PEP 562 `__getattr__`, Click `LazyGroup`): rejected; import-linter still
+  sees the deferred imports, PEP 562 breaks when the lazy name matches a submodule (`run`), and
+  PEP 810 needs Python 3.15.
+- Each leaf `register()`s itself: rejected; help order became a side effect spread over 12
+  files, and catalog would have had to call test's `register` (leaf to leaf).
 
 - Push composition down into `shared/` (Cargo's `ops`, kubectl's `cmd/util`): rejected;
   selection rules would leave their command, against ADR-0001.
