@@ -193,7 +193,7 @@ def test_plumbing_does_not_import_domain_or_validation_policy() -> None:
 #: bounds for `domain/` on the day it is created, the same way the TID251 lift
 #: table in pyproject.toml defaults a new package to "no adapters".
 #:
-#: `chart_manager.shared.settings` is absent (see
+#: `chart_manager.settings` is absent (see
 #: `test_settings_and_domain_do_not_import_each_other`). `pydantic` remains
 #: here because domain owns model loading; byte decoding is centralized in
 #: `plumbing.yaml_files`.
@@ -315,14 +315,14 @@ def test_integrations_do_not_import_services() -> None:
 
 def test_settings_and_domain_do_not_import_each_other() -> None:
     """Layout reaches domain/ and integrations/ from RepositoryWorkspace, not Settings."""
-    settings = _PKG / "shared" / "settings.py"
+    settings = _PKG / "settings.py"
     upward = [
         module
         for _, module in _imports_in(settings.read_text(encoding="utf-8"), "settings.py")
         if module.startswith("chart_manager.domain")
     ]
-    downward = _imports_matching(_DOMAIN, ("chart_manager.shared.settings",)) + _imports_matching(
-        _INTEGRATIONS, ("chart_manager.shared.settings",)
+    downward = _imports_matching(_DOMAIN, ("chart_manager.settings",)) + _imports_matching(
+        _INTEGRATIONS, ("chart_manager.settings",)
     )
 
     assert not upward, f"settings.py must not import domain/: {upward}"
@@ -735,7 +735,7 @@ _API_FORBIDDEN_IMPORTS = {
     "chart_manager.integrations": "adapters run commands; a contract describes text",
     "chart_manager.cli": "a contract must not know how it is rendered",
     "chart_manager.composition": "wiring adapters is the composition root's job",
-    "chart_manager.shared.settings": "settings are repository state, not authored shape",
+    "chart_manager.settings": "settings are repository state, not authored shape",
     "rich": "a contract must be decodable where there is no terminal",
     "typer": "a contract must be decodable where there is no terminal",
     "yaml": "turning bytes into dicts is the loader's job, in services/",
@@ -1066,7 +1066,7 @@ _API_LEAKS = {
     "reaching-for-the-loader": "from chart_manager.shared.charts.lifecycle import load",
     "reaching-for-an-adapter": "from chart_manager.integrations.helm import Helm",
     "reaching-for-the-surface": "import chart_manager.cli.output",
-    "reaching-for-settings": "from chart_manager.shared.settings import Settings",
+    "reaching-for-settings": "from chart_manager.settings import Settings",
     "decoding-its-own-yaml": "import yaml",
     "rendering-its-own-errors": "from rich.console import Console",
     "a-plumbing-module-that-is-not-a-pure-rule": (

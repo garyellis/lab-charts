@@ -8,8 +8,8 @@ import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.settings import Settings
 from chart_manager.shared.cluster import session
-from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, Reply
 
 READYZ = ("kubectl", "get", "--raw=/readyz", "--context", "kind-lab")

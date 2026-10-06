@@ -55,7 +55,7 @@ from chart_manager.plumbing.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
-from chart_manager.shared.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
+from chart_manager.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
 
 # --- the command tree ------------------------------------------------------
 

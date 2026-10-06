@@ -18,10 +18,10 @@ from chart_manager.commands.promote.state import (
 )
 from chart_manager.commands.promote.telemetry import emit_promotion
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.settings import Settings
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import PromotionPhase
 from chart_manager.shared.events.writer import EventWriter
-from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
     VERSION,

@@ -14,9 +14,9 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.settings import Settings
 from chart_manager.shared.charts import dependencies
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
-from chart_manager.shared.settings import Settings
 
 DEFAULT_CLUSTER_NAME = "chart-manager"
 

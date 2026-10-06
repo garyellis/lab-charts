@@ -12,8 +12,8 @@ from chart_manager.commands.promote.monitor import run
 from chart_manager.commands.promote.state import DETAIL_MAX, Reason
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
-from chart_manager.shared.settings import Settings
 from tests.commands.promote.conftest import (
     CHART,
     HR,

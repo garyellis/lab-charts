@@ -59,9 +59,9 @@ from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.services.grafana.dashboard_export import GrafanaExporter
+from chart_manager.settings import Settings, load_settings
 from chart_manager.shared.charts import dependencies as chart_deps
 from chart_manager.shared.events.store import preflight_event_store
-from chart_manager.shared.settings import Settings, load_settings
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
     load_repository_workspace,

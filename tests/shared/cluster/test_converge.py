@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from chart_manager.plumbing.errors import MissingToolError
+from chart_manager.settings import Settings
 from chart_manager.shared.cluster import session
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
-from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, argv_prefix, plain_argv
 
 MANIFEST = """\

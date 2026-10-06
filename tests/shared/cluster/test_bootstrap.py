@@ -8,9 +8,9 @@ import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.settings import Settings
 from chart_manager.shared.cluster import bootstrap, session
 from chart_manager.shared.cluster.converge import ReleaseFailed
-from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, argv_prefix, plain_argv
 
 CILIUM_MANIFEST = """\

@@ -30,6 +30,7 @@ from chart_manager.commands.test.plan import (
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.converge import (
@@ -52,7 +53,6 @@ from chart_manager.shared.cluster.progress import (
 )
 from chart_manager.shared.cluster.session import Session, attach, find, provision
 from chart_manager.shared.cluster.session import teardown as delete_cluster
-from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 _LOG = logging.getLogger(__name__)

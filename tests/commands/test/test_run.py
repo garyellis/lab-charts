@@ -9,8 +9,8 @@ import pytest
 from chart_manager.commands import test
 from chart_manager.commands.test.run import plan, run, teardown
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, MissingToolError
+from chart_manager.settings import Settings
 from chart_manager.shared.cluster.progress import ProgressEvent
-from chart_manager.shared.settings import Settings
 from chart_manager.shared.workspace import load_repository_workspace as load_workspace
 from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv
 

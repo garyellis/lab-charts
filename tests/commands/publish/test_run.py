@@ -15,10 +15,10 @@ from chart_manager.commands.publish import (
 )
 from chart_manager.commands.publish.run import run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
+from chart_manager.settings import Settings
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
 from chart_manager.shared.events.store import EventQuery
 from chart_manager.shared.events.writer import EventWriter
-from chart_manager.shared.settings import Settings
 from tests.conftest import FakeCommandRunner, MakeChart, plain_argv, workspace_for
 
 REPOSITORY = "oci://registry.local/library"
