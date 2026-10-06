@@ -420,7 +420,7 @@ def test_no_match_outcome_pretty_message(monkeypatch: pytest.MonkeyPatch) -> Non
 
 # ----- promote: exit codes, non-interactive guard, json projection --------
 #
-# The defect these lock down (design doc 8.1): `promote` decoded its six
+# The defect these lock down: `promote` decoded its six
 # terminal states into six `console.print` calls and raised `typer.Exit` on
 # none of them. A declined downgrade printed "aborted ... no PR opened" and
 # exited 0, so a promotion that did nothing was indistinguishable from one
@@ -453,7 +453,7 @@ def _promote_result(status: PromoteStatus) -> PromoteResult:
 
     Shaped like what `pr.run` actually returns
     for that state, so an exit-code assertion is not passing against a
-    result the service could never produce.
+    result `pr.run` could never produce.
     """
     match status:
         case PromoteStatus.NO_CHANGES:
@@ -623,10 +623,9 @@ def test_promote_interactive_decline_exits_1(monkeypatch: pytest.MonkeyPatch) ->
 def test_promote_json_parses_cleanly_off_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     """stdout carries the projection and nothing else.
 
-    An *explicit* `--output json` also silences narration (design doc 6.2:
-    "json implies --quiet"), so stderr is empty here. That is the one leg of
-    this assertion that changed in P1.4; the stdout purity it exists to
-    protect is unchanged and is still checked by `json.loads` below.
+    An *explicit* `--output json` also silences narration ("json
+    implies --quiet"), so stderr is empty here. The stdout purity
+    is still checked by `json.loads` below.
 
     The companion property -- that the narration still exists and is merely
     suppressed -- is held by

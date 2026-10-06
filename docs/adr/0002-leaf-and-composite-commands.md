@@ -20,8 +20,8 @@ Rules, enforced by import-linter:
    validate`, then `validate.select`), never a leaf's submodules. The leaf's `__init__.py` is
    its interface.
 3. Composites are named in the contract, so becoming one is a reviewed change.
-4. A leaf's package root is a cheap interface: it re-exports what composites and `main.py`
-   read (models, `select`), never `run` or `cli`, and loads no `integrations.*`. A `forbidden`
+4. A leaf's package root is a cheap interface: it re-exports what composites read
+   (models, `select`), never `run` or `cli`, and loads no `integrations.*`. A `forbidden`
    contract checks the root `__init__` files only (`as_packages = false`). One counted
    exception: validate's root loads `integrations.kubeconform` for the schema check doctor runs.
 

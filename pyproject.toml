@@ -95,8 +95,8 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG"]
 # *is* the behavior, and the parameter name is part of the contract it
 # implements. `settings_customise_sources` is a pydantic-settings hook whose
 # full source list is mandated by the framework; deliberately omitting
-# `dotenv_settings` from the returned tuple is the documented decision at
-# settings.py:110. Both are structural, not dead code, so they are exempted
+# `dotenv_settings` from the returned tuple is the decision documented in
+# that method's docstring. Both are structural, not dead code, so they are exempted
 # by code rather than left as a standing lint backlog.
 "src/chart_manager/shared/events/store.py" = ["ARG002"]
 "src/chart_manager/settings.py" = ["ARG003"]

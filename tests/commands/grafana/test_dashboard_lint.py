@@ -118,7 +118,7 @@ def test_expand_targets_passes_a_missing_file_through_untouched(tmp_path: Path) 
 
 
 def test_expand_targets_recurses_into_a_directory(tmp_path: Path) -> None:
-    """`--path DIR` lints the JSON under it, as the default discovery does (design doc 8.9)."""
+    """`--path DIR` lints the JSON under it, as the default discovery does."""
     tree = tmp_path / "dashboards"
     (tree / "nested").mkdir(parents=True)
     (tree / "a.json").write_text(_PASSING_DASHBOARD)
@@ -135,7 +135,7 @@ def test_wire_payload_carries_the_tally_as_well_as_the_findings(
 
     A clean run over 40 dashboards and a run that found no dashboards at all
     both produce no findings; the tally is what separates them, which is the
-    distinction design doc 8.7 is about.
+    distinction the tally exists for.
     """
     bad = tmp_path / "bad.json"
     bad.write_text('{"panels": [], "templating": {"list": []}}')

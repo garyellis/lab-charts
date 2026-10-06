@@ -179,7 +179,7 @@ def expand_targets(paths: Iterable[Path]) -> list[Path]:
 
     A directory is the natural thing to hand `--path`, and until this existed
     it reached `Path.read_text` and killed the process with a raw
-    `IsADirectoryError` traceback (design doc 8.9). Recursing is the reading
+    `IsADirectoryError` traceback. Recursing is the reading
     that matches what the caller meant -- `--path charts/x/dashboards/` lints
     that tree -- and it makes `--path` and the default discovery agree, since
     `discover_dashboards` already rglobs.

@@ -18,7 +18,7 @@ def _clear_mise_cache() -> None:
 
 
 def _helm(runner: FakeCommandRunner, **kwargs: Any) -> Helm:
-    """A Helm wired the way `Container.helm` wires it.
+    """A Helm wired the way `chart validate` wires it.
 
     `template`'s "does this chart declare dependencies?" gate is injected, so
     an un-wired Helm conservatively assumes it does and always runs the

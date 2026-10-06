@@ -25,7 +25,7 @@ def _clear_mise_cache() -> None:
 
 
 def _helm(runner: FakeCommandRunner) -> Helm:
-    """A Helm wired the way `Container.helm` wires it.
+    """A Helm wired the way `chart validate` wires it.
 
     The freshness gate is injected, so an un-wired Helm conservatively
     assumes stale and always runs the update. This file is the gate's

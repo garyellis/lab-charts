@@ -60,7 +60,7 @@ def _setup_logging_for_mode(mode: str) -> None:
 def _is_interactive() -> bool:
     """True when it is legitimate to block the run on a prompt.
 
-    Design §6.6: never prompt when stdin is not a TTY or `CI=true`. Both
+    Never prompt when stdin is not a TTY or `CI=true`. Both
     legs matter. `isatty()` alone misses a runner that sets `CI=true` while
     still allocating a pty -- there the prompt would not EOF, it would sit
     there until the job's wall-clock timeout. `CI=true` alone misses a
@@ -336,7 +336,7 @@ def pr(
             narration.print("[yellow]--allow-downgrade set; proceeding.[/yellow]")
             return True
         if not _is_interactive():
-            # §6.6. Prompting here used to hand a non-TTY runner an EOF,
+            # Prompting here used to hand a non-TTY runner an EOF,
             # which `typer.confirm` turned into a declined downgrade -- and
             # a declined downgrade then exited 0. Two silent failures in a
             # row. Refuse up front, as a usage error (exit 2), and name the
@@ -409,7 +409,7 @@ def pr(
     # Two lookups, one judgement. `PROMOTE_OUTCOME` answers "did this promote
     # succeed" -- the same lookup `wire.promote_to_dict` publishes as the
     # payload's `ok` -- and `exit_code_for` answers "what number is that
-    # worth" (design §6.1). Neither re-derives the other's half, so the exit
+    # worth". Neither re-derives the other's half, so the exit
     # status and the json a CI step reads cannot disagree.
     exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
     if exit_code:

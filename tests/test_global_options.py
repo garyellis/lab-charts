@@ -273,11 +273,10 @@ def test_verbose_raises_the_log_level_and_silence_leaves_it_alone(
 def test_verbosity_is_a_count_not_a_boolean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`-vv` means more than `-v` (6.4: stream subprocess output).
+    """`-vv` means more than `-v` (stream subprocess output).
 
-    The behavioral half of that lives in services and is not in this commit,
-    so pin the count now: a later phase reads it, and a `bool` flag here
-    would have thrown the distinction away irrecoverably.
+    Pin the count: a `bool` flag here would throw the distinction away
+    irrecoverably.
     """
     monkeypatch.chdir(tmp_path)
     captured: list[dict[str, object]] = []
@@ -311,11 +310,8 @@ def _root_option_names() -> set[str]:
 
 
 def test_there_is_a_global_output_flag() -> None:
-    """P1.4 landed the root `-o`, together with the vocabulary unification.
-
-    It was deliberately held back from P0.10 (design doc 6.2 / plan 2.7)
-    until there was one vocabulary for it to name, so that no release ever
-    shipped `-o` meaning three different things.
+    """The root `-o` names the one output vocabulary every `--output` speaks,
+    so `-o` never means three different things.
     """
     assert "-o" in _root_option_names()
     assert "--output" in _root_option_names()

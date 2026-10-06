@@ -20,7 +20,7 @@ from tests.conftest import cli, write_workspace
 # The rename exists for this flip. As `grafana export-dashboard`, `-o` named
 # the destination *file*, so `-o json` wrote the dashboard into a file called
 # `json`. `--to` now carries the destination and `-o` means what it means
-# everywhere else on the surface. There is no alias -- see design doc 5.
+# everywhere else on the surface. There is no alias.
 
 _DASHBOARD = {
     "uid": "u",
@@ -132,7 +132,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
 # `lint_paths([])` is `ok` -- that is `lint_paths` reporting "zero
 # findings", which is true. The *command* must not report the same thing as
 # success: a wrong --root or a --path that matches nothing produced a green
-# CI job that linted no files at all. See design doc 8.7.
+# CI job that linted no files at all.
 
 
 def _lint(*argv: str) -> Result:

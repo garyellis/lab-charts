@@ -16,7 +16,7 @@ Severity = Literal["step", "detail", "warn", "error", "info"]
 
 @dataclass(frozen=True)
 class ProgressEvent:
-    """One narration point emitted while a service runs."""
+    """One narration point emitted while a long-running flow runs."""
 
     severity: Severity
     message: str = ""
@@ -54,7 +54,7 @@ def info(message: str) -> ProgressEvent:
 def emit(progress: ProgressCallback | None, event: ProgressEvent) -> None:
     """Deliver `event` if a callback is wired; no-op otherwise.
 
-    A free function keeps optional progress reporting uniform across services.
+    A free function keeps optional progress reporting uniform across callers.
     """
     if progress is not None:
         progress(event)

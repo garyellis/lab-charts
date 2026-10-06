@@ -8,8 +8,7 @@ Ownership, stated once so it is never re-derived:
     too. `doctor` is a *surface* that aggregates the results -- it does not
     know what `kubeconform` is called or which flag prints its version.
 
-That position is recorded in `MY_COMMENTS.md` and in the design doc's P0
-bullet, and it is why this module holds only the shared *shape* of a result
+That position is why this module holds only the shared *shape* of a result
 plus the one probe every adapter would otherwise hand-roll. Nothing here
 knows about any specific tool.
 

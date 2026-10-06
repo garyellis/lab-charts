@@ -154,8 +154,8 @@ def test_a_lifecycle_release_pointing_at_a_foreign_chart_is_rejected(
 
     `charts/network/Chart.yaml` declaring someone else's name means the
     catalog resolves that name to the other tree, and bootstrap would install
-    a chart the LocalCluster never named. Shared with the development
-    service's `_preflight_target`, so this covers both.
+    a chart the LocalCluster never named. Shared with `local up`
+    through `lifecycle_install_plan`, so this covers both.
     """
     chart = tmp_path / "charts/network"
     other = tmp_path / "charts/other"

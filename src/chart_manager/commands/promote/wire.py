@@ -104,7 +104,7 @@ def promote_to_dict(
             if pr is not None
             else None
         ),
-        # Paths as the service produced them. They sit under the promote run's
+        # Paths as `pr.run` produced them. They sit under the promote run's
         # temporary clone, so they are evidence of *which files* changed, not
         # locations a consumer can open after the process exits.
         "changed_files": [str(p) for p in result.changed_files],

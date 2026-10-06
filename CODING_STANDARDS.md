@@ -96,6 +96,3 @@ Consolidation examples from the current suite (`tests/`):
 
 - `test_kind_port_mappings.py::test_container_host_ports_*`: eight tests that differ only in
   the docker payload. Make it one parametrized table of (ps output, inspect output, expected).
-- Same behavior at several layers:
-  `commands/promote/test_cli.py::test_timeout_ordering_violation_is_a_clean_domain_error`
-  re-tests the `MonitorRequest` validation.

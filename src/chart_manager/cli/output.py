@@ -230,7 +230,7 @@ def resolve(
     `is_terminal`. Callers that already hold their stdout console pass it so
     the decision and the writing cannot disagree.
 
-    On `json` implying `--quiet` (design doc 6.2), note *`requested`*, not
+    On `json` implying `--quiet`, note *`requested`*, not
     `selected`: narration is silenced only when the caller actually asked for
     json, never when `auto` merely resolved to it.
 
@@ -267,7 +267,7 @@ def require_dry_run(value: str | None, *, dry_run: bool) -> None:
     `chart test` and `chart cache clean` emit no projection when they run
     for real -- one narrates progress, the other prints a status line. Their
     `-o` therefore names the form of the *plan*, and accepting it on a real
-    run would be the accepted-and-ignored flag design doc 6.3 forbids: the
+    run would be an accepted-and-ignored flag: the
     caller asked for json, got a cluster install, and nothing said
     otherwise. Exit 2 naming the missing flag instead.
 

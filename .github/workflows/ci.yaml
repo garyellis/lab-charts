@@ -9,7 +9,7 @@ name: ci
 #   publish      → publish PR previews or final artifacts for merged chart changes.
 #
 # validate and sandbox-test run in parallel after prep — they're independent
-# signals. Chart Manager's lifecycle impact service owns both validation
+# signals. `chart-manager plan` owns both validation
 # selection and the sandbox chart/profile matrix, including repository-level
 # safety fanout for kind config, tool pins, and workflow changes.
 #

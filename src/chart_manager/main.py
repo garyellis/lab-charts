@@ -156,7 +156,7 @@ def global_options(
     * **No global `--version` flag.** `--version` already means the *chart*
       version on `chart publish` and all three `promote` commands. One
       flag, two meanings by position, is a bad flag -- so the CLI's own
-      version is the `version` command (8.6).
+      version is the `version` command.
     """
     # Order matters: the config file must be located before anything reads
     # Settings, because Settings is where the config file's values enter.
@@ -266,7 +266,7 @@ app.add_typer(schemas_app, name="schemas")
 #: and both have to precede the `ChartManagerError` catch-all that closes the
 #: table and makes the lookup total.
 #:
-#: This is where design §6.1's rows 3, 4 and 127 come from: an unparseable
+#: This is where exit codes 3, 4 and 127 come from: an unparseable
 #: `chart-lifecycle.yaml` is not the same event as a helm that ran and
 #: failed, which is not the same event as a helm that is not installed, and
 #: before this every one of them exited 1 (except the absent binary, which
@@ -323,7 +323,7 @@ def main() -> None:
     does not fire for a missing values file. Every *other* `OSError` is the
     machine refusing rather than the run failing (a directory where a file
     was expected, a permission denial, a refused connection -- `socket`
-    errors are `OSError` too), which is design §6.1's environment error, 5.
+    errors are `OSError` too), which is the environment error, 5.
     """
     try:
         settings = load_settings()

@@ -269,7 +269,7 @@ def test_timeout_default_is_unbounded() -> None:
 
 
 def test_kind_context_is_the_one_home_for_the_naming_convention() -> None:
-    # Two services derived this with their own f-string before it lived here.
+    # Two modules derived this with their own f-string before it lived here.
     assert kind_context("chart-manager") == "kind-chart-manager"
 
 

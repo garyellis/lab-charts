@@ -12,7 +12,7 @@ The chart and version arrive as one `CHART@VERSION` positional (`event
 list` takes the optional-version `CHART[@VERSION]` selector), parsed by
 `shared/events/ref.py`. Nothing here looks for an `@`: the token is the
 event `correlation_id`, so its grammar is the events domain's, not the
-surface's (design commitment 6). The old `--chart` / `--version` flag pair
+surface's. The old `--chart` / `--version` flag pair
 stays accepted as a hidden alias and reaches the same resolver.
 """
 

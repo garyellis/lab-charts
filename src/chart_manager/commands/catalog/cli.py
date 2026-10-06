@@ -41,9 +41,8 @@ def list_charts(
     `-o` defaults to `auto`: the table on a terminal, JSON in a pipe or in
     CI. The table was this command's only output for its whole life, which
     made `chart list | grep` a habit and the chart inventory unreadable to
-    anything else; the JSON payload is the document in
-    `services/chart_catalog_wire.py`, so a second surface answers this
-    question with the same bytes.
+    anything else; the JSON payload is the chart catalog document, so a
+    second surface answers this question with the same bytes.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
     entries = catalog.list_charts(_container().workspace())
@@ -52,7 +51,7 @@ def list_charts(
     # projection (as `error`, in every format) and again as the exit code, so
     # neither a reader nor a pipeline has to learn the other's channel. What
     # failed is the *authoring* of a `Chart.yaml` or `chart-lifecycle.yaml`,
-    # which is 6.1's spec error -- exit 3, not the generic 1 this used to
+    # which is a spec error -- exit 3, not the generic 1 this used to
     # return.
     if any(entry.error is not None for entry in entries):
         raise typer.Exit(code=exit_code_for(Outcome.SPEC))

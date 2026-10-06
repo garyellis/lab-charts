@@ -146,7 +146,7 @@ class Helm:
         self._deps_updated_lock = threading.Lock()
         self._chart_locks: dict[Path, threading.Lock] = {}
         # Whether a chart declares dependencies, and whether its materialized
-        # ones are current, are questions about chart *metadata* -- service
+        # ones are current, are questions about chart *metadata* -- caller
         # policy this adapter deliberately does not parse. `shared/cluster/session.py`
         # wires the real predicates from shared/charts/dependencies; unwired,
         # both answers are the conservative ones, so the update always runs.

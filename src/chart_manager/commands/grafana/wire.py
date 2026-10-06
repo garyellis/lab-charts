@@ -8,7 +8,7 @@ so they cannot diverge.
 The payload carries the tally alongside the findings even though a consumer
 could count the list, because `files_scanned` is not derivable from it: a run
 over 40 dashboards that found nothing and a run over zero dashboards both
-produce an empty `findings`, and those two are the case design doc 8.7 exists
+produce an empty `findings`, and those two are the cases the tally exists
 to separate. `ok` is read off `LintResult.ok` rather than re-derived from the
 list for the same reason the CLI does not re-derive it -- the pass/fail rule
 belongs to `dashboard_lint`.

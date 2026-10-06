@@ -1,4 +1,4 @@
-"""Local releases validate path spelling; domain loaders validate existence and Chart.yaml."""
+"""Local releases validate path spelling; their loaders validate existence and Chart.yaml."""
 
 from __future__ import annotations
 

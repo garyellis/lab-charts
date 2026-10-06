@@ -132,7 +132,7 @@ class Kubectl:
 
     Matches the `Helm` constructor shape. Before that, this adapter took no
     context at all, so `Settings.kube_context` reached two of six adapters
-    and every kubectl call in the lab/sandbox/ci/expose services hit
+    and every other kubectl call hit
     whatever `kubectl config current-context` happened to be. That is wrong
     the moment two clusters exist and unusable for a process serving
     concurrent requests against different ones.
@@ -163,7 +163,7 @@ class Kubectl:
     def context(self) -> str | None:
         """The kubeconfig context this instance is pinned to, if any.
 
-        Read by services that must name the same cluster in a *detached*
+        Read by callers that must name the same cluster in a *detached*
         child (port-forward) rather than through `run`.
         """
         return self._context

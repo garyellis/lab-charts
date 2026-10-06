@@ -3,7 +3,7 @@
   * `wait_certificate_ready`: a thin wrapper around `kubectl wait`; we assert the argv shape and propagate the
     runner's exit code as ExternalCommandError on failure.
   * `list_virtualservices` / `list_gateway_hosts`: best-effort
-    listings used by DevClusterService and access discovery. Empty list
+    listings used by `local status` and access discovery. Empty list
     on missing CRD / parse error is the contract -- callers treat that
     as "no VirtualServices / hosts yet" rather than as a hard error.
 """
@@ -256,8 +256,8 @@ def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
 
 
 # ----- cluster addressing ---------------------------------------------------
-# `Kubectl` took no context at all until Wave 4, so `Settings.kube_context`
-# reached two of six adapters and the lab/sandbox/ci/expose services all read
+# `Kubectl` once took no context at all, so `Settings.kube_context`
+# reached two of six adapters and every other kubectl call read
 # the ambient kubeconfig. These pin both halves: pinned adds the flag
 # everywhere, unpinned is byte-identical to the old behavior.
 
@@ -340,7 +340,7 @@ def test_port_forward_argv_uses_the_instance_context(monkeypatch: pytest.MonkeyP
     )
 
     assert captured[0][-2:] == ["--context", "kind-a"]
-    # A per-call context wins: one ExposeService fronts every cluster.
+    # A per-call context wins: one caller can address every cluster.
     assert captured[1][-2:] == ["--context", "kind-b"]
 
 

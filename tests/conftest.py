@@ -42,7 +42,7 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 #: Repo root, anchored to this file rather than the process cwd.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: The conventional layout, for domain loaders that take it explicitly.
+#: The conventional layout, for loaders that take it explicitly.
 CHARTS_DIR = Path("charts")
 LOCAL_CONFIG = Path(".chart-manager/local-cluster.yaml")
 POLICIES_DIR = Path("policies")
@@ -466,7 +466,7 @@ def _root_app() -> typer.Typer:
 
     Lazily so that a conftest import -- which every test in the suite pays
     for, including the ones that never touch the surface -- does not drag
-    Rich, Typer's command tree and the whole service layer into the process,
+    Rich, Typer's command tree and every command package into the process,
     and so that an import error in `cli/` fails the CLI tests rather than
     collection of the entire suite.
     """

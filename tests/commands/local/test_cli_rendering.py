@@ -1,11 +1,9 @@
-"""CLI rendering of the results the lab/sandbox services now return.
+"""CLI rendering of the results `commands/local/run.py` returns.
 
-`commands/local/cli.py` is where the `local` group's Rich rendering lives -- the
-service layer knows nothing about a terminal. These tests pin
-the output shape so the services-return-results refactor stayed a refactor:
-the summary table, the access-hint blocks, the lifecycle lines and the
-progress narration must carry the same information they did when the
-services printed them themselves.
+`commands/local/cli.py` is where the `local` group's Rich rendering lives --
+`run` knows nothing about a terminal. These tests pin the output shape: the
+summary table, the access-hint blocks, the lifecycle lines and the progress
+narration.
 
 `cli/streams.py` owns two consoles: `console` for the selected output
 projection and `narration` for everything else. These tests record them
@@ -143,7 +141,7 @@ def test_access_hints_render_credentials_under_their_url(narrated: Console) -> N
     out = narrated.export_text()
 
     assert "URLs:" in out
-    # Sort order is the service's; the renderer must not reshuffle it.
+    # Sort order is `run`'s; the renderer must not reshuffle it.
     assert out.index("app.localhost") < out.index("user: admin") < out.index("loki.localhost")
     assert "pass: s3cret" in out
 

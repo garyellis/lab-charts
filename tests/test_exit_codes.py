@@ -66,7 +66,7 @@ def test_each_outcome_maps_to_the_code_design_6_1_assigns_it(
     outcome: Outcome,
     expected: int,
 ) -> None:
-    """Design §6.1's table, transcribed. Changing a row is a release event."""
+    """The exit-code table, transcribed. Changing a row is a release event."""
     assert exit_code_for(outcome) == expected
 
 
@@ -99,7 +99,7 @@ def test_success_is_zero() -> None:
 # shorter. That is how the table ended up with one consumer the first time.
 
 #: `raise typer.Exit(...)` and `sys.exit(...)` -- the two ways a Python CLI
-#: sets `$?`. Both are scanned, because `cli/validate.py` legitimately uses
+#: sets `$?`. Both are scanned, because `main.py` legitimately uses
 #: the second one and a gate that only knew the first would wave it through.
 _EXIT_CALLS = frozenset({"Exit", "exit"})
 
@@ -250,7 +250,7 @@ def test_a_domain_error_exits_with_the_code_its_type_earns(
 def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
     exc: OSError, expected: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Design doc 8.9's general case.
+    """The general case of an `OSError` escaping a command.
 
     `IsADirectoryError` is the one that was reported: `grafana
     lint-dashboards --path DIR` printed a Python traceback and exited on

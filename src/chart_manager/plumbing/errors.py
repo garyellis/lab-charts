@@ -50,7 +50,7 @@ class MissingToolError(ExternalCommandError):
 
     Distinct from a tool that ran and failed: the surface maps this to exit
     127 ("command not found"), so a missing binary is not reported as a
-    missing data file, and best-effort service handlers can degrade on it
+    missing data file, and best-effort handlers can degrade on it
     the same way they degrade on any other ExternalCommandError.
     """
 

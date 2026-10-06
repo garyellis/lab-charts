@@ -19,9 +19,9 @@ Why this is worth a gate rather than a convention:
       on the same stream is silently absorbed into the value, and no exit
       code reveals it.
 
-  (b) `cli/validate.py --format json` writes a JSON document to stdout. It
+  (b) `chart validate -o json` writes a JSON document to stdout. It
       used to write its warnings to a stdout console too, so
-      `--format json --github-step-summary` with `$GITHUB_STEP_SUMMARY`
+      `-o json --github-step-summary` with `$GITHUB_STEP_SUMMARY`
       unset emitted a warning *inside* the JSON stream. That is the exact
       regression `test_json_projections_are_parseable_on_stdout` exists to
       catch, and it is why the behavioral leg below parses rather than
@@ -85,8 +85,8 @@ def _argv(name: str, root: Path) -> list[str]:
         ],
         # Deliberately does NOT name `--output json`: it lets `auto` resolve
         # to json, which is what happens off a terminal and therefore what
-        # happens in CI. An *explicit* `-o json` implies `--quiet` (design doc
-        # 6.2), which would suppress the very warning this case exists to
+        # happens in CI. An *explicit* `-o json` implies `--quiet`,
+        # which would suppress the very warning this case exists to
         # produce -- and the regression being guarded is a warning landing in
         # the JSON document, which only has teeth while the warning is emitted.
         # See `cli/output.resolve` for why auto-resolved json is not quiet.

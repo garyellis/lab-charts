@@ -8,7 +8,7 @@ Everything here is decidable from one document.  Loading the file, agreeing
 its ``metadata.name`` with the chart directory and ``Chart.yaml``, deciding
 whether a capability is enabled, resolving namespaces, and looking a profile
 up by name all need more than the document and therefore live in
-``chart_manager.services``.
+``chart_manager.shared.charts``.
 
 Types are declared dependency-first -- chart test, then manifest
 validation, then the envelope -- so the module reads bottom-up from the

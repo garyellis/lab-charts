@@ -71,8 +71,8 @@ Rules:
 2. Each package owns its flow and wires itself from settings, workspace and the command runner.
    Its Typer command is `<pkg>/cli.py`. `composition.py` goes away.
 3. Imports, enforced by one import-linter config: command packages are independent of each
-   other; `shared/` never imports `commands/`; `integrations/` imports only `plumbing/` and
-   `api/`; inside `shared/`, `workspace` imports nothing else from `shared/`.
+   other; `shared/` never imports `commands/`; `integrations/` imports only `plumbing/`;
+   inside `shared/`, `workspace` imports nothing else from `shared/`.
    Two exceptions: `plan/` may import each command's `select()` and its result types, and
    `doctor/` may import each command's `requirements()`.
 4. Flat inside a package: an entry function `run(request) -> outcome`, its models, `cli.py`.

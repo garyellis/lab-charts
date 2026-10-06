@@ -4,7 +4,7 @@
 chart root is configured. A nested value (`deploy/helm`) is the case that
 catches a subsystem quietly assuming `charts/`, so every consumer is
 asserted against one here: change mapping, git, the planner, upgrade path
-resolution, dashboard discovery, and the services the container builds.
+resolution, dashboard discovery, and the workspace the container reads.
 """
 
 from __future__ import annotations
@@ -145,7 +145,7 @@ spec:
 
 
 def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path) -> None:
-    """One container's workspace answers for every service it builds.
+    """One container's workspace answers for every command that reads it.
 
     Each of these three was once constructed at the surface from a layout of
     its own, so the container's configuration was not what answered the

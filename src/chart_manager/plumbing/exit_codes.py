@@ -1,4 +1,4 @@
-"""The process exit-code table, per design §6.1.
+"""The process exit-code table.
 
 One table. `Outcome` is the vocabulary a caller speaks; `EXIT_CODE` is the
 only place in the codebase that says what number each outcome is worth.

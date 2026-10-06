@@ -60,7 +60,7 @@ def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
     """A pipeline reads the exit code; a jq filter reads `error`. Both work.
 
     The code is 3, not 1: what failed is the *authoring* of a
-    `chart-lifecycle.yaml`, which is design 6.1's spec error. `chart list`
+    `chart-lifecycle.yaml`, which is a spec error. `chart list`
     itself did its job and printed every row that parsed.
     """
     chart = make_chart("broken")

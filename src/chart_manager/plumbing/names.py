@@ -1,4 +1,4 @@
-"""Lexical name validation shared by authored API models and service code.
+"""Lexical name validation shared by authored API models and command code.
 
 `dns_label` is a pure `str -> str` rule with no knowledge of charts, clusters
 or the repository, which is why it lives here rather than in either of the two
@@ -8,9 +8,8 @@ fields (`metadata.name`, `release.name`, `release.namespace`, ...) and
 typed on the command line and to a name read out of `Chart.yaml`.  Keeping one
 definition means the two can never drift into accepting different spellings.
 
-It raises `ValueError`, not `SpecError`: the API layer must not raise service
-exceptions, and the loaders that call it directly translate the failure
-themselves.
+It raises `ValueError`, not `SpecError`: API validators raise `ValueError`,
+and the loaders that call it directly translate the failure themselves.
 """
 
 from __future__ import annotations

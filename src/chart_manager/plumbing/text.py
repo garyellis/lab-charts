@@ -3,8 +3,8 @@
 Lives in `plumbing/` because neither function knows anything about
 HelmReleases, Flux, or diagnostics reports -- they are pure `str -> str`.
 They previously sat in `commands/promote/_common.py`, which meant any
-other service that wanted a bounded log blob either imported from a sibling
-service package or grew its own copy.
+other package that wanted a bounded log blob either imported from a sibling
+package or grew its own copy.
 
 Both append a marker rather than truncating silently: an operator reading a
 capped report needs to know the tail was dropped, otherwise "the logs end

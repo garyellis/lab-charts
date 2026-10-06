@@ -234,7 +234,7 @@ def test_presence_only_probes_skip_the_subprocess(on_path: OnPath) -> None:
 def test_renovate_reports_a_missing_token_as_environment(
     on_path: OnPath, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Required configuration is a per-integration preflight matter (MY_COMMENTS.md)."""
+    """Required configuration is a per-integration preflight matter."""
     on_path("renovate", "renovate-config-validator")
     for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(variable, raising=False)

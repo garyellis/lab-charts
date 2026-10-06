@@ -151,7 +151,7 @@ def test_canonical_json_is_stable_across_key_insertion_order() -> None:
 # ----- summarize_dashboard --------------------------------------------------
 #
 # `-o table` needs a human projection of a document that has no table form,
-# so the fields it shows are a service decision rather than a CLI one.
+# so the fields it shows are a command decision rather than a CLI one.
 
 
 def test_summary_reports_the_identifying_fields() -> None:

@@ -1,7 +1,7 @@
 """The `CHART@VERSION` grammar, which the surface is not allowed to own.
 
-`shared/events/ref.py` exists so that parsing the token is a domain rule
-(design commitment 6). These tests pin the rules the module docstring states,
+`shared/events/ref.py` exists so that parsing the token is a domain rule,
+not the surface's. These tests pin the rules the module docstring states,
 including the ones that are deliberate *rejections* -- a grammar that silently
 accepts `a@b@c` by guessing a split would write a wrong partition key into a
 ledger nobody re-reads until an incident.
@@ -116,7 +116,7 @@ def test_a_bare_chart_name_is_rejected_rather_than_versionless() -> None:
 
 
 def test_a_version_without_a_chart_says_why() -> None:
-    """Rule 3 / design doc 7.5. `store.py` partitions on `chart_name`, so a
+    """Rule 3. `store.py` partitions on `chart_name`, so a
     bare version is a cross-partition scan -- the caller needs to know that,
     not just that the string was rejected."""
     with pytest.raises(ChartRefError, match="version with no chart"):
@@ -173,7 +173,7 @@ def test_a_ref_is_hashable_and_compares_by_value() -> None:
 
 
 # --------------------------------------------------------------------------
-# the read side's CHART[@VERSION] selector (design doc 7.5)
+# the read side's CHART[@VERSION] selector
 # --------------------------------------------------------------------------
 
 

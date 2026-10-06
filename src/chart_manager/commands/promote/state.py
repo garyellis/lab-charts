@@ -330,10 +330,9 @@ PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
 #:   NO_CHANGES          -- every match is already at the target version, so
 #:                          the desired state holds. A promote must be safe
 #:                          to re-run in CI.
-#:   DRY_RUN             -- design §6.3: a dry run prints the plan and exits 0.
-#:   ABORTED             -- design §6.1 names this verbatim: "promote
-#:                          aborted/declined" is a FAILED case. Nothing was
-#:                          promoted.
+#:   DRY_RUN             -- a dry run prints the plan and exits 0.
+#:   ABORTED             -- an aborted or declined promote is a FAILED case.
+#:                          Nothing was promoted.
 #:
 #: Deliberately no `Outcome.USAGE` arm: a usage error is raised by the
 #: surface during argument handling and never reaches a `PromoteResult`.
