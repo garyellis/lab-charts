@@ -8,7 +8,6 @@ from pathlib import Path
 from chart_manager.plumbing.commands import (
     CommandResult,
     CommandRunner,
-    SubprocessRunner,
 )
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
@@ -54,13 +53,13 @@ class Kind:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         docker_host: str | None = None,
         timeout: float | None = None,
     ) -> None:
         """Bind a runner and pin every invocation to a daemon and timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._env = {"DOCKER_HOST": docker_host} if docker_host is not None else None
         # Per-subprocess wall-clock cap. None = unbounded (today's behavior);
         # nothing else bounds `docker ps` or a `kind create cluster`.

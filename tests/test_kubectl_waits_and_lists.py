@@ -332,10 +332,10 @@ def test_port_forward_argv_uses_the_instance_context(monkeypatch: pytest.MonkeyP
         lambda args, **_kwargs: captured.append(args) or object(),
     )
 
-    Kubectl(context="kind-a").port_forward(
+    Kubectl(FakeCommandRunner(), context="kind-a").port_forward(
         namespace="istio-ingress", service="istio-gateway", ports=["8080:80"]
     )
-    Kubectl(context="kind-a").port_forward(
+    Kubectl(FakeCommandRunner(), context="kind-a").port_forward(
         namespace="istio-ingress", service="istio-gateway", ports=["8080:80"], context="kind-b"
     )
 

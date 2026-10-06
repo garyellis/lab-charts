@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 from weakref import WeakKeyDictionary
 
-from chart_manager.plumbing.commands import CommandResult, CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
 
@@ -96,7 +96,7 @@ class Helm:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         version: str | None = None,
         binary: str | Path | None = None,
@@ -105,7 +105,7 @@ class Helm:
         context: str | None = None,
     ) -> None:
         """Resolve the helm binary (explicit path > mise version > PATH) and set defaults."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._helm_bin = _resolve(self.runner, version, binary)
         self._context = context
         # verbose=True preserves the pre-existing stream-to-terminal contract

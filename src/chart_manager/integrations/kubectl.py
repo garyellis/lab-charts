@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import IO, Any
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import parse_duration as _parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
@@ -146,13 +146,13 @@ class Kubectl:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         context: str | None = None,
         timeout: float | None = None,
     ) -> None:
         """Bind a runner and pin every invocation to a context and timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._context = context
         # Per-subprocess wall-clock cap. None = unbounded, which is what
         # every call site got before this existed; `kubectl get` and the

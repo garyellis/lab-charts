@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
 
@@ -81,13 +81,13 @@ class Kyverno:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         binary: str | Path | None = None,
         timeout: float | None = None,
     ) -> None:
         """Bind a CommandRunner, binary path (default `kyverno`), and timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._bin = str(binary) if binary is not None else "kyverno"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --tool-timeout so a hung kyverno doesn't pin a worker.

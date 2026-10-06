@@ -11,6 +11,7 @@ import pytest
 
 from chart_manager.commands.validate.schemas.crd import _strict_schema
 from chart_manager.integrations.kubeconform import Kubeconform
+from chart_manager.plumbing.commands import SubprocessRunner
 
 pytestmark = pytest.mark.integration
 
@@ -149,7 +150,7 @@ def _assert_verdicts(tmp_path, constraint, valid, invalid, *, root_constraint=Fa
                 }
             )
         )
-    report = Kubeconform().validate(
+    report = Kubeconform(SubprocessRunner()).validate(
         manifests,
         schema_locations=[str(schema_path)],
         extra_args=["-verbose"],
