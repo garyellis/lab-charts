@@ -36,10 +36,12 @@ def run(
     """
     try:
         repository: RepositoryWorkspace | None = workspace()
-        schemas = validate.KubeconformSchemaDoctor(repository, runner=runner)
+        schemas = validate.KubeconformSchemaDoctor(
+            repository, runner=runner, schema_cache_root=settings.schema_cache_root
+        )
     except WorkspaceNotFoundError as exc:
         repository, schemas = None, validate.KubeconformSchemaDoctor(
-            None, runner=runner, skip_reason=str(exc)
+            None, runner=runner, schema_cache_root=settings.schema_cache_root, skip_reason=str(exc)
         )
     root = repository.root if repository else settings.root.resolve()
     timeout = settings.command_timeout

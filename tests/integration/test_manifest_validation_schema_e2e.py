@@ -28,6 +28,7 @@ def check(workspace: RepositoryWorkspace, *charts: str) -> validate.ValidateOutc
         validate.ValidateRequest(out=workspace.root / "out", charts=charts, checks=SCHEMA_ONLY),
         workspace=workspace,
         runner=SubprocessRunner(),
+        schema_cache_root=workspace.root / "schema-cache",
     )
 
 

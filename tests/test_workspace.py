@@ -236,6 +236,17 @@ def test_an_invalid_config_value_names_the_key_and_the_file(
         load_settings()
 
 
+def test_the_schema_cache_root_override_expands_home_and_must_be_absolute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHART_MANAGER_SCHEMA_CACHE_ROOT", "~/x")
+    assert load_settings().schema_cache_root == Path.home() / "x"
+
+    monkeypatch.setenv("CHART_MANAGER_SCHEMA_CACHE_ROOT", "relative/x")
+    with pytest.raises(SpecError, match="schema_cache_root"):
+        load_settings()
+
+
 def test_other_chart_manager_environment_variables_still_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fcntl
-import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -48,14 +47,6 @@ class StoreStatus:
 class KubeconformSchemaLocations:
     generated_schema_locations: tuple[str, ...]
     fallback_schema_locations: tuple[str, ...]
-
-
-def default_schema_cache_root() -> Path:
-    configured = os.environ.get("XDG_CACHE_HOME")
-    base = Path(configured).expanduser() if configured else Path.home() / ".cache"
-    if not base.is_absolute():
-        raise KubeconformSchemaStoreError("XDG_CACHE_HOME must be an absolute path")
-    return base / "chart-manager" / "schemas"
 
 
 class KubeconformSchemaStore:
@@ -173,8 +164,8 @@ class KubeconformSchemaStore:
         )
 
 
-def open_schema_store(runner: CommandRunner) -> KubeconformSchemaStore:
-    """The schema store under the XDG cache root, checking out snapshots through `runner`."""
+def open_schema_store(runner: CommandRunner, schema_cache_root: Path) -> KubeconformSchemaStore:
+    """The schema store under `schema_cache_root`, checking out snapshots through `runner`."""
     return KubeconformSchemaStore(
-        cache_root=default_schema_cache_root(), snapshots=RepositorySnapshot(runner)
+        cache_root=schema_cache_root, snapshots=RepositorySnapshot(runner)
     )

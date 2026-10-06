@@ -82,6 +82,7 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "FORCE_COLOR",
         "CHART_MANAGER_OCI_REPOSITORY",
         "CHART_MANAGER_OCI_CA_FILE",
+        "CHART_MANAGER_SCHEMA_CACHE_ROOT",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")
@@ -382,17 +383,13 @@ def materialize_dependency(
 
 
 @pytest.fixture
-def schema_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
-    """A locked schema generation and an empty store under a tmp XDG cache root."""
-    from chart_manager.commands.validate.schemas.store import (
-        KubeconformSchemaStore,
-        default_schema_cache_root,
-    )
+def schema_cache(tmp_path: Path) -> tuple[Any, Any]:
+    """A locked schema generation and an empty store under `tmp_path / "schema-cache"`."""
+    from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
     from tests import schema_fixtures  # imports this module
 
     lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    return lock, KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots)
+    return lock, KubeconformSchemaStore(cache_root=tmp_path / "schema-cache", snapshots=snapshots)
 
 
 @pytest.fixture

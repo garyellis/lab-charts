@@ -9,7 +9,9 @@ from .schema_fixtures import workspace
 
 
 def checks(root):
-    doctor = KubeconformSchemaDoctor(workspace(root), runner=SubprocessRunner())
+    doctor = KubeconformSchemaDoctor(
+        workspace(root), runner=SubprocessRunner(), schema_cache_root=root / "schema-cache"
+    )
     return {c.name: c for c in doctor.preflight()}
 
 
@@ -59,10 +61,12 @@ def test_bad_lock_fails_before_store_inspection(tmp_path):
     assert result["schema-store"].status is CheckStatus.SKIPPED
 
 
-def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path):
     result = KubeconformSchemaDoctor(
-        None, runner=SubprocessRunner(), skip_reason="no workspace here"
+        None,
+        runner=SubprocessRunner(),
+        schema_cache_root=tmp_path / "cache",
+        skip_reason="no workspace here",
     ).preflight()
     assert [check.name for check in result] == ["schema-policy", "schema-lock", "schema-store"]
     assert all(check.status is CheckStatus.SKIPPED for check in result)
@@ -74,7 +78,9 @@ def test_managed_workspace_still_requires_schema_policy(tmp_path):
     from tests.conftest import workspace_for
 
     result = KubeconformSchemaDoctor(
-        workspace_for(tmp_path, name="managed"), runner=SubprocessRunner()
+        workspace_for(tmp_path, name="managed"),
+        runner=SubprocessRunner(),
+        schema_cache_root=tmp_path / "schema-cache",
     ).preflight()
     assert result[0].status is CheckStatus.FAILED
     assert result[0].outcome is Outcome.SPEC

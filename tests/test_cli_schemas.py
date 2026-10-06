@@ -20,7 +20,7 @@ def test_sync_forwards_only_explicit_pin_update(monkeypatch):
     monkeypatch.setattr(validate_cli, "sync_schemas", sync)
     monkeypatch.setattr(validate_cli, "_container", lambda: SimpleNamespace(
         workspace=lambda: None,
-        settings=SimpleNamespace(command_timeout=None),
+        settings=SimpleNamespace(command_timeout=None, schema_cache_root=Path("/cache")),
         command_runner=lambda: FakeCommandRunner(),
     ))
     assert cli("schemas", "sync").exit_code == 0
