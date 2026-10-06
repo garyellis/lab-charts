@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from chart_manager.cli import grafana as grafana_cli
 from chart_manager.cli import main
 from chart_manager.commands.events import cli as events_cli
+from chart_manager.commands.grafana import dashboard_export
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
@@ -195,9 +194,8 @@ def test_grafana_dashboard_lint_without_a_path_needs_the_workspace() -> None:
 
 
 def test_grafana_dashboard_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    exporter = SimpleNamespace(fetch=lambda _request: dict(_PASSING_DASHBOARD))
     monkeypatch.setattr(
-        grafana_cli, "_container", lambda: SimpleNamespace(grafana_exporter=lambda: exporter)
+        dashboard_export, "export", lambda _request, _kubectl: dict(_PASSING_DASHBOARD)
     )
 
     result = cli("grafana", "dashboard", "export", "u", "-o", "json")

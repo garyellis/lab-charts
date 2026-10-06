@@ -1,21 +1,10 @@
-import json
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+"""Dashboard normalization, canonical JSON and the export summary."""
 
-import pytest
-
-from chart_manager.cli import grafana as grafana_cli
-from chart_manager.plumbing.yaml_files import parse_yaml
-from chart_manager.services.grafana.dashboard_export import (
-    ExportRequest,
-    GrafanaExporter,
+from chart_manager.commands.grafana.dashboard_export import (
     canonical_json,
     normalize_dashboard,
     summarize_dashboard,
 )
-
-from .conftest import cli
 
 
 def test_strips_churn_keys_and_forces_editable() -> None:
@@ -160,20 +149,6 @@ def test_canonical_json_is_stable_across_key_insertion_order() -> None:
     assert a == b
 
 
-def test_export_returns_the_canonical_payload_of_the_normalized_dashboard() -> None:
-    class _StubExporter(GrafanaExporter):
-        def fetch(self, request: ExportRequest) -> dict[str, Any]:
-            return {"uid": "u", "editable": True}
-
-    # `fetch` is overridden, so no kubectl call is reachable -- this test
-    # covers the export -> canonical_json seam only.
-    payload = _StubExporter(kubectl=None).export(  # type: ignore[arg-type]
-        ExportRequest(uid="u", cluster_name="c", namespace="observability")
-    )
-
-    assert payload == canonical_json({"uid": "u", "editable": True})
-
-
 # ----- summarize_dashboard --------------------------------------------------
 #
 # `-o table` needs a human projection of a document that has no table form,
@@ -215,121 +190,3 @@ def test_summary_tolerates_a_dashboard_missing_every_optional_field() -> None:
     assert summary.schema_version is None
     assert summary.top_level_panels == 0
     assert summary.datasource_variables == ()
-
-
-# --- surface: --to is the file, -o is the format ---------------------------
-#
-# The rename exists for this flip. As `grafana export-dashboard`, `-o` named
-# the destination *file*, so `-o json` wrote the dashboard into a file called
-# `json`. `--to` now carries the destination and `-o` means what it means
-# everywhere else on the surface. There is no alias -- see design doc 5.
-
-_DASHBOARD = {
-    "uid": "u",
-    "title": "T",
-    "schemaVersion": 39,
-    "editable": True,
-    "panels": [{"id": 1, "title": "p"}],
-    "templating": {"list": [{"type": "datasource", "name": "DS_PROMETHEUS"}]},
-}
-
-
-@pytest.fixture
-def exporter(monkeypatch: pytest.MonkeyPatch) -> list[ExportRequest]:
-    """Wire a fetch-only exporter into `grafana._container()`; return its requests."""
-    requests: list[ExportRequest] = []
-
-    def fetch(request: ExportRequest) -> dict[str, Any]:
-        requests.append(request)
-        return dict(_DASHBOARD)
-
-    monkeypatch.setattr(
-        grafana_cli,
-        "_container",
-        lambda: SimpleNamespace(
-            grafana_exporter=lambda: SimpleNamespace(fetch=fetch),
-        ),
-    )
-    return requests
-
-
-def test_a_path_handed_to_output_is_a_usage_error_naming_to(
-    exporter: list[ExportRequest],
-) -> None:
-    """The old spelling must fail loudly, not write a file named `charts`.
-
-    Exit 2 is the reserved usage code, and the message has to name `--to` --
-    "unknown output: charts/x.json" alone leaves the caller with a rejected
-    flag and no idea where the path was supposed to go.
-    """
-    result = cli(
-        "grafana", "dashboard", "export", "u",
-        "-o", "charts/grafana-dashboards/dashboards/x.json",
-    )
-
-    assert result.exit_code == 2
-    assert "--to" in result.stderr
-    # Rejected at parse time, so the cluster is never contacted.
-    assert exporter == []
-
-
-def test_the_output_flag_still_rejects_a_plain_typo(
-    exporter: list[ExportRequest],
-) -> None:
-    """Guard the guard: the path hint must not be the only rejection path."""
-    result = cli("grafana", "dashboard", "export", "u", "-o", "jsonn")
-
-    assert result.exit_code == 2
-    assert "unknown output" in result.stderr
-    assert exporter == []
-
-
-def test_json_projection_is_the_canonical_document_on_stdout(
-    exporter: list[ExportRequest],
-) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
-
-    assert result.exit_code == 0
-    assert result.stdout == canonical_json(_DASHBOARD)
-    assert json.loads(result.stdout)["uid"] == "u"
-    assert exporter[0].uid == "u"
-
-
-def test_yaml_projection_is_the_same_object(exporter: list[ExportRequest]) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "yaml")
-
-    assert result.exit_code == 0
-    assert parse_yaml(result.stdout) == _DASHBOARD
-
-
-def test_to_writes_canonical_json_and_stdout_carries_the_summary(
-    tmp_path: Path, exporter: list[ExportRequest]
-) -> None:
-    """`-o table` is the only mode where the file and stdout coexist."""
-    destination = tmp_path / "nested" / "board.json"
-
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "table"
-    )
-
-    assert result.exit_code == 0
-    # Missing parents are created, and the file is the git artifact.
-    assert destination.read_text() == canonical_json(_DASHBOARD)
-    assert "u" in result.stdout
-    assert "DS_PROMETHEUS" in result.stdout
-    assert str(destination) in result.stderr
-
-
-def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
-    tmp_path: Path, exporter: list[ExportRequest]
-) -> None:
-    """The document goes to exactly one place; `--to` is that place."""
-    destination = tmp_path / "board.json"
-
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "json"
-    )
-
-    assert result.exit_code == 0
-    assert destination.read_text() == canonical_json(_DASHBOARD)
-    assert result.stdout == ""

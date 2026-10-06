@@ -48,55 +48,36 @@ class ExportRequest:
     admin_user: str = DEFAULT_ADMIN_USER
 
 
-class GrafanaExporter:
-    """Fetch a dashboard from a cluster's Grafana over a port-forward and normalize it."""
+def export(request: ExportRequest, kubectl: Kubectl) -> dict[str, Any]:
+    """Port-forward to Grafana, GET the dashboard, and return it normalized.
 
-    def __init__(self, *, kubectl: Kubectl) -> None:
-        """Bind the Kubectl this exporter addresses the cluster through.
+    Reads the admin password from the release's Secret. Raises
+    ChartManagerError if the API response lacks a .dashboard object.
+    `canonical_json` renders the result as the git-ready payload.
+    """
+    password = kubectl.get_secret_value(
+        request.release, SECRET_PASSWORD_KEY, namespace=request.namespace
+    )
+    # The configured context wins, else the kind naming convention for the
+    # cluster the request names.
+    context = kubectl.context or kind_context(request.cluster_name)
 
-        Required rather than defaulted so the adapter's configured context
-        is the only cluster address in play; see `ExposeService.__init__`.
-        """
-        self.kubectl = kubectl
-
-    def export(self, request: ExportRequest) -> str:
-        """Fetch the dashboard and render it as the canonical, git-ready payload.
-
-        This is the verb a surface wants: the caller only chooses whether
-        the returned string goes to stdout or to a file. Use `fetch` when
-        you need the object rather than the bytes.
-        """
-        return canonical_json(self.fetch(request))
-
-    def fetch(self, request: ExportRequest) -> dict[str, Any]:
-        """Port-forward to Grafana, GET the dashboard, and return it normalized.
-
-        Reads the admin password from the release's Secret. Raises
-        ChartManagerError if the API response lacks a .dashboard object.
-        """
-        password = self.kubectl.get_secret_value(
-            request.release, SECRET_PASSWORD_KEY, namespace=request.namespace
+    with kubectl.port_forward_session(
+        context=context,
+        namespace=request.namespace,
+        service=request.release,
+        remote_port=request.remote_port,
+    ) as local_port:
+        raw = _http_get_dashboard(
+            local_port, request.uid, request.admin_user, password
         )
-        # See ExposeService.start: configured context wins, else the kind
-        # naming convention for the cluster the request names.
-        context = self.kubectl.context or kind_context(request.cluster_name)
 
-        with self.kubectl.port_forward_session(
-            context=context,
-            namespace=request.namespace,
-            service=request.release,
-            remote_port=request.remote_port,
-        ) as local_port:
-            raw = _http_get_dashboard(
-                local_port, request.uid, request.admin_user, password
-            )
-
-        dashboard = raw.get("dashboard")
-        if not isinstance(dashboard, dict):
-            raise ChartManagerError(
-                f"Grafana API response has no .dashboard object for uid {request.uid!r}"
-            )
-        return normalize_dashboard(dashboard)
+    dashboard = raw.get("dashboard")
+    if not isinstance(dashboard, dict):
+        raise ChartManagerError(
+            f"Grafana API response has no .dashboard object for uid {request.uid!r}"
+        )
+    return normalize_dashboard(dashboard)
 
 
 def canonical_json(dashboard: dict[str, Any]) -> str:

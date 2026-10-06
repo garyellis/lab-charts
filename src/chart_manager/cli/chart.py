@@ -1,6 +1,6 @@
 """`chart list` and `chart show`: pure reads of the chart catalog.
 
-Both hand a wire document from `services/chart_catalog_wire.py` to `output.emit` and build
+Both hand a wire document from `commands/catalog/wire.py` to `output.emit` and build
 their own table beside it. `chart test` and `chart teardown` live in `commands/test` and
 register between them, which is their `--help` order.
 """
@@ -17,12 +17,11 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import repository_root
 from chart_manager.cli.streams import console
+from chart_manager.commands.catalog import run as catalog
+from chart_manager.commands.catalog.wire import catalog_to_dict, lifecycle_to_dict
 from chart_manager.commands.test import cli as test_cli
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.services.chart_catalog import ChartCatalogEntry
-from chart_manager.services.chart_catalog_wire import catalog_to_dict, lifecycle_to_dict
 
 #: `chart list` and `chart show` speak the core projections minus `md`:
 #: neither has a markdown form, and advertising one the resolver cannot
@@ -63,8 +62,7 @@ def list_charts(
     question with the same bytes.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    root = repository_root()
-    entries = _container().chart_catalog_service(root).list_entries()
+    entries = catalog.list_charts(_container().workspace())
     output_mod.emit(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
     # A chart whose lifecycle document does not load is reported *in* the
     # projection (as `error`, in every format) and again as the exit code, so
@@ -76,7 +74,7 @@ def list_charts(
         raise typer.Exit(code=exit_code_for(Outcome.SPEC))
 
 
-def _catalog_table(entries: Sequence[ChartCatalogEntry]) -> Table:
+def _catalog_table(entries: Sequence[catalog.ChartCatalogEntry]) -> Table:
     """Render the chart catalog as the terminal projection."""
     table = Table(
         "Chart",
@@ -166,8 +164,7 @@ def show_lifecycle(
     selects there.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    root = repository_root()
-    document = lifecycle_to_dict(_container().chart_catalog_service(root).get_lifecycle(chart))
+    document = lifecycle_to_dict(catalog.show_chart(_container().workspace(), chart))
     output_mod.emit(
         document,
         mode=mode,

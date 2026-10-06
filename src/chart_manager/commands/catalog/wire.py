@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
-from chart_manager.services.chart_catalog import ChartCatalogEntry
+from chart_manager.commands.catalog.run import ChartCatalogEntry
 
 __all__ = ["catalog_to_dict", "lifecycle_to_dict"]
 

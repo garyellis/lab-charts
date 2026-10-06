@@ -11,7 +11,7 @@ over 40 dashboards that found nothing and a run over zero dashboards both
 produce an empty `findings`, and those two are the case design doc 8.7 exists
 to separate. `ok` is read off `LintResult.ok` rather than re-derived from the
 list for the same reason the CLI does not re-derive it -- the pass/fail rule
-belongs to the service.
+belongs to `dashboard_lint`.
 
 Deliberately I/O-free and format-free, matching the other wire modules: this
 returns a plain, JSON-ready dict. Choosing an encoder and performing the

@@ -27,7 +27,7 @@ world in `integrations/`.
 chart_manager/
   api/v1alpha1/   Kubernetes-style resource shapes only (kinds, fields, validation)
   cli/            main.py (registers commands, maps errors to exit codes), output.py, Container
-  commands/       validate test publish upgrade promote local plan event grafana doctor
+  commands/       validate test publish upgrade promote local plan event catalog grafana doctor
   shared/         charts cluster events workspace.py
   settings.py     process configuration (env, config file) and its defaults
   integrations/   every call to the outside world, one module per external system
@@ -36,6 +36,7 @@ chart_manager/
 
 - **Command packages** (`commands/<name>`) are named after the CLI subcommand: `chart validate`
   is `commands/validate`, `chart test` is `commands/test`, `local up` is `commands/local`.
+  `chart list` and `chart show` are `commands/catalog`.
   `promote` has the subcommands `pr`, `monitor` and `test` (one promotion flow, three stages).
   `version` stays one line in `cli/main.py`.
 - **Shared packages** (`shared/`) hold behaviour used by two or more commands:

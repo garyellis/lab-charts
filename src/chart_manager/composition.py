@@ -56,9 +56,7 @@ from chart_manager.integrations.kyverno import Kyverno
 from chart_manager.integrations.renovate import Renovate
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.errors import WorkspaceNotFoundError
-from chart_manager.services.chart_catalog import ChartCatalogService
 from chart_manager.services.doctor import CheckProvider, DoctorService
-from chart_manager.services.grafana.dashboard_export import GrafanaExporter
 from chart_manager.settings import Settings, load_settings
 from chart_manager.shared.charts import dependencies as chart_deps
 from chart_manager.shared.events.store import preflight_event_store
@@ -181,17 +179,3 @@ class Container:
             "events": preflight_event_store,
         }
         return DoctorService(providers)
-
-    def grafana_exporter(self) -> GrafanaExporter:
-        """Build the dashboard exporter (port-forward + Grafana HTTP API)."""
-        return GrafanaExporter(kubectl=self.kubectl())
-
-    def chart_catalog_service(self, root: Path) -> ChartCatalogService:
-        """Build the read-only chart/lifecycle catalog for the repo at `root`.
-
-        Built here rather than at the surface: `charts_dir` is the one setting
-        that decides which directories are charts at all, and a surface that
-        supplies it itself can answer
-        `chart list` from a different directory than `plan` selected against.
-        """
-        return ChartCatalogService(workspace=self.workspace(root))

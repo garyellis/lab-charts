@@ -14,12 +14,13 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.catalog import run as catalog
+from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.composition import Container
 from chart_manager.integrations.git import Git
-from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import ChartRepository
 from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
@@ -155,8 +156,8 @@ def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path
     write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())
 
-    catalog = container.chart_catalog_service(tmp_path).list_entries()
-    assert [entry.name for entry in catalog] == ["demo"]
+    charts = catalog.list_charts(container.workspace(tmp_path))
+    assert [entry.name for entry in charts] == ["demo"]
 
     resolved = _local_targets(container, tmp_path).resolve("deploy/helm/demo")
     assert resolved.path == (tmp_path / CUSTOM_CHARTS_DIR / "demo").resolve()

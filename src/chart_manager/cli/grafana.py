@@ -6,7 +6,7 @@ has exactly one legal byte sequence, that the admin password lives in
 `secret/<release>`. Keeping that under `grafana` rather than `chart` is what
 leaves room for datasources and alert rules to arrive as siblings.
 
-Both service imports are deferred to the command body. `dashboard_export`
+Both command imports are deferred to the command body. `dashboard_export`
 pulls in the HTTP path and `dashboard_lint` the rule set, and neither is
 wanted in the process for a `chart list`.
 """
@@ -96,28 +96,18 @@ def grafana_dashboard_export(
     give a human at a terminal something readable. It prints in both cases,
     so an interactive `--to` export still says what it just wrote.
     """
-    from chart_manager.services.grafana.dashboard_export import (
+    from chart_manager.commands.grafana.dashboard_export import (
         ExportRequest,
         canonical_json,
+        export,
         summarize_dashboard,
     )
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
-    # `fetch` rather than `export`: the normalized object is what the summary
-    # and the yaml projection are derived from, and `canonical_json` is the
-    # same function `export` would have applied.
-    dashboard = (
-        _container()
-        .grafana_exporter()
-        .fetch(
-            ExportRequest(
-                uid=uid,
-                cluster_name=cluster_name,
-                namespace=namespace,
-                release=release,
-            )
-        )
+    request = ExportRequest(
+        uid=uid, cluster_name=cluster_name, namespace=namespace, release=release
     )
+    dashboard = export(request, _container().kubectl())
     if to is not None:
         try:
             to.parent.mkdir(parents=True, exist_ok=True)
@@ -180,15 +170,15 @@ def grafana_dashboard_lint(
     `-o table` is one greppable `path: [rule] message` line per finding --
     the shape a human scans and a CI log grep matches. `-o json`/`-o yaml`
     are the same report as the wire document owned by
-    `services/grafana/wire.py`, which carries the tally as well as the
+    `commands/grafana/wire.py`, which carries the tally as well as the
     findings so a consumer does not have to count lines.
     """
-    from chart_manager.services.grafana.dashboard_lint import (
+    from chart_manager.commands.grafana.dashboard_lint import (
         discover_dashboards,
         expand_targets,
         lint_paths,
     )
-    from chart_manager.services.grafana.wire import lint_result_to_dict
+    from chart_manager.commands.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
     # `discover_dashboards` reads the container's workspace rather than a

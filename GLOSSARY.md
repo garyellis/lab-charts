@@ -47,6 +47,10 @@ A chart directory with a `Chart.yaml` and an optional `chart-lifecycle.yaml`, wh
 agree.
 _Avoid_: chart tree, chart dir
 
+**Catalog**:
+What `chart list` and `chart show` report: each chart's Helm metadata and lifecycle status.
+_Avoid_: inventory, chart catalog service
+
 **Dev cluster**:
 The long-lived kind cluster a person develops charts against, managed by `local up`, `down`,
 `reset` and `status`.

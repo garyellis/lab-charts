@@ -11,12 +11,12 @@ from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
 from chart_manager.cli import main
 from chart_manager.cli._container import reset_invocation
+from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
-from chart_manager.services.grafana.dashboard_lint import discover_dashboards
 from chart_manager.settings import Settings, load_settings
 from chart_manager.shared.charts.chart import ChartRepository
 from chart_manager.shared.workspace import (
@@ -503,9 +503,7 @@ spec:
     container = Container(Settings())
     workspace = container.workspace(tmp_path)
 
-    assert container.chart_catalog_service(tmp_path).repository.charts_dir == (
-        tmp_path / "helm/charts"
-    )
+    assert workspace.charts_root == tmp_path / "helm/charts"
     assert _local_targets(container, tmp_path).local_config == Path("ops/local.yaml")
     assert render_dir_state(workspace).path == tmp_path / "artifacts/rendered"
     assert workspace.spec.policies_dir == Path("compliance/policies")
