@@ -22,7 +22,6 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.semver import SemVer, parse_semver
 from chart_manager.settings import Settings
-from chart_manager.shared.charts import dependencies
 from chart_manager.shared.charts.chart import ChartRepository
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase
@@ -85,11 +84,7 @@ def run(
         request.operation_id or "(none)",
     )
     helm = Helm(
-        runner,
-        verbose=False,
-        context=settings.kube_context,
-        deps_are_fresh=dependencies.deps_are_fresh,
-        chart_has_dependencies=dependencies.chart_has_dependencies,
+        runner, verbose=False, context=settings.kube_context, timeout=settings.command_timeout
     )
     repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
     with tempfile.TemporaryDirectory(prefix="chart-manager-publish-") as work:

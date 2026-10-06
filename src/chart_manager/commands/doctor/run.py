@@ -43,7 +43,7 @@ def run(
     timeout = settings.command_timeout
     context = settings.kube_context
     checks: dict[str, Callable[[], Sequence[Check]]] = {
-        "helm": Helm(runner, context=context).preflight,
+        "helm": Helm(runner, context=context, timeout=timeout).preflight,
         "kubeconform": Kubeconform(runner, timeout=timeout).preflight,
         "kyverno": Kyverno(runner, timeout=timeout).preflight,
         "kubectl": Kubectl(runner, context=context, timeout=timeout).preflight,

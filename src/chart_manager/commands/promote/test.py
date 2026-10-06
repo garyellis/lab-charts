@@ -34,7 +34,6 @@ from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.settings import Settings
-from chart_manager.shared.charts import dependencies
 from chart_manager.shared.events.writer import EventWriter
 
 _LOG = logging.getLogger(__name__)
@@ -205,11 +204,7 @@ def run(
     # verbose=False: concurrent `helm test` streams would interleave; the
     # output is captured onto each outcome instead.
     helm = Helm(
-        runner,
-        verbose=False,
-        context=settings.kube_context,
-        deps_are_fresh=dependencies.deps_are_fresh,
-        chart_has_dependencies=dependencies.chart_has_dependencies,
+        runner, verbose=False, context=settings.kube_context, timeout=settings.command_timeout
     )
     tester = _Tester(kubectl, helm, clock, progress)
     start = clock()

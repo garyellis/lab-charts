@@ -20,6 +20,7 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.plumbing.yaml_files import parse_yaml_documents
+from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster.session import Session
 
 WORKLOAD_KINDS = ("deployment", "statefulset", "daemonset")
@@ -68,7 +69,7 @@ def converge(session: Session, release: Release) -> Literal["applied", "no-chang
     step: Step = "dependency update"
     try:
         if isinstance(release.chart, Path):
-            session.helm.dependency_update_if_stale(release.chart)
+            ensure_dependencies(session.helm, release.chart)
         step = "install"
         result = session.helm.upgrade_install(
             release.name,

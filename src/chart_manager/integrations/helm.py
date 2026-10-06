@@ -6,7 +6,7 @@ import json
 import math
 import re
 import threading
-from collections.abc import Callable, MutableMapping
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -31,16 +31,6 @@ def format_helm_duration(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds < 0:
         raise ValueError(f"helm duration must be finite and >= 0 (got {seconds!r})")
     return f"{Decimal(repr(float(seconds))).normalize():f}s"
-
-
-def _assume_stale(_chart_path: Path) -> bool:
-    """Default freshness policy: never claim fresh, so the update always runs."""
-    return False
-
-
-def _assume_dependencies(_chart_path: Path) -> bool:
-    """Default declaration policy: assume deps exist, so the update always runs."""
-    return True
 
 
 @dataclass(frozen=True)
@@ -113,8 +103,6 @@ class Helm:
         verbose: bool = True,
         timeout: float | None = None,
         context: str | None = None,
-        deps_are_fresh: Callable[[Path], bool] = _assume_stale,
-        chart_has_dependencies: Callable[[Path], bool] = _assume_dependencies,
     ) -> None:
         """Resolve the helm binary (explicit path > mise version > PATH) and set defaults."""
         self.runner = runner or SubprocessRunner()
@@ -125,33 +113,9 @@ class Helm:
         # verbose=False so concurrent helm invocations don't interleave
         # stdout/stderr into an unreadable mess.
         self.verbose = verbose
-        # Per-subprocess wall-clock cap for all helm invocations on this
-        # instance. None = unbounded. Validate sets this
-        # from --tool-timeout so a hung helm template doesn't pin a worker.
-        # dependency_update's own `timeout=` kwarg takes precedence when set.
+        # Per-subprocess wall-clock cap for every helm invocation on this
+        # instance. None = unbounded.
         self.timeout = timeout
-        # Per-chart dedupe for `helm dependency update`. Same Helm instance
-        # validating one chart across 5 envs in parallel must only fetch
-        # deps once, and a concurrent caller for the SAME chart waits for
-        # that fetch to finish before proceeding to `helm template`.
-        #
-        # Two levels, deliberately: `_deps_updated_lock` guards the bookkeeping
-        # (the cache and the registry) and is never held across a subprocess,
-        # while `_chart_locks[path]` serializes fetches of one chart. A single
-        # lock held across the fetch also serialized *distinct* charts, which
-        # silently defeated every caller that fans dependency updates out
-        # across a thread pool. Lock order is always chart lock -> bookkeeping
-        # lock, and the two are never held in the other order.
-        self._deps_updated: set[Path] = set()
-        self._deps_updated_lock = threading.Lock()
-        self._chart_locks: dict[Path, threading.Lock] = {}
-        # Whether a chart declares dependencies, and whether its materialized
-        # ones are current, are questions about chart *metadata* -- caller
-        # policy this adapter deliberately does not parse. `shared/cluster/session.py`
-        # wires the real predicates from shared/charts/dependencies; unwired,
-        # both answers are the conservative ones, so the update always runs.
-        self._deps_are_fresh = deps_are_fresh
-        self._chart_has_dependencies = chart_has_dependencies
 
     def preflight(self) -> tuple[Check, ...]:
         """Report whether the helm this instance resolved is usable.
@@ -171,80 +135,13 @@ class Helm:
             ),
         )
 
-    def _chart_lock(self, resolved: Path) -> threading.Lock:
-        """Return the fetch lock for one chart, creating it on first use."""
-        with self._deps_updated_lock:
-            lock = self._chart_locks.get(resolved)
-            if lock is None:
-                lock = threading.Lock()
-                self._chart_locks[resolved] = lock
-            return lock
-
-    def _mark_updated(self, resolved: Path) -> None:
-        """Record that this chart's dependencies were fetched in this process."""
-        with self._deps_updated_lock:
-            self._deps_updated.add(resolved)
-
-    def _already_updated(self, resolved: Path) -> bool:
-        """Whether this chart's dependencies were already fetched in this process."""
-        with self._deps_updated_lock:
-            return resolved in self._deps_updated
-
-    def dependency_update(self, chart_path: Path, *, timeout: float | None = None) -> None:
-        """Run `helm dependency update`, at most once per chart per instance."""
-        resolved = chart_path.resolve()
-        with self._chart_lock(resolved):
-            # Re-checked inside the chart lock, not before it: a caller that
-            # lost the race must see the winner's result, not start a second
-            # fetch of the same chart.
-            if self._already_updated(resolved):
-                return
-            self.runner.run(
-                self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
-                capture=not self.verbose,
-                timeout=timeout,
-            )
-            self._mark_updated(resolved)
-
-    def dependency_update_if_stale(
-        self, chart_path: Path, *, timeout: float | None = None
-    ) -> bool:
-        """Run `helm dependency update` only when the lock is stale.
-
-        A conservative metadata gate elides the (5-15s) subprocess in the
-        common re-run case where Chart.lock and charts/ are up-to-date with
-        Chart.yaml. The expensive `helm dependency update` call is the single
-        biggest tax on a lab `up` re-run (~18 charts in the install plan), so
-        this is a meaningful win for converge-on-rerun.
-
-        Returns True if the update actually ran (or was forced by missing
-        artifacts), False if it was skipped because the lock looks fresh.
-        The per-instance `_deps_updated` cache is still consulted first so
-        a chart only updates once per process even when stale.
-
-        Charts with no declared dependencies return immediately. Freshness is
-        decided by `deps_are_fresh` (see its docstring): Helm's lock digest
-        and every materialized name/version identity must agree. Any other
-        shape falls through to running the update.
-        """
-        if not self._chart_has_dependencies(chart_path):
-            return False
-        resolved = chart_path.resolve()
-        with self._chart_lock(resolved):
-            if self._already_updated(resolved):
-                return False
-            if self._deps_are_fresh(resolved):
-                # Mark as updated so subsequent calls in this process skip
-                # the freshness probe entirely.
-                self._mark_updated(resolved)
-                return False
-            self.runner.run(
-                self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
-                capture=not self.verbose,
-                timeout=timeout,
-            )
-            self._mark_updated(resolved)
-            return True
+    def dependency_update(self, chart_path: Path) -> None:
+        """Run `helm dependency update` for a local chart."""
+        self.runner.run(
+            self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
+            capture=not self.verbose,
+            timeout=self.timeout,
+        )
 
     def package(
         self,
@@ -454,17 +351,13 @@ class Helm:
     ) -> Path:
         """Render the chart into `output_dir` via `helm template`; return that dir.
 
-        Local charts with dependencies get a `dependency update` first. On
-        render failure, reruns with --debug to capture detail, then raises
+        On render failure, reruns with --debug to capture detail, then raises
         ExternalCommandError (partial output is left in `output_dir`).
         """
         # Resolve to absolute up-front so the path in error messages is
         # actionable from any cwd (engineers need to be able to `ls` it).
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        if _is_local_chart_ref(chart_ref):
-            self.dependency_update_if_stale(Path(chart_ref))
 
         base_args = [
             self._helm_bin,
@@ -628,20 +521,6 @@ def _resolve(
     if version is None:
         return "helm"
     return _resolve_via_mise(runner, version)
-
-
-def _is_local_chart_ref(chart_ref: str | Path) -> bool:
-    """Whether a Helm CLI chart argument names an existing local path.
-
-    Resolving a command argument is adapter policy, not chart-domain policy:
-    remote references are passed through untouched, while relative paths are
-    interpreted against the process working directory just as Helm interprets
-    them.
-    """
-    ref = str(chart_ref)
-    if ref.startswith(("oci://", "http://", "https://")):
-        return False
-    return Path(ref).exists()
 
 
 def _helm_output_value(output: str, label: str) -> str | None:

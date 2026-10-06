@@ -15,7 +15,6 @@ from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.settings import Settings
-from chart_manager.shared.charts import dependencies
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 
 
@@ -89,12 +88,7 @@ def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
         name=name,
         context=context,
         kind=Kind(runner, docker_host=settings.docker_host, timeout=settings.command_timeout),
-        helm=Helm(
-            runner,
-            context=context,
-            deps_are_fresh=dependencies.deps_are_fresh,
-            chart_has_dependencies=dependencies.chart_has_dependencies,
-        ),
+        helm=Helm(runner, context=context, timeout=settings.command_timeout),
         kubectl=Kubectl(runner, context=context, timeout=settings.command_timeout),
     )
 

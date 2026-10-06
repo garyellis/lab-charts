@@ -130,16 +130,6 @@ def _is_local_dependency(dependency: ChartDependency) -> bool:
     return not repository or repository.startswith("file://")
 
 
-def chart_has_dependencies(chart_path: Path) -> bool:
-    """Return whether a readable, valid Chart.yaml declares dependencies."""
-    try:
-        return bool(load_chart_metadata(chart_path / "Chart.yaml").dependencies)
-    except SpecError:
-        # This is only a pre-template optimization. Helm itself owns the
-        # actionable error for a malformed chart passed to `helm template`.
-        return False
-
-
 def deps_are_fresh(chart_path: Path) -> bool:
     """Return whether Helm's lock digest and materialized identities agree.
 

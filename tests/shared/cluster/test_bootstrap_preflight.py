@@ -32,9 +32,8 @@ class _Helm:
         self.dependencies: list[Path] = []
         self.lints: list[tuple[Path, list[Path]]] = []
 
-    def dependency_update_if_stale(self, chart: Path) -> bool:
+    def dependency_update(self, chart: Path) -> None:
         self.dependencies.append(chart)
-        return False
 
     def lint(self, chart: Path, values: list[Path] | None = None) -> None:
         self.lints.append((chart, values or []))
@@ -187,7 +186,8 @@ def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:
     chart = tmp_path / "charts/network"
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: network\nversion: 1.0.0\n",
+        "apiVersion: v2\nname: network\nversion: 1.0.0\n"
+        "dependencies: [{name: cni, version: 1.0.0, repository: 'https://example.test'}]\n",
         encoding="utf-8",
     )
     (chart / "chart-lifecycle.yaml").write_text(
@@ -247,7 +247,6 @@ spec:
         bootstrap.preflight(cluster, root=tmp_path, helm=helm)  # type: ignore[arg-type]
 
     assert helm.lints == []
-    assert helm.dependencies == []
 
 
 def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(

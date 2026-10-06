@@ -17,6 +17,7 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
@@ -115,7 +116,7 @@ def preflight(
             lint_targets.append((chart.path, catalog.value_paths(chart, entry.profile)))
     if helm is not None:
         for chart_path, values in lint_targets:
-            helm.dependency_update_if_stale(chart_path)
+            ensure_dependencies(helm, chart_path)
             helm.lint(chart_path, values)
     return frozenset(identities)
 

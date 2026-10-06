@@ -32,6 +32,7 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
+from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.converge import (
     DEFAULT_TIMEOUT,
@@ -324,7 +325,7 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
     if action.kind is ActionKind.NAMESPACE_ENSURE:
         session.kubectl.create_namespace(namespace)
     elif action.kind is ActionKind.HELM_LINT:
-        session.helm.dependency_update_if_stale(action.chart_path)
+        ensure_dependencies(session.helm, action.chart_path)
         session.helm.lint(action.chart_path, list(action.values))
     elif action.kind in (ActionKind.INSTALL, ActionKind.WORKLOAD_READY):
         target = Release(

@@ -526,6 +526,33 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
     assert not [call for call in runner.calls if "--include-crds" in call]
 
 
+def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path: Path) -> None:
+    envs = ("dev", "qa", "stage", "prod", "lab")
+    app = write_validation_chart(
+        tmp_path, "app", environments={env: {"values": ["values.yaml"]} for env in envs}
+    )
+    (app / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
+        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
+    )
+    runner = FakeCommandRunner()
+
+    outcome = run(
+        validate.ValidateRequest(
+            out=tmp_path / "out", charts=("app",), checks=RENDER, workers=5, tool_timeout=30.0
+        ),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert [row.checks["render"].status for row in outcome.rows] == ["passed"] * 5
+    assert [
+        (record.args, record.timeout)
+        for record in runner.records
+        if record.args[1:3] == ("dependency", "update")
+    ] == [(("helm", "dependency", "update", str(app)), 30.0)]
+
+
 def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=-9)
@@ -661,7 +688,7 @@ def test_the_tool_timeout_and_verbose_reach_every_tool_call(
         runner=runner,
     )
 
-    tools = {record.args[0]: record for record in runner.records if record.args[1] != "dependency"}
+    tools = {record.args[0]: record for record in runner.records}
     assert {tool: record.timeout for tool, record in tools.items()} == {
         "helm": 30.0,
         "kubeconform": 30.0,

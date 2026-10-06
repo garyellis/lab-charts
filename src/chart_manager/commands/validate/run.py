@@ -42,8 +42,8 @@ from chart_manager.plumbing.errors import (
     MissingToolError,
     SpecError,
 )
-from chart_manager.shared.charts import dependencies
 from chart_manager.shared.charts.chart import Chart, load_chart
+from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_validation
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -198,6 +198,9 @@ class _Checker:
         self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
         self.schemas: KubeconformSchemaRuntime | None = None
         self.schemas_lock = threading.Lock()
+        # Rows run in parallel: one chart's rows share one dependency update.
+        self.dependency_locks: dict[Path, threading.Lock] = {}
+        self.dependencies_ready: set[Path] = set()
 
     def check(
         self, chart: Chart, spec: ManifestValidationSpec, row: Row, rendered: Path
@@ -206,7 +209,9 @@ class _Checker:
             self.runner, spec, verbose=self.request.verbose, timeout=self.request.tool_timeout
         )
         checks: dict[CheckName, CheckResult] = {
-            "render": self._timed(row, "render", lambda: _render(helm, chart, spec, row, rendered))
+            "render": self._timed(
+                row, "render", lambda: self._render(helm, chart, spec, row, rendered)
+            )
         }
         if "schema" in self.request.checks:
             skip = _skip_reason(spec.validators.kubeconform, checks, rendered)
@@ -252,7 +257,7 @@ class _Checker:
         with self.schemas_lock:
             if self.schemas is None:
                 runtime = load_kubeconform_schema_runtime(self.workspace)
-                _update_dependencies(self.runner, generated.providers(self.workspace))
+                self._update_dependencies(generated.providers(self.workspace))
                 crds = generated.prepare(
                     self.workspace, render=self._render_crds, cache_root=default_schema_cache_root()
                 )
@@ -268,75 +273,74 @@ class _Checker:
             for env in spec.environments:
                 row = selected_row(chart.name, spec, env)
                 try:
-                    result = _render(helm, chart, spec, row, out / chart.name / env, crds=True)
+                    result = self._render(
+                        helm, chart, spec, row, out / chart.name / env, crds=True
+                    )
                 except SpecError as exc:
                     result = CheckResult("failed", str(exc))
                 if result.status != "passed":
                     failures.append(f"{chart.name}/{env}: {result.detail}")
         return failures
 
+    def _update_dependencies(self, charts: Sequence[Chart]) -> None:
+        """Bring stale chart dependencies up to date, eight charts at a time."""
 
-def _update_dependencies(runner: CommandRunner, charts: Sequence[Chart]) -> None:
-    """Bring stale chart dependencies up to date, eight charts at a time."""
-    stale = [
-        chart
-        for chart in charts
-        if chart.metadata.dependencies and not dependencies.deps_are_fresh(chart.path)
-    ]
+        def update(chart: Chart) -> None:
+            spec = require_validation(chart.lifecycle, chart_name=chart.name)
+            timeout = self.request.tool_timeout or 300.0
+            helm = _helm(self.runner, spec, verbose=False, timeout=timeout)
+            self._ensure_dependencies(helm, chart)
 
-    def update(chart: Chart) -> None:
-        spec = require_validation(chart.lifecycle, chart_name=chart.name)
-        _helm(runner, spec, verbose=False, timeout=None).dependency_update_if_stale(
-            chart.path, timeout=300.0
-        )
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(update, charts))
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(update, stale))
+    def _ensure_dependencies(self, helm: Helm, chart: Chart) -> None:
+        """Update the chart's stale dependencies once per run; its other rows wait for that."""
+        key = chart.path.resolve()
+        with self.dependency_locks.setdefault(key, threading.Lock()):
+            if key not in self.dependencies_ready:
+                ensure_dependencies(helm, chart.path)
+                self.dependencies_ready.add(key)
+
+    def _render(
+        self,
+        helm: Helm,
+        chart: Chart,
+        spec: ManifestValidationSpec,
+        row: Row,
+        out: Path,
+        *,
+        crds: bool = False,
+    ) -> CheckResult:
+        values = _values(chart, spec, row.env)
+        if out.is_symlink() or out.parent.is_symlink():
+            raise SpecError(f"render directory must not be a symlink: {out}")
+        if out.exists():
+            shutil.rmtree(out)
+        try:
+            self._ensure_dependencies(helm, chart)
+            helm.template(
+                row.release,
+                chart.path,
+                namespace=row.namespace,
+                output_dir=out,
+                values=values,
+                include_crds=crds,
+            )
+        except MissingToolError:
+            raise
+        except ExternalCommandError as exc:
+            rejected = exc.returncode is not None and exc.returncode > 0
+            return CheckResult(status="failed" if rejected else "error", detail=str(exc))
+        return CheckResult(status="passed")
 
 
 def _helm(
     runner: CommandRunner, spec: ManifestValidationSpec, *, verbose: bool, timeout: float | None
 ) -> Helm:
     return Helm(
-        runner,
-        version=spec.helm_version,
-        binary=spec.helm_binary,
-        verbose=verbose,
-        timeout=timeout,
-        deps_are_fresh=dependencies.deps_are_fresh,
-        chart_has_dependencies=dependencies.chart_has_dependencies,
+        runner, version=spec.helm_version, binary=spec.helm_binary, verbose=verbose, timeout=timeout
     )
-
-
-def _render(
-    helm: Helm,
-    chart: Chart,
-    spec: ManifestValidationSpec,
-    row: Row,
-    out: Path,
-    *,
-    crds: bool = False,
-) -> CheckResult:
-    values = _values(chart, spec, row.env)
-    if out.is_symlink() or out.parent.is_symlink():
-        raise SpecError(f"render directory must not be a symlink: {out}")
-    if out.exists():
-        shutil.rmtree(out)
-    try:
-        helm.template(
-            row.release,
-            chart.path,
-            namespace=row.namespace,
-            output_dir=out,
-            values=values,
-            include_crds=crds,
-        )
-    except MissingToolError:
-        raise
-    except ExternalCommandError as exc:
-        rejected = exc.returncode is not None and exc.returncode > 0
-        return CheckResult(status="failed" if rejected else "error", detail=str(exc))
-    return CheckResult(status="passed")
 
 
 def _skip_reason(
