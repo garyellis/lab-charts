@@ -30,11 +30,9 @@ KIND_CLUSTER_LABEL = "io.x-k8s.kind.cluster"
 def kind_context(cluster_name: str) -> str:
     """The kubeconfig context `kind create cluster --name <n>` writes.
 
-    kind prefixes every context it creates with `kind-`. Two services need
-    to address a cluster they know only by kind cluster name, and each had
-    grown its own `f"kind-{name}"`: a naming convention owned by kind,
-    hardcoded twice inside `services/`, where a rename would have to find
-    both. This is the one place that convention lives.
+    kind prefixes every context it creates with `kind-`. This is the one place
+    that convention lives, for every caller that knows a cluster only by its
+    kind cluster name.
     """
     return f"kind-{cluster_name}"
 

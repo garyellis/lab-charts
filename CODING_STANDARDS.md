@@ -30,13 +30,13 @@ Ask these of every diff first.
    value or path and the fix, e.g. `SpecError(f"{path}: charts_dir {value!r} does not exist")`.
    Skip helpers that rewrite library messages, guess which source a value came from, or re-read
    config just to word an error. Pydantic `extra="forbid"` errors can pass through as they are.
-5. **Catch at the boundary.** `cli/main.py::_outcome_for` maps exceptions to `Outcome`, and
-   `plumbing/exit_codes.py` maps `Outcome` to a number. Services raise; cli exits. Log with the
-   module's `_LOG` at I/O boundaries, using %-style args.
+5. **Catch at the boundary.** `main.py::_outcome_for` maps exceptions to `Outcome`, and
+   `plumbing/exit_codes.py` maps `Outcome` to a number. Commands raise; `main.py` and each
+   command's `cli.py` exit. Log with the module's `_LOG` at I/O boundaries, using %-style args.
 6. **Proportionality.** Enforce a rule once, with a type, a ruff rule or one plain test. Small,
    obviously proportionate checks are fine. Don't add AST-scanning machinery, tests of tests,
    leak tables, or a second enforcement of an existing rule. A nested `.ruff.toml` replaces the
-   root tables (`banned-api`, `per-file-ignores`), so avoid adding one.
+   root tables (`per-file-ignores`), so avoid adding one.
 7. **No shims.** No env-var tombstones, deprecated aliases or "legacy" fallbacks unless asked.
    There are no outside users, so CLI flags, JSON output and `api/` YAML may be renamed; update
    every caller, chart and CI step in the same PR.
@@ -61,7 +61,7 @@ Every call to the outside world is an adapter in `integrations/`, one module per
 - **Wiring is required.** The runner or client is a required argument.
 - **No policy.** An adapter reports what is true; deciding what to do about it belongs to the
   calling package.
-- **Imports** only `plumbing/` and `api/`.
+- **Imports** only `plumbing/`.
 - **Protocols only for two or more real adapters.** Tests fake external tools at the command
   runner (`FakeCommandRunner`), not with a Protocol per tool. Today only the event store has a
   Protocol.
@@ -71,8 +71,8 @@ Every call to the outside world is an adapter in `integrations/`, one module per
 The suite has about 1,570 test functions in 122 files and about 39k lines, roughly 2,100 cases
 once parametrize expands them. Much of it is redundant, so treat test lines as a cost.
 
-- **Test behavior once, at the highest stable boundary.** If the service owns the logic, test
-  the service. Test the CLI only for what it adds: flag parsing, output mode, exit code.
+- **Test behavior once, at the highest stable boundary.** If a command's `run()` owns the
+  logic, test `run()`. Test the CLI only for what it adds: flag parsing, output mode, exit code.
 - **Parametrize instead of copying** when tests differ by one input and one expected value.
 - **Use public entry points, not private helpers.** Treat `from x import _helper` in a test as
   a smell.
@@ -97,7 +97,5 @@ Consolidation examples from the current suite (`tests/`):
 - `test_kind_port_mappings.py::test_container_host_ports_*`: eight tests that differ only in
   the docker payload. Make it one parametrized table of (ps output, inspect output, expected).
 - Same behavior at several layers:
-  - `commands/promote/test_cli.py::test_timeout_ordering_violation_is_a_clean_domain_error`
-    re-tests the `MonitorRequest` validation.
-  - `test_layering.py`: the `*_is_discoverable`, `*_fires_on_*`, `*_stays_quiet_*` and
-    `*_allowlist_*` tests check the checker.
+  `commands/promote/test_cli.py::test_timeout_ordering_violation_is_a_clean_domain_error`
+  re-tests the `MonitorRequest` validation.

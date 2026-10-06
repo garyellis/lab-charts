@@ -393,7 +393,7 @@ but broken tool, `3` invalid configuration.
 ## More
 
 - [`docs/architecture.md`](docs/architecture.md) — where a type belongs:
-  authored API contract vs domain, services, and execution.
+  the package layout and what stays out of the authored API contract.
 - [`docs/chart-lifecycle-spec.md`](docs/chart-lifecycle-spec.md) — the
   `ChartLifecycle` resource and the plan/execute model behind the commands.
 - [`docs/renovate-upgrades.md`](docs/renovate-upgrades.md) — how

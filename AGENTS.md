@@ -8,24 +8,17 @@ Don't restate these docs here or in code:
 - `CODING_STANDARDS.md`: how code and tests should be written. Review your diff against it
   before finishing.
 - `GLOSSARY.md`: the name to use for each concept.
-- `docs/adr/`: decisions not to re-argue. ADR-0001 sets the target package layout.
+- `docs/adr/`: decisions not to re-argue. ADR-0001 sets the package layout.
 - `docs/architecture.md`: where a type belongs in the current layout.
 
-## Layout and layer arrows
+## Layout
 
-```text
-cli/ (surface) -> services/ -> api/ + domain/ + integrations/
-                           domain/ -> api/ + plumbing/
-                              api/ -> plumbing/ (pure helpers only)
-```
-
-- This is the current layout. Code is moving feature by feature to the packages in
-  `docs/adr/0001-feature-packages.md`; a rebuilt package follows the ADR.
-- `composition.py` is the only place outside `services/` and `integrations/` that builds
-  adapters. Surfaces get services from `Container` (`cli/_container.py`).
-- `plumbing/` is generic (errors, exit codes, YAML, paths) and imports no higher layer.
-- Enforcement already exists: TID251 in `pyproject.toml` and `src/chart_manager/domain/.ruff.toml`,
-  plus `tests/test_layering.py`. Work within it rather than adding to it.
+- Code is grouped by command (`commands/`), shared package (`shared/`) and external system
+  (`integrations/`). ADR-0001 places each module; ADR-0002 says which command may import which.
+- `main.py` is the composition root and declares the whole command tree. A command's `cli.py`
+  wires its own adapters from `Container` (`cli/_container.py`).
+- `lint-imports` enforces the contracts in `[tool.importlinter]` in `pyproject.toml`. Work
+  within them rather than adding enforcement.
 
 ## Commands (from `pyproject.toml`, `.mise.toml` and `.github/workflows/ci.yaml`)
 
@@ -33,9 +26,9 @@ cli/ (surface) -> services/ -> api/ + domain/ + integrations/
 uv run --extra dev pytest -q                      # unit suite; addopts exclude integration
 uv run --extra dev pytest -q -m integration tests/integration  # needs helm, kubeconform, kyverno
 uv run --extra dev ruff check src/ tests/
-uv run --extra dev ruff check --select TID251 src/   # layer contract (CI `layering` job)
+uv run --extra dev lint-imports                      # import contracts (CI `layering` job)
 uv run --extra dev mypy src/chart_manager            # production code only
-mise run check     # CI fast gate: actionlint, chart contracts, ruff, mypy, dashboard lint, pytest
+mise run check     # CI fast gate: actionlint, chart contracts, ruff, mypy, lint-imports, dashboard lint, pytest
 ```
 
 CI's integration step runs four of the five files under `tests/integration/`:

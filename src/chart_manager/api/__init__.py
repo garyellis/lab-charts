@@ -8,8 +8,8 @@ reading loaders, filesystem resolution, planning, or CLI code.
 
 This package may import the standard library, Pydantic, and side-effect-free
 lexical helpers from ``chart_manager.plumbing``.  It must not import
-``services``, ``integrations``, ``cli``, the composition root, repository
-settings, Rich, or Typer, and its validators raise ``ValueError`` (or Pydantic
+``commands``, ``shared``, ``integrations``, ``cli``, ``main``, ``settings``,
+Rich, or Typer, and its validators raise ``ValueError`` (or Pydantic
 validation errors) rather than ``SpecError``: translating a decode failure
 into a user-facing diagnostic is the loader's job.
 

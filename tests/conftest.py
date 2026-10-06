@@ -98,7 +98,7 @@ def hermetic_logging() -> Iterator[None]:
     logs anything then writes into a closed stream, and `logging` swallows the
     result as "--- Logging error ---" on stderr.
 
-    That was invisible while `services/` emitted no log records. It is not
+    That was invisible while nothing below the CLI emitted log records. It is not
     invisible now, and the fix belongs here rather than in each test: the
     leaked state is global, and no test should have to know which earlier one
     configured logging.
