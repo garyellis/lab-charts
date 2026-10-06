@@ -150,13 +150,8 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
     assert result.stderr != ""
 
 
-def test_streams_module_exposes_the_seam() -> None:
-    """The data and narration consoles resolve to different streams."""
+def test_data_and_narration_consoles_write_to_different_streams() -> None:
     from chart_manager.cli import streams
 
-    assert callable(streams.data_console)
-    assert callable(streams.narration_console)
-    assert callable(streams.narrate)
-    # The two must not resolve to the same stream.
     assert streams.data_console().stderr is False
     assert streams.narration_console().stderr is True

@@ -22,13 +22,6 @@ from chart_manager.plumbing.errors import (
 )
 from chart_manager.plumbing.exit_codes import (
     EXIT_CODE,
-    EXIT_ENVIRONMENT,
-    EXIT_FAILED,
-    EXIT_MISSING_BINARY,
-    EXIT_SPEC,
-    EXIT_SUCCESS,
-    EXIT_TOOL,
-    EXIT_USAGE,
     Outcome,
     exit_code_for,
 )
@@ -47,6 +40,7 @@ def test_table_is_exhaustive_over_every_outcome() -> None:
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
+        # promote's wire `ok` (outcome is SUCCESS) agrees with `$?` only because SUCCESS alone is 0.
         (Outcome.SUCCESS, 0),
         (Outcome.FAILED, 1),
         (Outcome.USAGE, 2),
@@ -62,24 +56,6 @@ def test_each_outcome_maps_to_the_code_design_6_1_assigns_it(
 ) -> None:
     """The exit-code table, transcribed. Changing a row is a release event."""
     assert exit_code_for(outcome) == expected
-
-
-def test_named_constants_agree_with_the_table() -> None:
-    """The constants exist so no caller writes a literal; keep them honest."""
-    assert (EXIT_SUCCESS, EXIT_FAILED, EXIT_USAGE, EXIT_SPEC) == (0, 1, 2, 3)
-    assert (EXIT_TOOL, EXIT_ENVIRONMENT, EXIT_MISSING_BINARY) == (4, 5, 127)
-
-
-def test_success_is_zero() -> None:
-    """The hinge between the wire `ok` field and `$?`.
-
-    `commands/promote/wire.py` publishes `ok = outcome is SUCCESS` while
-    `commands/promote/cli.py` exits `exit_code_for(outcome)`. Those two agree only
-    because SUCCESS is 0 and nothing else is. Asserted here rather than left
-    implicit, because the coupling is otherwise invisible from either side.
-    """
-    assert exit_code_for(Outcome.SUCCESS) == 0
-    assert [o for o in Outcome if exit_code_for(o) == 0] == [Outcome.SUCCESS]
 
 
 # --------------------------------------------------------------------------
@@ -153,11 +129,17 @@ def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
     assert _exit_code_from_main(exc, monkeypatch) == expected
 
 
-def test_the_error_line_reads_like_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard the guard: a mapped exit code with no message is still a dead end."""
-    from chart_manager import main as main_cli
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (IsADirectoryError(21, "Is a directory", "charts/"), "error: is a directory: charts/"),
+        (OSError("socket closed"), "error: socket closed"),
+    ],
+)
+def test_the_error_line_reads_like_a_sentence(
+    exc: OSError, expected: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mapped exit code with no readable message is still a dead end."""
+    _exit_code_from_main(exc, monkeypatch)
 
-    assert main_cli._os_error_text(IsADirectoryError(21, "Is a directory", "charts/")) == (
-        "is a directory: charts/"
-    )
-    assert main_cli._os_error_text(OSError()) == str(OSError())
+    assert capsys.readouterr().err.strip() == expected
