@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import (
@@ -33,13 +33,13 @@ class Github:
     def __init__(
         self,
         repo_root: Path,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
         binary: str = "gh",
     ) -> None:
         """Bind the repo root, a CommandRunner, and the gh binary name."""
         self.repo_root = repo_root
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self.binary = binary
 
     def preflight(self) -> tuple[Check, ...]:

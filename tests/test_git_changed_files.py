@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.integrations.git import Git
+from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner, workspace_for
 
@@ -108,7 +109,7 @@ def test_changed_files_are_relative_to_a_workspace_below_the_git_top_level(
     (tmp_path / "README.md").write_text("changed outside the workspace\n", encoding="utf-8")
     _git(tmp_path, "commit", "-q", "-am", "change")
 
-    changed = Git(workspace_root).changed_files(base=base)
+    changed = Git(workspace_root, SubprocessRunner()).changed_files(base=base)
 
     assert changed == ["charts/demo/values.yaml"]
     workspace = workspace_for(workspace_root)

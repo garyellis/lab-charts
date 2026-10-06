@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, CheckStatus, probe_binary
@@ -14,10 +14,10 @@ from chart_manager.plumbing.preflight import Check, CheckStatus, probe_binary
 class Git:
     """Run git subcommands rooted at one working tree."""
 
-    def __init__(self, root: Path, runner: CommandRunner | None = None) -> None:
+    def __init__(self, root: Path, runner: CommandRunner) -> None:
         """Bind the working-tree root and a CommandRunner."""
         self.root = root
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
 
     def preflight(self) -> tuple[Check, ...]:
         """Report the git binary and whether `root` is actually a work tree.
@@ -61,10 +61,9 @@ class Git:
         *,
         branch: str | None = None,
         depth: int | None = 1,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
     ) -> None:
         """Clone `url` into `target`; shallow (depth=1) by default."""
-        runner = runner or SubprocessRunner()
         args = ["git", "clone"]
         if depth is not None:
             args.extend(["--depth", str(depth)])
