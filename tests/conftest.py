@@ -398,7 +398,7 @@ def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Reposit
 #
 # Every test that drives the CLI names a command as a sequence of argv
 # tokens, and Typer resolves those tokens against the registered command
-# tree. A rename in `cli/main.py` therefore breaks every test that spelled
+# tree. A rename in `main.py` therefore breaks every test that spelled
 # the old name -- silently at the source level, loudly and in bulk at run
 # time. Before this seam existed, ~49 assertion sites across nine modules
 # each carried a literal group name, so renaming one group was a nine-file
@@ -542,15 +542,8 @@ def cli(*argv: str, input: str | None = None, catch_exceptions: bool = True) -> 
     Use this instead of `CliRunner().invoke(main.app, [...])` everywhere, so
     a command rename stays a `_COMMAND_PATHS` diff.
 
-    Deliberately offers no `app=` override. `_COMMAND_PATHS` is expressed in
-    *root-app* paths, and a module that assembles a partial app from a
-    `cli/*.py` `register()` function (`tests/commands/upgrade/test_cli.py`) registers
-    those commands flat, with no group above them. Mid-migration, when an
-    entry is non-identity, translating a root path into such an app would
-    rewrite e.g. `publish` to `chart publish` against an app where only
-    `publish` exists. Those modules are already insulated --
-    `register()` owns the command name, `main.py` owns the group name -- so
-    they keep a plain `CliRunner` and need nothing from this table.
+    Deliberately offers no `app=` override: `_COMMAND_PATHS` is expressed in
+    *root-app* paths, and `main.py` owns the whole command tree.
     """
     # Historical tests addressed synthetic repositories with the removed
     # `--root` option. Translate that test-only spelling onto the supported
