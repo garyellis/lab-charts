@@ -26,9 +26,9 @@ A package for one capability used by at least two command packages.
 _Avoid_: common, utils, core, shared service
 
 **Floor**:
-The shared packages every other package may use and that import nothing else from `shared/`:
-`workspace` and `settings`. Inside `shared/`, `charts` and `events` are leaves over the floor and
-`cluster` is the composite over them.
+The shared package every other package may use and that imports nothing else from `shared/`:
+`workspace`. Inside `shared/`, `charts` and `events` are leaves over the floor and `cluster` is
+the composite over them.
 _Avoid_: base, core, common
 
 **Integration**:

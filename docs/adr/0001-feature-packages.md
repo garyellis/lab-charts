@@ -28,7 +28,8 @@ chart_manager/
   api/v1alpha1/   Kubernetes-style resource shapes only (kinds, fields, validation)
   cli/            main.py (registers commands, maps errors to exit codes), output.py, Container
   commands/       validate test publish upgrade promote local plan event grafana doctor
-  shared/         charts cluster events workspace.py settings.py
+  shared/         charts cluster events workspace.py
+  settings.py     process configuration (env, config file) and its defaults
   integrations/   every call to the outside world, one module per external system
   plumbing/       errors, yaml, paths, command runner
 ```
@@ -49,7 +50,10 @@ chart_manager/
     gets its own code: the cert-manager webhook is a Deployment in its manifest. Anything
     more is the chart's `helmTest` or hooks.
   - `events/`: write and query events; the backend is chosen from settings.
-  - `workspace.py` and `settings.py`: read once per run by the `Container`.
+  - `workspace.py`: read once per run by the `Container`.
+- **`settings.py`** sits at the top level, below `shared/` and beside `api/` and
+  `integrations/`: process configuration is not a domain capability. It imports only
+  `plumbing/`; `DEFAULT_CLUSTER_NAME` lives here.
 - **Integrations** are deep adapters: few methods, each returning an answer rather than raw
   output, with the runner or client a required argument and no policy decisions. A package
   uses as many as it needs. A Protocol goes in front of integrations only where two or more
@@ -66,7 +70,7 @@ Rules:
    Its Typer command is `<pkg>/cli.py`. `composition.py` goes away.
 3. Imports, enforced by one import-linter config: command packages are independent of each
    other; `shared/` never imports `commands/`; `integrations/` imports only `plumbing/` and
-   `api/`; inside `shared/`, `workspace` and `settings` import nothing else from `shared/`.
+   `api/`; inside `shared/`, `workspace` imports nothing else from `shared/`.
    Two exceptions: `plan/` may import each command's `select()` and its result types, and
    `doctor/` may import each command's `requirements()`.
 4. Flat inside a package: an entry function `run(request) -> outcome`, its models, `cli.py`.

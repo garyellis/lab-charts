@@ -25,8 +25,9 @@ Rules, enforced by import-linter:
    contract checks the root `__init__` files only (`as_packages = false`). One counted
    exception: validate's root loads `integrations.kubeconform` for the schema check doctor runs.
 
-`shared/` follows the same shape with one addition, a **floor**. `workspace` and `settings`
-are the floor: they import nothing else from `shared/`, and every shared package may use them.
+`shared/` follows the same shape with one addition, a **floor**. `workspace` is the floor:
+it imports nothing else from `shared/`, and every shared package may use it. (`settings.py`
+is not in `shared/`; it is a top-level module below it.)
 `charts` and `events` are leaves: they import only the floor, never each other. `cluster` is
 the composite: it installs charts, so it reads `charts`. Rule 1 holds (a shared composite never
 imports another composite); rule 2 does not apply, because a shared package's submodules are
@@ -35,10 +36,10 @@ rows, so a new shared composite is a reviewed change:
 
 ```toml
 [[tool.importlinter.contracts]]
-name = "Shared: cluster is a composite over the charts and events leaves; workspace and settings are the floor"
+name = "Shared: cluster is a composite over the charts and events leaves; workspace is the floor"
 type = "layers"
 containers = ["chart_manager.shared"]
-layers = ["cluster", "charts | events", "workspace | settings"]
+layers = ["cluster", "charts | events", "workspace"]
 ```
 
 `main.py` is the composition root and owns the command tree: it mounts every leaf's Typer
