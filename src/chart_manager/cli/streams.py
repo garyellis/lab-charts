@@ -27,7 +27,7 @@ is silently bypassed and the output vanishes. `Console(stderr=False|True)`
 resolves `sys.stdout`/`sys.stderr` lazily on every write, which is what a
 process-wide seam needs. Ruff's TID251 bans importing `Console` outside the
 modules allowlisted in `pyproject.toml`, so a bare `Console()` -- which
-silently means stdout -- cannot come back unnoticed.
+silently means stdout -- cannot appear outside them unnoticed.
 """
 
 from __future__ import annotations

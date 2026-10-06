@@ -25,7 +25,7 @@ Why this is worth a gate rather than a convention:
       unset emitted a warning *inside* the JSON stream. That is the exact
       regression `test_json_projections_are_parseable_on_stdout` exists to
       catch, and it is why the tests below parse rather than
-      pattern-matches.
+      pattern-match.
 
 These tests drive real commands through Typer's CliRunner (which separates
 `.stdout` from `.stderr`) and assert the split holds end to end. A new module
