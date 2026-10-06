@@ -25,6 +25,12 @@ _Avoid_: aggregator, meta command
 A package for one capability used by at least two command packages.
 _Avoid_: common, utils, core, shared service
 
+**Floor**:
+The shared packages every other package may use and that import nothing else from `shared/`:
+`workspace` and `settings`. Inside `shared/`, `charts` and `events` are leaves over the floor and
+`cluster` is the composite over them.
+_Avoid_: base, core, common
+
 **Integration**:
 An adapter for one system outside chart-manager (a CLI tool, a cloud service, or the
 Kubernetes cluster) that speaks only that system's language, answers questions about it and
