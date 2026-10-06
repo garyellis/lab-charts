@@ -22,7 +22,7 @@ used only to check whether the chart's branch already has an open PR.
 uv run chart-manager doctor
 ```
 
-checks exactly this command's prerequisites — `git`, the repository, `gh`
+checks, among the rest, this command's prerequisites — `git`, the repository, `gh`
 auth, the Renovate runtime and config validator, the Renovate token, the
 events backend — and prints the fix beside each failure. Renovate also needs
 credentials for every private registry the chart references; supply them

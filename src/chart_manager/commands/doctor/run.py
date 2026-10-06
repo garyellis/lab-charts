@@ -54,12 +54,11 @@ def run(
         "schemas": schemas.preflight,
         "events": preflight_event_store,
     }
-    return DoctorReport(
-        checks=tuple(result for name, check in checks.items() for result in _run(name, check))
-    )
+    results = (result for name, check in checks.items() for result in _run_check(name, check))
+    return DoctorReport(checks=tuple(results))
 
 
-def _run(name: str, check: Callable[[], Sequence[Check]]) -> tuple[Check, ...]:
+def _run_check(name: str, check: Callable[[], Sequence[Check]]) -> tuple[Check, ...]:
     """Run one integration's checks, reporting an unexpected exception as a failed check."""
     try:
         return tuple(check())
