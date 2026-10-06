@@ -21,6 +21,7 @@ from chart_manager.integrations.kubeconform.repository_snapshot import (
     RepositorySnapshot,
     RepositorySnapshotDirectoryNotFoundError,
 )
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
@@ -63,12 +64,12 @@ class KubeconformSchemaStore:
     def __init__(
         self,
         *,
-        cache_root: Path | None = None,
-        snapshots: RepositorySnapshot | None = None,
+        cache_root: Path,
+        snapshots: RepositorySnapshot,
     ) -> None:
-        self.cache_root = (cache_root or default_schema_cache_root()).resolve()
+        self.cache_root = cache_root.resolve()
         self.root = self.cache_root / "v3"
-        self.snapshots = snapshots or RepositorySnapshot()
+        self.snapshots = snapshots
 
     def repository_path(self, pin: RepositoryPin, directory: str | None = None) -> Path:
         return self.root / "repositories" / pin.repository / pin.resolved / (directory or "all")
@@ -172,10 +173,8 @@ class KubeconformSchemaStore:
         )
 
 
-def kubeconform_schema_locations(
-    lock: SchemaLock, generation_path: Path
-) -> KubeconformSchemaLocations:
-    # generation_path is <cache>/v3/repositories.
+def open_schema_store(runner: CommandRunner) -> KubeconformSchemaStore:
+    """The schema store under the XDG cache root, checking out snapshots through `runner`."""
     return KubeconformSchemaStore(
-        cache_root=generation_path.parent.parent
-    ).locations(lock)
+        cache_root=default_schema_cache_root(), snapshots=RepositorySnapshot(runner)
+    )

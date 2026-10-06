@@ -33,7 +33,12 @@ from typer.testing import CliRunner, Result
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspaceSpec
 from chart_manager.cli._container import reset_invocation
-from chart_manager.plumbing.commands import CommandResult, redact
+from chart_manager.plumbing.commands import (
+    CommandResult,
+    CommandRunner,
+    SubprocessRunner,
+    redact,
+)
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check
 from chart_manager.plumbing.yaml_files import dump_yaml
@@ -377,21 +382,35 @@ def materialize_dependency(
 
 
 @pytest.fixture
-def schema_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryWorkspace:
-    """A workspace whose locked schema generation is synced into a tmp cache."""
-    from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+def schema_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
+    """A locked schema generation and an empty store under a tmp XDG cache root."""
     from chart_manager.commands.validate.schemas.store import (
         KubeconformSchemaStore,
         default_schema_cache_root,
     )
-    from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
     from tests import schema_fixtures  # imports this module
 
     lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots).sync(lock)
+    return lock, KubeconformSchemaStore(cache_root=default_schema_cache_root(), snapshots=snapshots)
+
+
+@pytest.fixture
+def schema_workspace(tmp_path: Path, schema_cache: tuple[Any, Any]) -> RepositoryWorkspace:
+    """A workspace whose locked schema generation is synced into a tmp cache."""
+    from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+    from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
+    from tests import schema_fixtures  # imports this module
+
+    lock, store = schema_cache
+    store.sync(lock)
     write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
     return schema_fixtures.workspace(tmp_path)
+
+
+def git_runner() -> FakeCommandRunner:
+    """A fake that runs git for real, so the schema store can inspect a tmp cache."""
+    return FakeCommandRunner().forward(("git",), SubprocessRunner())
 
 
 # --- the CLI argv seam -------------------------------------------------------
@@ -660,6 +679,7 @@ class FakeCommandRunner:
         self._queue: list[Reply] = []
         self._when_exhausted = when_exhausted
         self._last: Reply | None = None
+        self._forwards: list[tuple[Predicate, CommandRunner]] = []
 
     # --- scripting ----------------------------------------------------------
 
@@ -687,6 +707,11 @@ class FakeCommandRunner:
         if not replies:
             raise ValueError("respond_each needs at least one reply")
         self._table.append((_as_predicate(matcher), list(replies)))
+        return self
+
+    def forward(self, matcher: Matcher, runner: CommandRunner) -> FakeCommandRunner:
+        """Run every argv matching `matcher` on `runner` instead of replying. Chainable."""
+        self._forwards.append((_as_predicate(matcher), runner))
         return self
 
     def script(self, *replies: Reply) -> FakeCommandRunner:
@@ -725,6 +750,11 @@ class FakeCommandRunner:
                 env=env,
             )
         )
+        for predicate, runner in self._forwards:
+            if predicate(argv):
+                return runner.run(
+                    argv, cwd=cwd, check=check, capture=capture, timeout=timeout, env=env
+                )
         reply = self._reply_for(argv)
         if reply.raises is not None:
             raise reply.raises

@@ -29,7 +29,7 @@ from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.commands.validate.run import run
 from chart_manager.commands.validate.schemas.app import sync as sync_schemas
-from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
+from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
 from chart_manager.plumbing.commands import CommandRunner
@@ -324,7 +324,7 @@ def sync(
     timeout = container.settings.command_timeout
     result = sync_schemas(
         container.workspace(),
-        store=KubeconformSchemaStore(),
+        store=open_schema_store(container.command_runner()),
         source=GitHubKubeconformSchemaSource(
             timeout=timeout if timeout is not None and timeout > 0 else 15.0
         ),

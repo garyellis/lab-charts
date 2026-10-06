@@ -19,6 +19,7 @@ from tests.conftest import (
     ONE_DEPENDENCY_LOCK,
     FakeCommandRunner,
     crd_manifest,
+    git_runner,
     materialize_dependency,
     workspace_for,
     write_validation_chart,
@@ -137,7 +138,7 @@ def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), returncode=returncode, stdout=stdout)
     )
@@ -173,7 +174,7 @@ def test_the_schema_check_is_skipped_without_running_kubeconform(
     helm: dict[str, Any],
 ) -> None:
     write_validation_chart(tmp_path, "demo", **validation)
-    runner = FakeCommandRunner().respond(**helm)
+    runner = git_runner().respond(**helm)
 
     outcome = run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
@@ -198,7 +199,7 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
     (tmp_path / "schemas").mkdir()
     gadget = "apiVersion: example.io/v1\nkind: Gadget\nmetadata:\n  name: demo\n"
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(gadget))
         .respond(("kubeconform",), stdout=json.dumps({"resources": []}))
     )
@@ -231,7 +232,7 @@ def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
     write_validation_chart(tmp_path, "demo", schemaLocations=["schemas/{{.ResourceKind}}.json"])
-    runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
+    runner = git_runner().respond(renders(CONFIG_MAP))
 
     outcome = run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
@@ -332,7 +333,7 @@ def test_a_failed_schema_check_skips_the_policy_check(
     write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), returncode=1, stdout=kubeconform_report("statusInvalid"))
     )
@@ -354,7 +355,7 @@ def test_a_chart_whose_render_fails_skips_its_checks_while_the_others_run(
         write_validation_chart(tmp_path, name)
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(lambda argv: argv[1:3] == ("template", "one"), returncode=1, stderr="bad")
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
@@ -467,7 +468,7 @@ def test_a_charts_crds_become_the_first_schema_location(
     (provider / "templates").mkdir()
     (provider / "templates" / "crd.yaml").write_text(crd_manifest())
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(crd_manifest()))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
     )
@@ -508,7 +509,7 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
         return True
 
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(updates)
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
@@ -666,13 +667,28 @@ def test_fail_fast_skips_the_rows_after_the_first_failure(tmp_path: Path) -> Non
     assert not [call for call in runner.calls if call[1:3] == ("template", "two")]
 
 
+
+def test_the_schema_stores_git_calls_go_through_the_given_runner(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    runner = git_runner().respond(renders(CONFIG_MAP)).respond(("kubeconform",))
+
+    run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert [call for call in runner.calls if call[0] == "git"]
+
 def test_the_tool_timeout_and_verbose_reach_every_tool_call(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
         .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
@@ -687,7 +703,7 @@ def test_the_tool_timeout_and_verbose_reach_every_tool_call(
     )
 
     tools = {record.args[0]: record for record in runner.records}
-    assert {tool: record.timeout for tool, record in tools.items()} == {
+    assert {tool: tools[tool].timeout for tool in ("helm", "kubeconform", "kyverno")} == {
         "helm": 30.0,
         "kubeconform": 30.0,
         "kyverno": 30.0,
