@@ -203,9 +203,7 @@ def run(
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
     # verbose=False: concurrent `helm test` streams would interleave; the
     # output is captured onto each outcome instead.
-    helm = Helm(
-        runner, verbose=False, context=settings.kube_context, timeout=settings.command_timeout
-    )
+    helm = Helm(runner, verbose=False, context=settings.kube_context)
     tester = _Tester(kubectl, helm, clock, progress)
     start = clock()
     matched = filter_matched_statuses(

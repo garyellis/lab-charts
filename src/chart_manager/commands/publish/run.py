@@ -23,6 +23,7 @@ from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.semver import SemVer, parse_semver
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.dependency_update import update_dependencies
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase
 from chart_manager.shared.events.writer import EventWriter
@@ -128,7 +129,7 @@ def _prepare(
         if request.version_suffix is not None
         else _validate_semver(base_version, label=f"chart '{name}' version")
     )
-    helm.dependency_update(chart.path)
+    update_dependencies(helm, chart.path)
     package = helm.package(chart.path, output, version=version if version != base_version else None)
     row = PublishedChart(name, version, _target_reference(request.repository, name, version))
     return row, package

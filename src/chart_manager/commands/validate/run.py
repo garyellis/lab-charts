@@ -287,8 +287,7 @@ class _Checker:
 
         def update(chart: Chart) -> None:
             spec = require_validation(chart.lifecycle, chart_name=chart.name)
-            timeout = self.request.tool_timeout or 300.0
-            helm = _helm(self.runner, spec, verbose=False, timeout=timeout)
+            helm = _helm(self.runner, spec, verbose=False, timeout=self.request.tool_timeout)
             self._ensure_dependencies(helm, chart)
 
         with ThreadPoolExecutor(max_workers=8) as pool:

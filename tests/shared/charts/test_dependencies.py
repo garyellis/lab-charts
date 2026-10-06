@@ -125,11 +125,19 @@ def test_a_chart_without_readable_dependencies_skips_the_update(
     assert _ran_update(chart) is False
 
 
-def test_a_missing_lock_runs_the_update(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("configured", "bound"), [(None, 600.0), (30.0, 30.0)])
+def test_a_missing_lock_runs_the_update_within_the_configured_timeout_or_ten_minutes(
+    tmp_path: Path, configured: float | None, bound: float
+) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
+    runner = FakeCommandRunner()
 
-    assert _ran_update(chart) is True
+    ensure_dependencies(Helm(runner, timeout=configured), chart)
+
+    assert [(r.args, r.timeout) for r in runner.records] == [
+        (("helm", "dependency", "update", str(chart)), bound)
+    ]
 
 
 def test_a_lock_without_materialized_charts_runs_the_update(tmp_path: Path) -> None:

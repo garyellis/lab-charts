@@ -88,7 +88,7 @@ def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
         name=name,
         context=context,
         kind=Kind(runner, docker_host=settings.docker_host, timeout=settings.command_timeout),
-        helm=Helm(runner, context=context, timeout=settings.command_timeout),
+        helm=Helm(runner, context=context),
         kubectl=Kubectl(runner, context=context, timeout=settings.command_timeout),
     )
 

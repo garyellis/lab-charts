@@ -135,12 +135,12 @@ class Helm:
             ),
         )
 
-    def dependency_update(self, chart_path: Path) -> None:
-        """Run `helm dependency update` for a local chart."""
+    def dependency_update(self, chart_path: Path, *, timeout: float) -> None:
+        """Run `helm dependency update` for a local chart, killed after `timeout` seconds."""
         self.runner.run(
             self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
             capture=not self.verbose,
-            timeout=self.timeout,
+            timeout=timeout,
         )
 
     def package(

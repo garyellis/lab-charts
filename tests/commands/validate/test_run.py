@@ -538,9 +538,7 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
     runner = FakeCommandRunner()
 
     outcome = run(
-        validate.ValidateRequest(
-            out=tmp_path / "out", charts=("app",), checks=RENDER, workers=5, tool_timeout=30.0
-        ),
+        validate.ValidateRequest(out=tmp_path / "out", charts=("app",), checks=RENDER, workers=5),
         workspace=workspace_for(tmp_path),
         runner=runner,
     )
@@ -550,7 +548,7 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
         (record.args, record.timeout)
         for record in runner.records
         if record.args[1:3] == ("dependency", "update")
-    ] == [(("helm", "dependency", "update", str(app)), 30.0)]
+    ] == [(("helm", "dependency", "update", str(app)), 600.0)]
 
 
 def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:

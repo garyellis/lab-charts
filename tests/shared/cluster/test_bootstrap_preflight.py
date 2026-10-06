@@ -27,12 +27,14 @@ def _cluster(releases: list[dict[str, object]]) -> LocalCluster:
 
 
 class _Helm:
+    timeout = None
+
     def __init__(self, *, fail_lint: bool = False) -> None:
         self.fail_lint = fail_lint
         self.dependencies: list[Path] = []
         self.lints: list[tuple[Path, list[Path]]] = []
 
-    def dependency_update(self, chart: Path) -> None:
+    def dependency_update(self, chart: Path, *, timeout: float) -> None:
         self.dependencies.append(chart)
 
     def lint(self, chart: Path, values: list[Path] | None = None) -> None:

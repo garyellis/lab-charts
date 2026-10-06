@@ -156,7 +156,7 @@ def test_dependency_update_carries_the_timeout_and_streams_only_when_verbose(
 ) -> None:
     runner = FakeCommandRunner()
 
-    Helm(runner, verbose=verbose, timeout=42.0).dependency_update(tmp_path)
+    Helm(runner, verbose=verbose).dependency_update(tmp_path, timeout=42.0)
 
     [call] = runner.records
     assert call.args == ("helm", "dependency", "update", str(tmp_path))
