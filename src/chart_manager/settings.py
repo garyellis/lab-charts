@@ -18,6 +18,7 @@ from chart_manager.plumbing.yaml_files import load_yaml_file
 
 DEFAULT_CONFIG_FILE = Path(".chart-manager/config.yaml")
 DEFAULT_ROOT = Path(".")
+DEFAULT_CLUSTER_NAME = "chart-manager"
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
 

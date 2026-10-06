@@ -19,7 +19,7 @@ Renovate uses its token for the checkout, branch, and PR. The GitHub CLI is
 used only to check whether the chart's branch already has an open PR.
 
 ```bash
-uv run chart-manager doctor --for 'chart upgrade'
+uv run chart-manager doctor
 ```
 
 checks exactly this command's prerequisites — `git`, the repository, `gh`
@@ -122,5 +122,5 @@ Preflight diagnostics do not modify the checkout. Common failures:
 unauthenticated Renovate or `gh`, a relevant dirty file, an unsafe chart
 path, an uncovered image convention, invalid chart-local configuration.
 Correct the named condition and rerun.
-`doctor --for 'chart upgrade'` reports the tooling and credential half
+`doctor` reports the tooling and credential half
 without starting an upgrade.

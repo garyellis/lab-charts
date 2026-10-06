@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from chart_manager.commands.promote import MonitorRequest, TestRequest, monitor, test
+from chart_manager.commands.promote import monitor, test
+from chart_manager.commands.promote.monitor import MonitorRequest
 from chart_manager.commands.promote.state import (
     PROMOTE_PHASE,
     TERMINAL_PHASES,
@@ -17,6 +18,7 @@ from chart_manager.commands.promote.state import (
     run_verdict,
 )
 from chart_manager.commands.promote.telemetry import emit_promotion
+from chart_manager.commands.promote.test import TestRequest
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.settings import Settings
 from chart_manager.shared.events.failure import emit_non_fatal

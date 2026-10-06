@@ -35,7 +35,7 @@ from chart_manager.commands.local.status import cluster_status
 from chart_manager.commands.local.targets import ResolvedLocalTarget
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.settings import Settings
+from chart_manager.settings import DEFAULT_CLUSTER_NAME, Settings
 from chart_manager.shared.charts.chart import ResolvedChartTarget
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
@@ -58,7 +58,6 @@ from chart_manager.shared.cluster.releases import (
     lifecycle_install_plan,
 )
 from chart_manager.shared.cluster.session import (
-    DEFAULT_CLUSTER_NAME,
     Session,
     attach,
     find,

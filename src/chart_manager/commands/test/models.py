@@ -9,7 +9,7 @@ from typing import Literal
 
 from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
+from chart_manager.settings import DEFAULT_CLUSTER_NAME
 
 
 class ActionKind(StrEnum):

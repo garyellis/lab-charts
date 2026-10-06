@@ -1,4 +1,4 @@
-"""`validate.run()` with real helm, kubeconform and kyverno against the repository policies."""
+"""`run()` with real helm, kubeconform and kyverno against the repository policies."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.integration.conftest import FIXTURES, fixture_chart, require
@@ -46,7 +47,7 @@ def test_fixture_charts_meet_or_break_the_repository_policies(
     shutil.copytree(REPO_POLICIES, tmp_path / "policies")
     fixture_chart(tmp_path, chart, schemaLocations=[SCHEMA_LOCATION])
 
-    outcome = validate.run(
+    outcome = run(
         validate.ValidateRequest(out=tmp_path / "out", charts=(chart,)),
         workspace=schema_workspace,
         runner=SubprocessRunner(),

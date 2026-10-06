@@ -19,13 +19,12 @@ git clone <repo> lab-charts
 cd lab-charts
 mise trust && mise install
 mise run setup
-uv run chart-manager doctor --for 'chart validate'
+uv run chart-manager doctor
 uv run chart-manager chart validate grafana --env dev
 ```
 
 `doctor` checks that the binaries, kubecontext, container runtime, and
-backends a command needs are usable; `--for` narrows it to one command's
-prerequisites. The last command renders `grafana` for `dev`, validates the
+backends chart-manager uses are usable. The last command renders `grafana` for `dev`, validates the
 manifests against the Kubernetes schema, and runs the policies declared in
 the chart's `chart-lifecycle.yaml`.
 
@@ -33,7 +32,7 @@ the chart's `chart-lifecycle.yaml`.
 
 | Command | What it does |
 | --- | --- |
-| `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. `--for '<command>'` narrows to one command. |
+| `uv run chart-manager doctor` | Check tool, kubecontext, and backend prerequisites. |
 | `uv run chart-manager chart validate <name> --env <env>` | Render one chart for one environment, then run its validators. `--all` validates every environment; with no chart named, the worklist comes from `git diff` against `origin/main`. |
 | `mise run validate -- --all` | Validate every chart and environment in the repo. |
 | `mise run schemas` | Verify or cache pinned upstream schema repositories. Chart changes only need validate; use `--update` to move upstream pins. |
@@ -218,7 +217,7 @@ the named snapshot and syncing again.
 
 Ordinary chart work only needs `chart-manager chart validate`: adding a chart,
 resource, or catalog-backed kind does not change the lock or require another
-sync. `chart-manager doctor --for 'chart validate'` checks whether the pinned
+sync. `chart-manager doctor` checks whether the pinned
 snapshots are ready without writing to the cache. Use
 `chart-manager schemas sync --update` to resolve moving upstream refs and write
 the lock after successful hydration. The lock contains policy and two commit
@@ -311,7 +310,7 @@ Publishing needs `HARBOR_REGISTRY`, `HARBOR_USERNAME`, and optionally
 - Validate failure: run `mise run schemas`, then
   `uv run chart-manager chart validate <name> --env <env>`.
 - Sandbox failure: `uv run chart-manager chart test <name> --profile minimal`.
-- If it looks environmental, run `uv run chart-manager doctor --for 'chart test'`
+- If it looks environmental, run `uv run chart-manager doctor`
   first — it names the missing binary or unreachable backend.
 
 ## Adding or editing a chart

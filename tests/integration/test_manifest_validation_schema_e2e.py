@@ -1,4 +1,4 @@
-"""`validate.run()` with real helm and kubeconform: render, then the schema check."""
+"""`run()` with real helm and kubeconform: render, then the schema check."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.yaml_files import dump_yaml
@@ -23,7 +24,7 @@ SCHEMA_ONLY = frozenset({"render", "schema"})
 
 
 def check(workspace: RepositoryWorkspace, *charts: str) -> validate.ValidateOutcome:
-    return validate.run(
+    return run(
         validate.ValidateRequest(out=workspace.root / "out", charts=charts, checks=SCHEMA_ONLY),
         workspace=workspace,
         runner=SubprocessRunner(),

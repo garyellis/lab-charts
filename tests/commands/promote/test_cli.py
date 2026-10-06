@@ -11,18 +11,17 @@ from typing import Any
 import pytest
 import typer
 
-from chart_manager.commands.promote import (
-    HelmReleaseMatch,
-    MonitorOutcome,
-    MonitorResult,
-    PromoteResult,
+from chart_manager.commands.promote import cli as promote_cli
+from chart_manager.commands.promote.monitor import MonitorOutcome, MonitorResult
+from chart_manager.commands.promote.pr import PromoteResult
+from chart_manager.commands.promote.scanner import HelmReleaseMatch
+from chart_manager.commands.promote.state import (
+    NO_MATCH_REF,
+    PROMOTE_OUTCOME,
     PromoteStatus,
-    TestOutcome,
-    TestResult,
     Transition,
 )
-from chart_manager.commands.promote import cli as promote_cli
-from chart_manager.commands.promote.state import NO_MATCH_REF, PROMOTE_OUTCOME
+from chart_manager.commands.promote.test import TestOutcome, TestResult
 from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.helmrelease import (
     ConditionSnapshot,

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.commands.promote import HelmReleaseMatch, PromoteRequest, PromoteResult
-from chart_manager.commands.promote.pr import run
+from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult, run
+from chart_manager.commands.promote.scanner import HelmReleaseMatch
 from chart_manager.commands.promote.state import PromoteStatus
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError

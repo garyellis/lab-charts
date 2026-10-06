@@ -24,7 +24,7 @@ from chart_manager.cli._options import (
 )
 from chart_manager.cli.streams import console, narration
 from chart_manager.cli.streams import print_progress as _print_progress
-from chart_manager.commands import local
+from chart_manager.commands.local import run as local_run
 from chart_manager.commands.local.access import LAB_CA_SECRET_NAME, LAB_CA_SECRET_NAMESPACE
 from chart_manager.commands.local.models import (
     DevClusterAccessHints,
@@ -45,8 +45,8 @@ from chart_manager.commands.local.wire import (
     status_to_dict,
 )
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.settings import DEFAULT_CLUSTER_NAME
 from chart_manager.shared.charts.chart import resolve_chart_target
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 
 #: `local`'s output vocabulary. No `md`: a cluster snapshot has no markdown
 #: projection, and offering one that silently rendered as a table would be
@@ -166,7 +166,7 @@ def local_up(
     workspace = container.workspace(root)
     if dry_run:
         _render_plan(
-            local.plan(
+            local_run.plan(
                 resolved,
                 workspace=workspace,
                 profile=profile,
@@ -176,7 +176,7 @@ def local_up(
             output,
         )
         return
-    result = local.up(
+    result = local_run.up(
         resolved,
         workspace=workspace,
         runner=container.command_runner(),
@@ -203,11 +203,11 @@ def local_down(
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
     if dry_run:
-        _render_plan(local.plan_down(), output)
+        _render_plan(local_run.plan_down(), output)
         return
     container = _container()
     _render_cluster_action(
-        local.down(
+        local_run.down(
             runner=container.command_runner(), settings=container.settings, progress=_print_progress
         ),
         output,
@@ -254,7 +254,7 @@ def local_reset(
     workspace = container.workspace(root)
     if dry_run:
         _render_plan(
-            local.plan(
+            local_run.plan(
                 resolved,
                 workspace=workspace,
                 profile=profile,
@@ -265,7 +265,7 @@ def local_reset(
             output,
         )
         return
-    result = local.reset(
+    result = local_run.reset(
         resolved,
         workspace=workspace,
         runner=container.command_runner(),
@@ -296,7 +296,7 @@ def local_status(
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
     container = _container()
-    status = local.status(
+    status = local_run.status(
         workspace=container.workspace(), runner=container.command_runner(), settings=container.settings
     )
     if output != output_mod.TABLE:

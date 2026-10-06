@@ -1,25 +1,13 @@
-"""`chart-manager doctor`: the three things the surface owns.
-
-Argument shape, projection, exit code -- and nothing else, which is the
-property most of these tests are really asserting. Every one of them
-replaces the whole provider set through `_make_doctor_service`, so no test
-here touches PATH, a cluster, or a network. That is possible only because
-the checks live behind a service seam rather than inside the command body;
-a `doctor` that probed inline could not be tested without the toolchain
-installed, which is the shape the design forbids.
-
-The checks themselves, and who owns them, are in
-`tests/test_doctor_service.py`.
-"""
+"""`chart-manager doctor`: exit codes and output modes over a scripted report."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 
 import pytest
 
-from chart_manager.cli import doctor as doctor_cli
+from chart_manager.commands.doctor import DoctorReport
+from chart_manager.commands.doctor import cli as doctor_cli
 from chart_manager.plumbing.exit_codes import (
     EXIT_ENVIRONMENT,
     EXIT_MISSING_BINARY,
@@ -30,9 +18,7 @@ from chart_manager.plumbing.exit_codes import (
     Outcome,
 )
 from chart_manager.plumbing.preflight import Check
-from chart_manager.services.doctor import DoctorService
-
-from .conftest import cli
+from tests.conftest import cli
 
 _HEALTHY = Check.ok("helm", "v3.16.2 (/opt/bin/helm)")
 _MISSING = Check.failed(
@@ -41,33 +27,16 @@ _MISSING = Check.failed(
     remediation="install kubeconform",
     outcome=Outcome.MISSING_BINARY,
 )
-_UNREACHABLE = Check.failed(
-    "events-backend",
-    "dynamodb table lifecycle-events unavailable",
-    remediation="check AWS credentials",
-    outcome=Outcome.ENVIRONMENT,
-)
 
 
 @pytest.fixture
 def fake_doctor(monkeypatch: pytest.MonkeyPatch):
-    """Replace the container-built service with one over scripted checks.
+    """Make `doctor` report exactly these checks."""
 
-    Same seam as `tests/commands/promote/test_cli.py` uses for the promote
-    services: the command keeps its real body, only the wiring is faked.
-    """
-
-    def install(*checks: Check, capability: str = "helm") -> None:
-        provider: dict[str, object] = {capability: lambda: checks}
-        service = DoctorService(provider)  # type: ignore[arg-type]
-        monkeypatch.setattr(doctor_cli, "_make_doctor_service", lambda: service)
+    def install(*checks: Check) -> None:
+        monkeypatch.setattr(doctor_cli, "run", lambda **_: DoctorReport(checks=checks))
 
     return install
-
-
-def _providers(mapping: dict[str, Sequence[Check]]) -> DoctorService:
-    """A DoctorService over several capabilities at once."""
-    return DoctorService({name: (lambda c=checks: c) for name, checks in mapping.items()})
 
 
 # --- exit codes -------------------------------------------------------------
@@ -82,24 +51,6 @@ def test_a_clean_preflight_exits_zero(fake_doctor) -> None:
     assert result.exit_code == EXIT_SUCCESS, result.output
 
 
-def test_a_missing_binary_exits_127(fake_doctor) -> None:
-    """The shell's own "command not found", straight out of the exit-code table."""
-    fake_doctor(_MISSING)
-
-    result = cli("doctor")
-
-    assert result.exit_code == EXIT_MISSING_BINARY
-
-
-def test_an_unreachable_backend_exits_5(fake_doctor) -> None:
-    """ENVIRONMENT, not FAILED: nothing the caller asked for went wrong."""
-    fake_doctor(_UNREACHABLE)
-
-    result = cli("doctor")
-
-    assert result.exit_code == EXIT_ENVIRONMENT
-
-
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
@@ -112,7 +63,7 @@ def test_an_unreachable_backend_exits_5(fake_doctor) -> None:
 def test_every_failure_outcome_goes_through_the_exit_code_table(
     fake_doctor, outcome: Outcome, expected: int
 ) -> None:
-    """No exit-code literal lives in `cli/doctor.py`; this is what that buys.
+    """No exit-code literal lives in `commands/doctor/cli.py`; this is what that buys.
 
     Parametrised over the whole failing half of `Outcome` so a future check
     that reports a different one cannot exit with a number nobody chose.
@@ -195,56 +146,3 @@ def test_a_projection_doctor_cannot_produce_is_a_usage_error(fake_doctor) -> Non
     result = cli("doctor", "-o", "yaml")
 
     assert result.exit_code == EXIT_USAGE
-
-
-# --- --for ------------------------------------------------------------------
-
-
-def test_for_runs_only_the_capabilities_that_command_needs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`--for chart validate` must not wait on docker or an events backend."""
-    service = _providers(
-        {
-            "helm": (_HEALTHY,),
-            "kubeconform": (Check.ok("kubeconform", "v0.6.7"),),
-            "kyverno": (Check.ok("kyverno", "v1.13.0"),),
-            "schemas": (Check.ok("schema-store", "ready=true"),),
-            "events": (_UNREACHABLE,),
-        }
-    )
-    monkeypatch.setattr(doctor_cli, "_make_doctor_service", lambda: service)
-
-    result = cli("doctor", "--for", "chart validate", "-o", "json")
-
-    payload = json.loads(result.stdout)
-    assert payload["for"] == "chart validate"
-    assert [check["name"] for check in payload["checks"]] == [
-        "helm",
-        "kubeconform",
-        "kyverno",
-        "schema-store",
-    ]
-    assert result.exit_code == EXIT_SUCCESS, "the unreachable backend was out of scope"
-
-
-def test_an_unknown_for_target_is_a_usage_error_that_lists_the_real_ones(
-    fake_doctor,
-) -> None:
-    """Exit 2 and a list beats exit 5 for a command the user mistyped."""
-    fake_doctor(_HEALTHY)
-
-    result = cli("doctor", "--for", "chart valdiate")
-
-    assert result.exit_code == EXIT_USAGE
-    assert "chart validate" in result.output
-
-
-# --- registration -----------------------------------------------------------
-
-
-def test_doctor_is_a_root_command() -> None:
-    """A preflight is about the process, not about one group."""
-    result = cli("--help")
-
-    assert "doctor" in result.stdout

@@ -24,8 +24,8 @@ from chart_manager.commands.test.run import plan, run, teardown, teardown_plan
 from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.commands import redact
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.settings import DEFAULT_CLUSTER_NAME
 from chart_manager.shared.charts.chart import resolve_chart_target
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 ProfileOption = Annotated[str, typer.Option("--profile", help="Chart-test profile.")]

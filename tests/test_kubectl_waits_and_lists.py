@@ -17,7 +17,9 @@ import pytest
 from chart_manager.integrations import kubectl as kubectl_module
 from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ExternalCommandError
-from tests.conftest import FakeCommandRunner, Reply
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import CheckStatus
+from tests.conftest import FakeCommandRunner, OnPath, Reply, checks_by_name
 
 # ----- wait_certificate_ready -----------------------------------------------
 
@@ -440,3 +442,55 @@ def test_get_json_non_object_payload_raises() -> None:
         Kubectl(runner=runner).get_json(["kubectl", "get", "pods", "-o", "json"])
 
     assert "kubectl JSON payload was not an object" in str(excinfo.value)
+
+
+def test_kubectl_reports_the_ambient_context(on_path: OnPath) -> None:
+    """No pin: the check answers with whatever the kubeconfig points at."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "current-context"), stdout="kind-lab\n")
+
+    checks = checks_by_name(Kubectl(runner).preflight())
+
+    assert checks["kubectl"].detail.startswith("v1.31.0")
+    assert checks["kube-context"].status is CheckStatus.OK
+    assert "kind-lab" in checks["kube-context"].detail
+
+
+def test_no_current_kubecontext_is_an_environment_failure(on_path: OnPath) -> None:
+    """Exit 5, per the table: nothing is missing, the environment is unset."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "current-context"), returncode=1)
+
+    context = checks_by_name(Kubectl(runner).preflight())["kube-context"]
+
+    assert context.status is CheckStatus.FAILED
+    assert context.outcome is Outcome.ENVIRONMENT
+
+
+def test_a_pinned_context_missing_from_the_kubeconfig_fails(on_path: OnPath) -> None:
+    """`CHART_MANAGER_KUBE_CONTEXT` naming a context nobody has is a real bug."""
+    on_path("kubectl")
+    runner = FakeCommandRunner()
+    runner.respond(("kubectl", "version"), stdout='{"clientVersion":{"gitVersion":"v1.31.0"}}')
+    runner.respond(("kubectl", "config", "get-contexts"), stdout="kind-lab\nprod\n")
+
+    context = checks_by_name(Kubectl(runner, context="kind-gone").preflight())["kube-context"]
+
+    assert context.status is CheckStatus.FAILED
+    assert context.outcome is Outcome.ENVIRONMENT
+    assert "kind-lab" in (context.remediation or ""), "say which contexts do exist"
+
+
+def test_the_context_check_is_skipped_when_kubectl_is_absent(on_path: OnPath) -> None:
+    """One broken install, one line of blame -- not two."""
+    on_path()
+
+    checks = checks_by_name(Kubectl(FakeCommandRunner()).preflight())
+
+    assert checks["kubectl"].outcome is Outcome.MISSING_BINARY
+    assert checks["kube-context"].status is CheckStatus.SKIPPED
+    assert checks["kube-context"].outcome is Outcome.SUCCESS, "a skip is not a failure"

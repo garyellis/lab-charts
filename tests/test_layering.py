@@ -395,13 +395,6 @@ def _probe(modules: list[str], forbidden: tuple[str, ...] = _FORBIDDEN_ROOTS) ->
     return proc.stdout.strip()
 
 
-def test_service_modules_are_discoverable() -> None:
-    """Guard the guard: an empty sweep would make the next test vacuously pass."""
-    modules = _modules_under(_SERVICES) + _modules_under(_DOMAIN)
-    assert len(modules) > 2, f"suspiciously few service modules found: {modules}"
-    assert "chart_manager.services.doctor" in modules
-
-
 def test_no_service_module_imports_rich_or_typer() -> None:
     """The service layer must be usable where there is no terminal.
 

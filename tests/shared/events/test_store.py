@@ -23,6 +23,8 @@ from typing import Any
 
 import pytest
 
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
 from chart_manager.shared.events.query import EventQuery, EventReadUnsupportedError
 from chart_manager.shared.events.store import (
@@ -31,6 +33,7 @@ from chart_manager.shared.events.store import (
     DynamoDBEventStore,
     NullEventStore,
     get_event_store,
+    preflight_event_store,
 )
 from tests.conftest import FakeCosmosContainer
 
@@ -251,3 +254,54 @@ def test_unknown_backend_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ValueError, match="unsupported EVENTS_BACKEND"):
         get_event_store()
+
+
+def test_events_disabled_is_a_skip_and_not_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`EVENTS_BACKEND=none` is a supported configuration, so `doctor` stays green."""
+    monkeypatch.setenv("EVENTS_BACKEND", "none")
+
+    (check,) = preflight_event_store()
+
+    assert check.status is CheckStatus.SKIPPED
+    assert check.outcome is Outcome.SUCCESS
+
+
+def test_events_unset_is_reported_disabled_with_the_way_to_enable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Events are opt-in: no EVENTS_BACKEND is the default, not a failure.
+
+    The detail names the switch, because for the disabled-by-default state
+    the report *is* the documentation for turning events on.
+    """
+    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
+
+    (check,) = preflight_event_store()
+
+    assert check.status is CheckStatus.SKIPPED
+    assert check.outcome is Outcome.SUCCESS
+    assert "EVENTS_BACKEND" in check.detail
+
+
+def test_an_unknown_events_backend_is_a_spec_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing is down: the operator wrote something the switch does not accept."""
+    monkeypatch.setenv("EVENTS_BACKEND", "postgres")
+
+    (check,) = preflight_event_store()
+
+    assert check.outcome is Outcome.SPEC
+    assert "postgres" in check.detail
+
+
+def test_an_unconfigured_cosmos_backend_reports_config_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Naming the unset variable beats "connection refused" from an SDK."""
+    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    for variable in ("COSMOS_CONNECTION_STRING", "COSMOS_ENDPOINT"):
+        monkeypatch.delenv(variable, raising=False)
+
+    (check,) = preflight_event_store()
+
+    assert check.outcome is Outcome.ENVIRONMENT
+    assert "COSMOS_ENDPOINT" in check.detail

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import logging
+import shutil
 import tarfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspaceSpec
 from chart_manager.cli._container import reset_invocation
 from chart_manager.plumbing.commands import CommandResult, redact
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.preflight import Check
 from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -124,6 +126,35 @@ def fresh_cli_invocation() -> Iterator[None]:
 def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep a developer's `CHART_MANAGER_ROOT` from redirecting CLI tests."""
     monkeypatch.delenv("CHART_MANAGER_ROOT", raising=False)
+
+
+#: Where the fake PATH lookup claims every binary lives.
+FAKE_BIN = "/opt/fake/bin"
+
+OnPath = Callable[..., None]
+
+
+@pytest.fixture
+def on_path(monkeypatch: pytest.MonkeyPatch) -> OnPath:
+    """Control what `probe_binary` finds on PATH: only the names passed are present."""
+
+    def install(*names: str) -> None:
+        present = set(names)
+
+        def which(binary: str, *args: Any, **kwargs: Any) -> str | None:
+            if binary not in present:
+                return None
+            # An absolute name (a mise-resolved helm) is already a path.
+            return binary if binary.startswith("/") else f"{FAKE_BIN}/{binary}"
+
+        monkeypatch.setattr(shutil, "which", which)
+
+    return install
+
+
+def checks_by_name(checks: Sequence[Check]) -> dict[str, Check]:
+    """Index a preflight result by check name."""
+    return {check.name: check for check in checks}
 
 
 @pytest.fixture

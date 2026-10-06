@@ -1,20 +1,4 @@
-"""`chart-manager doctor` -- the preflight surface.
-
-Thin, and thin in a specific way that is worth stating because the obvious
-implementation is not: **there is no check logic in this file.** No binary
-name, no version flag, no "is the daemon up" heuristic. Each integration
-owns its own preflight (`MY_COMMENTS.md`, and the design doc's P0 bullet);
-`composition.Container.doctor_service` binds those to configured adapters;
-`services/doctor.py` folds the results. What is left here is the three
-things a surface owns: argument shape, projection, and the exit code.
-
-The exit code is the interesting one. `doctor` is the second consumer of
-`plumbing/exit_codes.py` after `commands/promote/cli.py`, and it consumes it the
-same way: the layer below reports a semantic `Outcome`, this layer turns it
-into a number with `exit_code_for`, and no integer literal appears in
-between. That is what keeps "a missing binary is 127" a fact stated once,
-in the table, rather than a convention re-implemented per command.
-"""
+"""`chart-manager doctor`: argument shape, projection and exit code; the checks are in `run`."""
 
 from __future__ import annotations
 
@@ -28,9 +12,10 @@ from rich.table import Table
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
 from chart_manager.cli.streams import console, narration
+from chart_manager.commands.doctor.models import DoctorReport
+from chart_manager.commands.doctor.run import run
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.plumbing.preflight import CheckStatus
-from chart_manager.services.doctor import DoctorReport, DoctorService
 
 #: `doctor` produces a status table or a machine-readable document; there is
 #: no yaml or markdown projection of a preflight to offer.
@@ -39,18 +24,6 @@ _DOCTOR_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 OutputOption = Annotated[
     str | None,
     output_mod.output_option(output_mod.TABLE, output_mod.JSON),
-]
-
-ForOption = Annotated[
-    str | None,
-    typer.Option(
-        "--for",
-        metavar="COMMAND",
-        help=(
-            "Only check what one command needs, e.g. --for 'chart validate'. "
-            "Default: everything."
-        ),
-    ),
 ]
 
 #: Status -> the glyph and Rich style the table renders it with. A table so
@@ -62,15 +35,6 @@ _STATUS_STYLE: dict[CheckStatus, tuple[str, str]] = {
 }
 
 
-def _make_doctor_service() -> DoctorService:
-    """Build the default DoctorService (module-level so tests can override).
-
-    Adapter wiring lives in the composition root; this function exists only so
-    a test can inject fake providers without a real helm on the developer's PATH.
-    """
-    return container().doctor_service()
-
-
 def register(app: typer.Typer) -> None:
     """Mount `doctor` onto the root app."""
     app.command("doctor")(doctor)
@@ -78,7 +42,6 @@ def register(app: typer.Typer) -> None:
 
 def doctor(
     ctx: typer.Context,
-    for_: ForOption = None,
     output: OutputOption = None,
 ) -> None:
     """Check that the tools, kubecontext and backends this CLI needs are usable.
@@ -96,14 +59,12 @@ def doctor(
     4 when a tool is installed but broken. Most fundamental failure wins.
     """
     mode = output_mod.resolve(output, ctx, allowed=_DOCTOR_OUTPUTS, console=console)
-    service = _make_doctor_service()
-    if for_ is not None and for_ not in service.commands():
-        raise typer.BadParameter(
-            f"unknown command: {for_} (known: {', '.join(service.commands())})",
-            param_hint="--for",
-        )
-
-    report = service.run(for_command=for_)
+    invocation = container()
+    report = run(
+        settings=invocation.settings,
+        runner=invocation.command_runner(),
+        workspace=invocation.workspace,
+    )
 
     if mode == output_mod.JSON:
         typer.echo(json.dumps(report.to_dict(), indent=2))
@@ -143,8 +104,7 @@ def _summarize(report: DoctorReport) -> None:
     """
     failed = [check for check in report.checks if check.status is CheckStatus.FAILED]
     if not failed:
-        scope = "" if report.selector is None else f" for `{report.selector}`"
-        narration.print(f"[green]all {len(report.checks)} checks passed{scope}[/green]")
+        narration.print(f"[green]all {len(report.checks)} checks passed[/green]")
         return
     names = ", ".join(check.name for check in failed)
     narration.print(f"[red]{len(failed)} of {len(report.checks)} checks failed:[/red] {names}")

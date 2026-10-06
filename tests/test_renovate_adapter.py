@@ -12,7 +12,9 @@ from chart_manager.plumbing.errors import (
     ChartManagerError,
     MissingToolError,
 )
-from tests.conftest import FakeCommandRunner
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import CheckStatus, probe_binary
+from tests.conftest import FakeCommandRunner, OnPath, checks_by_name
 
 
 def _config(root: Path, name: str = "renovate-global.json") -> Path:
@@ -210,3 +212,49 @@ def test_missing_config_and_invalid_overlay_use_expected_error_hierarchy(
                 runtime_overlay={"bad": object()},
             )
         )
+
+
+def test_presence_only_probes_skip_the_subprocess(on_path: OnPath) -> None:
+    """Some tools have no version flag; asking anyway would report them broken."""
+    on_path("renovate-config-validator")
+    runner = FakeCommandRunner(when_exhausted="raise")
+
+    check = probe_binary(
+        runner,
+        "renovate-config-validator",
+        name="renovate-config-validator",
+        version_args=(),
+        remediation="npm install -g renovate",
+    )
+
+    assert check.status is CheckStatus.OK
+    assert runner.calls == []
+
+
+def test_renovate_reports_a_missing_token_as_environment(
+    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Required configuration is a per-integration preflight matter (MY_COMMENTS.md)."""
+    on_path("renovate", "renovate-config-validator")
+    for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(variable, raising=False)
+
+    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
+    token = checks["renovate-token"]
+
+    assert token.status is CheckStatus.FAILED
+    assert token.outcome is Outcome.ENVIRONMENT
+
+
+def test_renovate_accepts_the_ci_token_it_actually_falls_back_to(
+    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composition root reads GITHUB_TOKEN as the fallback; so must the check."""
+    on_path("renovate", "renovate-config-validator")
+    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_fake")
+
+    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
+    token = checks["renovate-token"]
+
+    assert token.status is CheckStatus.OK

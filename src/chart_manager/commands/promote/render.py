@@ -23,8 +23,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from chart_manager.commands.promote import MonitorResult, PromoteResult, TestResult, Transition
-from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS
+from chart_manager.commands.promote.monitor import MonitorResult
+from chart_manager.commands.promote.pr import PromoteResult
+from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS, Transition
+from chart_manager.commands.promote.test import TestResult
 from chart_manager.commands.promote.wire import monitor_to_dict, promote_to_dict, test_to_dict
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 

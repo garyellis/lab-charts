@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import local
+from chart_manager.commands.local import run as local_run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import ResolvedChartTarget
@@ -68,7 +69,7 @@ def _installs(runner: FakeCommandRunner) -> list[str]:
 
 
 def _up(repo: Path, runner: FakeCommandRunner, **options: object) -> local.DevClusterResult:
-    return local.up(
+    return local_run.up(
         _target(repo),
         workspace=load_repository_workspace(repo),
         runner=runner,
@@ -126,7 +127,7 @@ def test_skip_installed_skips_deployed_and_failed_releases(repo: Path) -> None:
 def test_reset_runs_the_pre_hook_once_then_deletes_and_recreates_the_cluster(repo: Path) -> None:
     runner = _runner("chart-manager")
 
-    local.reset(
+    local_run.reset(
         _target(repo),
         workspace=load_repository_workspace(repo),
         runner=runner,
@@ -147,7 +148,7 @@ def test_down_stops_the_running_nodes(repo: Path) -> None:
         lambda argv: argv[:2] == ("docker", "ps"), stdout="chart-manager-control-plane\n"
     )
 
-    result = local.down(runner=runner, settings=Settings())
+    result = local_run.down(runner=runner, settings=Settings())
 
     assert result.changed
     assert ("docker", "stop", "chart-manager-control-plane") in runner.calls
@@ -156,7 +157,7 @@ def test_down_stops_the_running_nodes(repo: Path) -> None:
 def test_status_of_an_absent_cluster_says_so_and_asks_nothing_else(repo: Path) -> None:
     runner = _runner()
 
-    status = local.status(
+    status = local_run.status(
         workspace=load_repository_workspace(repo), runner=runner, settings=Settings()
     )
 
@@ -171,7 +172,7 @@ def test_status_lists_releases_sorted_by_namespace_and_name(repo: Path) -> None:
     )
     runner = _runner("chart-manager").respond(argv_prefix("helm", "list"), stdout=listing)
 
-    status = local.status(
+    status = local_run.status(
         workspace=load_repository_workspace(repo), runner=runner, settings=Settings()
     )
 
@@ -183,7 +184,7 @@ def test_status_lists_releases_sorted_by_namespace_and_name(repo: Path) -> None:
 
 
 def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path) -> None:
-    plan = local.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
 
     assert [(e.chart, e.source) for e in plan.entries] == [
         ("db", "target"),
@@ -194,7 +195,7 @@ def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path
 
 def test_plan_fails_on_an_unresolvable_profile_like_the_real_run(repo: Path) -> None:
     with pytest.raises(ChartManagerError):
-        local.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing")
+        local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing")
 
 
 def test_plan_warns_that_local_up_does_not_run_chart_test_hooks(
@@ -206,7 +207,7 @@ def test_plan_warns_that_local_up_does_not_run_chart_test_hooks(
     )
     events: list[ProgressEvent] = []
 
-    local.plan(
+    local_run.plan(
         _target(repo),
         workspace=load_repository_workspace(repo),
         profile=None,
@@ -228,7 +229,7 @@ def test_plan_leaves_out_a_requirement_bootstrap_installs(repo: Path) -> None:
         )
     )
 
-    plan = local.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
 
     assert [(e.chart, e.source) for e in plan.entries] == [("db", "bootstrap"), ("app", "target")]
 
@@ -238,7 +239,7 @@ def test_status_records_a_failed_release_listing_instead_of_raising(repo: Path) 
         argv_prefix("helm", "list"), returncode=1, stderr="unreachable"
     )
 
-    status = local.status(
+    status = local_run.status(
         workspace=load_repository_workspace(repo), runner=runner, settings=Settings()
     )
 
@@ -247,7 +248,7 @@ def test_status_records_a_failed_release_listing_instead_of_raising(repo: Path) 
 
 
 def test_status_survives_a_repository_with_no_local_cluster(chart_root: Path) -> None:
-    status = local.status(
+    status = local_run.status(
         workspace=load_repository_workspace(chart_root),
         runner=_runner("chart-manager"),
         settings=Settings(),

@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from chart_manager.commands.promote import TestRequest, TestResult, Transition
-from chart_manager.commands.promote.test import run
+from chart_manager.commands.promote.state import Transition
+from chart_manager.commands.promote.test import TestRequest, TestResult, run
 from chart_manager.integrations.helmrelease import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout
 from chart_manager.plumbing.text import truncate_bytes

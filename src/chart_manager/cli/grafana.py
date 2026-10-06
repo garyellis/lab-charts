@@ -25,7 +25,7 @@ from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import ClusterNameOption
 from chart_manager.cli.streams import console, narration
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.shared.cluster.session import DEFAULT_CLUSTER_NAME
+from chart_manager.settings import DEFAULT_CLUSTER_NAME
 
 #: Where the lab's Grafana runs: the namespace `charts/grafana` declares for
 #: its chart-test profiles. Owned here, not borrowed from a fallback.

@@ -18,8 +18,6 @@ from chart_manager.settings import Settings
 from chart_manager.shared.charts import dependencies
 from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 
-DEFAULT_CLUSTER_NAME = "chart-manager"
-
 
 @dataclass(frozen=True)
 class Session:

@@ -27,6 +27,7 @@ dev = [
   "mypy>=1.13",
   "vulture>=2.13",
   "pip-audit>=2.7",
+  "import-linter>=2.15",
 ]
 
 [project.scripts]
@@ -233,6 +234,33 @@ plugins = ["pydantic.mypy"]
 # Ignored vulnerabilities: none currently. If a no-fix-available CVE
 # surfaces, add `--ignore-vuln GHSA-xxxx-xxxx-xxxx` to the mise task with
 # a comment naming the upstream tracking issue and a revisit date.
+
+[tool.importlinter]
+root_package = "chart_manager"
+
+[[tool.importlinter.contracts]]
+name = "Leaf commands are independent; composites import only a leaf's root"
+type = "independence"
+modules = ["chart_manager.commands.*"]
+ignore_imports = [
+  "chart_manager.commands.plan.** -> chart_manager.commands.*",
+  "chart_manager.commands.doctor.** -> chart_manager.commands.*",
+]
+
+[[tool.importlinter.contracts]]
+name = "Composites never import each other"
+type = "independence"
+modules = ["chart_manager.commands.plan", "chart_manager.commands.doctor"]
+
+[[tool.importlinter.contracts]]
+name = "Command roots load no integration; validate's schema check is the one exception"
+type = "forbidden"
+source_modules = ["chart_manager.commands.*"]
+forbidden_modules = ["chart_manager.integrations.**"]
+as_packages = false
+ignore_imports = [
+  "chart_manager.commands.validate.schemas.store -> chart_manager.integrations.kubeconform.repository_snapshot",
+]
 
 [tool.vulture]
 # Dead-code detection. min_confidence=80 keeps signal high; lower thresholds

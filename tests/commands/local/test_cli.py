@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.cli import _container
-from chart_manager.commands import local
+from chart_manager.commands.local import run as local_run
 from chart_manager.commands.local.models import (
     DevClusterActionResult,
     DevClusterPlan,
@@ -245,7 +245,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingService:
     """Route every `local` command at one recording stand-in."""
     service = _RecordingService()
     for name in ("up", "reset", "down", "status", "plan", "plan_down"):
-        monkeypatch.setattr(local, name, getattr(service, name))
+        monkeypatch.setattr(local_run, name, getattr(service, name))
     return service
 
 
@@ -342,7 +342,7 @@ def test_status_exits_zero_for_an_absent_cluster(
 ) -> None:
     """`status` reports; it does not grade. An absent cluster is the answer."""
     monkeypatch.setattr(
-        local,
+        local_run,
         "status",
         lambda **_options: DevClusterStatus(cluster_name="chart-manager", exists=False),
     )

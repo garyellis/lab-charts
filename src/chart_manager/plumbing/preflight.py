@@ -17,7 +17,7 @@ Why the result carries an `Outcome` rather than an exit code
 ------------------------------------------------------------
 `Check.outcome` is the semantic vocabulary from `plumbing/exit_codes.py`, so
 an adapter states "this is a missing binary" or "this is an environment
-problem" and never "this is 127". The number is `cli/doctor.py`'s call,
+problem" and never "this is 127". The number is `commands/doctor/cli.py`'s call,
 looked up through `exit_code_for` exactly like `commands/promote/cli.py` looks up
 a promote outcome. An adapter that wrote an integer here would be the second
 place in the codebase that decides what a failure is worth, which is the

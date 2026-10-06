@@ -29,37 +29,18 @@ Everything addressed by a `root` stays per-call and unmemoized on purpose:
 `root` is a per-invocation argument rather than configuration, so a memo
 would need it as a key, and each of these constructions is path arithmetic
 with no I/O behind it.
-
-Test seams
-----------
-Surfaces keep their module-level `_make_*` factories (see `cli/doctor.py`)
-and delegate the body to a container. Tests that
-`monkeypatch.setattr(module, "_make_x_service", ...)` keep working unchanged;
-tests that want real services with fake adapters can subclass `Container` or
-pass a `Settings`.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.integrations.git import Git
-from chart_manager.integrations.github import Github
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind
-from chart_manager.integrations.kubeconform import (
-    Kubeconform,
-)
 from chart_manager.integrations.kubectl import Kubectl
-from chart_manager.integrations.kyverno import Kyverno
-from chart_manager.integrations.renovate import Renovate
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.errors import WorkspaceNotFoundError
-from chart_manager.services.doctor import CheckProvider, DoctorService
 from chart_manager.settings import Settings, load_settings
 from chart_manager.shared.charts import dependencies as chart_deps
-from chart_manager.shared.events.store import preflight_event_store
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
     load_repository_workspace,
@@ -137,45 +118,3 @@ class Container:
             docker_host=self._settings.docker_host,
             timeout=self._settings.command_timeout,
         )
-
-    # --- capabilities -----------------------------------------------------
-
-    def doctor_service(self, root: Path | None = None) -> DoctorService:
-        """Assemble the preflight providers, one per capability.
-
-        This is the whole of `doctor`'s wiring, and it is deliberately dull:
-        every value is a *bound method on a configured adapter*, so each
-        check runs against exactly the helm binary, kube context and docker
-        daemon the real command would use. A provider built any other way --
-        a lambda constructing its own adapter, a check implemented in `cli/`
-        -- would be free to probe a different tool than the one that then
-        fails, which is the failure mode a preflight exists to remove.
-
-        Insertion order is the report order: toolchain first (the things you
-        install), then the cluster-facing pair, then the repository tools,
-        then telemetry. `DoctorService` preserves it rather than sorting, so
-        the order is decided here, next to the reasoning.
-
-        Outside a chart repository the schema checks are skipped, and git/gh
-        probe `root`, else `Settings.root` (the working directory by default).
-        """
-        runner = self.command_runner()
-        try:
-            workspace: RepositoryWorkspace | None = self.workspace(root)
-            schemas = KubeconformSchemaDoctor(workspace)
-        except WorkspaceNotFoundError as exc:
-            workspace, schemas = None, KubeconformSchemaDoctor(None, skip_reason=str(exc))
-        probe_root = workspace.root if workspace else (root or self._settings.root).resolve()
-        providers: dict[str, CheckProvider] = {
-            "helm": self.helm().preflight,
-            "kubeconform": Kubeconform(runner, timeout=self._settings.command_timeout).preflight,
-            "kyverno": Kyverno(runner, timeout=self._settings.command_timeout).preflight,
-            "kubectl": self.kubectl().preflight,
-            "kind": self.kind().preflight,
-            "git": Git(probe_root, runner).preflight,
-            "github": Github(probe_root, runner).preflight,
-            "renovate": Renovate(runner).preflight,
-            "schemas": schemas.preflight,
-            "events": preflight_event_store,
-        }
-        return DoctorService(providers)

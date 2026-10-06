@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from chart_manager.commands import validate
+from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import write_validation_chart
@@ -28,7 +29,7 @@ def widget_chart(root: Path, manifest: str = WIDGET, **validation: object) -> No
 
 
 def schema_check(workspace: RepositoryWorkspace) -> validate.CheckResult:
-    outcome = validate.run(
+    outcome = run(
         validate.ValidateRequest(
             out=workspace.root / "out", charts=("demo",), checks=frozenset({"render", "schema"})
         ),
