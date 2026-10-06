@@ -14,7 +14,7 @@ import pytest
 from chart_manager.commands.promote.fanout import run_fanout, run_matched
 from chart_manager.commands.promote.state import NO_MATCH_REF, Stage, Verdict
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
-from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import EventLog

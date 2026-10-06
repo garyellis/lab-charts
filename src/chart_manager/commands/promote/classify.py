@@ -1,6 +1,6 @@
 """Reading a HelmRelease status: is this release done, and if not, why not?
 
-Pure by construction -- no HelmRelease client, no clock, no cancellation. Everything
+Pure by construction -- no kubectl, no clock, no cancellation. Everything
 here is a function of one status snapshot plus the workload rollouts observed
 alongside it, which is what makes the Flux condition semantics reviewable in
 one screen instead of spread across a polling loop that also owns backoff,
@@ -14,7 +14,7 @@ documented condition semantics, and it is now directly unit-testable.
 
 Deliberately *not* in `state.py`: that module is the vocabulary shared by
 monitor, test, promote, wire and the CLI renderer. These rules are the
-rollout watcher's alone, and they drag in `integrations.helmrelease` status types
+rollout watcher's alone, and they drag in `integrations.kubectl` status types
 that the vocabulary does not otherwise need.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from chart_manager.commands.promote.state import (
     Verdict,
     coerce_reason,
 )
-from chart_manager.integrations.helmrelease import HelmReleaseStatus, WorkloadRollout
+from chart_manager.integrations.kubectl import HelmReleaseStatus, WorkloadRollout
 
 __all__ = [
     "Decision",

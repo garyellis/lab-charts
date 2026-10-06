@@ -9,7 +9,7 @@ import pytest
 
 from chart_manager.commands.promote.monitor import MonitorRequest, MonitorResult, run
 from chart_manager.commands.promote.state import DETAIL_MAX, Reason, Transition
-from chart_manager.integrations.helmrelease import HelmReleaseRef
+from chart_manager.integrations.kubectl import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter

@@ -23,7 +23,7 @@ from chart_manager.commands.promote.state import (
 )
 from chart_manager.commands.promote.test import TestOutcome, TestResult
 from chart_manager.integrations.github import PullRequest
-from chart_manager.integrations.helmrelease import (
+from chart_manager.integrations.kubectl import (
     ConditionSnapshot,
     HelmReleaseRef,
     HelmReleaseStatus,

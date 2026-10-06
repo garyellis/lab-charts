@@ -8,13 +8,13 @@ that cost is visible to whoever changes the fan-out, and so the known N+1
 """
 from __future__ import annotations
 
-from chart_manager.integrations.helmrelease import HelmReleaseClient, HelmReleaseStatus
+from chart_manager.integrations.kubectl import HelmReleaseStatus, Kubectl
 
 __all__ = ["filter_matched_statuses"]
 
 
 def filter_matched_statuses(
-    client: HelmReleaseClient,
+    kubectl: Kubectl,
     *,
     namespace: str | None,
     chart_name: str,
@@ -28,12 +28,12 @@ def filter_matched_statuses(
     desired_chart_version) here keeps each subservice's fan-out targeting
     consistent.
     """
-    refs = client.list(namespace=namespace, timeout=per_poll)
+    refs = kubectl.list_helmreleases(namespace=namespace, timeout=per_poll)
     matched: list[HelmReleaseStatus] = []
     for ref in refs:
         if namespace is not None and ref.namespace != namespace:
             continue
-        status = client.get_status(ref, timeout=per_poll)
+        status = kubectl.get_helmrelease_status(ref, timeout=per_poll)
         if (
             status.desired_chart_name == chart_name
             and status.desired_chart_version == version

@@ -28,7 +28,7 @@ from chart_manager.commands.promote.pr import PromoteResult
 from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS, Transition
 from chart_manager.commands.promote.test import TestResult
 from chart_manager.commands.promote.wire import monitor_to_dict, promote_to_dict, test_to_dict
-from chart_manager.integrations.helmrelease import HelmReleaseRef
+from chart_manager.integrations.kubectl import HelmReleaseRef
 
 _LOG = logging.getLogger(__name__)
 

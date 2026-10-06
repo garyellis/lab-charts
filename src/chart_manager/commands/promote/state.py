@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from chart_manager.integrations.helmrelease import HelmReleaseRef
+from chart_manager.integrations.kubectl import HelmReleaseRef
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.events.model import PromotionPhase
 

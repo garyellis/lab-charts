@@ -30,13 +30,12 @@ from chart_manager.commands.promote.state import (
     Verdict,
 )
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
-from chart_manager.integrations.helmrelease import (
-    HelmReleaseClient,
+from chart_manager.integrations.kubectl import (
     HelmReleaseRef,
     HelmReleaseStatus,
+    Kubectl,
     WorkloadRollout,
 )
-from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
@@ -176,15 +175,12 @@ def run(
     (kubectl/watcher crashes) raise, after cancelling peer watchers.
     `progress` hears each recorded transition; the time sources are for tests.
     """
-    # Both adapters share one kubectl, so the HelmRelease queries and the
-    # diagnostics events address the same cluster.
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
-    client = HelmReleaseClient(kubectl)
-    watcher = _Watcher(client, kubectl, sleep, clock, rand, progress)
+    watcher = _Watcher(kubectl, sleep, clock, rand, progress)
     start = clock()
     per_poll = request.per_poll_timeout_seconds
     matched = filter_matched_statuses(
-        client,
+        kubectl,
         namespace=request.namespace,
         chart_name=request.chart_name,
         version=request.version,
@@ -242,7 +238,6 @@ def run(
 class _Watcher:
     """Polls one HelmRelease to a verdict; one instance serves every watcher thread."""
 
-    client: HelmReleaseClient
     kubectl: Kubectl
     sleep: Callable[[float], None]
     clock: Callable[[], float]
@@ -419,7 +414,7 @@ class _Watcher:
         back as a Terminal rather than as another `None`.
         """
         try:
-            return self.client.get_status(state.ref, timeout=per_poll)
+            return self.kubectl.get_helmrelease_status(state.ref, timeout=per_poll)
         except ExternalCommandError as exc:
             stderr = (exc.stderr or str(exc)).strip()
             if "NotFound" in stderr or "not found" in stderr:
@@ -449,7 +444,7 @@ class _Watcher:
         converge, and the budget is what decides how long we keep asking.
         """
         try:
-            return tuple(self.client.list_owned_workloads(state.ref, timeout=per_poll))
+            return tuple(self.kubectl.list_owned_workloads(state.ref, timeout=per_poll))
         except ExternalCommandError as exc:
             stderr = (exc.stderr or str(exc)).strip()
             self._record_deduped(

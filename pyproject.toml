@@ -252,6 +252,11 @@ containers = ["chart_manager.shared"]
 layers = ["cluster", "charts | events", "workspace"]
 
 [[tool.importlinter.contracts]]
+name = "Integrations are independent"
+type = "independence"
+modules = ["chart_manager.integrations.*"]
+
+[[tool.importlinter.contracts]]
 name = "Leaf commands are independent; composites import only a leaf's root"
 type = "independence"
 modules = ["chart_manager.commands.*"]

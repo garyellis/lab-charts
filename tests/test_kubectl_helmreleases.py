@@ -1,11 +1,11 @@
-"""argv-level coverage for `integrations/helmrelease.py` (was `flux.py`).
+"""argv-level coverage for the Flux HelmRelease queries in `integrations/kubectl.py`
+(was `helmrelease.py`, and before that `flux.py`).
 
-The client is constructed through a real `Kubectl` over a fake
-`CommandRunner` rather than a mock: composing the kubectl adapter is what
-gives it its `--context` pin and its JSON-parse policy, so faking the
-adapter would stop testing the thing that changed. The pod/event tests
-that used to live here moved with their methods to
-`test_kubectl_waits_and_lists.py`.
+The queries run through a real `Kubectl` over a fake `CommandRunner`
+rather than a mock: the kubectl adapter is what gives them their
+`--context` pin and their JSON-parse policy, so faking the adapter would
+stop testing them. The pod/event tests that used to live here moved with
+their methods to `test_kubectl_waits_and_lists.py`.
 """
 from __future__ import annotations
 
@@ -14,11 +14,7 @@ from datetime import UTC
 
 import pytest
 
-from chart_manager.integrations.helmrelease import (
-    HelmReleaseClient,
-    HelmReleaseRef,
-)
-from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.kubectl import HelmReleaseRef, Kubectl
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from tests.conftest import FakeCommandRunner, Reply
 
@@ -75,7 +71,7 @@ def test_list_parses_mixed_v2_and_v2beta2_payload() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    refs = HelmReleaseClient(Kubectl(runner=runner)).list()
+    refs = Kubectl(runner=runner).list_helmreleases()
     assert [(r.name, r.release_name) for r in refs] == [
         ("loki", "loki-prod"),
         ("grafana", "grafana"),
@@ -93,7 +89,7 @@ def test_list_empty_release_name_falls_back_to_metadata_name() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.release_name == "loki"
 
 
@@ -111,7 +107,7 @@ def test_list_release_name_prefixed_with_target_namespace() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.release_name == "cert-manager-cert-manager"
     assert ref.target_namespace == "cert-manager"
     assert ref.storage_namespace == "cert-manager"
@@ -132,7 +128,7 @@ def test_list_explicit_release_name_overrides_target_namespace_prefix() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.release_name == "custom"
 
 
@@ -151,7 +147,7 @@ def test_list_empty_release_name_with_target_namespace_uses_prefix() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.release_name == "ns-loki"
 
 
@@ -169,7 +165,7 @@ def test_list_storage_namespace_from_spec_storage_namespace() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.storage_namespace == "loki-storage"
     assert ref.target_namespace == "loki"
 
@@ -185,7 +181,7 @@ def test_list_storage_namespace_falls_back_to_target_namespace() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.storage_namespace == "loki"
 
 
@@ -200,7 +196,7 @@ def test_list_storage_namespace_falls_back_to_metadata_namespace() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [ref] = HelmReleaseClient(Kubectl(runner=runner)).list()
+    [ref] = Kubectl(runner=runner).list_helmreleases()
     assert ref.storage_namespace == "loki"
 
 
@@ -220,19 +216,19 @@ def test_list_target_namespace_independent_of_storage() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    refs = HelmReleaseClient(Kubectl(runner=runner)).list()
+    refs = Kubectl(runner=runner).list_helmreleases()
     assert [r.target_namespace for r in refs] == ["loki-target", "grafana-ns"]
 
 
 def test_list_propagates_external_error_when_crds_absent() -> None:
     runner = _scripted([_fail("error: the server doesn't have a resource type", returncode=1)])
     with pytest.raises(ExternalCommandError):
-        HelmReleaseClient(Kubectl(runner=runner)).list()
+        Kubectl(runner=runner).list_helmreleases()
 
 
 def test_list_empty_items_returns_empty_list() -> None:
     runner = _scripted([_ok(json.dumps({"items": []}))])
-    assert HelmReleaseClient(Kubectl(runner=runner)).list() == []
+    assert Kubectl(runner=runner).list_helmreleases() == []
 
 
 # ----- get_status ----------------------------------------------------------
@@ -257,7 +253,7 @@ def test_get_status_parses_tz_aware_last_transition_time() -> None:
         },
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    status = HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref())
+    status = Kubectl(runner=runner).get_helmrelease_status(_ref())
     assert status.observed_generation == 3
     ready = status.ready
     assert ready is not None
@@ -273,7 +269,7 @@ def test_get_status_with_absent_status_block() -> None:
         "spec": {},
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    status = HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref())
+    status = Kubectl(runner=runner).get_helmrelease_status(_ref())
     assert status.observed_generation == -1
     assert status.conditions == ()
     assert status.observed_at.tzinfo == UTC
@@ -291,7 +287,7 @@ def test_get_status_unparseable_timestamp_is_none() -> None:
         },
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    status = HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref())
+    status = Kubectl(runner=runner).get_helmrelease_status(_ref())
     assert status.conditions[0].last_transition_time is None
 
 
@@ -303,7 +299,7 @@ def test_get_status_exposes_suspended_flag() -> None:
         "status": {},
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    assert HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref()).suspended is True
+    assert Kubectl(runner=runner).get_helmrelease_status(_ref()).suspended is True
 
 
 def test_get_status_exposes_desired_chart_fields() -> None:
@@ -314,7 +310,7 @@ def test_get_status_exposes_desired_chart_fields() -> None:
         "status": {},
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    status = HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref())
+    status = Kubectl(runner=runner).get_helmrelease_status(_ref())
     assert status.desired_chart_name == "loki"
     assert status.desired_chart_version == "0.2.0"
 
@@ -332,7 +328,7 @@ def test_get_status_exposes_history_chart_version() -> None:
         },
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    assert HelmReleaseClient(Kubectl(runner=runner)).get_status(_ref()).history_chart_version == "0.1.9"
+    assert Kubectl(runner=runner).get_helmrelease_status(_ref()).history_chart_version == "0.1.9"
 
 
 # ----- list_owned_workloads -----------------------------------------------
@@ -365,7 +361,7 @@ def test_list_owned_workloads_parses_mixed_kinds_converged() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    rollouts = HelmReleaseClient(Kubectl(runner=runner)).list_owned_workloads(_ref())
+    rollouts = Kubectl(runner=runner).list_owned_workloads(_ref())
     assert [r.workload.kind for r in rollouts] == ["Deployment", "DaemonSet"]
     assert all(r.converged for r in rollouts)
 
@@ -386,7 +382,7 @@ def test_list_owned_workloads_not_converged_when_observed_generation_lags() -> N
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [rollout] = HelmReleaseClient(Kubectl(runner=runner)).list_owned_workloads(_ref())
+    [rollout] = Kubectl(runner=runner).list_owned_workloads(_ref())
     assert rollout.converged is False
 
 
@@ -407,7 +403,7 @@ def test_list_owned_workloads_daemonset_uses_daemonset_fields() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [rollout] = HelmReleaseClient(Kubectl(runner=runner)).list_owned_workloads(_ref())
+    [rollout] = Kubectl(runner=runner).list_owned_workloads(_ref())
     assert rollout.workload.desired == 4
     assert rollout.workload.ready == 3
     assert rollout.workload.available == 2
@@ -428,7 +424,7 @@ def test_list_owned_workloads_zero_replica_deployment_is_converged() -> None:
         ]
     }
     runner = _scripted([_ok(json.dumps(payload))])
-    [rollout] = HelmReleaseClient(Kubectl(runner=runner)).list_owned_workloads(_ref())
+    [rollout] = Kubectl(runner=runner).list_owned_workloads(_ref())
     assert rollout.workload.desired == 0
     assert rollout.converged is True
 
@@ -464,7 +460,7 @@ def test_list_test_pods_unions_hook_queries_dedupes_and_returns_phase() -> None:
     runner = _scripted(
         [_ok(json.dumps(test_payload)), _ok(json.dumps(test_success_payload))]
     )
-    pods = HelmReleaseClient(Kubectl(runner=runner)).list_test_pods(_ref())
+    pods = Kubectl(runner=runner).list_test_pods(_ref())
     assert pods == [
         ("loki", "loki-test", "Running"),
         ("loki", "loki-shared", "Succeeded"),
@@ -485,7 +481,7 @@ def test_get_json_non_json_stdout_raises_external_command_error() -> None:
     """
     runner = _scripted([_ok("not actually json " + "x" * 500)])
     with pytest.raises(ExternalCommandError) as excinfo:
-        HelmReleaseClient(Kubectl(runner=runner)).list()
+        Kubectl(runner=runner).list_helmreleases()
     assert "kubectl JSON" in str(excinfo.value)
     assert "not actually json" in str(excinfo.value)
     assert isinstance(excinfo.value, ChartManagerError)
@@ -497,7 +493,7 @@ def test_get_json_non_json_stdout_raises_external_command_error() -> None:
 def test_context_kwarg_appends_kubectl_flag_on_list() -> None:
     payload = {"items": []}
     runner = _scripted([_ok(json.dumps(payload))])
-    HelmReleaseClient(Kubectl(runner=runner, context="kind-foo")).list()
+    Kubectl(runner=runner, context="kind-foo").list_helmreleases()
     argv = runner.calls[0]
     assert argv[-2:] == ("--context", "kind-foo")
 
@@ -505,6 +501,6 @@ def test_context_kwarg_appends_kubectl_flag_on_list() -> None:
 def test_context_default_omits_kubectl_flag() -> None:
     payload = {"items": []}
     runner = _scripted([_ok(json.dumps(payload))])
-    HelmReleaseClient(Kubectl(runner=runner)).list()
+    Kubectl(runner=runner).list_helmreleases()
     assert "--context" not in runner.calls[0]
 

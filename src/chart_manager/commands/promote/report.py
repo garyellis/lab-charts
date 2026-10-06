@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from chart_manager.commands.promote.state import DETAIL_MAX, ReasonLike, Verdict
-from chart_manager.integrations.helmrelease import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.text import truncate_lines
 

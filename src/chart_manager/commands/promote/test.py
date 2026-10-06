@@ -28,12 +28,7 @@ from chart_manager.commands.promote.state import (
 )
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helm import Helm, format_helm_duration
-from chart_manager.integrations.helmrelease import (
-    HelmReleaseClient,
-    HelmReleaseRef,
-    HelmReleaseStatus,
-)
-from chart_manager.integrations.kubectl import Kubectl
+from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus, Kubectl
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
@@ -206,10 +201,7 @@ def run(
     propagates; other crashes are wrapped as ChartManagerError. `progress`
     hears each phase; the time sources are for tests.
     """
-    # One kubectl serves the HelmRelease queries and the pod/event calls, so
-    # both address the same cluster.
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
-    client = HelmReleaseClient(kubectl)
     # verbose=False: concurrent `helm test` streams would interleave; the
     # output is captured onto each outcome instead.
     helm = Helm(
@@ -219,10 +211,10 @@ def run(
         deps_are_fresh=dependencies.deps_are_fresh,
         chart_has_dependencies=dependencies.chart_has_dependencies,
     )
-    tester = _Tester(client, kubectl, helm, clock, progress)
+    tester = _Tester(kubectl, helm, clock, progress)
     start = clock()
     matched = filter_matched_statuses(
-        client,
+        kubectl,
         namespace=request.namespace,
         chart_name=request.chart_name,
         version=request.version,
@@ -281,7 +273,6 @@ def run(
 class _Tester:
     """Runs the per-HelmRelease pipeline; one instance serves every worker thread."""
 
-    client: HelmReleaseClient
     kubectl: Kubectl
     helm: Helm
     clock: Callable[[], float]
@@ -356,7 +347,7 @@ class _Tester:
         """
         self._fire(ctx, "Reaping", "checking for existing test pods")
         try:
-            pods = self.client.list_test_pods(
+            pods = self.kubectl.list_test_pods(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
         except ExternalCommandError as exc:
@@ -650,7 +641,7 @@ class _Tester:
         the pre-run status it falls back to, so the detail comes back with it.
         """
         try:
-            status = self.client.get_status(
+            status = self.kubectl.get_helmrelease_status(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
             return status, None
@@ -759,7 +750,7 @@ class _Tester:
         empty list.
         """
         try:
-            pods = self.client.list_test_pods(
+            pods = self.kubectl.list_test_pods(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
             )
         except ExternalCommandError as exc:
