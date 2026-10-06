@@ -24,6 +24,7 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli._options import ClusterNameOption
 from chart_manager.cli.streams import console, narration
+from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.settings import DEFAULT_CLUSTER_NAME
 
@@ -45,12 +46,6 @@ DashboardOutputOption = Annotated[
     str | None,
     output_mod.output_option(*_DASHBOARD_OUTPUTS),
 ]
-
-
-def register(app: typer.Typer) -> None:
-    """Attach the dashboard commands to the `grafana dashboard` Typer group."""
-    app.command("export")(grafana_dashboard_export)
-    app.command("lint")(grafana_dashboard_lint)
 
 
 def grafana_dashboard_export(
@@ -107,7 +102,13 @@ def grafana_dashboard_export(
     request = ExportRequest(
         uid=uid, cluster_name=cluster_name, namespace=namespace, release=release
     )
-    dashboard = export(request, _container().kubectl())
+    invocation = _container()
+    kubectl = Kubectl(
+        invocation.command_runner(),
+        context=invocation.settings.kube_context,
+        timeout=invocation.settings.command_timeout,
+    )
+    dashboard = export(request, kubectl)
     if to is not None:
         try:
             to.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +224,3 @@ def grafana_dashboard_lint(
         )
         raise typer.Exit(code=exit_code_for(Outcome.FAILED))
     narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
-
-
-__all__ = ["register"]

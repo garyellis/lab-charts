@@ -15,7 +15,7 @@ belongs to `dashboard_lint`.
 
 Deliberately I/O-free and format-free, matching the other wire modules: this
 returns a plain, JSON-ready dict. Choosing an encoder and performing the
-write is the surface's job -- see `cli/grafana.py`.
+write is the surface's job -- see `commands/grafana/cli.py`.
 """
 
 from __future__ import annotations

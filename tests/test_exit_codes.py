@@ -170,7 +170,7 @@ def test_exit_scan_finds_the_call_sites_it_is_meant_to_check() -> None:
     assert len(found) >= 8, f"suspiciously few exit sites: {found}"
 
     files = {f"{path.parent.name}/{path.name}" for path, _ in found}
-    assert "cli/main.py" in files, "the root app exits on domain errors"
+    assert "chart_manager/main.py" in files, "the root app exits on domain errors"
     assert "promote/cli.py" in files, "promote pr/monitor/test all exit nonzero"
 
     # And that the check itself can see a literal: if `_literal_code` ever
@@ -217,13 +217,13 @@ def test_no_module_outside_the_table_writes_a_nonzero_exit_literal() -> None:
 
 
 def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) -> int:
-    """Run `cli.main()` with an app that raises `exc`, and return its exit code.
+    """Run `main.main()` with an app that raises `exc`, and return its exit code.
 
     Driven through `main()` itself rather than `conftest.cli()`: CliRunner
     invokes the Typer app, so it never reaches the `except` arms that are
     the entire subject here.
     """
-    from chart_manager.cli import main as main_cli
+    from chart_manager import main as main_cli
 
     def _raise() -> None:
         raise exc
@@ -284,7 +284,7 @@ def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
 
 def test_the_error_line_reads_like_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard the guard: a mapped exit code with no message is still a dead end."""
-    from chart_manager.cli import main as main_cli
+    from chart_manager import main as main_cli
 
     assert main_cli._os_error_text(IsADirectoryError(21, "Is a directory", "charts/")) == (
         "is a directory: charts/"

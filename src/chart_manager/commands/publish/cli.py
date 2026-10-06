@@ -21,11 +21,6 @@ from chart_manager.shared.events.store import get_event_store
 from chart_manager.shared.events.writer import EventWriter
 
 
-def register(app: typer.Typer) -> None:
-    """Attach `publish` to the `chart` Typer group."""
-    app.command("publish")(publish)
-
-
 def publish(
     charts: Annotated[list[str], typer.Argument(help="One or more chart directory names.")],
     repository: Annotated[

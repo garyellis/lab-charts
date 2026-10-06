@@ -29,8 +29,8 @@ import pytest
 import typer.main
 from typer.testing import CliRunner, Result
 
-from chart_manager import composition
-from chart_manager.cli import main
+from chart_manager import main
+from chart_manager.cli import _container
 from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
 
 from .conftest import cli, write_workspace
@@ -95,7 +95,7 @@ def test_non_repository_command_never_discovers_a_workspace(
     def fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("version must not load repository state")
 
-    monkeypatch.setattr(composition, "load_repository_workspace", fail)
+    monkeypatch.setattr(_container, "load_repository_workspace", fail)
 
     assert cli("version").exit_code == 0
 
@@ -112,13 +112,13 @@ def test_a_repository_command_loads_the_workspace_once_per_invocation(
     root = _repo_with_chart(tmp_path, "zeta")
     monkeypatch.chdir(root)
     loaded: list[Path] = []
-    real = composition.load_repository_workspace
+    real = _container.load_repository_workspace
 
     def counting(path: Path, **kwargs):  # type: ignore[no-untyped-def]
         loaded.append(path)
         return real(path, **kwargs)
 
-    monkeypatch.setattr(composition, "load_repository_workspace", counting)
+    monkeypatch.setattr(_container, "load_repository_workspace", counting)
 
     result = _charts("chart", "list")
 

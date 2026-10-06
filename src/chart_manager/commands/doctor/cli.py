@@ -35,11 +35,6 @@ _STATUS_STYLE: dict[CheckStatus, tuple[str, str]] = {
 }
 
 
-def register(app: typer.Typer) -> None:
-    """Mount `doctor` onto the root app."""
-    app.command("doctor")(doctor)
-
-
 def doctor(
     ctx: typer.Context,
     output: OutputOption = None,
@@ -108,6 +103,3 @@ def _summarize(report: DoctorReport) -> None:
         return
     names = ", ".join(check.name for check in failed)
     narration.print(f"[red]{len(failed)} of {len(report.checks)} checks failed:[/red] {names}")
-
-
-__all__ = ["register"]

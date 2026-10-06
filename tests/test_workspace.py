@@ -7,14 +7,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from chart_manager import main
 from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
-from chart_manager.cli import main
-from chart_manager.cli._container import reset_invocation
+from chart_manager.cli._container import Container, reset_invocation
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
-from chart_manager.composition import Container
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.settings import Settings, load_settings

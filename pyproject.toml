@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-chart-manager = "chart_manager.cli.main:main"
+chart-manager = "chart_manager.main:main"
 
 [tool.hatch.build.targets.wheel]
 # src layout: hatchling walks the package, so `chart_manager/domain/` and any
@@ -192,7 +192,6 @@ directly (ADR-0001)."""
 "src/chart_manager/shared/cluster/**/*.py" = ["TID251"]
 # shared/events builds its event stores on the Cosmos and DynamoDB integrations (ADR-0001).
 "src/chart_manager/shared/events/**/*.py" = ["TID251"]
-"src/chart_manager/composition.py" = ["TID251"]
 
 [tool.ruff.format]
 # Defaults: double-quote, 4-space indent, LF endings.
@@ -237,6 +236,20 @@ plugins = ["pydantic.mypy"]
 
 [tool.importlinter]
 root_package = "chart_manager"
+
+[[tool.importlinter.contracts]]
+name = "Tiers point down"
+type = "layers"
+layers = ["chart_manager.main", "chart_manager.commands", "chart_manager.cli",
+  "chart_manager.shared",
+  "chart_manager.integrations | chart_manager.api | chart_manager.settings",
+  "chart_manager.plumbing"]
+
+[[tool.importlinter.contracts]]
+name = "Shared: cluster is a composite over the charts and events leaves; workspace is the floor"
+type = "layers"
+containers = ["chart_manager.shared"]
+layers = ["cluster", "charts | events", "workspace"]
 
 [[tool.importlinter.contracts]]
 name = "Leaf commands are independent; composites import only a leaf's root"

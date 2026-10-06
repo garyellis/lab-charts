@@ -1,8 +1,7 @@
 """`chart list` and `chart show`: pure reads of the chart catalog.
 
 Both hand a wire document from `commands/catalog/wire.py` to `output.emit` and build
-their own table beside it. `chart test` and `chart teardown` live in `commands/test` and
-register between them, which is their `--help` order.
+their own table beside it.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import console
 from chart_manager.commands.catalog import run as catalog
 from chart_manager.commands.catalog.wire import catalog_to_dict, lifecycle_to_dict
-from chart_manager.commands.test import cli as test_cli
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
 #: `chart list` and `chart show` speak the core projections minus `md`:
@@ -32,20 +30,6 @@ ChartCatalogOutputOption = Annotated[
     str | None,
     output_mod.output_option(*_CHART_CATALOG_OUTPUTS),
 ]
-
-#: The vocabulary a `--dry-run` plan is printed in. Same three projections;
-#: named separately because the document is a *plan*, not a catalog, and the
-#: two have no reason to stay equal.
-def register(app: typer.Typer) -> None:
-    """Attach the read-and-exercise commands to the `chart` Typer group.
-
-    Registration order is `--help` order, and `main.py` calls this after the
-    modules that own `validate`, `publish` and `upgrade`, which is where
-    these three sat when they were decorated inline.
-    """
-    app.command("list")(list_charts)
-    test_cli.register(app)
-    app.command("show")(show_lifecycle)
 
 
 def list_charts(
@@ -170,6 +154,3 @@ def show_lifecycle(
         mode=mode,
         table=_document_table(document, title=f"{chart} lifecycle"),
     )
-
-
-__all__ = ["register"]

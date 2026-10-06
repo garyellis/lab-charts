@@ -176,9 +176,11 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
 
 
 def _console_constructions() -> list[tuple[Path, ast.Call]]:
-    """Every `Console(...)` call site under cli/ and commands/, as (path, node)."""
+    """Every `Console(...)` call site in main.py, cli/ and commands/, as (path, node)."""
     found: list[tuple[Path, ast.Call]] = []
-    for path in sorted([*_CLI.rglob("*.py"), *(_CLI.parent / "commands").rglob("*.py")]):
+    for path in sorted(
+        [_CLI.parent / "main.py", *_CLI.rglob("*.py"), *(_CLI.parent / "commands").rglob("*.py")]
+    ):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

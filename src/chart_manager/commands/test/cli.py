@@ -45,12 +45,6 @@ DryRunOutputOption = Annotated[
 ]
 
 
-def register(app: typer.Typer) -> None:
-    """Attach `test` and `teardown` to the `chart` Typer group."""
-    app.command("test")(chart_test)
-    app.command("teardown")(chart_teardown)
-
-
 def _target(chart: str) -> tuple[str, RepositoryWorkspace]:
     """The chart's name, and the workspace with its charts directory pointed at the chart's."""
     workspace = _container().workspace()

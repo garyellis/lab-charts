@@ -1,16 +1,9 @@
-"""Assembly of the chart-manager CLI: the command tree, the global options,
+"""The composition root: the command tree in `--help` order, the global options,
 and the one place an escaped exception becomes an exit code.
 
-Deliberately holds no command implementation beyond `version`. Every group
-lives in its own module and exposes `register()`; this file decides what the
-tree looks like and nothing about what any command does. That is not
-tidiness -- it is what keeps the *shape* of the surface reviewable as a
-single screen, and it is the property that was lost while four groups
-(`chart`, `local`, `grafana`, `plan`) were inlined here and this file grew
-past 1600 lines.
-
-Registration order is `--help` order, so the wiring block at the bottom is
-read top to bottom as the listing a user sees.
+Holds no command implementation beyond `version`. Each command package exposes
+plain Typer callbacks (and the `event` sub-app) from its `cli.py`; this file
+mounts them, so the shape of the whole surface reads as one screen.
 """
 
 from __future__ import annotations
@@ -25,17 +18,18 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from chart_manager.cli import chart as chart_cli
-from chart_manager.cli import grafana as grafana_cli
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import start_invocation
 from chart_manager.cli.streams import console, errors, narration, set_narration_quiet
+from chart_manager.commands.catalog import cli as catalog_cli
 from chart_manager.commands.doctor import cli as doctor_cli
 from chart_manager.commands.events import cli as events_cli
+from chart_manager.commands.grafana import cli as grafana_cli
 from chart_manager.commands.local import cli as local_cli
 from chart_manager.commands.plan import cli as plan_cli
 from chart_manager.commands.promote import cli as promote_cli
 from chart_manager.commands.publish import cli as publish_cli
+from chart_manager.commands.test import cli as test_cli
 from chart_manager.commands.upgrade import cli as upgrade_cli
 from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.commands.validate.schemas.errors import (
@@ -222,34 +216,41 @@ def version_command() -> None:
 
 # --- wiring ----------------------------------------------------------------
 #
-# Read as the `--help` listing: Typer lists commands in registration order,
-# then groups in the order they were mounted.
+# Read as the `--help` listing. Typer lists a group's commands in the order
+# they were added, then its sub-groups in the order they were mounted.
 
-# The `event` group owns its own tree (group plus the `emit` subgroup), so it
-# mounts onto the root like upgrade/publish.
-events_cli.register(app)
-# Root-level: a preflight is about the process, not about one group.
-doctor_cli.register(app)
-# Root-level and frozen: `renovate-global.json` pins its literal spelling.
-upgrade_cli.register_finalize(app)
+app.command("doctor")(doctor_cli.doctor)
+# Hidden and frozen: `renovate-global.json` pins its literal spelling.
+app.command("upgrade-finalize", hidden=True)(upgrade_cli.upgrade_finalize)
 app.command("version")(version_command)
-# Root-level: `plan` is asked about the repository, not about one chart.
-plan_cli.register(app)
-validate_cli.register_schemas(schemas_app)
+app.command("plan")(plan_cli.plan)
 
-validate_cli.register_validate(chart_app)
-validate_cli.register_cache(chart_cache_app)
-publish_cli.register(chart_app)
-upgrade_cli.register_upgrade(chart_app)
-chart_cli.register(chart_app)
-
-local_cli.register(local_app)
-grafana_cli.register(grafana_dashboard_app)
-promote_cli.register(promote_app)
-
+chart_app.command("validate")(validate_cli.validate)
+chart_app.command("publish")(publish_cli.publish)
+chart_app.command("upgrade")(upgrade_cli.upgrade)
+chart_app.command("list")(catalog_cli.list_charts)
+chart_app.command("test")(test_cli.chart_test)
+chart_app.command("teardown")(test_cli.chart_teardown)
+chart_app.command("show")(catalog_cli.show_lifecycle)
+chart_cache_app.command("clean")(validate_cli.clean)
 chart_app.add_typer(chart_cache_app, name="cache")
+
+local_app.command("up")(local_cli.local_up)
+local_app.command("down")(local_cli.local_down)
+local_app.command("reset")(local_cli.local_reset)
+local_app.command("status")(local_cli.local_status)
+
+grafana_dashboard_app.command("export")(grafana_cli.grafana_dashboard_export)
+grafana_dashboard_app.command("lint")(grafana_cli.grafana_dashboard_lint)
 grafana_app.add_typer(grafana_dashboard_app, name="dashboard")
 
+promote_app.command("pr")(promote_cli.pr)
+promote_app.command("monitor")(promote_cli.monitor)
+promote_app.command("test")(promote_cli.test)
+
+schemas_app.command("sync")(validate_cli.sync)
+
+app.add_typer(events_cli.event_app, name="event")
 app.add_typer(chart_app, name="chart")
 app.add_typer(local_app, name="local")
 app.add_typer(grafana_app, name="grafana")

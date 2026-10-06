@@ -28,7 +28,7 @@ LogFormat = Literal["text", "json"]
 #: resolves its sources from the *class*, not from per-instance kwargs --
 #: there is no `Settings(config=...)` to thread through, and `Container`
 #: builds its own default when no `Settings` is injected. The surface sets
-#: this once from `--config` in `cli/main.py`'s root callback, before
+#: this once from `--config` in `main.py`'s root callback, before
 #: anything constructs Settings; nothing else writes it.
 _config_file: Path = DEFAULT_CONFIG_FILE
 

@@ -30,11 +30,6 @@ _OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML, output_mod.GITHU
 _KINDS = ("validate", "test", "publish", "all")
 
 
-def register(app: typer.Typer) -> None:
-    """Attach `plan` to the root app."""
-    app.command("plan")(plan)
-
-
 def plan(
     ctx: typer.Context,
     base: Annotated[str, typer.Option("--base", help="Git comparison base.")] = "origin/main",

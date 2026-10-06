@@ -64,14 +64,6 @@ DryRunOption = Annotated[
 ]
 
 
-def register(app: typer.Typer) -> None:
-    """Attach the four lifecycle commands to the `local` Typer group."""
-    app.command("up")(local_up)
-    app.command("down")(local_down)
-    app.command("reset")(local_reset)
-    app.command("status")(local_status)
-
-
 def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
     """Resolve a chart directory or LocalStack through configured repository paths."""
     workspace = _container().workspace(root)
@@ -508,6 +500,3 @@ def _render_cluster_action(
         return
     state = verb if result.changed else absent
     narration.print(f"dev cluster {state}: {result.cluster_name}")
-
-
-__all__ = ["register"]

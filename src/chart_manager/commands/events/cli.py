@@ -370,9 +370,8 @@ def _age(timestamp: Any, *, now: datetime) -> str:
 
 # --- the command tree ------------------------------------------------------
 #
-# Assembled here rather than in `cli/main.py` so the whole `event` group --
-# emit and the read side -- is one file. `main.py` mounts it, the way it
-# already mounts `upgrade` and `publish`.
+# Assembled here so the whole `event` group -- emit and the read side -- is
+# one file. `main.py` mounts it.
 
 emit_app = typer.Typer(no_args_is_help=True, help="Emit one platform lifecycle event.")
 emit_app.command("build")(build)
@@ -383,9 +382,4 @@ event_app.add_typer(emit_app, name="emit")
 event_app.command("list")(list_events)
 
 
-def register(app: typer.Typer) -> None:
-    """Mount the `event` group."""
-    app.add_typer(event_app, name="event")
-
-
-__all__ = ["build", "emit_app", "event_app", "list_events", "promote", "register"]
+__all__ = ["build", "emit_app", "event_app", "list_events", "promote"]

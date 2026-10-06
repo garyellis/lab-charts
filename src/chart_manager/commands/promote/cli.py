@@ -416,11 +416,4 @@ def pr(
         raise typer.Exit(code=exit_code)
 
 
-def register(app: typer.Typer) -> None:
-    """Attach `pr`, `monitor` and `test` to the `promote` Typer group."""
-    app.command("pr")(pr)
-    app.command("monitor")(monitor)
-    app.command("test")(test)
-
-
-__all__ = ["monitor", "pr", "register", "test"]
+__all__ = ["monitor", "pr", "test"]

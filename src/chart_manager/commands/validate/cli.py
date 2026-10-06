@@ -42,21 +42,6 @@ _CLEAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
 _PROGRESS = ("auto", "live", "plain", "none")
 
 
-def register_validate(app: typer.Typer) -> None:
-    """Attach `validate` to the `chart` Typer group."""
-    app.command("validate")(validate)
-
-
-def register_cache(app: typer.Typer) -> None:
-    """Attach `clean` to the `chart cache` Typer group."""
-    app.command("clean")(clean)
-
-
-def register_schemas(app: typer.Typer) -> None:
-    """Attach `schemas sync` to the `schemas` Typer group."""
-    app.command("sync")(sync)
-
-
 def validate(
     ctx: typer.Context,
     charts: Annotated[

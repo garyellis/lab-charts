@@ -166,3 +166,34 @@ def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: 
         )
 
     assert not any(call[:2] == ("kind", "delete") for call in runner.calls)
+
+
+@pytest.mark.parametrize("entry", ["provision", "attach"])
+def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
+    tmp_path: Path, entry: str
+) -> None:
+    runner = _runner("lab")
+    settings = Settings(
+        kube_context="ambient", docker_host="tcp://remote:2375", command_timeout=30.0
+    )
+
+    if entry == "provision":
+        session.provision(
+            _cluster(tmp_path),
+            root=tmp_path,
+            name="lab",
+            run_hooks=False,
+            runner=runner,
+            settings=settings,
+        )
+    else:
+        dev = session.attach("lab", runner=runner, settings=settings)
+        dev.kind.clusters()
+        dev.kubectl.wait_apiserver_ready()
+
+    kind, kubectl = (
+        [r for r in runner.records if r.args[0] == tool] for tool in ("kind", "kubectl")
+    )
+    assert kind and all(r.env == {"DOCKER_HOST": "tcp://remote:2375"} for r in kind)
+    assert [r.args[-2:] for r in kubectl] == [("--context", "kind-lab")]
+    assert {r.timeout for r in kind + kubectl} == {30.0}

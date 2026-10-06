@@ -149,19 +149,7 @@ def _shown(value: Any) -> str:
     return "-" if value is None or value == "" else str(value)
 
 
-def register_upgrade(app: typer.Typer) -> None:
-    """Attach the public upgrade command to the given Typer app (`chart`)."""
-    app.command("upgrade")(upgrade)
-
-
-def register_finalize(app: typer.Typer) -> None:
-    """Attach the hidden Renovate callback to the root app, where the allowlist expects it."""
-    app.command("upgrade-finalize", hidden=True)(upgrade_finalize)
-
-
 __all__ = [
-    "register_finalize",
-    "register_upgrade",
     "upgrade",
     "upgrade_finalize",
 ]

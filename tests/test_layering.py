@@ -96,7 +96,7 @@ _INTEGRATIONS = _PKG / "integrations"
 _CLI = _PKG / "cli"
 
 #: Only the surface layer may terminate the process.
-_EXIT_ALLOWED_DIRS = (_CLI,)
+_EXIT_ALLOWED_DIRS = (_CLI, _PKG / "main.py")
 
 #: Import either of these and a headless surface has a TUI in its address space.
 _FORBIDDEN_ROOTS = ("rich", "typer")
@@ -470,7 +470,7 @@ def test_non_surface_modules_are_discoverable() -> None:
     """Guard the guard: prove the scan actually has files to look at."""
     paths = _non_surface_modules()
     assert len(paths) > 30, f"suspiciously few non-surface modules: {len(paths)}"
-    assert _PKG / "composition.py" in paths
+    assert _PKG / "settings.py" in paths
     assert _PKG / "commands" / "local" / "run.py" in paths
 
 
@@ -575,8 +575,8 @@ def _settings_offenders(source: str, label: str) -> list[str]:
 
 
 def _cli_modules() -> list[Path]:
-    """Every .py file under `cli/`."""
-    return sorted(_CLI.rglob("*.py"))
+    """`main.py` and every .py file under `cli/`."""
+    return sorted([_PKG / "main.py", *_CLI.rglob("*.py")])
 
 
 def test_cli_modules_are_discoverable() -> None:
@@ -584,10 +584,6 @@ def test_cli_modules_are_discoverable() -> None:
     paths = _cli_modules()
     assert len(paths) > 5, f"suspiciously few cli modules: {len(paths)}"
     assert _CLI / "_container.py" in paths
-    # The module that used to construct services inline. If it is renamed
-    # away, the scan must be updated deliberately rather than quietly losing
-    # coverage of the exact file this rule was written for.
-    assert _CLI / "chart.py" in paths
 
 
 def test_no_cli_module_constructs_a_service() -> None:

@@ -470,7 +470,7 @@ def _root_app() -> typer.Typer:
     and so that an import error in `cli/` fails the CLI tests rather than
     collection of the entire suite.
     """
-    from chart_manager.cli.main import app
+    from chart_manager.main import app
 
     return app
 

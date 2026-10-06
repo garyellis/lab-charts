@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.cli._container import Container
 from chart_manager.commands import validate
 from chart_manager.commands.catalog import run as catalog
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.validate.render_dir import render_dir_state
-from chart_manager.composition import Container
 from chart_manager.integrations.git import Git
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import ChartRepository

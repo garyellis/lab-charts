@@ -1,39 +1,17 @@
-"""Surface glue every `cli/` module needs and none of them should own.
+"""The per-invocation `Container` and the surface glue every command's `cli.py` needs.
 
-Two things live here, and each was previously copy-pasted with its
-docstring into several command modules:
-
-  * `container()` -- the composition root for one invocation;
+  * `Container` -- the settings, the workspace and the command runner for one
+    invocation; each command wires its own adapters from them;
+  * `container()` -- returns the current invocation's `Container`;
   * `exit_if_failed()` -- the surface's rule for a result that reports its
     own failure.
 
-None of them is a capability. `services/` owns what a command *does*;
-`plumbing/exit_codes.py` owns which outcome is which number. What is
-left is the few lines of surface that bind them to configuration, which is
-exactly what a module with a leading underscore is for -- this is internal
-to `cli/` and nothing outside it should import it.
-
-Named `_container` rather than `_wiring` because `services/*/wire.py` means
-something else entirely -- an `X -> dict` projection -- and one
-`cli/` reader already took the two for the same thing. There is one wiring
-concept on this surface and it is the composition root, so the file is named
-after it.
-
-Note the test seam. Several `cli/` modules alias `container` into their own
-namespace (`from ._container import container as _container`) so a test can
-monkeypatch one command group's wiring without reaching into every other
-group's. That is an import alias, not a second copy: there is one function
-body, and the alias exists purely so the patch stays scoped.
+Several `cli.py` modules alias `container` into their own namespace
+(`from ..._container import container as _container`) so a test can
+monkeypatch one command's wiring without reaching into every other one's.
 
 One `Container` per invocation: the root callback calls `start_invocation()`
 and `container()` returns it, so workspace.yaml is parsed once per invocation.
-
-The other seam is `container(settings=...)`. `Container` has taken a
-`Settings` since it was written, but every CLI call site built one bare, so
-the parameter was unreachable from the only surface that exists -- and the
-bypass sites that used to construct services inline each built a *second*
-`Settings` besides. Both are closed: nothing under `cli/` constructs a
-service, and nothing but `main.py` constructs `Settings`.
 """
 
 from __future__ import annotations
@@ -42,10 +20,54 @@ from pathlib import Path
 
 import typer
 
-from chart_manager.composition import Container, Settings
+from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.settings import Settings, load_settings
+from chart_manager.shared.workspace import (
+    RepositoryWorkspace,
+    load_repository_workspace,
+    resolve_repository_root,
+)
 
-#: The current invocation's composition root; see the module docstring.
+
+class Container:
+    """One invocation's settings, workspace and command runner. Construct once; the caller holds it."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        """Bind settings (defaults reproduce today's CLI behavior)."""
+        self._settings = settings if settings is not None else load_settings()
+        self._command_runner: CommandRunner | None = None
+        self._workspaces: dict[Path | None, RepositoryWorkspace] = {}
+
+    @property
+    def settings(self) -> Settings:
+        """The settings this container was built from."""
+        return self._settings
+
+    def workspace(self, root: Path | None = None) -> RepositoryWorkspace:
+        """Resolve the repository workspace, on first use.
+
+        Memoized per root, so workspace.yaml is parsed once per container.
+        Raises `WorkspaceNotFoundError` when there is no workspace.yaml.
+        """
+        key = root.resolve() if root is not None else None
+        if key not in self._workspaces:
+            configured = root
+            if configured is None and "root" in self._settings.model_fields_set:
+                configured = self._settings.root
+            compiled = load_repository_workspace(resolve_repository_root(configured=configured))
+            self._workspaces[key] = compiled
+            self._workspaces[compiled.root] = compiled
+        return self._workspaces[key]
+
+    def command_runner(self) -> CommandRunner:
+        """The shared subprocess runner (stateless; memoized)."""
+        if self._command_runner is None:
+            self._command_runner = SubprocessRunner()
+        return self._command_runner
+
+
+#: The current invocation's container; see the module docstring.
 _invocation: Container | None = None
 
 
@@ -63,18 +85,11 @@ def reset_invocation() -> None:
 
 
 def container(settings: Settings | None = None) -> Container:
-    """Return the composition root for the current CLI invocation.
+    """Return the current invocation's `Container`, or one bound to `settings`.
 
-    Every service on this surface is built through it: constructing them
-    inline is what let `Settings.kube_context` be configured and then
-    ignored, and it is what `tests/test_layering.py`'s container-bypass scan
-    now forbids.
-
-    `settings=None` resolves the process configuration exactly as before
+    `settings=None` resolves the process configuration
     (`CHART_MANAGER_* env > config.yaml > defaults`), which is what every
-    command does. Passing one is the injection point: a test, or a second
-    surface that has already resolved its own configuration, gets every
-    service built against it in one call rather than per construction site.
+    command does. Passing one is the injection point for a test.
     """
     if settings is not None:
         return Container(settings)
@@ -101,11 +116,12 @@ def exit_if_failed(ok: bool) -> None:
 
 
 def repository_root() -> Path:
-    """Discover the current repository through the composition boundary."""
+    """Discover the current repository through the invocation's workspace."""
     return container().workspace().root
 
 
 __all__ = [
+    "Container",
     "container",
     "exit_if_failed",
     "repository_root",
