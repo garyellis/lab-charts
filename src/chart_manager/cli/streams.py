@@ -25,9 +25,9 @@ stdout at import, so anything that later replaces `sys.stdout` -- Click's
 `CliRunner`, `contextlib.redirect_stdout`, a future embedding surface --
 is silently bypassed and the output vanishes. `Console(stderr=False|True)`
 resolves `sys.stdout`/`sys.stderr` lazily on every write, which is what a
-process-wide seam needs. `tests/test_output_streams.py` enforces that every
-`Console(...)` under `cli/` names its stream explicitly one way or the other,
-so a bare `Console()` -- which silently means stdout -- cannot come back.
+process-wide seam needs. Ruff's TID251 bans importing `Console` outside the
+modules allowlisted in `pyproject.toml`, so a bare `Console()` -- which
+silently means stdout -- cannot appear outside them unnoticed.
 """
 
 from __future__ import annotations

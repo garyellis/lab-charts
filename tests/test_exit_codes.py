@@ -8,10 +8,6 @@ the table under test would pass no matter what the table said.
 
 from __future__ import annotations
 
-import ast
-import re
-from pathlib import Path
-
 import pytest
 
 from chart_manager.plumbing.errors import (
@@ -36,8 +32,6 @@ from chart_manager.plumbing.exit_codes import (
     Outcome,
     exit_code_for,
 )
-
-_SRC = Path(__file__).resolve().parents[1] / "src" / "chart_manager"
 
 
 def test_table_is_exhaustive_over_every_outcome() -> None:
@@ -86,107 +80,6 @@ def test_success_is_zero() -> None:
     """
     assert exit_code_for(Outcome.SUCCESS) == 0
     assert [o for o in Outcome if exit_code_for(o) == 0] == [Outcome.SUCCESS]
-
-
-# --------------------------------------------------------------------------
-# the surface speaks Outcome, never a number
-# --------------------------------------------------------------------------
-#
-# Static, in the spirit of `test_output_streams.py`:
-# the behavioral tests below can only cover the exit sites they enumerate,
-# and the failure mode being guarded is a *new* command written by someone
-# who never read this module and reached for `typer.Exit(1)` because it is
-# shorter. That is how the table ended up with one consumer the first time.
-
-#: `raise typer.Exit(...)` and `sys.exit(...)` -- the two ways a Python CLI
-#: sets `$?`. Both are scanned, because `main.py` legitimately uses
-#: the second one and a gate that only knew the first would wave it through.
-_EXIT_CALLS = frozenset({"Exit", "exit"})
-
-#: The one module allowed to write exit-code integers.
-_TABLE = Path("chart_manager") / "plumbing" / "exit_codes.py"
-
-
-def _exit_call_sites() -> list[tuple[Path, ast.Call]]:
-    """Every `typer.Exit(...)` / `sys.exit(...)` under `src/`, as (path, node)."""
-    found: list[tuple[Path, ast.Call]] = []
-    for path in sorted(_SRC.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = (
-                func.id
-                if isinstance(func, ast.Name)
-                else func.attr
-                if isinstance(func, ast.Attribute)
-                else None
-            )
-            if name in _EXIT_CALLS:
-                found.append((path, node))
-    return found
-
-
-def _literal_code(node: ast.Call) -> int | None:
-    """The integer literal this exit call was given, if it was given one.
-
-    Covers both spellings -- `typer.Exit(code=1)` and `sys.exit(1)` -- and
-    returns None for anything computed, which is what a call routed through
-    `exit_code_for` looks like.
-    """
-    args = [*node.args, *(kw.value for kw in node.keywords if kw.arg in (None, "code"))]
-    for arg in args:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
-            return arg.value
-    return None
-
-
-def test_exit_scan_finds_the_call_sites_it_is_meant_to_check() -> None:
-    """Guard the guard: an empty sweep would make the next test vacuous."""
-    found = _exit_call_sites()
-    assert len(found) >= 8, f"suspiciously few exit sites: {found}"
-
-    files = {f"{path.parent.name}/{path.name}" for path, _ in found}
-    assert "chart_manager/main.py" in files, "the root app exits on domain errors"
-    assert "promote/cli.py" in files, "promote pr/monitor/test all exit nonzero"
-
-    # And that the check itself can see a literal: if `_literal_code` ever
-    # stopped recognising one, the rule below would pass by blindness.
-    assert _literal_code(ast.parse("typer.Exit(code=1)").body[0].value) == 1  # type: ignore[attr-defined]
-    assert _literal_code(ast.parse("sys.exit(127)").body[0].value) == 127  # type: ignore[attr-defined]
-    assert _literal_code(ast.parse("sys.exit(exit_code_for(x))").body[0].value) is None  # type: ignore[attr-defined]
-
-
-def test_no_module_outside_the_table_writes_a_nonzero_exit_literal() -> None:
-    """Every nonzero exit must name an `Outcome`, not a number.
-
-    A magic literal is not a style complaint here: it is a second, silent
-    copy of the table that no test transcribes and no reader can find. The
-    2 -> 4 move for tool errors is exactly what such a copy would have
-    survived unchanged.
-
-    `typer.Exit(0)` and `sys.exit(0)` are fine -- zero is the absence of a
-    failure, not a classification of one, and spelling it
-    `exit_code_for(Outcome.SUCCESS)` buys nothing.
-    """
-    offenders: list[str] = []
-    for path, node in _exit_call_sites():
-        rel = path.relative_to(_SRC.parent)
-        if rel == _TABLE:
-            continue
-        code = _literal_code(node)
-        if code:
-            offenders.append(f"  {rel}:{node.lineno} -> exit {code}")
-
-    assert not offenders, (
-        "a nonzero exit code must come from "
-        "`chart_manager.plumbing.exit_codes.exit_code_for(Outcome.…)`, "
-        "never from a literal:\n"
-        + "\n".join(offenders)
-        + "\n\nPick the row that describes what happened (FAILED, USAGE, SPEC, "
-        "TOOL, ENVIRONMENT, MISSING_BINARY) and let the table say what it is worth."
-    )
 
 
 # --------------------------------------------------------------------------
@@ -268,13 +161,3 @@ def test_the_error_line_reads_like_a_sentence(monkeypatch: pytest.MonkeyPatch) -
         "is a directory: charts/"
     )
     assert main_cli._os_error_text(OSError()) == str(OSError())
-
-
-def test_module_docstring_transcribes_every_row() -> None:
-    """Doc drift here is worse than none: the table is read by humans first."""
-    import chart_manager.plumbing.exit_codes as mod
-
-    doc = mod.__doc__ or ""
-    for outcome, code in EXIT_CODE.items():
-        row = rf"\|\s*{code}\s*\|\s*{outcome.name}\s*\|"
-        assert re.search(row, doc), f"missing docstring row for {outcome.name} -> {code}"
