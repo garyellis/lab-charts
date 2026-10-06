@@ -1,13 +1,11 @@
-"""Read-only preflight for the authored schema policy, lock, and XDG store."""
+"""Read-only preflight for the authored schema policy, lock, and schema cache."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from chart_manager.commands.validate.schemas.errors import (
-    KubeconformSchemaLockError,
-    KubeconformSchemaStoreError,
-)
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaLockError
 from chart_manager.commands.validate.schemas.lock import load_schema_lock
 from chart_manager.commands.validate.schemas.models import (
     AuthoredSchemaPolicy,
@@ -35,10 +33,12 @@ class KubeconformSchemaDoctor:
         workspace: RepositoryWorkspace | None,
         *,
         runner: CommandRunner,
+        schema_cache_root: Path,
         skip_reason: str = "no workspace",
     ) -> None:
         self.workspace = workspace
         self.runner = runner
+        self.schema_cache_root = schema_cache_root
         self.skip_reason = skip_reason
 
     def preflight(self) -> tuple[Check, ...]:
@@ -72,17 +72,15 @@ class KubeconformSchemaDoctor:
             )
 
         try:
-            status = open_schema_store(self.runner).inspect(lock)
-        except (OSError, KubeconformSchemaStoreError) as exc:
+            status = open_schema_store(self.runner, self.schema_cache_root).inspect(lock)
+        except OSError as exc:
             return (
                 policy_check,
                 lock_check,
                 Check.failed(
                     "schema-store",
                     f"schema store cannot be inspected: {exc}",
-                    remediation=(
-                        "set XDG_CACHE_HOME to an absolute readable path, then " + _HYDRATE
-                    ),
+                    remediation=_HYDRATE,
                     outcome=Outcome.ENVIRONMENT,
                     data={"ready": False},
                 ),

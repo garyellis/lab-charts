@@ -165,7 +165,11 @@ def validate(
         )
     try:
         outcome = run(
-            request, workspace=workspace, runner=runner, progress=_display(progress, mode, verbose)
+            request,
+            workspace=workspace,
+            runner=runner,
+            schema_cache_root=container.settings.schema_cache_root,
+            progress=_display(progress, mode, verbose),
         )
     except RequestError as exc:
         raise typer.BadParameter(str(exc), param_hint=exc.flag) from exc
@@ -324,7 +328,9 @@ def sync(
     timeout = container.settings.command_timeout
     result = sync_schemas(
         container.workspace(),
-        store=open_schema_store(container.command_runner()),
+        store=open_schema_store(
+            container.command_runner(), container.settings.schema_cache_root
+        ),
         source=GitHubKubeconformSchemaSource(
             timeout=timeout if timeout is not None and timeout > 0 else 15.0
         ),

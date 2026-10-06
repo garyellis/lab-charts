@@ -266,8 +266,10 @@ The fast CI gate also runs the real Helm/kubeconform packaging and schema
 integration suites; missing tools fail that gate instead of silently skipping tests.
 
 The cache lives under `$XDG_CACHE_HOME/chart-manager/schemas/v3/`
-(default `~/.cache/chart-manager/schemas/v3/`), with separate `repositories/` and
-`derived/` directories. Previous cache formats are left untouched and never
+(`~/.cache/chart-manager/schemas/v3/` when `XDG_CACHE_HOME` is unset or relative),
+with separate `repositories/` and `derived/` directories.
+`CHART_MANAGER_SCHEMA_CACHE_ROOT` (or `schema_cache_root:` in the operator config)
+moves the root that holds `v3/`. Previous cache formats are left untouched and never
 reused. Run `mise run schemas` once to populate the new upstream cache.
 Automatic pruning of old snapshots and interrupted staging directories is
 intentionally deferred to a future maintenance command.

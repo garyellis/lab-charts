@@ -35,6 +35,7 @@ def schema_check(workspace: RepositoryWorkspace) -> validate.CheckResult:
         ),
         workspace=workspace,
         runner=SubprocessRunner(),
+        schema_cache_root=workspace.root / "schema-cache",
     )
     return outcome.rows[0].checks["schema"]
 

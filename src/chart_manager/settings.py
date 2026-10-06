@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -31,6 +32,13 @@ LogFormat = Literal["text", "json"]
 #: this once from `--config` in `main.py`'s root callback, before
 #: anything constructs Settings; nothing else writes it.
 _config_file: Path = DEFAULT_CONFIG_FILE
+
+
+def _default_schema_cache_root() -> Path:
+    """`$XDG_CACHE_HOME/chart-manager/schemas`; a relative or empty value is ignored, per XDG."""
+    xdg = Path(os.environ.get("XDG_CACHE_HOME", "")).expanduser()
+    base = xdg if xdg.is_absolute() else Path.home() / ".cache"
+    return base / "chart-manager" / "schemas"
 
 
 def config_file() -> Path:
@@ -68,6 +76,8 @@ class Settings(BaseSettings):
     #: Explicit operator override. When absent, repository-bound entry points
     #: discover the nearest workspace marker; non-repository commands ignore it.
     root: Path = DEFAULT_ROOT
+    #: Where pinned upstream schema snapshots and derived CRD schemas are cached.
+    schema_cache_root: Path = Field(default_factory=_default_schema_cache_root)
 
     @classmethod
     def settings_customise_sources(
@@ -109,6 +119,14 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_log_format(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
+
+    @field_validator("schema_cache_root")
+    @classmethod
+    def _absolute_schema_cache_root(cls, value: Path) -> Path:
+        expanded = value.expanduser()
+        if not expanded.is_absolute():
+            raise ValueError(f"must be an absolute path, got {str(value)!r}")
+        return expanded
 
 
 def load_settings() -> Settings:
