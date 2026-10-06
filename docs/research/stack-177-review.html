@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stack #177 Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap">
+<style>
+/* Layout: one reading column; findings as dense ledgers, candidates as before/after pairs. */
+:root{
+  --bg:#f5f7f8; --surface:#ffffff; --sunk:#eaeff1; --fg:#14232b; --muted:#56666f; --line:#d3dce0;
+  --accent:#0d6b86; --accent-soft:#d9eef4;
+  --hard:#b42318; --hard-soft:#fde7e4; --warn:#9a5b00; --warn-soft:#fdf0d8; --ok:#1d7a4c; --ok-soft:#dcf2e5; --spec:#5b4fb0; --spec-soft:#e9e6fa;
+  --seg1:#0d6b86; --seg2:#3f93ab; --seg3:#7cb8c9; --seg4:#a9cfd9; --seg5:#c9e0e6; --seg6:#9aa8ae; --seg7:#c4ccd0;
+  --display:"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f171b; --surface:#152127; --sunk:#1b2a31; --fg:#e3ecef; --muted:#93a5ad; --line:#2a3b43;
+  --accent:#5cc0dc; --accent-soft:#16343f;
+  --hard:#ff8a7a; --hard-soft:#3a1d1a; --warn:#f2b552; --warn-soft:#352a14; --ok:#5fd39a; --ok-soft:#14321f; --spec:#ab9fff; --spec-soft:#25204a;
+  --seg1:#5cc0dc; --seg2:#3f93ab; --seg3:#2f7387; --seg4:#245866; --seg5:#1c4550; --seg6:#5d6c73; --seg7:#3c4a51;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f171b; --surface:#152127; --sunk:#1b2a31; --fg:#e3ecef; --muted:#93a5ad; --line:#2a3b43;
+  --accent:#5cc0dc; --accent-soft:#16343f;
+  --hard:#ff8a7a; --hard-soft:#3a1d1a; --warn:#f2b552; --warn-soft:#352a14; --ok:#5fd39a; --ok-soft:#14321f; --spec:#ab9fff; --spec-soft:#25204a;
+  --seg1:#5cc0dc; --seg2:#3f93ab; --seg3:#2f7387; --seg4:#245866; --seg5:#1c4550; --seg6:#5d6c73; --seg7:#3c4a51;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--body);margin:0}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:20px;padding-block:28px 64px;display:grid;gap:44px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:clamp(28px,4.4vw,40px);letter-spacing:-.01em}
+h2{font-size:24px}
+h3{font-size:17px;font-family:var(--body);font-weight:600}
+p{margin:0;max-width:68ch}
+code,.mono{font-family:var(--mono);font-size:.86em}
+.eyebrow{font:500 11.5px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.muted{color:var(--muted)}
+header{display:grid;gap:14px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;font:13px var(--mono);color:var(--muted)}
+.meta b{color:var(--fg);font-weight:500}
+nav{display:flex;flex-wrap:wrap;gap:6px;position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:10px;border-bottom:1px solid var(--line)}
+nav a{font:500 13px var(--body);color:var(--fg);text-decoration:none;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface)}
+nav a:hover,nav a:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
+section{display:grid;gap:18px;scroll-margin-top:64px}
+.sechead{display:grid;gap:6px}
+.verdict{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:grid;gap:12px}
+.verdict p{font-size:16px}
+.score{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.score div{background:var(--sunk);border-radius:8px;padding:12px 14px;display:grid;gap:4px;min-width:0}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:4px 8px;border-radius:999px;white-space:nowrap;width:max-content}
+.pill.hard{background:var(--hard-soft);color:var(--hard)} .pill.judge{background:var(--warn-soft);color:var(--warn)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)} .pill.spec{background:var(--spec-soft);color:var(--spec)}
+.pill.acc{background:var(--accent-soft);color:var(--accent)} .pill.plain{background:var(--sunk);color:var(--muted)}
+/* LOC bars */
+.bars{display:grid;gap:14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.barrow{display:grid;grid-template-columns:92px 1fr 70px;gap:12px;align-items:center}
+.barrow .lbl{font:500 13px var(--mono)} .barrow .num{font:500 13px var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.track{display:flex;height:30px;border-radius:5px;overflow:hidden;background:var(--sunk)}
+.track span{display:flex;align-items:center;padding-left:6px;font:500 11px var(--mono);color:#fff;white-space:nowrap;overflow:hidden;border-right:1px solid var(--surface)}
+.track span.dk{color:var(--fg)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font:12px var(--mono);color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:grid;gap:2px}
+.stat b{font:600 22px var(--display);font-variant-numeric:tabular-nums}
+.stat span{font-size:12.5px;color:var(--muted)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.two>*{min-width:0}
+pre.block{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 var(--mono)}
+.add{color:var(--ok)} .del{color:var(--hard)}
+/* findings ledger */
+.ledger{display:grid;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.f{display:grid;grid-template-columns:118px 1fr;gap:6px 16px;padding:14px 18px;border-top:1px solid var(--line)}
+.f:first-child{border-top:0}
+.f .body{display:grid;gap:5px;min-width:0}
+.f .t{font-weight:600}
+.f .loc{font:12.5px/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.f .fix{font-size:14px}
+.f .fix::before{content:"Fix → ";color:var(--accent);font-weight:600}
+.tag{font:11px var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;margin-left:6px;white-space:nowrap}
+.axis{display:grid;gap:12px}
+.note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 8px 8px 0;font-size:14px}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+/* candidates */
+.cand{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;display:grid;gap:14px;scroll-margin-top:64px}
+.cand header{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.cand header h3{font-family:var(--display);font-size:19px;flex:1 1 320px}
+.rank{font:600 13px var(--mono);color:var(--muted)}
+.ba{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.ba>div{min-width:0;background:var(--sunk);border-radius:8px;padding:10px 12px;display:grid;gap:6px;align-content:start}
+.ba .mm{overflow-x:auto}
+.ba pre.mermaid{margin:0;background:transparent;font-size:12px}
+.pa{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 20px}
+.pa>div{min-width:0;display:grid;gap:4px}
+.cand ul{margin:0;padding-left:18px;display:grid;gap:3px;font-size:14px}
+.files{font:12px/1.6 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+/* roadmap */
+.road{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.step{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:8px;align-content:start}
+.step .n{font:600 12px var(--mono);color:var(--accent)}
+.step ul{margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px}
+.step .loc{font:12px var(--mono);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);vertical-align:top}
+th{font:500 11.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-top:0}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px 8px}
+.pips{display:inline-flex;gap:3px;vertical-align:middle}
+.pips i{width:14px;height:8px;border-radius:2px;background:var(--line)}
+.pips i.on{background:var(--muted)}
+.pips.now i.on{background:var(--seg2)}
+.pips.after i.on{background:var(--accent)}
+.pips.r2 i.on{background:var(--ok)}
+.dims{display:flex;flex-wrap:wrap;gap:6px}
+.dims span{font:500 11.5px var(--mono);padding:3px 8px;border-radius:4px;background:var(--ok-soft);color:var(--ok);white-space:nowrap}
+.seqlist{margin:0;padding-left:22px;display:grid;gap:6px;font-size:14px}
+.seqlist li::marker{font-family:var(--mono);color:var(--accent);font-weight:600}
+/* cross-section: where tests attach */
+.xsec{display:grid;gap:4px}
+.band{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:4px 10px;min-height:36px;border-left:4px solid var(--line);background:var(--surface);border-radius:0 6px 6px 0;padding:6px 10px}
+.band.seam{border-left-color:var(--accent);border-left-width:6px}
+.band.faded{opacity:.5}
+.band .bl{font:500 12px var(--mono);display:grid;gap:1px}
+.band .bl small{font:11px var(--body);color:var(--muted)}
+.probes{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}
+.probe{font:500 11px var(--mono);padding:2px 6px;border-radius:4px;background:var(--hard-soft);color:var(--hard);white-space:nowrap}
+.probe.good{background:var(--ok-soft);color:var(--ok)}
+.probe.dim{background:var(--sunk);color:var(--muted)}
+.xsec .cap{font:11.5px var(--mono);color:var(--muted);padding-top:4px}
+/* gate matrix: what runs where */
+.matrix{display:grid;grid-template-columns:1fr 58px 58px;gap:3px;font-size:12px}
+.matrix .h{font:500 10.5px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-align:center;padding:4px 2px;align-self:end}
+.matrix .g{padding:5px 8px;background:var(--surface);border-radius:4px;font:11.5px var(--mono);min-width:0;overflow-wrap:anywhere}
+.matrix .g small{color:var(--muted);font-family:var(--body)}
+.matrix .c{display:flex;align-items:center;justify-content:center;border-radius:4px;background:var(--surface);font:600 13px var(--mono)}
+.matrix .c.y{background:var(--ok-soft);color:var(--ok)}
+.matrix .c.n{background:var(--hard-soft);color:var(--hard)}
+.matrix .c.z{background:var(--sunk);color:var(--muted)}
+.matrix .wide{grid-column:1 / -1;font:11.5px var(--mono);color:var(--muted);padding:6px 8px 2px}
+.tally{display:flex;flex-wrap:wrap;gap:6px 14px;font:12px var(--mono);color:var(--muted);padding-top:6px}
+.tally b{color:var(--fg);font-weight:500}
+/* composition bar: what leaves the suite */
+.comp{display:grid;gap:6px}
+.comp .track{height:26px}
+.comp .track span{font-size:10.5px}
+td.r{white-space:nowrap}
+.proj{display:grid;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.proj .grp{font:500 12px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:6px}
+.prow{display:grid;grid-template-columns:150px 1fr 120px;gap:12px;align-items:center}
+.prow .lbl{font:13px var(--mono)} .prow .num{font:500 13px var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.ptrack{position:relative;height:18px;background:var(--sunk);border-radius:4px;overflow:hidden}
+.ptrack b{position:absolute;inset:0 auto 0 0;border-radius:4px 0 0 4px}
+.ptrack b.rng{background:repeating-linear-gradient(45deg,var(--accent) 0 3px,transparent 3px 7px);opacity:.55}
+@media (max-width:560px){.prow{grid-template-columns:96px 1fr 84px}}
+footer{font-size:13px;color:var(--muted);display:grid;gap:6px;border-top:1px solid var(--line);padding-top:18px}
+@media (max-width:560px){.f{grid-template-columns:1fr}.barrow{grid-template-columns:60px 1fr 58px}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+<style>
+/* standalone additions: the artifact host normally supplies these */
+html{color-scheme:light}
+@media (prefers-color-scheme: dark){html{color-scheme:dark}}
+img{max-width:100%}
+pre.mermaid{background:transparent}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <span class="eyebrow">lab-charts · chart-manager · code review + architecture scan</span>
+  <h1>The #177 stack, main → fec107e</h1>
+  <div class="meta">
+    <span>base <b>f54931a</b> (main)</span><span>top <b>fec107e</b> fix/helm-dependency-update</span>
+    <span><b>112</b> commits</span><span>issues <b>#125 #137 #144 #153 #155 #159 #164 #169 #170</b></span>
+  </div>
+</header>
+
+<nav aria-label="Sections">
+  <a href="#verdict">Verdict</a><a href="#diff">Diff</a><a href="#standards">Standards</a><a href="#spec">Spec</a><a href="#beyond">Beyond #177</a><a href="#roadmap">Roadmap</a><a href="#round2">Round 2</a><a href="#outlook">After it all</a><a href="#method">Method</a>
+</nav>
+
+<section id="verdict">
+  <div class="verdict">
+    <span class="eyebrow">Verdict</span>
+    <p>The stack mostly met its goal. The 18k-line <code>services/</code> layer is gone, and <code>cli/</code> shrank from 5.3k lines to 0.7k. In their place are feature packages under <code>commands/</code> with a small <code>shared/</code> floor and enforced import contracts, and <code>main.py</code> reads as one screen of wiring. What remains works against human accountability in a few repeated ways: optional wiring that silently builds its own adapters, design history in docstrings, tests that police prose or private functions, and four install-plan and chart-loading paths that still repeat themselves.</p>
+    <div class="score">
+      <div><span class="pill ok">Pass</span><b>Less code</b><span class="muted">src −23% (32.0k → 24.5k), tests −39% (37.9k → 23.3k), docs −3.9k</span></div>
+      <div><span class="pill judge">Partial</span><b>Predictability</b><span class="muted"><code>runner or SubprocessRunner()</code> in 8 adapters; <code>CI</code> parsed two ways; token precedence reversed between readers</span></div>
+      <div><span class="pill judge">Partial</span><b>Human accountability</b><span class="muted">Clear packages and contracts, but 19.5% of src is comments and docstrings, much of it design history</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="diff">
+  <div class="sechead"><span class="eyebrow">Diff at a glance</span><h2>Where the lines went</h2>
+  <p class="muted">Python lines under <code>src/chart_manager/</code>, per top-level package, drawn on one scale.</p></div>
+  <div class="bars" role="img" aria-label="Source lines by package: main 32,005, HEAD 24,548">
+    <div class="barrow"><span class="lbl">main</span>
+      <div class="track">
+        <span style="width:57.44%;background:var(--seg1)" title="services 18,384">services 18.4k</span>
+        <span style="width:16.67%;background:var(--seg2)" title="cli 5,334">cli 5.3k</span>
+        <span style="width:12.48%;background:var(--seg4)" class="dk" title="integrations 3,995">integ 4.0k</span>
+        <span style="width:4.34%;background:var(--seg3)" title="domain 1,390"></span>
+        <span style="width:3.79%;background:var(--seg6)" title="plumbing 1,212"></span>
+        <span style="width:3.08%;background:var(--seg7)" title="api 986"></span>
+        <span style="width:2.20%;background:var(--seg5)" title="root 704"></span>
+      </div><span class="num">32,005</span></div>
+    <div class="barrow"><span class="lbl">HEAD</span>
+      <div class="track">
+        <span style="width:45.31%;background:var(--seg1)" title="commands 14,500">commands 14.5k</span>
+        <span style="width:11.97%;background:var(--seg4)" class="dk" title="integrations 3,830">integ 3.8k</span>
+        <span style="width:8.80%;background:var(--seg3)" title="shared 2,815">shared</span>
+        <span style="width:3.81%;background:var(--seg6)" title="plumbing 1,220"></span>
+        <span style="width:3.07%;background:var(--seg7)" title="api 982"></span>
+        <span style="width:2.24%;background:var(--seg2)" title="cli 717"></span>
+        <span style="width:1.51%;background:var(--seg5)" title="root 484"></span>
+        <span style="width:23.30%;background:transparent" title="removed 7,457"></span>
+      </div><span class="num">24,548</span></div>
+    <div class="legend">
+      <span><i style="background:var(--seg1)"></i>services → commands</span><span><i style="background:var(--seg2)"></i>cli</span><span><i style="background:var(--seg3)"></i>domain → shared</span><span><i style="background:var(--seg4)"></i>integrations</span><span><i style="background:var(--seg6)"></i>plumbing</span><span><i style="background:var(--seg7)"></i>api</span><span><i style="background:var(--seg5)"></i>root modules</span>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>−7,493</b><span>src lines (+8,777 / −16,270)</span></div>
+    <div class="stat"><b>−14,600</b><span>test lines (+10,212 / −24,812)</span></div>
+    <div class="stat"><b>162 → 156</b><span>src .py files</span></div>
+    <div class="stat"><b>423</b><span>files touched in total</span></div>
+  </div>
+  <div class="two">
+    <pre class="block" aria-label="Package layout change"><span class="muted"> src/chart_manager/</span>
+<span class="del">-├── services/      # 93 files, 18.4k</span>
+<span class="del">-├── domain/        # 8 files</span>
+<span class="del">-├── cli/           # 20 files, 5.3k</span>
+<span class="add">+├── cli/           # 5 files, 0.7k</span>
+<span class="add">+├── commands/      # one package per command</span>
+<span class="add">+│   ├── promote/   3,955</span>
+<span class="add">+│   ├── validate/  3,468</span>
+<span class="add">+│   ├── local/     1,856</span>
+<span class="add">+│   ├── test/      1,560</span>
+<span class="add">+│   ├── upgrade/   1,201</span>
+<span class="add">+│   └── grafana publish events catalog plan doctor</span>
+<span class="add">+├── shared/        # charts, cluster, events, workspace</span>
+<span class="add">+├── settings.py</span>
+ ├── integrations/  # helm, kubectl, kind, kyverno …
+ ├── plumbing/
+ └── api/v1alpha1/</pre>
+    <div style="display:grid;gap:10px;align-content:start">
+      <h3>What the stack did, by issue</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Issue</th><th>Commits</th><th>Theme</th></tr></thead>
+        <tbody>
+          <tr><td class="n">#125</td><td class="n">13</td><td>validate becomes a command package; schema lock moved</td></tr>
+          <tr><td class="n">#137</td><td class="n">12</td><td>one <code>converge()</code>; <code>spec.chartTest</code> rename (breaking)</td></tr>
+          <tr><td class="n">#144</td><td class="n">12</td><td>plan reads <code>validate.select()</code> / <code>test.select()</code></td></tr>
+          <tr><td class="n">#153</td><td class="n">4</td><td>publish selection goes direct</td></tr>
+          <tr><td class="n">#155</td><td class="n">15</td><td>promote cleanup, dead re-exports</td></tr>
+          <tr><td class="n">#159</td><td class="n">30</td><td>upgrade / finalize, wire payload pins</td></tr>
+          <tr><td class="n">#164</td><td class="n">6</td><td>events into <code>shared/events</code></td></tr>
+          <tr><td class="n">#169</td><td class="n">13</td><td>empty the old layers, import-linter</td></tr>
+          <tr><td class="n">#170</td><td class="n">2</td><td>bound <code>helm dependency update</code></td></tr>
+        </tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<section id="standards" class="axis">
+  <div class="sechead"><span class="eyebrow">Code review · axis 1 of 2</span><h2>Standards</h2>
+  <p class="muted">Checked against <code>CODING_STANDARDS.md</code>, <code>GLOSSARY.md</code>, ADR-0001 and ADR-0002, plus the Fowler smell baseline. Anything ruff, mypy, lint-imports or vulture already enforces is skipped. <span class="tag">arch</span> marks a finding the architecture scan reached on its own.</p></div>
+  <div class="ledger">
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Tests of tests, and tests of docstrings</span><span class="loc">tests/test_exit_codes.py:110-158, 274-281 · tests/test_output_streams.py:177-200</span><span>Breaks CODING_STANDARDS #6. One test's own name admits it guards the guard: <code>test_exit_scan_finds_the_call_sites_it_is_meant_to_check</code>. Another asserts on the <code>exit_codes</code> module docstring. The two <code>ast.walk</code> scanners are also copies of each other.</span><span class="fix">Delete them, or replace them with a ruff rule.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Optional wiring builds its own adapters <span class="tag">arch</span></span><span class="loc">shared/workspace.py:163 · cli/_container.py:36, 87 · validate/schemas/store.py:66-71 → validate/cli.py:327 · <code>runner or SubprocessRunner()</code> in helm, kubectl, kind, kyverno, github, git, repository_snapshot</span><span>Breaks rule #3, "wiring is required". <code>KubeconformSchemaStore()</code> skips <code>container.command_runner()</code> and builds its own runner, so a reader can't tell from the call site which runner runs. The <code>container(settings=…)</code> parameter has no callers.</span><span class="fix">Make these parameters required, and delete the dead parameter.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Second <code>LocalCluster</code> loader in the shared floor swallows errors</span><span class="loc">shared/workspace.py:103-107</span><span>Breaks #2 (one loader) and #4 (fail loudly) with <code>except (YamlError, ValueError): pass</code>. It also breaks ADR-0001 rule 5, because selection rules belong with their command.</span><span class="fix">Move <code>chart_test_patterns</code> to <code>commands/test/select.py</code> and <code>validate_patterns</code> to <code>validate/select.py</code>.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Design history in code <span class="tag">arch</span></span><span class="loc">promote/state.py:3-20 · main.py:142-158, 178-182, 268-277 · cli/output.py:96, 168 · cli/streams.py</span><span>Breaks #9. In <code>cli/streams.py</code>, comment and docstring lines outnumber code 129 to 43. A reader has to get through the rationale before reaching the behaviour.</span><span class="fix">Move the history to PRs or ADRs and keep only what the code does.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t"><code>KubeconformSchemaSyncService</code> is a stateless Middle Man <span class="tag">arch</span></span><span class="loc">commands/validate/schemas/sync.py:47 · app.py:30</span><span>Breaks #10 (no <code>*Service</code>) and the GLOSSARY entry for Service.</span><span class="fix">Make it a plain <code>sync()</code> function.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Protocol with one implementer</span><span class="loc">commands/validate/schemas/source.py:6</span><span>Breaks the Integrations rule, "Protocols only for two or more real adapters". <code>KubeconformSchemaSource</code> has only <code>GitHubKubeconformSchemaSource</code>.</span><span class="fix">Type against the concrete class.</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">GLOSSARY <em>Avoid</em> terms in user-facing text</span><span class="loc">local/cli.py:181, 392 · local/__init__.py:1 · test/cli.py:128 · cli/streams.py:174 · promote/__init__.py:1</span><span>Uses "development cluster", "Lab install summary", "ephemeral" and "rollout".</span><span class="fix">Use "dev cluster", "test cluster" and "HelmRelease reconcile".</span></div></div>
+    <div class="f"><span class="pill hard">Hard</span><div class="body"><span class="t">Tests reach into private functions <span class="tag">arch</span></span><span class="loc">tests/commands/local/test_cli_rendering.py (319 lines, 13 private calls) · test_exit_codes.py:267 · test_kubeconform_schema_generated.py:277+</span><span>Breaks the Tests rule, "use public entry points". These tests pin rendering text, not flag parsing, output mode or exit code.</span><span class="fix">Test through <code>cli()</code>, or delete them.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Duplicated Code: four JSON emitters despite "the single emitter"</span><span class="loc">validate/cli.py:229 · upgrade/cli.py:110-113 · plan/cli.py:115 · promote/render.py:120-228</span><span><code>cli/output.py:286</code> <code>emit</code> promises <code>indent=2, sort_keys=True</code> everywhere. Each bypass encodes JSON differently.</span><span class="fix">Route them through <code>emit</code>, or correct the docstring.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Mysterious Name: <code>commands/*/wire.py</code></span><span class="loc">every command package</span><span>AGENTS.md uses "wire" to mean dependency wiring, but these files hold JSON projections, and validate calls the same thing <code>output.py::to_json</code>.</span><span class="fix">Pick one name, such as <code>payload.py</code>.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Shotgun Surgery: <code>main.py</code> knows validate's error hierarchy <span class="tag">arch</span></span><span class="loc">main.py:35-42, 282</span><span>It imports six <code>KubeconformSchema*Error</code> types and special-cases the render error.</span><span class="fix">Subclass the <code>plumbing/errors.py</code> types.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Duplicated test fixture and a module cache <span class="tag">arch</span></span><span class="loc">5 × tests/test_helm_*.py <code>_clear_mise_cache</code> · helm.py:550</span><span>The fixture exists only because of a module-global <code>WeakKeyDictionary</code>, which breaks default #8 (no module caches).</span><span class="fix">Delete the cache, or move the fixture to conftest.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Stale test names and flat layout <span class="tag">arch</span></span><span class="loc">test_cluster_tests.py · test_lifecycle_policy.py · test_provisioning_hooks.py · test_manifest_validation_*.py · ~60 flat files</span><span>Files are named after deleted modules or <em>Avoid</em> terms and don't mirror <code>commands/</code> or <code>shared/</code>.</span><span class="fix">Rename and move them in one mechanical commit.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Speculative Generality</span><span class="loc">local/__init__.py re-exports · catalog/wire.py:4 · reset_invocation · kubectl.get_json:710</span><span>These include re-exports no composite reads (ADR-0002 rule 4), a comment about "a REST endpoint, a Slack app", a test hook in src, and a public method used only internally.</span><span class="fix">Delete or narrow them.</span></div></div>
+    <div class="f"><span class="pill judge">Judgement</span><div class="body"><span class="t">Swallowed <code>SpecError</code></span><span class="loc">shared/charts/dependency_update.py:24-27</span><span>Defensible, but it conflicts with #4 (fail loudly).</span><span class="fix">Either fail loudly or log the skip.</span></div></div>
+  </div>
+</section>
+
+<section id="spec" class="axis">
+  <div class="sechead"><span class="eyebrow">Code review · axis 2 of 2</span><h2>Spec</h2>
+  <p class="muted">Checked against ADR-0001 (its placement table and rules), ADR-0002, the commit bodies and the AGENTS.md Scope rules. Each finding quotes the spec line it tests.</p></div>
+  <div class="note warn">The GitHub issue bodies for #125–#170 weren't available, because <code>gh</code> can't authenticate inside the sandbox. This axis therefore judges the stack against its design ADR, not the issue text. Re-run it once the issues are reachable.</div>
+
+  <h3>Implemented, but looks wrong</h3>
+  <div class="ledger">
+    <div class="f"><span class="pill spec">Wrong</span><div class="body"><span class="t">The install wait is N × timeout, not one budget</span><span class="loc">shared/cluster/converge.py:27 · 129-132 · verified</span><span>Spec: <em>"<code>DEFAULT_TIMEOUT</code>: the install and wait budget."</em> Each <code>rollout_status</code> and each <code>wait_established</code> gets the full <code>release.timeout</code>, one after another, so a release with 5 workloads can wait 50 minutes. <code>helm --wait</code> used to apply one bound. The 4538163 behaviour-change list doesn't mention this.</span><span class="fix">Compute a deadline once and pass each wait the time remaining.</span></div></div>
+    <div class="f"><span class="pill spec">Wrong</span><div class="body"><span class="t">A failed dependency fetch reads as a chart failure</span><span class="loc">commands/validate/run.py:320-335 · run.py:260 · verified</span><span>bb86a98: <em>"A check whose tool broke is now <code>error</code>."</em> When <code>helm dependency update</code> fails on the registry or network inside <code>_render</code>, it exits non-zero and is reported as <code>failed</code>. The same failure in the CRD pre-pass escapes and exits 4, so one cause gets two outcomes.</span><span class="fix">Run dependency update outside the rejected-or-broke split, or classify its failure as <code>error</code>.</span></div></div>
+    <div class="f"><span class="pill spec">Wrong</span><div class="body"><span class="t"><code>--tool-timeout</code> now also bounds dependency fetches</span><span class="loc">shared/charts/dependency_update.py:33</span><span>fec107e: <em>"the configured tool or command timeout when set."</em> Validate's <code>--tool-timeout</code> is sized for <code>helm template</code> but now also caps network fetches, which used to have a fixed 300s cap (1436bef).</span><span class="fix">Give the dependency update its own bound, or document the coupling.</span></div></div>
+  </div>
+
+  <h3>Missing or partial</h3>
+  <div class="ledger">
+    <div class="f"><span class="pill spec">Partial</span><div class="body"><span class="t">Chart and lifecycle loading still copied 4 times <span class="tag">arch</span></span><span class="loc">shared/cluster/local_cluster.py:77-84 · shared/charts/chart_tests.py:33-35, 54-56 · chart.py:60</span><span>ADR-0001: <em>"chart + chart-lifecycle.yaml loading is copied 8 times"</em> and <em>"chart-lifecycle.yaml with names checked"</em>. <code>local_cluster</code> checks the name against Chart.yaml, while <code>validate_chart_lifecycle_identity</code> checks it against the directory.</span></div></div>
+    <div class="f"><span class="pill spec">Partial</span><div class="body"><span class="t">Integrations still default the runner</span><span class="loc">helm.py:99 · kubectl.py:149 · kind.py:57 · git.py:17, 64 · github.py:36 · kyverno.py:84 · kubeconform/runner.py:65 · repository_snapshot.py:20</span><span>ADR-0001: <em>"with the runner or client a required argument"</em>. Only Renovate was fixed (2ff3aec). The Standards axis flags the same lines against rule #3.</span></div></div>
+    <div class="f"><span class="pill spec">Partial</span><div class="body"><span class="t">Classes that hold no real state</span><span class="loc">validate/schemas/sync.py:47 · shared/charts/install_plan.py:24</span><span>Rule 4: <em>"Plain functions over *Service classes; a class only when it holds real state."</em> <code>DependencyResolver</code> wraps a single callable.</span></div></div>
+    <div class="f"><span class="pill spec">Partial</span><div class="body"><span class="t"><code>commands/events</code>, not <code>event</code></span><span class="loc">commands/events/</span><span>Spec: <em>"Command packages are named after the CLI subcommand."</em> The name also collides with <code>shared/events</code>.</span></div></div>
+    <div class="f"><span class="pill spec">Partial</span><div class="body"><span class="t">validate is not flat; tests don't mirror packages</span><span class="loc">commands/validate/schemas/ (13 modules) · 62 flat tests/test_*.py</span><span>Rule 4: <em>"Flat inside a package."</em> Rule 6 asks tests to mirror packages <em>"where that helps"</em>, and 9 <code>test_kubeconform_schema_*</code> files would help most.</span></div></div>
+  </div>
+
+  <h3>Breaking without <code>!</code>, and scope creep</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Commit</th><th>Change</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1436bef</td><td><code>--phase / --kubeconform / --policy</code> become <code>--check</code>; <code>--dep-update-timeout</code> removed; <code>-o json</code> shape changed</td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">bb86a98</td><td>new <code>error</code> status; a chart helm rejects now exits 1, not 4</td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">12af14b</td><td><code>local down/status</code> JSON drops <code>port_forward_pid</code></td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">613833d</td><td><code>helmrelease promote|monitor|test</code> becomes <code>promote …</code>, with no alias (the rename was asked for)</td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">277760a</td><td>removes <code>doctor --for</code> (ADR-0002 asked for this)</td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">a26bb8f</td><td><code>plan</code> exit code 3 becomes 2</td><td><span class="pill hard">no !</span></td></tr>
+      <tr><td class="n">31b2a6d</td><td>lazy cloud-SDK imports; not in any spec</td><td><span class="pill judge">creep</span></td></tr>
+      <tr><td class="n">874b9f8</td><td>adds a doctor requirement that 277760a later deletes, so it nets to nothing</td><td><span class="pill judge">churn</span></td></tr>
+      <tr><td class="n">4128928</td><td>drops <code>chart upgrade --path</code> (has <code>!</code>); not confirmed that #159 asked for it</td><td><span class="pill plain">check</span></td></tr>
+    </tbody></table></div>
+  <p class="muted">Every other ADR-0001 table row is satisfied: <code>shared/charts</code>, <code>workspace</code>, <code>shared/cluster</code>, <code>test</code>, <code>plan</code>, <code>local</code>, <code>validate</code>, <code>promote</code>, <code>events</code> and the deleted row. <code>converge.py:74</code> is the only <code>upgrade_install</code> caller.</p>
+</section>
+
+<section id="beyond">
+  <div class="sechead"><span class="eyebrow">improve-codebase-architecture</span><h2>Beyond #177: deepening opportunities</h2>
+  <p class="muted">This is a separate scan of the HEAD tree, weighted toward the hot spots in the last 150 commits. Candidates are ranked by value. LOC deltas are the scanning agent's estimates.</p></div>
+
+  <article class="cand" id="c1">
+    <header><span class="rank">1</span><h3>Resolve the chart-test install plan to releases in one place</h3><span class="pill ok">Strong</span><span class="pill plain">local-substitutable</span><span class="pill acc">M · ≈ −150 src / −100 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: three commands rebuild each release</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  B[cluster/bootstrap] --> R[releases.lifecycle_install_plan]
+  L[local/run] --> R
+  T[test/plan] --> D[install_plan.DependencyResolver]
+  R --> D
+  B --> C[ChartTestCatalog]
+  L --> C
+  T --> C
+  B --> P[require_chart_test_profile]
+  L --> P
+  T --> P
+</pre></div></div>
+      <div><span class="eyebrow">After: one module answers "what installs"</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  B[cluster/bootstrap] --> IP[shared/charts/install_plan<br/>resolved entries]
+  L[local/run] --> IP
+  T[test/plan] --> IP
+  IP --> C[chart + lifecycle loading]
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class IP deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p><code>InstallPlanEntry</code> is only <code>(chart, profile)</code>. Every caller re-loads the chart, re-resolves values, namespace and timeout, and rebuilds a <code>Release</code>. That repeats the install loop ADR-0001 set out to remove.</p></div>
+      <div><span class="eyebrow">Evidence</span><ul><li>The same <code>catalog.get → require_chart_test_profile → value_paths → Release(...)</code> sequence appears at bootstrap.py:99-116 and 132-148, local/run.py:321-329 and 418-421, and test/plan.py:106-109.</li><li><code>ExternallySatisfiedLifecycle</code> is rebuilt by hand 3 times.</li><li>Understanding one install means reading 5 types across 4 modules.</li></ul></div>
+    </div>
+    <div class="files">shared/charts/install_plan.py · shared/charts/chart_tests.py · shared/cluster/releases.py · shared/cluster/bootstrap.py · commands/local/run.py · commands/test/plan.py</div>
+  </article>
+
+  <article class="cand" id="c4">
+    <header><span class="rank">2</span><h3>One Chart loader in <code>shared/charts/chart.py</code></h3><span class="pill ok">Strong</span><span class="pill plain">local-substitutable</span><span class="pill acc">M · ≈ −150 src / −80 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: 5 types, 6 loaders, a second resolver</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  V[validate] --> LC[load_chart]
+  CA[catalog] --> LC
+  T[test/select] --> CT[ChartTestCatalog.get] --> LH[load_helm_chart] --> LM[load_chart_metadata]
+  CL[cluster/releases] --> LN[load_chart_name]
+  UP[upgrade] --> RP[upgrade/paths resolver]
+  LO[local] --> TG[chart_target] --> LN
+  PU[publish] --> CR[ChartRepository]
+</pre></div></div>
+      <div><span class="eyebrow">After: one Chart, one load</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  V[validate] --> CH[shared/charts/chart<br/>Chart + load]
+  CA[catalog] --> CH
+  T[test] --> CH
+  CL[cluster] --> CH
+  UP[upgrade] --> CH
+  LO[local] --> CH
+  PU[publish] --> CH
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class CH deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p>The GLOSSARY "Chart" is spread across <code>Chart</code>, <code>HelmChart</code>, <code>ChartUnderTest</code>, <code>ChartMetadata</code> and <code>ResolvedChartTarget</code>. Upgrade has its own resolver with its own name check.</p></div>
+      <div><span class="eyebrow">Evidence</span><ul><li>chart.py has six load entry points: :60, :69, :105, :152, :182 and :194/:209.</li><li><code>ChartRepository(workspace.root, charts_dir=…)</code> is rebuilt at 5 sites.</li><li>upgrade resolves the same chart 3 times: cli.py:74, run.py:284 and finalize.py:134.</li></ul></div>
+    </div>
+    <div class="files">Do this together with #1, since <code>ChartTestCatalog</code> is shared. It completes ADR-0001's "chart loading copied 8 times".</div>
+  </article>
+
+  <article class="cand" id="c2">
+    <header><span class="rank">3</span><h3>Make the schema lock one deep module</h3><span class="pill ok">Strong</span><span class="pill plain">local-substitutable</span><span class="pill acc">M · ≈ −300 src / −250 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: 12 modules, 1,862 lines, policy derived 3×</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  CLI[validate/cli] --> APP[schemas/app] --> SYNC[sync.SyncService]
+  RUN[validate/run] --> RT[schemas/runtime]
+  DOC[doctor] --> SD[schemas/doctor]
+  SYNC --> LK[schemas/lock]
+  RT --> LK
+  SD --> LK
+  SYNC --> ST[schemas/store]
+  RT --> ST
+  MAIN[main.py] -.leak.-> ERR[schemas/errors x8]
+  linkStyle 9 stroke:#b42318,stroke-width:2px
+</pre></div></div>
+      <div><span class="eyebrow">After: check · sync · locations</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  CLI[validate/cli] --> SL[schemas<br/>check / sync / locations]
+  RUN[validate/run] --> SL
+  DOC[doctor] --> SL
+  SL --> ST[store + snapshots]
+  SL --> PE[plumbing/errors]
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class SL deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p>Sync, the validate runtime and doctor each rebuild <code>AuthoredSchemaPolicy</code>, load the lock and compute mismatches on their own. Eight error classes leak into the composition root.</p></div>
+      <div><span class="eyebrow">Evidence</span><ul><li><code>AuthoredSchemaPolicy(...)</code> is built at app.py:33, runtime.py:76 and doctor.py:119.</li><li>The lock is loaded and checked for mismatches at sync.py:86, runtime.py:74 and doctor.py:151.</li><li><code>main.py:35-41</code> imports 6 error types.</li><li>The 7 <code>test_kubeconform_schema_*</code> files sit flat in <code>tests/</code>.</li></ul></div>
+    </div>
+    <div class="files">Keeps ADR-0002's rule-4 exception (validate exports the schema check for doctor) with a smaller surface. This one module also fixes three Standards findings: <code>*Service</code>, the one-implementer Protocol and the <code>main.py</code> error imports.</div>
+  </article>
+
+  <article class="cand" id="c3">
+    <header><span class="rank">4</span><h3>One promotion-stage runner for <code>promote monitor</code> and <code>promote test</code></h3><span class="pill judge">Worth exploring</span><span class="pill plain">local-substitutable</span><span class="pill acc">L · ≈ −400 src / −200 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: one frame written twice, and the copies have drifted</span><div class="mm"><pre class="mermaid">
+flowchart TB
+  CLI[promote/cli] --> M[monitor.run / _Watcher]
+  CLI --> T[test.run / _Tester]
+  M --> F[fanout.run_matched]
+  T --> F
+  M --> X[matching, report, telemetry, classify]
+  T --> Y[matching, report, telemetry]
+  CLI --> RE[render x2] --> W[wire x2]
+</pre></div></div>
+      <div><span class="eyebrow">After: stages supply only their step</span><div class="mm"><pre class="mermaid">
+flowchart TB
+  CLI[promote/cli] --> S[promote stage runner]
+  S --> MS[monitor step + classify]
+  S --> TS[helm-test step]
+  S --> K[kubectl, helm]
+  CLI --> RE[one render path]
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class S deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p>Request validation, no-match outcome, worker, ring buffer, deadline, <code>_finalize</code>, <code>_compose_diagnostics</code>, the CLI body, renderers and wire are all written twice.</p></div>
+      <div><span class="eyebrow">Drift already present</span><ul><li>The events namespace is <code>target_namespace or namespace</code> at monitor.py:587 but only <code>target_namespace</code> at test.py:710.</li><li>The suspended check is re-implemented at test.py:310 alongside classify.py:94.</li><li>The CLI bodies at cli.py:157-198 and 227-268 match line for line.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="c5">
+    <header><span class="rank">5</span><h3>Open the event store from Settings, not <code>os.environ</code></h3><span class="pill judge">Worth exploring</span><span class="pill plain">ports &amp; adapters</span><span class="pill acc">M · ≈ −120 src / −80 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: a 3-branch switch on <code>EVENTS_BACKEND</code>, written 3×</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  P[promote/telemetry] --> NF[emit_non_fatal] --> W[events/writer]
+  U[upgrade/telemetry] --> NF
+  W --> G[get_event_store env]
+  Q[query_events env] --> G
+  D[preflight env] --> CO[cosmos]
+  G --> CO
+  G --> DY[dynamodb]
+</pre></div></div>
+      <div><span class="eyebrow">After: one open, three real adapters</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  S[settings.events_backend] --> O[events: open store]
+  O --> CO[Cosmos]
+  O --> DY[DynamoDB]
+  O --> NU[Null]
+  P[promote] --> O
+  U[upgrade] --> O
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class O deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p>The backend is read from the environment at store.py:219, 245 and 265, bypassing <code>Settings</code> (rule #3). Callers learn compose and build pairs and <code>emit_non_fatal</code> lambdas.</p></div>
+      <div><span class="eyebrow">Evidence</span><ul><li><code>PromotionTelemetry</code> and <code>emit_non_fatal</code> appear at 22 sites.</li><li>There are 3 near-copy EventStore fakes in tests.</li><li><code>pr._emit_promotion</code> forwards to a forwarder.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="c6">
+    <header><span class="rank">6</span><h3>Collapse the chart-test plan IR</h3><span class="pill judge">Worth exploring</span><span class="pill plain">in-process</span><span class="pill acc">S–M · ≈ −150 src / −150 tests</span></header>
+    <div class="ba">
+      <div><span class="eyebrow">Before: compile, digest, then 4 rewrite passes</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  REQ[ChartTestRequest] --> CP[compile + sha256 digest]
+  CP --> X1[exclude bootstrap-owned] --> X2[exclude required] --> X3[without required helm tests] --> MG[merge / cleanup_tail]
+  MG --> EX[run._perform]
+  MG --> WI[dry-run json]
+</pre></div></div>
+      <div><span class="eyebrow">After: steps straight from the install plan</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  REQ[ChartTestRequest] --> IP[install plan, candidate 1]
+  IP --> ST[test steps]
+  ST --> EX[run]
+  ST --> WI[dry-run output]
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p><code>input_digest</code> is read only by <code>--dry-run -o json</code> (test/wire.py:39). The evidence-safe ids serve an evidence store that no longer exists.</p></div>
+      <div><span class="eyebrow">Evidence</span><ul><li>plan.py is 475 lines, against 370 for the executor.</li><li>The digest machinery is plan.py:378-456.</li><li>This becomes nearly free once #1 lands.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="c7">
+    <header><span class="rank">7</span><h3>Settings as the one seam for process configuration</h3><span class="pill plain">Speculative</span><span class="pill plain">in-process</span><span class="pill acc">S–M · ≈ −20 src</span></header>
+    <div class="pa">
+      <div><span class="eyebrow">Problem</span><p><code>Settings</code> has 7 fields, while about 20 environment reads are scattered across commands and integrations, and two of them disagree. The win is predictability, not line count.</p></div>
+      <div><span class="eyebrow">Live inconsistencies</span><ul><li><code>CI</code> is accepted as <code>{1,true,yes,on}</code> at cli/_options.py:40 but only as <code>== "true"</code> at cli/output.py:318 and promote/cli.py:73.</li><li>Token precedence is reversed: GITHUB_TOKEN first at github_schema_source.py:75, RENOVATE_TOKEN first at upgrade/run.py:73.</li><li>An autouse conftest fixture clears about 10 environment variables to compensate.</li></ul></div>
+    </div>
+  </article>
+</section>
+
+<section id="roadmap">
+  <div class="sechead"><span class="eyebrow">What should happen next</span><h2>Roadmap after #177</h2>
+  <p class="muted">The order is set by hot spots and dependencies: candidate 6 rides on 1, and 2 shares <code>ChartTestCatalog</code> with 1.</p></div>
+  <div class="road">
+    <div class="step"><span class="n">NOW · small PRs</span><h3>Predictability bugs</h3><ul><li>Give the converge wait one deadline, not N × timeout</li><li>Classify a failed dependency fetch as <code>error</code></li><li>Pass <code>Session</code>'s Helm the command timeout</li><li>Give <code>chart upgrade</code> a non-zero exit on failure</li><li>List the 6 unflagged breaking changes in the #177 PR body</li><li>Parse <code>CI</code> one way</li><li>Pick one token precedence</li><li>Use one events namespace in monitor and test</li><li>Wire <code>KubeconformSchemaStore</code> to the container runner</li></ul><span class="loc">These are behaviour bugs, not refactors</span></div>
+    <div class="step"><span class="n">NEXT · hygiene</span><h3>Close the hard Standards findings</h3><ul><li>Delete the tests of tests and docstring tests</li><li>Make wiring parameters required</li><li>Move the pattern loaders out of <code>shared/workspace</code></li><li>Remove <em>Avoid</em> terms</li><li>Cut design-history docstrings</li></ul><span class="loc">Mostly deletion</span></div>
+    <div class="step"><span class="n">THEN · deepen</span><h3>Install plan + Chart loader</h3><ul><li>Candidates 1 and 4 together</li><li>Then 6 (plan IR)</li></ul><span class="loc">≈ −450 src / −330 tests</span></div>
+    <div class="step"><span class="n">AFTER</span><h3>Schema lock, promote stages, events</h3><ul><li>2 (schema lock)</li><li>3 (stage runner)</li><li>5 then 7 (Settings seam)</li></ul><span class="loc">≈ −840 src / −530 tests</span></div>
+  </div>
+  <div class="two">
+    <div style="display:grid;gap:8px;align-content:start"><h3>CI and doc drift</h3><ul style="margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px">
+      <li><code>test_manifest_validation_policy_e2e.py</code> and <code>test_renovate_extraction.py</code> never run in CI.</li>
+      <li><code>mise run check</code> claims parity with CI, but CI lacks the dashboard lint and mise lacks the integration step.</li>
+      <li>The suite stats at <code>CODING_STANDARDS.md:71</code> are stale (1,570 / 122 / 39k, now about 1,063 / 113 / 23.3k).</li>
+      <li>"Today only the event store has a Protocol" is false; there are 5.</li>
+      <li>Stale <code>helm_test.py</code> references remain at promote/matching.py:5 and state.py:74.</li>
+    </ul></div>
+    <div style="display:grid;gap:8px;align-content:start"><h3>Test suite shape</h3><ul style="margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px">
+      <li>Vulture scans <code>tests/</code>, so test-only callers keep <code>Kubectl.list_gateway_hosts</code>, <code>streams.narrate</code> and <code>helm._clear_mise_cache</code> alive.</li>
+      <li>There are 3 EventStore fakes and 2 DynamoDB <code>_FakeTable</code> fakes; fold each into one conftest fixture.</li>
+      <li>The output-mode rules are re-tested in 5 command CLI test files.</li>
+      <li><code>test_cluster_tests.py:18</code> reads the real <code>charts/</code> through the cwd.</li>
+      <li><code>src/count_python_loc.py</code> is unreferenced.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="round2">
+  <div class="sechead"><span class="eyebrow">improve-codebase-architecture · round 2</span><h2>Patterns that reach 5 out of 5 while shrinking further</h2>
+  <p class="muted">A second agent started from round 1's seven candidates and the reasons each dimension stopped at 4. It looked for shapes that eleven command packages and four adapters copy by hand, not for more one-off deepenings. Every count below was checked against HEAD; the <span class="tag">verified</span> tag marks claims I re-read in the source myself.</p></div>
+
+  <div class="note">Three things the brief asked it to check that the code does <b>not</b> support, so they're dropped: <code>doctor</code> is already a table (<code>doctor/run.py:45-56</code>); <code>promote/classify.py:81-184</code> is not a table, since two branches need two conditions each and a table would lie; and the command frame is already 60% built, because <code>cli/output.resolve</code>, <code>emit</code> and <code>output_option</code> are called from 10 packages. What is still hand-copied is the projection, the exit, the progress sink and <code>--dry-run</code>.</div>
+
+  <h3>New bugs found in passing</h3>
+  <div class="ledger">
+    <div class="f"><span class="pill hard">Bug</span><div class="body"><span class="t"><code>Session</code> builds <code>Helm</code> with no timeout <span class="tag">verified</span></span><span class="loc">shared/cluster/session.py:91</span><span><code>Kind</code> and <code>Kubectl</code> on the lines above and below get <code>settings.command_timeout</code>; <code>Helm</code> does not, so a hung helm has no bound inside a kind session.</span></div></div>
+    <div class="f"><span class="pill hard">Bug</span><div class="body"><span class="t">"CRD missing" and "apiserver down" look the same <span class="tag">verified</span></span><span class="loc">integrations/kubectl.py:521-539 vs 710-721</span><span><code>_list_items</code> returns <code>[]</code> on any non-zero exit or bad JSON, while <code>get_json</code> raises. <code>local status</code> and <code>local access</code> rely on the swallow for an absent VirtualService CRD, so a dead cluster reads as "no routes".</span></div></div>
+    <div class="f"><span class="pill hard">Bug</span><div class="body"><span class="t"><code>chart upgrade</code> never exits non-zero <span class="tag">verified</span></span><span class="loc">commands/upgrade/cli.py</span><span>No <code>Exit</code>, <code>exit_code_for</code> or <code>exit_if_failed</code> anywhere in the file, including for <code>UpgradeStatus.STATUS_UNKNOWN</code>. CI consumers can't tell a failed upgrade from a clean one by exit code.</span></div></div>
+  </div>
+
+  <h3>Pattern-level moves</h3>
+
+  <article class="cand" id="r2a">
+    <header><span class="rank">A</span><h3>The result dataclass is the wire document; one <code>finish()</code> in <code>cli/</code></h3><span class="pill ok">Strong</span><span class="pill acc">≈ −650 to −800 src · −250 to −400 tests</span></header>
+    <div class="dims"><span>Maintainability 4→5</span><span>Ease of use 4→5</span><span>Ownership: validate 22→~15 modules</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: every command projects, encodes and exits its own way</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  R1[validate/run ValidateOutcome] --> W1[validate/output.to_json] --> E1[validate/cli stdout.write + Exit]
+  R2[local/run DevClusterResult] --> W2[local/wire.converge_to_dict] --> E2[local/cli emit + exit_if_failed]
+  R3[promote/monitor MonitorResult] --> W3[promote/render.render_monitor_json] --> E3[json.dump compact]
+</pre></div></div>
+      <div><span class="eyebrow">After: flags → request → run() → finish()</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  R["any run() → Result with .outcome"] --> F[cli/output.finish]
+  F --> O["json / yaml / table, one encoder"]
+  F --> X["exit_code_for(result.outcome)"]
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class F deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li>Seven <code>wire.py</code> files plus <code>plan/cli.py:183-215</code>, <code>validate/output.py:28-63</code> and three JSON wrappers in <code>promote/render.py</code> total about 760 lines. Most are field-for-field mirrors: <code>local/wire.py</code> 5 of 5 functions, <code>test/wire.py</code> 3 of 3, <code>promote/wire.py</code> 7 of 9.</li>
+        <li>Six encoders bypass <code>emit</code>, each with different settings <span class="tag">verified</span>: <code>doctor/cli.py:62</code>, <code>plan/cli.py:115</code>, <code>promote/render.py:38</code>, <code>upgrade/cli.py:113</code>, <code>validate/cli.py:229,248</code>, <code>grafana/cli.py:137</code>.</li>
+        <li>Six exit idioms, and <code>--dry-run</code> is declared nine ways across eleven packages.</li>
+        <li>Path encoding already disagrees: <code>str(path)</code> in promote, <code>as_posix()</code> in grafana and upgrade.</li></ul></div>
+      <div><span class="eyebrow">Risk</span><ul>
+        <li>Key renames unless dataclass fields take the wire names (<code>catalog.chart_type</code> → <code>type</code>; <code>upgrade.current_version</code> → <code>current_wrapper_version</code>).</li>
+        <li>promote, upgrade and plan JSON go from compact to <code>indent=2</code>. No in-repo consumer breaks; <code>ci.yaml:255</code> and <code>README.md:167</code> use <code>jq</code>.</li>
+        <li>Five of 24 callbacks keep an escape hatch: <code>promote pr</code>, <code>grafana export --to</code>, validate's sidecars, <code>publish</code>, and <code>upgrade-finalize --format</code>, which <code>renovate-global.json</code> freezes.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="r2b">
+    <header><span class="rank">B</span><h3>Deep adapters: one <code>_run</code> / <code>_json</code> funnel each; answers, not argv</h3><span class="pill ok">Strong</span><span class="pill acc">≈ −300 to −400 src · −600 to −900 tests</span></header>
+    <div class="dims"><span>Ownership 4→5</span><span>Updatability 4→5</span><span>Test confidence</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: 29 call sites each repeat context + timeout; two JSON rules</span><div class="mm"><pre class="mermaid">
+flowchart TD
+  H1[Helm.list_releases] --> RR1[runner.run + _with_context + timeout]
+  H2[Helm.upgrade_install] --> RR2[runner.run + _with_context + timeout]
+  K1[Kubectl.get_json] --> P1[_parse_json raises]
+  K2[Kubectl._list_items] --> P2["returns [] on any error"]
+  linkStyle 3 stroke:#b42318,stroke-width:2px
+</pre></div></div>
+      <div><span class="eyebrow">After: the shape <code>Kind._run</code> already has</span><div class="mm"><pre class="mermaid">
+flowchart TD
+  HM[Helm public methods] --> HR[Helm._run / _json]
+  KM[Kubectl public methods] --> KR[Kubectl._run / _json]
+  HR --> CR[plumbing/commands.CommandRunner]
+  KR --> CR
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class HR,KR deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li><code>Helm</code> has 12 <code>runner.run</code> sites and <code>Kubectl</code> 17, each repeating <code>_with_context</code> and <code>timeout=self.timeout</code>. <code>integrations/kind.py:254-279</code> already has the funnel, and its docstring names this exact problem.</li>
+        <li>Three error-wrapping styles; <code>create_namespace</code> at <code>kubectl.py:374-378</code> swallows every failure.</li>
+        <li>Timeouts are two types: <code>"10m"</code> strings for helm waits, floats for subprocess budgets. <code>Helm.test</code> takes both.</li>
+        <li>Dead in production: <code>Helm.status</code>, <code>Kubectl.list_gateway_hosts</code>, <code>Kubectl.workload_events</code>. <code>wait_workloads_ready</code> is re-implemented by its only caller, <code>converge.py:124-130</code>.</li>
+        <li>About 45 adapter tests assert exact argv tuples instead of the answer the adapter returns.</li></ul></div>
+      <div><span class="eyebrow">Risk</span><ul>
+        <li><code>local/status.py:82</code> and <code>local/access.py:164</code> depend on <code>_list_items</code> returning <code>[]</code>. That decision moves to those callers explicitly: the adapter reports, the caller decides.</li>
+        <li><code>Session</code>'s Helm gets <code>settings.command_timeout</code>. The default is <code>None</code>, so nothing changes unless it's set.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="r2c">
+    <header><span class="rank">C</span><h3>One progress seam: <code>ProgressEvent</code> everywhere, rendered once in <code>cli/</code></h3><span class="pill ok">Strong</span><span class="pill acc">≈ −150 to −200 src · −60 to −100 tests</span></header>
+    <div class="dims"><span>Ease of use 4→5</span><span>Ownership</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: three progress interfaces, two live tables</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  VP[validate/progress.Progress Protocol] --> VD[validate/display LiveTable + PlainNarration]
+  PC["Callable[[HelmReleaseRef, Transition], None]"] --> PR[promote/render.ProgressTable]
+  SP[shared/cluster/progress.ProgressEvent] --> SS[cli/streams.print_progress]
+</pre></div></div>
+      <div><span class="eyebrow">After: one event type, one sink chosen by output mode</span><div class="mm"><pre class="mermaid">
+flowchart LR
+  SP2[shared/cluster/progress.ProgressEvent + key] --> CP["cli/progress: plain lines, or LiveRows on a TTY"]
+  V[validate] --> SP2
+  P[promote] --> SP2
+  L[local, test] --> SP2
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class CP deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li>validate: a 36-line Protocol, 109 lines of display, and a <code>--progress auto|live|plain|none</code> flag. promote: a 55-line Rich table fed by twin fire helpers at <code>monitor.py:477</code> and <code>test.py:835</code>. local and test: the shared callback.</li>
+        <li><code>validate/display.py:38,61</code> builds <code>Console(file=sys.stderr)</code>, which <code>cli/streams.py:20-30</code> forbids and which bypasses <code>-q</code>.</li>
+        <li><code>LiveTable</code> and <code>ProgressTable</code> are the same thing: a live table keyed by row.</li></ul></div>
+      <div><span class="eyebrow">Risk</span><ul><li>validate loses <code>--progress live</code> as a forced mode. <code>auto</code> is the only rule: TTY → live, else plain, json → silent.</li><li>promote's per-release transition log stays in the result, since it's data. Only the live rendering moves.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="r2d">
+    <header><span class="rank">D</span><h3>Errors carry their <code>Outcome</code>; <code>main.py</code> imports no command internals</h3><span class="pill ok">Strong</span><span class="pill acc">≈ −50 src · −150 tests</span></header>
+    <div class="dims"><span>Ownership: main.py 340→~290</span><span>Updatability</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: a 10-row table in the composition root, plus two exceptions to it</span><div class="mm"><pre class="mermaid">
+flowchart TD
+  E1[plumbing/errors 10 classes] --> T[main._ERROR_OUTCOMES + _outcome_for]
+  E2[validate/schemas/errors 8 classes] -.leak.-> T
+  E3[events/query.EventReadError.outcome] --> C[events/cli except → Exit]
+  T --> X[exit_code_for]
+  linkStyle 1 stroke:#b42318,stroke-width:2px
+</pre></div></div>
+      <div><span class="eyebrow">After: the rule <code>KubeconformSchemaRenderError</code> already follows, applied everywhere</span><div class="mm"><pre class="mermaid">
+flowchart TD
+  S[every ChartManagerError subclass sets .outcome] --> B["ChartManagerError.outcome: ClassVar"]
+  B --> M["main.py: exit_code_for(exc.outcome)"]
+  classDef deep fill:#0f2a35,stroke:#0d6b86,color:#e3ecef,stroke-width:3px
+  class B deep
+</pre></div></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li>Not in the table, so exit 1 by accident: <code>UpgradeError</code> (raised 30 times), <code>ChartRefError</code>, and the three <code>GitHubKubeconformSchemaSource*</code> errors.</li>
+        <li><code>plumbing/exit_codes.py:76-82</code> <code>EXIT_*</code> constants duplicate <code>EXIT_CODE</code>.</li>
+        <li>Tests call the private <code>main._outcome_for</code> three times.</li></ul></div>
+      <div><span class="eyebrow">Risk</span><ul><li><code>UpgradeError</code> and <code>ChartRefError</code> get deliberate outcomes instead of accidental 1s. CI doesn't branch on either today.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="r2e">
+    <header><span class="rank">E</span><h3>Tests at the interface: golden CLI documents, one runner fake, no argv table, no AST gates</h3><span class="pill ok">Strong</span><span class="pill acc">≈ −950 to −1,100 tests · −90 scripts</span></header>
+    <div class="dims"><span>Test confidence 4→5</span><span>Maintainability</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: tests probe every depth, through a translation table</span>
+        <div class="xsec" role="img" aria-label="Cross-section of the CLI with test probes attached at six depths, from source text to the runner">
+          <div class="band"><span class="bl">tests/<small>59 flat files, 9,179 lines; fixtures copied per file</small></span><span class="probes"><span class="probe">_runner ×9</span><span class="probe">_chart ×6</span><span class="probe">3 store fakes</span></span></div>
+          <div class="band"><span class="bl">conftest argv table<small>170 lines, every entry identity</small></span><span class="probes"><span class="probe">+ 154-line test of the table</span></span></div>
+          <div class="band seam"><span class="bl">cli()<small>the public interface</small></span><span class="probes"><span class="probe dim">output-mode rules re-asserted ×5</span></span></div>
+          <div class="band"><span class="bl">run()</span><span class="probes"><span class="probe dim">per-command</span></span></div>
+          <div class="band"><span class="bl">private helpers<small>_render_*, _possible_crd_bytes, _helm_bin, _outcome_for</small></span><span class="probes"><span class="probe">31 direct calls</span><span class="probe">11 monkeypatch _x</span></span></div>
+          <div class="band seam"><span class="bl">adapters<small>Helm, Kubectl, Kind</small></span><span class="probes"><span class="probe">exact argv tuples, ~20 files</span></span></div>
+          <div class="band"><span class="bl">source text<small>ast.walk over src/</small></span><span class="probes"><span class="probe">2 AST scans + their self-tests</span></span></div>
+          <span class="cap">red = a probe that breaks on a refactor that changes no behaviour</span>
+        </div></div>
+      <div><span class="eyebrow">After: two seams, one fake under each</span>
+        <div class="xsec" role="img" aria-label="Same cross-section with probes only at the two public seams">
+          <div class="band"><span class="bl">tests/<small>mirrors commands/, shared/, integrations/</small></span><span class="probes"><span class="probe good">one conftest: FakeCommandRunner + InMemoryEventStore</span></span></div>
+          <div class="band faded"><span class="bl">argv table<small>deleted</small></span><span class="probes"><span class="probe dim">—</span></span></div>
+          <div class="band seam"><span class="bl">cli()<small>golden -o json + one table, per callback</small></span><span class="probes"><span class="probe good">24 golden tests</span><span class="probe good">_auto tested once</span></span></div>
+          <div class="band faded"><span class="bl">run()<small>internal</small></span><span class="probes"><span class="probe dim">covered through cli()</span></span></div>
+          <div class="band faded"><span class="bl">private helpers<small>internal</small></span><span class="probes"><span class="probe dim">no probes</span></span></div>
+          <div class="band seam"><span class="bl">adapters<small>stdout → answer tables</small></span><span class="probes"><span class="probe good">parametrized, one per adapter</span></span></div>
+          <div class="band faded"><span class="bl">source text<small>ruff and lint-imports own this</small></span><span class="probes"><span class="probe dim">no scans</span></span></div>
+          <span class="cap">green = a probe at an interface the standards say to test</span>
+        </div></div>
+    </div>
+    <div class="comp" role="img" aria-label="Test lines that leave the suite under move E, and the golden tests that come in">
+      <span class="eyebrow">Net test lines under E, drawn on round 1's 23.3k</span>
+      <div class="track" style="max-width:100%">
+        <span style="width:1.37%;background:var(--hard)" title="argv table + its test: 320">argv</span>
+        <span style="width:1.29%;background:var(--hard)" title="parametrize folds: 300">folds</span>
+        <span style="width:1.07%;background:var(--hard)" title="fixture dedupe: 250">fixtures</span>
+        <span style="width:0.64%;background:var(--hard)" title="output-mode re-asserts: 150"></span>
+        <span style="width:0.60%;background:var(--hard)" title="AST gates: 140"></span>
+        <span style="width:1.29%;background:var(--hard)" title="displaced JSON-shape asserts: 300"></span>
+        <span style="width:1.55%;background:var(--ok)" title="golden tests added: 360">+golden</span>
+        <span style="width:92.19%;background:var(--sunk)" class="dk" title="unchanged">rest of the suite</span>
+      </div>
+      <div class="legend"><span><i style="background:var(--hard)"></i>leaves: ≈ 1,460 lines across six categories</span><span><i style="background:var(--ok)"></i>arrives: ≈ 360 lines of golden <code>cli()</code> tests</span></div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li><code>tests/conftest.py:397-577</code> holds a 170-line argv translation table whose every entry is identity <span class="tag">verified</span>: its own comment says "Every entry is identity, and that is the steady state." <code>tests/test_cli_argv_table.py</code> (154 lines) guards it.</li>
+        <li><code>scripts/check-drift</code> plus <code>drift-baseline.json</code>: nine commits touch the baseline <span class="tag">verified</span>, every drop a hand edit. Its one live Protocol hit is <code>CommandRunner</code>, the Protocol the standards bless. It freezes 28 + 17 standing violations rather than ratcheting them.</li>
+        <li>Duplicated fixtures: <code>_runner</code> ×9, <code>fake_run</code> ×7, <code>_chart</code> ×6, <code>_scripted</code> ×3, three EventStore fakes. <code>shared/events/store.py</code> has no in-memory adapter for tests to share.</li>
+        <li>Output-mode rules re-asserted: auto→json 5×, "unknown output" 5×, global <code>-o</code> reaches the command 4×. Yet <code>cli/output._auto</code> itself is never unit-tested and its TTY branch never runs under CliRunner.</li>
+        <li>Parametrize folds with bodies at least 85% similar: about −300 lines across six files.</li></ul></div>
+      <div><span class="eyebrow">Pattern and risk</span><ul>
+        <li>Per callback, one <code>cli()</code> golden test: the <code>-o json</code> document plus one table rendering, with <code>FakeCommandRunner</code> replies and one <code>InMemoryEventStore</code>.</li>
+        <li>Adapters tested as stdout → answer tables, not argv tuples.</li>
+        <li>Golden files are brittle to wording by design. Keep them to <code>-o json</code> plus one table per command, as reviewable fixture files, not inline strings.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="cand" id="r2f">
+    <header><span class="rank">F</span><h3>CI runs what <code>mise run check</code> runs, plus every integration test</h3><span class="pill ok">Strong</span><span class="pill acc">ci.yaml −30 · .mise.toml +5 · src 0</span></header>
+    <div class="dims"><span>Test confidence 4→5</span><span>Updatability</span></div>
+    <div class="ba">
+      <div><span class="eyebrow">Before: two hand-written lists, drifting both ways</span>
+        <div class="matrix" role="img" aria-label="Thirteen gates by where they run: eight run on both laptop and CI, three on only one side, two on neither">
+          <span class="h">gate</span><span class="h">laptop<br/>mise check</span><span class="h">CI<br/>layering</span>
+          <span class="g">actionlint</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">check-chart-source-contracts</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">ruff src/ tests/</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">ruff .github/scripts/validation_cache.py</span><span class="c n">—</span><span class="c y">●</span>
+          <span class="g">mypy</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">lint-imports</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">vulture</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">check-drift</span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">grafana dashboard lint</span><span class="c y">●</span><span class="c n">—</span>
+          <span class="g">pytest -q <small>unit</small></span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">integration: packaging, schema e2e, CRD constraints, precedence <small>4 files, named one by one</small></span><span class="c n">—</span><span class="c y">●</span>
+          <span class="g">integration: policy e2e <small>kyverno is pinned and installed anyway</small></span><span class="c n">—</span><span class="c n">—</span>
+          <span class="g">test_renovate_extraction.py <small>marked integration, lives at tests/ root</small></span><span class="c n">—</span><span class="c n">—</span>
+        </div>
+        <div class="tally"><span><b>8</b> both</span><span><b>3</b> one side only</span><span><b>2</b> neither</span><span>ci.yaml:51-107 · .mise.toml:30-42</span></div>
+      </div>
+      <div><span class="eyebrow">After: one list, two readers</span>
+        <div class="matrix" role="img" aria-label="Two mise tasks run on both laptop and CI, covering every gate">
+          <span class="h">gate</span><span class="h">laptop</span><span class="h">CI</span>
+          <span class="g">mise run check <small>the 9 fast gates above, plus the dashboard lint and the validation_cache lint, in one place</small></span><span class="c y">●</span><span class="c y">●</span>
+          <span class="g">mise run check:integration <small>new: pytest -m integration tests/integration, all 6 files</small></span><span class="c y">●</span><span class="c y">●</span>
+          <span class="wide">ci.yaml drops eight hand-listed steps for two. test_renovate_extraction.py moves under tests/integration/. The sandbox-test job stays the only kind check.</span>
+          <span class="g" style="opacity:.55">vulture, check-drift <small>run on both until the delete list lands, then go</small></span><span class="c z">●</span><span class="c z">●</span>
+        </div>
+        <div class="tally"><span><b>13</b> both</span><span><b>0</b> one side only</span><span><b>0</b> neither</span><span>ci.yaml −30 · .mise.toml +5</span></div>
+      </div>
+    </div>
+    <div class="pa">
+      <div><span class="eyebrow">Evidence</span><ul>
+        <li><code>ci.yaml:161-205</code> hand-lists 8 steps and names 4 of 5 integration files; <code>.mise.toml:893-905</code> lists 9 commands. Drift runs both ways already: CI lints <code>validation_cache.py</code> and mise doesn't; mise runs the dashboard lint and CI doesn't.</li>
+        <li>The skipped kyverno e2e needs kyverno 1.18.1, which <code>.mise.toml:878</code> pins and <code>jdx/mise-action@v4</code> installs. It is skippable for no reason.</li>
+        <li>No kind-based pytest exists. The <code>sandbox-test</code> job is the kind behaviour check and should stay the only one.</li></ul></div>
+      <div><span class="eyebrow">Pattern</span><p>The <code>layering</code> job becomes two steps: <code>mise run check</code> and a new <code>mise run check:integration</code>. Move <code>test_renovate_extraction.py</code> under <code>tests/integration/</code>.</p></div>
+    </div>
+  </article>
+
+  <h3>Targeted deepenings beyond round 1</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Deepening</th><th>Evidence</th><th>Est.</th><th>Lands with</th></tr></thead>
+    <tbody>
+      <tr><td><b><code>EventWriter.record(event)</code>; events built by the model</b></td><td><code>writer.py</code> has 4 methods × 10–11 kwargs that only fill the 15-field <code>PlatformLifecycleEvent</code>; <code>emit_non_fatal</code> wraps every write in 4 places; <code>events/cli.py</code> spells the kwargs twice.</td><td class="n">−150 src</td><td>round-1 #5</td></tr>
+      <tr><td><b>Validate checks as a table</b></td><td><code>validate/run.py:205-237</code> dispatches three checks in three inline blocks sharing <code>_skip_reason</code> and <code>_timed</code>; <code>skip_all</code> already iterates <code>CheckName</code>. Also <code>promote/test._classify</code> is a 5-row first-match written as if/elif.</td><td class="n">−65 src</td><td>round-1 #2</td></tr>
+      <tr><td><b><code>local</code> entries, and <code>up</code> / <code>reset</code></b></td><td><code>local/models.py</code> has three (chart, profile, namespace) twins and <code>RunSummary</code> as a mutable twin of <code>DevClusterResult</code>; <code>up</code> and <code>reset</code> differ only in <code>provision(replace=)</code>.</td><td class="n">−120 src</td><td>after A</td></tr>
+      <tr><td><b><code>promote/cli.py</code> stage callbacks</b></td><td><code>monitor</code> and <code>test</code> callbacks are ~90% identical; each re-declares <code>--no-color</code>, duplicating <code>main.py:133</code>, and rebuilds consoles and logging.</td><td class="n">−120 src</td><td>A, C, round-1 #3</td></tr>
+      <tr><td><b>Fold the two schema-store adapters into <code>git.py</code> / <code>github.py</code></b></td><td><code>repository_snapshot.py</code> (130) runs git itself: a second git adapter with one caller. <code>github_schema_source.py</code> (187) is a second GitHub adapter and the only implementer of its Protocol: a one-adapter seam.</td><td class="n">−120 src</td><td>round-1 #2</td></tr>
+    </tbody></table></div>
+
+  <h3>Delete list: fails the deletion test outright</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Item</th><th>Lines</th></tr></thead>
+    <tbody>
+      <tr><td>Design-history prose above 40% of the file: <code>cli/streams.py</code> 129/198, <code>cli/output.py</code> 181/341, <code>promote/state.py</code> 157/346, <code>shared/events/store.py</code> 128/290, <code>shared/events/ref.py</code> 103/203, <code>main.py</code> 112/340, <code>plumbing/preflight.py</code> 95/232, <code>plumbing/exit_codes.py</code> 76/129, <code>promote/report.py</code> 38/80. Six of these are new since round 1.</td><td class="n">≈ −700 (−400 beyond round 1)</td></tr>
+      <tr><td>conftest argv table and <code>--root</code> rewrite, plus <code>tests/test_cli_argv_table.py</code></td><td class="n">≈ 170 + 154</td></tr>
+      <tr><td>AST scans, their self-tests and the docstring test in <code>test_exit_codes.py</code> and <code>test_output_streams.py</code></td><td class="n">≈ 140</td></tr>
+      <tr><td><code>scripts/check-drift</code>, <code>drift-baseline.json</code>, their CI step and mise line</td><td class="n">90 + 4</td></tr>
+      <tr><td><code>Kubectl.list_gateway_hosts</code>, <code>Kubectl.workload_events</code> and their tests</td><td class="n">37 + ≈ 60</td></tr>
+      <tr><td><code>Helm._resolve_via_mise</code> cache, <code>_clear_mise_cache</code> and its 5 test copies</td><td class="n">20 + 25</td></tr>
+      <tr><td><code>Helm.status</code> and <code>tests/test_helm_status.py</code></td><td class="n">7 + 19</td></tr>
+      <tr><td><code>plumbing/exit_codes.py</code> <code>EXIT_*</code> constants; <code>cli/_container.exit_if_failed</code> and <code>repository_root</code>; <code>cli/streams.narrate</code> (0 callers)</td><td class="n">47</td></tr>
+      <tr><td>Three EventStore fakes → one in conftest</td><td class="n">49 → 15</td></tr>
+    </tbody></table></div>
+
+  <h3>Sequence</h3>
+  <div class="two">
+    <ol class="seqlist">
+      <li><b>F</b> first. Zero src lines, and it's the behaviour check everything after relies on.</li>
+      <li><b>E, part 1.</b> Delete the argv table and its test, dedupe fixtures, one EventStore fake, the parametrize folds. Independent of all src moves.</li>
+      <li><b>D</b> together with round-1 #2, since both edit <code>validate/schemas/errors.py</code>. Delete the AST gates here.</li>
+      <li><b>A</b> after D, because <code>finish</code> needs <code>.outcome</code>. Do <code>test/wire.py</code> last, with round-1 #6. Golden tests land per command here.</li>
+      <li><b>C</b> after A: the finisher's mode selects the progress sink. Delete validate's <code>--progress</code>.</li>
+    </ol>
+    <ol class="seqlist" start="6">
+      <li><b>Round-1 #3</b> and the promote stage-callback deepening, on top of A, C and D.</li>
+      <li><b>B</b> per adapter: kubectl, helm, github, each with its stdout → answer test rewrite. Fix <code>session.py:91</code>. Independent of 3–6.</li>
+      <li>Remaining deepenings alongside their round-1 partners.</li>
+      <li>Delete <code>check-drift</code> last, once B and D have driven its two live counts to zero. Trim prose in each file as it's touched.</li>
+    </ol>
+  </div>
+  <div class="note">No ADR needs reopening. The one-implementer Protocols (<code>KubeconformSchemaSource</code>, <code>validate.Progress</code>) are fixed by C and the fifth deepening; <code>CommandRunner</code> stays the blessed exception. <code>main.py</code>'s import of <code>commands.validate.schemas.errors</code> is legal under the import contracts, which check package roots only, but it's the same leak in spirit; D removes it without a contract change.</div>
+</section>
+
+<section id="outlook">
+  <div class="sechead"><span class="eyebrow">Projection · my judgement</span><h2>Where the codebase lands after every proposal</h2>
+  <p class="muted">Two "after" columns: round 1 alone, and both rounds together. The <code>main</code> column is inferred from the diff and the ADR-0001 context, not from a separate review. Round-2 estimates are the agent's; I discount them the same way as round 1's.</p></div>
+
+  <div class="verdict">
+    <span class="eyebrow">Bottom line</span>
+    <p>Today one person can own this codebase if they take the effort to learn where its duplicates hide. After round 1 they could own it comfortably; after round 2 they could own it from memory. The package map never changes: every proposal in both rounds works inside the ADR-0001 layout, so nobody re-learns where things live. Round 1 gives each spread-out concept one home (Chart, install plan, schema lock, event backend, process configuration, promotion stage). Round 2 gives the <em>shapes</em> one home: one finisher for output and exit, one funnel per adapter, one progress sink, one exit rule carried by the error itself, and tests that hit public interfaces. What stays true even then: <code>kubectl.py</code> is still the largest file at about 850 lines because Kubernetes has many nouns, <code>upgrade-finalize --format</code> keeps its frozen Renovate contract, and no pytest ever drives a kind cluster, which is right.</p>
+  </div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Dimension</th><th>main</th><th>HEAD</th><th>After R1</th><th>After R1+R2</th><th>What 5 means here, and what gets it there</th></tr></thead>
+    <tbody>
+      <tr><td><b>Human ownership</b><br/><span class="muted">can one person hold it and answer for it</span></td>
+        <td class="r"><span class="pips" aria-label="2 of 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips now" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips after" aria-label="4 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td>
+        <td class="r"><span class="pips r2" aria-label="5 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td>
+        <td><b>5 =</b> every command package under about 2.5k lines and 12 modules, every adapter under about 850 lines with one way to run a command, and <code>main.py</code> importing only package roots and <code>plumbing</code>. Round 1 gives each concept one home; round 2's B and D plus the promote and schema deepenings get <code>promote</code> to about 2.4k and <code>validate</code> to about 2.3k.</td></tr>
+      <tr><td><b>Maintainability</b><br/><span class="muted">fix a bug once, in one place</span></td>
+        <td class="r"><span class="pips" aria-label="2 of 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips now" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips after" aria-label="4 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td>
+        <td class="r"><span class="pips r2" aria-label="5 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td>
+        <td><b>5 =</b> one behaviour change is one edit in one module, proven by a test at that module's interface. Round 1 merges the drifted copies. Round 2's A (one encoder and finisher), B (one funnel), C (one progress sink), D (one exit seam) and E (interface tests) mean the next drift has nowhere to start.</td></tr>
+      <tr><td><b>Updatability</b><br/><span class="muted">cost of the next change</span></td>
+        <td class="r"><span class="pips" aria-label="2 of 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips now" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips after" aria-label="4 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td>
+        <td class="r"><span class="pips r2" aria-label="5 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td>
+        <td><b>5 =</b> a helm, kubectl or Flux change lands in one argv builder and one parser, verified by an answer-shaped test, and CI runs the same gates as the laptop. Round 1 makes new settings and errors one-line additions. Round 2's B and F cover the adapters and CI.</td></tr>
+      <tr><td><b>Ease of use</b><br/><span class="muted">the CLI from the operator's seat</span></td>
+        <td class="r"><span class="pips" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips now" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips after" aria-label="4 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td>
+        <td class="r"><span class="pips r2" aria-label="5 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td>
+        <td><b>5 =</b> every command shares the <code>-o</code> vocabulary, one JSON convention, <code>ok</code> and <code>outcome</code> in every document, progress silenced by <code>-q</code> and json, one exit rule, and <code>--dry-run</code> meaning "print the document you'd act on". The bug fixes do most of the work; round 2's A and C do the rest. One documented exception stays: <code>upgrade-finalize --format</code>, frozen by <code>renovate-global.json</code>.</td></tr>
+      <tr><td><b>Test confidence</b><br/><span class="muted">do tests catch what matters</span></td>
+        <td class="r"><span class="pips" aria-label="2 of 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips now" aria-label="3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></td>
+        <td class="r"><span class="pips after" aria-label="4 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></td>
+        <td class="r"><span class="pips r2" aria-label="5 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></td>
+        <td><b>5 =</b> every PR runs <code>mise run check</code> plus all of <code>tests/integration/</code>, every callback has a golden <code>cli()</code> test, adapters are tested by answer, and the fakes are one <code>FakeCommandRunner</code> and one <code>InMemoryEventStore</code>. Round 2's E and F. The honest limit: no pytest drives a kind cluster, and none should; the <code>sandbox-test</code> job stays the kind check. 5 means everything that can run without a cluster runs on every PR.</td></tr>
+    </tbody></table></div>
+
+  <div class="proj" role="img" aria-label="Projected lines of code: src from 32.0k on main to 24.5k now to 21.7 to 22.6k after round 1 to 19.4 to 20.6k after both rounds; tests from 37.9k to 23.3k to 21.6 to 22.3k to 18.4 to 19.6k">
+    <span class="eyebrow">Expected lines of code (one scale)</span>
+    <span class="grp">src/chart_manager</span>
+    <div class="prow"><span class="lbl">main</span><div class="ptrack"><b style="width:84.45%;background:var(--seg6)"></b></div><span class="num">32,005</span></div>
+    <div class="prow"><span class="lbl">HEAD</span><div class="ptrack"><b style="width:64.77%;background:var(--seg2)"></b></div><span class="num">24,548</span></div>
+    <div class="prow"><span class="lbl">after R1</span><div class="ptrack"><b class="rng" style="width:59.63%"></b><b style="width:57.26%;background:var(--accent)"></b></div><span class="num">21.7k–22.6k</span></div>
+    <div class="prow"><span class="lbl">after R1+R2</span><div class="ptrack"><b class="rng" style="width:54.35%;background:repeating-linear-gradient(45deg,var(--ok) 0 3px,transparent 3px 7px)"></b><b style="width:51.19%;background:var(--ok)"></b></div><span class="num">19.4k–20.6k</span></div>
+    <span class="grp">tests</span>
+    <div class="prow"><span class="lbl">main</span><div class="ptrack"><b style="width:100%;background:var(--seg6)"></b></div><span class="num">37,901</span></div>
+    <div class="prow"><span class="lbl">HEAD</span><div class="ptrack"><b style="width:61.48%;background:var(--seg2)"></b></div><span class="num">23,301</span></div>
+    <div class="prow"><span class="lbl">after R1</span><div class="ptrack"><b class="rng" style="width:58.84%"></b><b style="width:56.99%;background:var(--accent)"></b></div><span class="num">21.6k–22.3k</span></div>
+    <div class="prow"><span class="lbl">after R1+R2</span><div class="ptrack"><b class="rng" style="width:51.71%;background:repeating-linear-gradient(45deg,var(--ok) 0 3px,transparent 3px 7px)"></b><b style="width:48.55%;background:var(--ok)"></b></div><span class="num">18.4k–19.6k</span></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>after round 1, low</span><span><i style="background:var(--ok)"></i>after both rounds, low</span><span><i style="background:repeating-linear-gradient(45deg,var(--muted) 0 3px,transparent 3px 7px)"></i>hatched: range up to the high estimate</span></div>
+  </div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Measure</th><th>main</th><th>HEAD</th><th>After R1 (est.)</th><th>After R1+R2 (est.)</th><th>vs main</th></tr></thead>
+    <tbody>
+      <tr><td>src lines, total</td><td class="n">32,005</td><td class="n">24,548</td><td class="n">21.7k–22.6k</td><td class="n">19.4k–20.6k</td><td class="n">−36% to −39%</td></tr>
+      <tr><td>&nbsp;&nbsp;of which executable code</td><td class="n">20,364</td><td class="n">16,266</td><td class="n">15.0k–15.4k</td><td class="n">13.3k–13.9k</td><td class="n">−32% to −35%</td></tr>
+      <tr><td>&nbsp;&nbsp;of which docstrings + comments</td><td class="n">7,320 (23%)</td><td class="n">4,762 (19%)</td><td class="n">3.4k–3.9k (15–17%)</td><td class="n">3.0k–3.5k (15–17%)</td><td class="n">about −55%</td></tr>
+      <tr><td>test lines</td><td class="n">37,901</td><td class="n">23,301</td><td class="n">21.6k–22.3k</td><td class="n">18.4k–19.6k</td><td class="n">−48% to −51%</td></tr>
+      <tr><td>test functions</td><td class="n">1,544</td><td class="n">1,063</td><td class="n">≈ 950–1,020</td><td class="n">≈ 850, incl. 24 golden</td><td class="n">≈ −45%</td></tr>
+      <tr><td>src files</td><td class="n">162</td><td class="n">156</td><td class="n">≈ 145</td><td class="n">≈ 125–130</td><td class="n">about −20%</td></tr>
+    </tbody></table></div>
+
+  <div class="two">
+    <div style="display:grid;gap:8px;align-content:start"><h3>How the estimate is built</h3><ul style="margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px">
+      <li>Deepening candidates: the architecture agent estimated −1,290 src and −860 test lines, which I discount to 60–100% because these estimates usually run optimistic.</li>
+      <li>Hygiene: trim design history (−700 to −1,200 doc lines), delete <code>count_python_loc.py</code> (150) and test-only dead code.</li>
+      <li>Test hygiene: tests of tests, the private-renderer file (319 lines, rewritten through <code>cli()</code>), folded fakes and repeated output-mode tests: −600 to −900.</li>
+      <li>Bug fixes add back about +100 lines of regression tests.</li>
+      <li>Round 2 src: A −650 to −800, B −300 to −400, C −150 to −200, D −50, five deepenings −575, delete list −490, minus about 200 of overlap with round-1 #2, #3 and #5. Net −2.0k to −2.3k.</li>
+      <li>Round 2 tests: A −250 to −400, B −600 to −900, C −60 to −100, D −150, E −950 to −1,100, deepenings −230. Net −2.2k to −2.9k, after adding 24 golden tests.</li>
+    </ul></div>
+    <div style="display:grid;gap:8px;align-content:start"><h3>What has to hold for this to be true</h3><ul style="margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px">
+      <li>Pin behaviour at each module's public interface before deepening it, so the moves stay pure refactors.</li>
+      <li>Land candidate 3 (promote stages, size L) last and alone. It carries the most risk of a behaviour change.</li>
+      <li>Keep the ADR-0001 package map unchanged. Owners who just learned it shouldn't have to learn a new one.</li>
+      <li>Lines are a proxy. The real gain is fewer places to look per change, measured as one home per GLOSSARY concept and one home per shape.</li>
+      <li>Round 2's A changes JSON key names and indentation for several commands. Decide the wire names once, up front, and list them as breaking in the PR that lands <code>finish()</code>.</li>
+      <li>Round 2's B makes "CRD missing" and "apiserver down" distinguishable. <code>local status</code> and <code>local access</code> must decide what to do with the difference before the adapter stops hiding it.</li>
+    </ul></div>
+  </div>
+</section>
+
+<footer id="method">
+  <span class="eyebrow">Method</span>
+  <p>Three separate agents ran: Standards review, Spec review and architecture scan. Their findings are not merged or re-ranked across axes. Every agent was read-only, and no tests were run. The diff is <code>git diff origin/main...fec107e</code>, and Python line counts are <code>wc -l</code> over <code>src/chart_manager</code> and <code>tests</code>.</p>
+  <p>Caveats: GitHub issue bodies were unreachable, so the Spec axis used ADR-0001 as its spec. fec107e is assumed to be the top of #177 because it contains every stack branch. The two "looks wrong" claims about the converge timeout and dependency-update classification were checked by hand against the source.</p>
+  <p>Summary: Standards found 8 hard violations and 7 judgement calls; the worst is optional wiring that builds its own adapters. Spec found 3 wrong, 5 partial and 6 unflagged breaking changes; the worst is the install wait that scales with workload count. Architecture round 1 found 7 deepenings; round 2 found 6 pattern-level moves, 5 more deepenings, 3 more bugs and a delete list. The round-2 bugs (<code>session.py:91</code>, <code>kubectl.py:521</code>, <code>upgrade/cli.py</code>), the identity argv table and the six <code>emit</code> bypasses were checked by hand.</p>
+</footer>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  // Theme follows the OS; the artifact host did this for us.
+  var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "loose",
+    themeVariables: dark ? { fontFamily: "IBM Plex Mono, monospace" } : { fontFamily: "IBM Plex Mono, monospace" } });
+</script>
+</body>
+</html>
