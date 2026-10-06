@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 
-from chart_manager.shared.events import store as store_module
 from chart_manager.shared.events.query import (
     DEFAULT_LIMIT,
     EventQuery,
@@ -114,8 +113,7 @@ def test_query_events_with_dynamodb_refuses_without_touching_the_table(
     read that cannot be served must never reach it."""
     monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
     monkeypatch.setattr(
-        store_module,
-        "get_table",
+        "chart_manager.integrations.dynamodb.get_table",
         lambda **kwargs: pytest.fail("query_events built the DynamoDB store"),
     )
 

@@ -23,7 +23,6 @@ from typing import Any
 
 import pytest
 
-from chart_manager.shared.events import store as store_module
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
 from chart_manager.shared.events.query import EventQuery, EventReadUnsupportedError
 from chart_manager.shared.events.store import (
@@ -192,7 +191,7 @@ def test_cosmos_wiring_declares_the_partition_key_as_a_document_path(
         seen.update(kwargs)
         return FakeCosmosContainer()
 
-    monkeypatch.setattr(store_module, "get_container", fake_get_container)
+    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", fake_get_container)
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
 
     assert isinstance(get_event_store(), CosmosEventStore)
@@ -210,7 +209,7 @@ def test_dynamodb_wiring_declares_the_bare_attribute_name(
         seen.update(kwargs)
         return _FakeTable()
 
-    monkeypatch.setattr(store_module, "get_table", fake_get_table)
+    monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", fake_get_table)
     monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
 
     assert isinstance(get_event_store(), DynamoDBEventStore)

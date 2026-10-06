@@ -503,10 +503,8 @@ def test_list_renders_newest_first_across_mixed_timezone_stamps(
     utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
     container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
 
-    from chart_manager.shared.events import store as store_module
-
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
-    monkeypatch.setattr(store_module, "get_container", lambda **kwargs: container)
+    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda **kwargs: container)
 
     result = cli("event", "list", "-o", "json")
 

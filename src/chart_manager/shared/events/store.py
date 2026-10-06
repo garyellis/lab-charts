@@ -25,13 +25,11 @@ history -- every version, both lifecycles -- is a single-partition read, and
 rate this platform actually produces, partition size is a non-issue; locality
 of the queries operators actually run is not.
 """
-import os
-from typing import Any, Protocol
+from __future__ import annotations
 
-from chart_manager.integrations import cosmos as cosmos_client
-from chart_manager.integrations import dynamodb as dynamodb_client
-from chart_manager.integrations.cosmos import CosmosContainer, get_container
-from chart_manager.integrations.dynamodb import DynamoDBTable, get_table
+import os
+from typing import TYPE_CHECKING, Any, Protocol
+
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.events.model import PlatformLifecycleEvent
@@ -41,6 +39,12 @@ from chart_manager.shared.events.query import (
     dynamodb_read_unsupported,
     newest_first,
 )
+
+# The cloud SDKs load only inside the backend that uses them, so a run
+# without events (and `version`) does not pay for azure or boto3.
+if TYPE_CHECKING:
+    from chart_manager.integrations.cosmos import CosmosContainer
+    from chart_manager.integrations.dynamodb import DynamoDBTable
 
 # The attribute both backends partition on. Named once so the writer, the
 # stores, and scripts/query-events cannot drift apart.
@@ -190,7 +194,9 @@ class DynamoDBEventStore:
 
 def _build_cosmos_store() -> CosmosEventStore:
     """Wire a CosmosEventStore against the platform/lifecycle-events container."""
-    container = get_container(
+    from chart_manager.integrations import cosmos
+
+    container = cosmos.get_container(
         database=COSMOS_DATABASE,
         container=EVENTS_RESOURCE,
         partition_key=f"/{PARTITION_KEY}",
@@ -199,7 +205,9 @@ def _build_cosmos_store() -> CosmosEventStore:
 
 def _build_dynamodb_store() -> DynamoDBEventStore:
     """Wire a DynamoDBEventStore against the lifecycle-events table."""
-    table = get_table(
+    from chart_manager.integrations import dynamodb
+
+    table = dynamodb.get_table(
         table_name=EVENTS_RESOURCE,
         partition_key=PARTITION_KEY,
         sort_key="event_id",
@@ -265,9 +273,13 @@ def preflight_event_store() -> tuple[Check, ...]:
         )
         return (Check.skipped("events-backend", detail),)
     if backend == "cosmos":
-        return (cosmos_client.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
+        from chart_manager.integrations import cosmos
+
+        return (cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
     if backend == "dynamodb":
-        return (dynamodb_client.preflight(EVENTS_RESOURCE),)
+        from chart_manager.integrations import dynamodb
+
+        return (dynamodb.preflight(EVENTS_RESOURCE),)
     return (
         Check.failed(
             "events-backend",
