@@ -29,7 +29,7 @@ from chart_manager.commands.validate.schemas.runtime import (
     KubeconformSchemaRuntime,
     load_kubeconform_schema_runtime,
 )
-from chart_manager.commands.validate.schemas.store import default_schema_cache_root
+from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
@@ -256,10 +256,11 @@ class _Checker:
         """The locked schema generation plus schemas generated from CRDs, loaded on first use."""
         with self.schemas_lock:
             if self.schemas is None:
-                runtime = load_kubeconform_schema_runtime(self.workspace)
+                store = open_schema_store(self.runner)
+                runtime = load_kubeconform_schema_runtime(self.workspace, store)
                 self._update_dependencies(generated.providers(self.workspace))
                 crds = generated.prepare(
-                    self.workspace, render=self._render_crds, cache_root=default_schema_cache_root()
+                    self.workspace, render=self._render_crds, cache_root=store.cache_root
                 )
                 self.schemas = replace(runtime, generated_schema_locations=crds)
             return self.schemas

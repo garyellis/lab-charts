@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
@@ -20,7 +19,6 @@ from chart_manager.commands.validate.schemas.models import (
 from chart_manager.commands.validate.schemas.store import (
     KubeconformSchemaLocations,
     KubeconformSchemaStore,
-    kubeconform_schema_locations,
 )
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
@@ -32,14 +30,11 @@ class KubeconformSchemaRuntime:
     """Verified immutable generation shared by every row in one validate run."""
 
     lock: SchemaLock
-    generation_path: Path
+    store: KubeconformSchemaStore
     generated_schema_locations: tuple[str, ...] = ()
 
     def locations(self) -> KubeconformSchemaLocations:
-        locations = kubeconform_schema_locations(
-            self.lock,
-            self.generation_path,
-        )
+        locations = self.store.locations(self.lock)
         return KubeconformSchemaLocations(
             self.generated_schema_locations, locations.fallback_schema_locations
         )
@@ -57,8 +52,7 @@ class KubeconformSchemaRuntime:
 
 def load_kubeconform_schema_runtime(
     workspace: RepositoryWorkspace,
-    *,
-    cache_root: Path | None = None,
+    store: KubeconformSchemaStore,
 ) -> KubeconformSchemaRuntime:
     """Verify policy, lock and cache without network access or filesystem writes."""
     authored = workspace.spec.validation
@@ -88,7 +82,7 @@ def load_kubeconform_schema_runtime(
             "`chart-manager schemas sync --update`: " + "; ".join(mismatches)
         )
 
-    status = KubeconformSchemaStore(cache_root=cache_root).inspect(lock)
+    status = store.inspect(lock)
     if status.corrupt:
         details = "; ".join(f"{problem.path}: {problem.detail}" for problem in status.corrupt)
         raise KubeconformSchemaStoreError(
@@ -103,10 +97,7 @@ def load_kubeconform_schema_runtime(
             + "; ".join(detail_parts)
             + "; run `chart-manager schemas sync`"
         )
-    return KubeconformSchemaRuntime(
-        lock=lock,
-        generation_path=status.generation_path,
-    )
+    return KubeconformSchemaRuntime(lock=lock, store=store)
 
 
 __all__ = [

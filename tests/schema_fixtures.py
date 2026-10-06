@@ -58,7 +58,7 @@ def workspace(root: Path) -> RepositoryWorkspace:
 
 class LocalSnapshots(RepositorySnapshot):
     def __init__(self, repositories: dict[str, Path]) -> None:
-        super().__init__()
+        super().__init__(SubprocessRunner())
         self.repositories = repositories
         self.calls: list[str] = []
 

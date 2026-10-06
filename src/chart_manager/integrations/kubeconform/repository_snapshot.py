@@ -6,7 +6,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 
 
@@ -17,8 +17,8 @@ class RepositorySnapshotDirectoryNotFoundError(ExternalCommandError):
 class RepositorySnapshot:
     """Fetch once; inspect locally with lazy fetching and hooks disabled."""
 
-    def __init__(self, runner: CommandRunner | None = None, *, timeout: float = 300) -> None:
-        self.runner = runner or SubprocessRunner()
+    def __init__(self, runner: CommandRunner, *, timeout: float = 300) -> None:
+        self.runner = runner
         self.timeout = timeout
 
     def _git(self, root: Path, *args: str, online: bool = False) -> str:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from chart_manager.commands.validate.schemas.errors import (
@@ -16,9 +15,10 @@ from chart_manager.commands.validate.schemas.models import (
     lock_policy_mismatches,
 )
 from chart_manager.commands.validate.schemas.store import (
-    KubeconformSchemaStore,
     StoreStatus,
+    open_schema_store,
 )
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
@@ -34,12 +34,12 @@ class KubeconformSchemaDoctor:
         self,
         workspace: RepositoryWorkspace | None,
         *,
+        runner: CommandRunner,
         skip_reason: str = "no workspace",
-        cache_root: Path | None = None,
     ) -> None:
         self.workspace = workspace
+        self.runner = runner
         self.skip_reason = skip_reason
-        self.cache_root = cache_root
 
     def preflight(self) -> tuple[Check, ...]:
         """Report policy, lock, and immutable generation readiness from disk only.
@@ -72,10 +72,7 @@ class KubeconformSchemaDoctor:
             )
 
         try:
-            store = KubeconformSchemaStore(
-                cache_root=self.cache_root,
-            )
-            status = store.inspect(lock)
+            status = open_schema_store(self.runner).inspect(lock)
         except (OSError, KubeconformSchemaStoreError) as exc:
             return (
                 policy_check,
