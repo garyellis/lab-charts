@@ -24,49 +24,29 @@ Why this is worth a gate rather than a convention:
       `-o json --github-step-summary` with `$GITHUB_STEP_SUMMARY`
       unset emitted a warning *inside* the JSON stream. That is the exact
       regression `test_json_projections_are_parseable_on_stdout` exists to
-      catch, and it is why the behavioral leg below parses rather than
+      catch, and it is why the tests below parse rather than
       pattern-matches.
 
-Two legs, because either alone is insufficient:
-
-  1. BEHAVIORAL -- drives real commands through Typer's CliRunner (which
-     separates `.stdout` from `.stderr`) and asserts the split holds end to
-     end. Catches a regression in code that already exists.
-
-  2. STATIC -- AST-scans `cli/` for a `Console(...)` that does not name its
-     stream. Catches a *new* module written by someone who never read this
-     file, which the behavioral leg cannot do because it only knows about
-     the commands it enumerates.
+These tests drive real commands through Typer's CliRunner (which separates
+`.stdout` from `.stderr`) and assert the split holds end to end. A new module
+that constructs its own `Console` is caught by ruff's TID251 ban instead.
 
 Note on `Console(file=...)` vs `Console(stderr=...)`: Rich resolves `file=`
 once, at construction. A module-level console built that way captures the
 real stdout at import and ignores any later replacement of `sys.stdout` --
 including CliRunner's, which is why such output is invisible to these
 tests. `cli/streams.py` therefore uses `stderr=False|True`, which Rich
-resolves lazily on every write. Either form satisfies the static rule; a
-bare `Console()` does not, because it silently means stdout.
+resolves lazily on every write.
 """
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
 import pytest
 
 from .conftest import cli, write_workspace
-
-_SRC = Path(__file__).resolve().parents[1] / "src"
-_CLI = _SRC / "chart_manager" / "cli"
-
-#: A console must say which stream it writes to, one way or the other.
-_STREAM_KEYWORDS = frozenset({"file", "stderr"})
-
-
-# --------------------------------------------------------------------------
-# (1) behavioral: the split holds when a real command runs
-# --------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -170,71 +150,8 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
     assert result.stderr != ""
 
 
-# --------------------------------------------------------------------------
-# (2) static: every console in cli/ names its stream
-# --------------------------------------------------------------------------
-
-
-def _console_constructions() -> list[tuple[Path, ast.Call]]:
-    """Every `Console(...)` call site in main.py, cli/ and commands/, as (path, node)."""
-    found: list[tuple[Path, ast.Call]] = []
-    for path in sorted(
-        [_CLI.parent / "main.py", *_CLI.rglob("*.py"), *(_CLI.parent / "commands").rglob("*.py")]
-    ):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = (
-                func.id
-                if isinstance(func, ast.Name)
-                else func.attr
-                if isinstance(func, ast.Attribute)
-                else None
-            )
-            if name == "Console":
-                found.append((path, node))
-    return found
-
-
-def test_console_scan_finds_the_constructions_it_is_meant_to_check() -> None:
-    """Guard the guard: an empty sweep would make the next test vacuous."""
-    found = _console_constructions()
-    assert len(found) >= 3, f"suspiciously few Console() sites: {found}"
-
-    files = {path.name for path, _ in found}
-    assert "streams.py" in files, "the shared seam should construct consoles"
-    assert "display.py" in files, "the progress displays construct their own"
-
-
-def test_every_console_in_cli_names_its_stream() -> None:
-    """A bare `Console()` silently means stdout -- the defect this commit fixed.
-
-    Passing `file=` or `stderr=` forces the author to decide, at the point
-    of construction, whether what follows is the caller's data or the
-    operator's narration. `cli/streams.py` exists so the answer is usually
-    `data_console()` / `narration_console()` rather than a raw Console.
-    """
-    offenders: list[str] = []
-    for path, node in _console_constructions():
-        named = {kw.arg for kw in node.keywords if kw.arg is not None}
-        if not (named & _STREAM_KEYWORDS):
-            rel = path.relative_to(_SRC)
-            offenders.append(f"  {rel}:{node.lineno}")
-
-    assert not offenders, (
-        "every Console() under cli/ must name its stream explicitly "
-        "(file=... or stderr=...), because a bare Console() defaults to "
-        "stdout and will corrupt a --output json payload:\n"
-        + "\n".join(offenders)
-        + "\n\nPrefer chart_manager.cli.streams.data_console() for the "
-        "selected projection and narration_console() for everything else."
-    )
-
-
 def test_streams_module_exposes_the_seam() -> None:
-    """Guard the guard: the rule above is only useful if the seam exists."""
+    """The data and narration consoles resolve to different streams."""
     from chart_manager.cli import streams
 
     assert callable(streams.data_console)

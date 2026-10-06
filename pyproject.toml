@@ -65,7 +65,11 @@ extend-exclude = ["tests/fixtures"]
 # catches a bare `logging.info(f"...")` and any future `log`/`logger` binding,
 # while the `_LOG.` call sites stay a convention this comment records rather
 # than a rule the linter checks.
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG"]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG", "TID251"]
+
+# A bare Console() means stdout and corrupts a --output json payload.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"rich.console.Console".msg = "use chart_manager.cli.streams.data_console() or narration_console()"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests use `assert` (the whole point), frequently bind unused
@@ -77,7 +81,7 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG"]
 # doesn't care about -- 196 of the 210 ARG findings when the rule was
 # selected, none of them dead code. Renaming every one to `_arg` would make
 # the doubles *less* readable than the interfaces they stand in for.
-"tests/**/*.py" = ["S101", "B011", "E501", "ARG"]
+"tests/**/*.py" = ["S101", "B011", "E501", "ARG", "TID251"]
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
@@ -100,6 +104,8 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG"]
 # by code rather than left as a standing lint backlog.
 "src/chart_manager/shared/events/store.py" = ["ARG002"]
 "src/chart_manager/settings.py" = ["ARG003"]
+# The modules that construct a Console (naming its stream) or annotate with one.
+"src/chart_manager/{cli/streams,cli/output,commands/validate/display,commands/promote/render,commands/promote/cli,plumbing/logger}.py" = ["TID251"]
 
 [tool.ruff.format]
 # Defaults: double-quote, 4-space indent, LF endings.

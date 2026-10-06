@@ -17,11 +17,6 @@ Nothing outside this module may write an exit-code literal.
     |    5 | ENVIRONMENT     | no cluster, no kubecontext, backend down     |
     |  127 | MISSING_BINARY  | required binary is not on PATH               |
 
-Scope note. Every exit in `cli/` now comes from here, and
-`tests/test_exit_codes.py::test_no_module_outside_the_table_writes_a_nonzero_exit_literal`
-is the gate that keeps it that way: no module but this one may write a
-nonzero exit-code integer.
-
 2 means what Click means by it and nothing else, so a CI wrapper can
 separate "you typed a bad flag" (2) from "kubeconform would not run" (4).
 
