@@ -21,10 +21,7 @@ from chart_manager.plumbing.preflight import CheckStatus
 #: no yaml or markdown projection of a preflight to offer.
 _DOCTOR_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
-OutputOption = Annotated[
-    str | None,
-    output_mod.output_option(output_mod.TABLE, output_mod.JSON),
-]
+OutputOption = Annotated[str | None, output_mod.output_option(*_DOCTOR_OUTPUTS)]
 
 #: Status -> the glyph and Rich style the table renders it with. A table so
 #: the three statuses are styled in one place rather than at three branches.

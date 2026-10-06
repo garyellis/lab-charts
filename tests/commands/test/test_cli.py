@@ -136,7 +136,7 @@ def test_a_failed_chart_test_raises_a_plain_error_naming_the_failed_action(
 
 
 def test_a_missing_tool_reaches_main_unchanged(chart_root: Path, calls: Calls) -> None:
-    """`cli/main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
+    """`main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
     calls.raises = MissingToolError("helm not found on PATH")
 
     result = _cli(chart_root, "chart", "test", "alloy")

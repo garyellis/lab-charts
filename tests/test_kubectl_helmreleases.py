@@ -1,11 +1,9 @@
-"""argv-level coverage for the Flux HelmRelease queries in `integrations/kubectl.py`
-(was `helmrelease.py`, and before that `flux.py`).
+"""argv-level coverage for the Flux HelmRelease queries in `integrations/kubectl.py`.
 
 The queries run through a real `Kubectl` over a fake `CommandRunner`
 rather than a mock: the kubectl adapter is what gives them their
 `--context` pin and their JSON-parse policy, so faking the adapter would
-stop testing them. The pod/event tests that used to live here moved with
-their methods to `test_kubectl_waits_and_lists.py`.
+stop testing them.
 """
 from __future__ import annotations
 

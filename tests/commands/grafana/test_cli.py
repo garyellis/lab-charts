@@ -129,7 +129,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
 
 # --- surface: what an empty target set means to a caller ------------------
 #
-# `lint_paths([])` is `ok` -- that is the service reporting "zero
+# `lint_paths([])` is `ok` -- that is `lint_paths` reporting "zero
 # findings", which is true. The *command* must not report the same thing as
 # success: a wrong --root or a --path that matches nothing produced a green
 # CI job that linted no files at all. See design doc 8.7.

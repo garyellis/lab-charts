@@ -249,7 +249,7 @@ def test_renovate_reports_a_missing_token_as_environment(
 def test_renovate_accepts_the_ci_token_it_actually_falls_back_to(
     on_path: OnPath, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The composition root reads GITHUB_TOKEN as the fallback; so must the check."""
+    """`commands/upgrade/run.py` reads GITHUB_TOKEN as the fallback; so must the check."""
     on_path("renovate", "renovate-config-validator")
     monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_fake")

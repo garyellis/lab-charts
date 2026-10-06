@@ -54,9 +54,8 @@ def test_text_panel_does_not_require_datasource(tmp_path: Path) -> None:
 
 # ----- LintResult -----------------------------------------------------------
 #
-# The pass/fail rule and the "N findings across M/N dashboards" tally used
-# to be inline in `cli/main.py`. They now come off the result so any surface
-# reports the same verdict.
+# The pass/fail rule and the "N findings across M/N dashboards" tally come
+# off the result so any surface reports the same verdict.
 
 
 def test_lint_result_is_ok_when_every_dashboard_passes(tmp_path: Path) -> None:

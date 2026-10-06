@@ -123,6 +123,7 @@ def load_settings() -> Settings:
 
 
 __all__ = [
+    "DEFAULT_CLUSTER_NAME",
     "DEFAULT_CONFIG_FILE",
     "DEFAULT_ROOT",
     "LogFormat",

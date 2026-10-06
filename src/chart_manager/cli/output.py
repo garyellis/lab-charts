@@ -1,17 +1,7 @@
 """The one place `cli/` decides what `--output` means.
 
-Before this module the surface had three unrelated answers to "how do I ask
-for machine-readable output?":
-
-    commands/upgrade/cli.py    --format text|json
-    cli/validate.py   --format text|md|json|all
-    cli/main.py       plan -o table|json|yaml|github
-    commands/promote/cli.py --output pretty|json|auto     (the only correct one)
-
-Four spellings of the same idea, two of them (`text`, `pretty`) different
-words for one thing, and only `promote` resolving `auto` from the
-environment. This module collapses them onto one flag (`-o/--output`), one
-vocabulary, and one resolver.
+Every command asks for machine-readable output the same way: one flag
+(`-o/--output`), one vocabulary, and one resolver.
 
 The vocabulary
 --------------
@@ -296,13 +286,8 @@ def require_dry_run(value: str | None, *, dry_run: bool) -> None:
 def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
     """Write one wire document in the resolved `--output` form.
 
-    The single emitter for the surface. It replaced four near-identical
-    helpers in `cli/main.py` alone (`_emit_json`, `_emit_yaml`,
-    `_emit_document`, `_emit_machine_document` -- the last being the third
-    minus its table arm) plus open-coded `json.dumps`/`yaml.safe_dump` pairs
-    in `cli/validate.py` and `cli/main.py::plan`. Every one of them had to
-    agree on `indent=2, sort_keys=True` and on `nl=False` for yaml, and
-    nothing made them.
+    The single emitter for the surface, so every command agrees on
+    `indent=2, sort_keys=True` for json and `nl=False` for yaml.
 
     The caller builds the terminal projection because only it knows what the
     columns mean; the machine projections are the same two encoders every

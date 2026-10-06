@@ -107,7 +107,7 @@ def test_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no
 
 
 def test_a_missing_binary_reaches_main_unchanged(fake_run) -> None:  # type: ignore[no-untyped-def]
-    """`cli/main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
+    """`main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
     fake_run.result = MissingToolError("required tool not found on PATH: helm")
 
     result = cli("chart", "validate", "--all", "-o", "json")

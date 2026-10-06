@@ -101,13 +101,13 @@ def container(settings: Settings | None = None) -> Container:
 def exit_if_failed(ok: bool) -> None:
     """The surface's single rule for a result that reports its own failure.
 
-    Services report partial failure on the result object rather than by
+    Commands report partial failure on the result object rather than by
     raising, so a surface that only renders it reports success for a run in
     which charts failed.
 
     A boolean `ok` is all these results carry, so `Outcome.FAILED` is the
-    only outcome derivable from it -- "the thing you asked about failed",
-    design §6.1's row 1. A command whose result can distinguish *why* it
+    only outcome derivable from it -- "the thing you asked about failed".
+    A command whose result can distinguish *why* it
     failed should map its own outcome instead of funnelling through here,
     the way `commands/promote/cli.py::pr` maps `PROMOTE_OUTCOME`.
     """

@@ -110,6 +110,14 @@ def test_the_json_check_shape_is_the_documented_four_keys(fake_doctor) -> None:
     }
 
 
+def test_structured_check_data_is_additive_to_the_wire_shape(fake_doctor) -> None:
+    fake_doctor(Check.ok("schema-store", "ready=true", data={"ready": True, "missing": 0}))
+
+    payload = json.loads(cli("doctor", "-o", "json").stdout)
+
+    assert payload["checks"][0]["data"] == {"ready": True, "missing": 0}
+
+
 def test_the_table_carries_the_remediation_beside_the_failure(fake_doctor) -> None:
     """A hint the operator has to scroll for is one they will not read."""
     fake_doctor(_MISSING)

@@ -25,8 +25,9 @@ world in `integrations/`.
 
 ```text
 chart_manager/
+  main.py         composition root: the command tree; maps errors to exit codes
   api/v1alpha1/   Kubernetes-style resource shapes only (kinds, fields, validation)
-  cli/            main.py (registers commands, maps errors to exit codes), output.py, Container
+  cli/            output.py, Container
   commands/       validate test publish upgrade promote local plan event catalog grafana doctor
   shared/         charts cluster events workspace.py
   settings.py     process configuration (env, config file) and its defaults
@@ -38,7 +39,7 @@ chart_manager/
   is `commands/validate`, `chart test` is `commands/test`, `local up` is `commands/local`.
   `chart list` and `chart show` are `commands/catalog`.
   `promote` has the subcommands `pr`, `monitor` and `test` (one promotion flow, three stages).
-  `version` stays one line in `cli/main.py`.
+  `version` stays one line in `main.py`.
 - **Shared packages** (`shared/`) hold behaviour used by two or more commands:
   - `charts/`: everything about a chart directory: `Chart.yaml`, `chart-lifecycle.yaml` with
     names checked, dependencies and their freshness, which charts depend on it, install order.

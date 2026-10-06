@@ -15,8 +15,8 @@ Don't restate these docs here or in code:
 
 - Code is grouped by command (`commands/`), shared package (`shared/`) and external system
   (`integrations/`). ADR-0001 places each module; ADR-0002 says which command may import which.
-- `main.py` is the composition root and declares the whole command tree. A command's `cli.py`
-  wires its own adapters from `Container` (`cli/_container.py`).
+- `main.py` is the composition root and declares the whole command tree. Each command package
+  wires its own adapters from the `Container`'s settings, workspace and runner.
 - `lint-imports` enforces the contracts in `[tool.importlinter]` in `pyproject.toml`. Work
   within them rather than adding enforcement.
 

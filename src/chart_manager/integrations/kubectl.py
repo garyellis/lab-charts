@@ -970,7 +970,6 @@ def _status_from_item(
     spec = _dict(payload.get("spec"))
     status = _dict(payload.get("status"))
 
-    chart_spec: dict[str, Any] = {}
     spec_chart = _dict(spec.get("chart"))
     chart_spec = _dict(spec_chart.get("spec"))
 
@@ -1018,10 +1017,8 @@ def _parse_iso8601(value: Any) -> datetime | None:
     """Parse a k8s timestamp to aware-UTC datetime; None if missing/unparseable."""
     if not isinstance(value, str) or not value:
         return None
-    # Python <3.11 fromisoformat rejects a trailing "Z"; rewrite it to +00:00.
-    raw = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:

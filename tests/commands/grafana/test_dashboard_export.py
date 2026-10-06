@@ -115,8 +115,7 @@ def test_normalize_does_not_mutate_input() -> None:
 # ----- canonical_json -------------------------------------------------------
 #
 # The git-normalization contract (sorted keys, 2-space indent, trailing
-# newline) used to live in `cli/main.py`'s export handler. It has to be
-# owned by the exporter so a committed dashboard and a fresh export of the
+# newline) is owned by the exporter so a committed dashboard and a fresh export of the
 # same dashboard are byte-identical no matter which surface wrote it.
 
 
