@@ -30,17 +30,14 @@ status enum
 ------------------------------------------------------------------------
 The obvious shape -- `Mapping[PromoteStatus, int]` living here -- would make
 `plumbing/` import `commands.promote.state`. That inverts the one
-dependency direction this codebase actually holds: ~30 modules under
-`services/` import `plumbing/`, and *no* module under `plumbing/` imports
-`services/` or `domain/`.
-`tests/test_layering.py::test_plumbing_does_not_import_domain_or_validation_policy`
-exists to keep it that way ("generic plumbing must not depend on chart or
-validation policy"), and a second vertical wanting an exit code would drag a
-second domain enum in behind the first.
+dependency direction this codebase actually holds: every package imports
+`plumbing/`, and `plumbing/` imports no other tier (the `Tiers point down`
+import contract). A second vertical wanting an exit code would drag a second
+domain enum in behind the first.
 
 So the split follows the question each layer can actually answer:
 
-  * "Is an aborted promote a failure?" is domain policy. The service owns it,
+  * "Is an aborted promote a failure?" is domain policy. The promote command owns it,
     as `PROMOTE_OUTCOME: Mapping[PromoteStatus, Outcome]` -- a table with no
     integers in it, sitting beside `PROMOTE_PHASE`, which classifies the same
     six states for the timeline.
@@ -93,7 +90,7 @@ class Outcome(StrEnum):
     serializes them today.
 
     Deliberately not an `IntEnum`. Folding the number into the member would
-    make `Outcome` unusable from `services/` without the service handling
+    make `Outcome` unusable from a command without the command handling
     exit codes again, which is the coupling this module exists to break:
     `RunResult.outcome()` and `PROMOTE_OUTCOME` both answer "what happened"
     with these members and never learn what they are worth.

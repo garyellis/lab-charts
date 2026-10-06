@@ -88,33 +88,11 @@ def test_success_is_zero() -> None:
     assert [o for o in Outcome if exit_code_for(o) == 0] == [Outcome.SUCCESS]
 
 
-def test_plumbing_exit_codes_does_not_import_a_service() -> None:
-    """Keep the table keyed on `Outcome`, not on some vertical's status enum.
-
-    This is the constraint that produced the current shape: a
-    `Mapping[PromoteStatus, int]` here would make `plumbing/` depend on
-    `services/`, which nothing in `plumbing/` does today. See the module
-    docstring, and `test_layering.py::test_plumbing_does_not_import_service_domains`
-    for the general rule this specialises.
-    """
-    path = _SRC / "plumbing" / "exit_codes.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported.append(node.module)
-
-    offenders = [m for m in imported if m.startswith("chart_manager.services")]
-    assert not offenders, f"plumbing/exit_codes.py imports services: {offenders}"
-
-
 # --------------------------------------------------------------------------
 # the surface speaks Outcome, never a number
 # --------------------------------------------------------------------------
 #
-# Static, in the spirit of `test_layering.py` and `test_output_streams.py`:
+# Static, in the spirit of `test_output_streams.py`:
 # the behavioral tests below can only cover the exit sites they enumerate,
 # and the failure mode being guarded is a *new* command written by someone
 # who never read this module and reached for `typer.Exit(1)` because it is

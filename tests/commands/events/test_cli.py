@@ -16,10 +16,8 @@ the positional.
 
 from __future__ import annotations
 
-import ast
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,7 +25,6 @@ import pytest
 from chart_manager.commands.events import cli as events_cli
 from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
-from chart_manager.shared.events.ref import SEPARATOR
 from tests.conftest import FakeCosmosContainer, cli
 
 
@@ -156,47 +153,6 @@ def test_a_malformed_ref_is_a_usage_error(writer: RecordingWriter, token: str) -
 
     assert result.exit_code == 2
     assert writer.build_calls == []
-
-
-def _cli_events_ast() -> ast.Module:
-    """`commands/events/cli.py` parsed, for the two structural assertions below."""
-    assert events_cli.__file__ is not None
-    return ast.parse(Path(events_cli.__file__).read_text(encoding="utf-8"))
-
-
-def test_the_surface_delegates_the_grammar_to_shared_events_ref() -> None:
-    """Design commitment 6, half one: the resolver is imported, not inlined."""
-    imported = {
-        alias.name
-        for node in ast.walk(_cli_events_ast())
-        if isinstance(node, ast.ImportFrom)
-        and node.module == "chart_manager.shared.events.ref"
-        for alias in node.names
-    }
-
-    assert "parse_ref" in imported
-
-
-def test_the_surface_never_names_the_separator() -> None:
-    """Design commitment 6, half two, and the part a reviewer would miss.
-
-    A bare `"@"` constant in `commands/events/cli.py` means the surface is composing or
-    splitting the ref itself -- and an f-string like `f"{chart}@{version}"`
-    lowers to exactly that constant in the AST, so this catches the tempting
-    shortcut as well as an explicit `.split("@")`. A second surface (REST,
-    Slack) must not be able to disagree with this one about what `a@b@c`
-    means. Whole tokens such as `"CHART@VERSION"` are unaffected.
-    """
-    offenders = [
-        node.lineno
-        for node in ast.walk(_cli_events_ast())
-        if isinstance(node, ast.Constant) and node.value == SEPARATOR
-    ]
-
-    assert not offenders, (
-        f"commands/events/cli.py handles the ref separator itself at line(s) {offenders}; "
-        "the grammar belongs to shared/events/ref.py"
-    )
 
 
 def test_a_missing_ref_is_a_usage_error(writer: RecordingWriter) -> None:

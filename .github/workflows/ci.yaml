@@ -1,7 +1,7 @@
 name: ci
 
 # Combined PR/main pipeline:
-#   layering     → architecture contract between cli/, services/, integrations/.
+#   layering     → import contracts ([tool.importlinter] in pyproject.toml).
 #   chart-contracts → offline rendered-chart source contracts.
 #   prep         → compute diff + sandbox chart matrix once.
 #   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
@@ -43,10 +43,8 @@ permissions:
   contents: read
 
 jobs:
-  # Enforce the surface/service/adapter layering so `cli/` stays thin enough
-  # that a REST, GraphQL, RPC, or Slack surface can front the same
-  # capabilities. Documented in tests/test_layering.py; the same two commands
-  # run locally via `mise run lint-layering`.
+  # Enforce the import contracts in pyproject.toml's [tool.importlinter]
+  # (ADR-0001, ADR-0002); `mise run lint-layering` runs the same command.
   #
   # Keep the fast Python and workflow quality gates together. Runtime chart
   # validation and cluster tests remain in their dedicated jobs below.
@@ -65,17 +63,8 @@ jobs:
       - name: Workflow syntax
         run: actionlint .github/workflows/ci.yaml
 
-      # (a) cli/ may import services/ + plumbing/ + the composition root,
-      #     never integrations/. Banned-api config lives in pyproject.toml
-      #     under [tool.ruff.lint.flake8-tidy-imports.banned-api]; the
-      #     per-file-ignores there name the layers allowed to lift it.
-      - name: Layer contract — cli/ must not import integrations/
-        run: uv run --extra dev ruff check --select TID251 src/
-
-      # (b) no module under services/ pulls rich/typer into the process.
-      # (c) sys.exit is a surface concern; nothing outside cli/ may exit.
-      - name: Layer contract — services/ stay headless, exits stay in cli/
-        run: uv run --extra dev pytest -q tests/test_layering.py
+      - name: Import contracts
+        run: uv run --extra dev lint-imports
 
       # The unit suite. Integration-marked tests are excluded by the addopts
       # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are

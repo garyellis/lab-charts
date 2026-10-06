@@ -34,13 +34,7 @@ dev = [
 chart-manager = "chart_manager.main:main"
 
 [tool.hatch.build.targets.wheel]
-# src layout: hatchling walks the package, so `chart_manager/domain/` and any
-# future sibling are picked up without an entry of their own.
 packages = ["src/chart_manager"]
-# Lint configuration is not runtime code. `domain/.ruff.toml` scopes the
-# layer ban to that one package (the file explains why it cannot live in
-# this table) and has no business in an installed wheel.
-exclude = ["**/.ruff.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -61,10 +55,6 @@ line-length = 100
 extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
-# TID251 (flake8-tidy-imports banned-api) is selected by code rather than as
-# the whole TID family: TID252/TID253 are unrelated to the layering contract
-# below and would add unowned findings to the existing lint backlog.
-#
 # G (flake8-logging-format) and LOG are selected at zero findings and enforce
 # lazy %-formatting in log calls. Read the coverage honestly before relying on
 # it: ruff recognizes a logger by the *name* it is called through, matching
@@ -75,86 +65,19 @@ extend-exclude = ["tests/fixtures"]
 # catches a bare `logging.info(f"...")` and any future `log`/`logger` binding,
 # while the `_LOG.` call sites stay a convention this comment records rather
 # than a rule the linter checks.
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "TID251", "ARG", "G", "LOG"]
-
-# --- layer contract: cli/ must not import integrations/ ------------------
-#
-# The shape being defended:
-#
-#     cli/surfaces -> services -> api + domain + integrations
-#                              domain -> api + plumbing
-#                                 api -> plumbing (pure helpers only)
-#
-# Read the arrows as guidance, not permission. `integrations/` shares a rank
-# with `api/` and `domain/` because services depend on all three, not because
-# an adapter should reach for an authored API type -- adapters are handed
-# resolved service inputs.
-#
-# `src/chart_manager/domain/` is a real top-level package, not a subpackage of
-# `services/`, so the diagram and the tree now agree. Its own ban -- domain may
-# not import `chart_manager.services` or `chart_manager.integrations` -- is
-# declared in `src/chart_manager/domain/.ruff.toml`, because banned-api is
-# global and banning `chart_manager.services` here would ban it for `cli/` as
-# well (see the paragraph below on why rule (d) is a test). Ruff resolves that
-# nested config automatically for files under `domain/`; no extra flag needed.
-#
-# The surface layer (cli/, and any future REST/GraphQL/RPC/Slack surface)
-# talks to services/ and plumbing/ only. Adapters are assembled in the
-# composition root, `chart_manager.composition`, which is the single module
-# outside integrations/ and services/ allowed to reach for an adapter. That
-# is what lets a second surface be ~10 lines of container calls instead of a
-# re-implementation of the CLI's wiring.
-#
-# The ban is declared globally and lifted per-directory below, so the default
-# for any NEW top-level package is "may not import integrations" -- a new
-# surface is guarded on the day it is created, without editing this table.
-# `src/chart_manager/api/**` is the worked example: the versioned YAML
-# contracts added in the configuration-API refactor are covered by the ban
-# without an entry of their own, purely by being absent from the lift table
-# below, and that absence is deliberate -- keep it.
-#
-# The other two arrows out of `api/` -- it may not import `chart_manager.
-# services` or `chart_manager.cli` either -- are NOT expressible here, and the
-# reason is the same one that pushed the `sys.exit` rule into a test.
-# banned-api is a global table and per-file-ignores are per-code, so banning
-# `chart_manager.services` to protect `api/` bans it for `cli/` as well, where
-# importing services is the entire job: 92 violations, measured, all of them
-# correct code. Those two arrows, plus "api/ imports nothing but stdlib,
-# Pydantic and pure lexical helpers", "authored envelopes live under api/",
-# "plumbing must not import api/" and "api/ raises ValueError, never
-# SpecError", are enforced in tests/test_layering.py under heading (d).
-#
-# TID251 matches every import form against the package prefix:
-#   from chart_manager.integrations.kubectl import Kubectl  -> flagged
-#   from chart_manager.integrations import helm             -> flagged
-#   import chart_manager.integrations.kubectl               -> flagged
-#
-# Enforced in CI by `uv run ruff check --select TID251 src/` (see the
-# `layering` job in .github/workflows/ci.yaml and `mise run lint-layering`).
-# The companion invariants -- services/ must not import rich/typer, sys.exit
-# belongs to cli/ only, and the configuration API boundary described above --
-# are enforced in tests/test_layering.py.
-[tool.ruff.lint.flake8-tidy-imports.banned-api]
-"chart_manager.integrations".msg = """not importable from this layer. \
-Surfaces (cli/ and friends) depend on services/ + plumbing/ only; build \
-configured adapters in `chart_manager.composition.Container` and pass the \
-service in. Command packages under commands/ may import integrations \
-directly (ADR-0001)."""
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests use `assert` (the whole point), frequently bind unused
 # loop variables in parametrize patterns, and embed long fixture-string
 # literals/long stub signatures that don't benefit from rewrapping.
-# TID251: tests exercise adapters directly (fake CommandRunners against
-# Helm/Kubectl/HelmReleaseClient) and assert on integration-level types;
-# not a layer.
 # ARG: a test double only earns its keep by matching the real signature.
 # Fakes, stubs and `lambda plan, *, dry_run: plan` callbacks accept the
 # arguments the production caller passes and ignore the ones the assertion
 # doesn't care about -- 196 of the 210 ARG findings when the rule was
 # selected, none of them dead code. Renaming every one to `_arg` would make
 # the doubles *less* readable than the interfaces they stand in for.
-"tests/**/*.py" = ["S101", "B011", "E501", "TID251", "ARG"]
+"tests/**/*.py" = ["S101", "B011", "E501", "ARG"]
 # Typer CLI modules: `list[X] = []` is the documented typer pattern for
 # repeatable options (B006), and `help=` strings for --options regularly
 # exceed line length (E501). Both are local to argument declarations.
@@ -177,21 +100,6 @@ directly (ADR-0001)."""
 # by code rather than left as a standing lint backlog.
 "src/chart_manager/shared/events/store.py" = ["ARG002"]
 "src/chart_manager/settings.py" = ["ARG003"]
-# TID251 lift: the layers that are *supposed* to reach for adapters.
-# integrations/ is the adapter layer itself; services/ owns the ports that
-# wrap adapters; composition.py is the composition root, by definition the
-# one place outside those two that wires them. Note cli/ is deliberately
-# absent -- that is the whole point of the rule -- and so are api/, which
-# describes authored YAML, and domain/, which interprets it: neither has any
-# business running a command.
-"src/chart_manager/integrations/**/*.py" = ["TID251"]
-"src/chart_manager/services/**/*.py" = ["TID251"]
-# Command packages own their flow and call integrations directly (ADR-0001).
-"src/chart_manager/commands/**/*.py" = ["TID251"]
-# shared/cluster provisions and installs into clusters for test and local (ADR-0001).
-"src/chart_manager/shared/cluster/**/*.py" = ["TID251"]
-# shared/events builds its event stores on the Cosmos and DynamoDB integrations (ADR-0001).
-"src/chart_manager/shared/events/**/*.py" = ["TID251"]
 
 [tool.ruff.format]
 # Defaults: double-quote, 4-space indent, LF endings.
@@ -291,7 +199,6 @@ ignore_decorators = [
   "@app.command",
   "@*_app.command",
   "@typer.command",
-  "@register",
   "@pytest.fixture",
   "@pytest.mark.*",
   "@model_validator",
