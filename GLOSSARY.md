@@ -12,14 +12,24 @@ A package that owns one thing a user does with chart-manager, from its command t
 named after the CLI subcommand.
 _Avoid_: feature module, service
 
+**Leaf command**:
+A command package that imports no other command package.
+_Avoid_: scalar command, base command
+
+**Composite command**:
+A command package that answers a question about several leaf commands by asking each one through
+its package interface, such as `plan` and `doctor`. It never imports another composite.
+_Avoid_: aggregator, meta command
+
 **Shared package**:
 A package for one capability used by at least two command packages.
 _Avoid_: common, utils, core, shared service
 
 **Integration**:
-An adapter for one system outside chart-manager (a CLI tool or a cloud service) that answers
-questions about it and makes no decisions of its own.
-_Avoid_: client wrapper, tool, port
+An adapter for one system outside chart-manager (a CLI tool, a cloud service, or the
+Kubernetes cluster) that speaks only that system's language, answers questions about it and
+makes no decisions of its own. One system may need several modules; two systems never share one.
+_Avoid_: client wrapper, tool, port, shared integration
 
 **Service**:
 Only a Kubernetes `Service` (or Istio `VirtualService`). Not a name for packages or classes.
