@@ -145,15 +145,6 @@ narration = narration_console()
 errors = error_console()
 
 
-def narrate(message: str) -> None:
-    """Print one line of narration to stderr.
-
-    For call sites that just need a warning or a status line and have no
-    reason to hold a console of their own.
-    """
-    narration.print(message)
-
-
 # --- progress ---------------------------------------------------------------
 
 #: Severity -> Rich style for the narration long-running flows emit.

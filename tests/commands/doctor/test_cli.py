@@ -8,15 +8,7 @@ import pytest
 
 from chart_manager.commands.doctor import DoctorReport
 from chart_manager.commands.doctor import cli as doctor_cli
-from chart_manager.plumbing.exit_codes import (
-    EXIT_ENVIRONMENT,
-    EXIT_MISSING_BINARY,
-    EXIT_SPEC,
-    EXIT_SUCCESS,
-    EXIT_TOOL,
-    EXIT_USAGE,
-    Outcome,
-)
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from tests.conftest import cli
 
@@ -48,16 +40,16 @@ def test_a_clean_preflight_exits_zero(fake_doctor) -> None:
 
     result = cli("doctor")
 
-    assert result.exit_code == EXIT_SUCCESS, result.output
+    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
-        (Outcome.SPEC, EXIT_SPEC),
-        (Outcome.TOOL, EXIT_TOOL),
-        (Outcome.ENVIRONMENT, EXIT_ENVIRONMENT),
-        (Outcome.MISSING_BINARY, EXIT_MISSING_BINARY),
+        (Outcome.SPEC, 3),
+        (Outcome.TOOL, 4),
+        (Outcome.ENVIRONMENT, 5),
+        (Outcome.MISSING_BINARY, 127),
     ],
 )
 def test_every_failure_outcome_goes_through_the_exit_code_table(
@@ -77,7 +69,7 @@ def test_a_skipped_check_does_not_make_the_command_fail(fake_doctor) -> None:
     """`EVENTS_BACKEND=none` is the real case: supported, and not a problem."""
     fake_doctor(_HEALTHY, Check.skipped("events-backend", "telemetry disabled"))
 
-    assert cli("doctor").exit_code == EXIT_SUCCESS
+    assert cli("doctor").exit_code == 0
 
 
 # --- projections ------------------------------------------------------------
@@ -153,4 +145,4 @@ def test_a_projection_doctor_cannot_produce_is_a_usage_error(fake_doctor) -> Non
 
     result = cli("doctor", "-o", "yaml")
 
-    assert result.exit_code == EXIT_USAGE
+    assert result.exit_code == 2

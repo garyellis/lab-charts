@@ -4,15 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner, Reply
-
-
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
 
 
 def test_template_emits_expected_args(tmp_path: Path) -> None:

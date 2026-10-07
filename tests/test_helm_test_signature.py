@@ -9,15 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm, format_helm_duration
 from chart_manager.plumbing.commands import CommandResult
 from tests.conftest import FakeCommandRunner
-
-
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
 
 
 def test_test_legacy_kwargs_still_work_and_return_command_result() -> None:

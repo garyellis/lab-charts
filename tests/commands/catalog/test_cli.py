@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import MakeChart, cli
 
@@ -68,7 +67,7 @@ def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
 
     result = cli("chart", "list", "-o", output, "--root", str(chart_root))
 
-    assert result.exit_code == EXIT_SPEC
+    assert result.exit_code == 3
     assert "broken" in result.stdout
     assert "invalid" in result.stdout
 
