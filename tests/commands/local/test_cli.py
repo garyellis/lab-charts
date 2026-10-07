@@ -78,7 +78,7 @@ def test_sandbox_group_is_removed_without_an_alias() -> None:
 
 
 @pytest.mark.parametrize("command", ["up", "reset"])
-def test_local_commands_require_exactly_one_explicit_selector(command: str) -> None:
+def test_local_commands_require_exactly_one_explicit_selector(root: Path, command: str) -> None:
     result = cli("local", command)
 
     assert result.exit_code != 0
@@ -108,19 +108,19 @@ def test_local_down_has_no_target_selector() -> None:
     assert rejected.exit_code == 2
 
 
-def test_local_up_rejects_the_old_positional_chart_shape(tmp_path: Path) -> None:
-    chart = _chart(tmp_path)
+def test_local_up_rejects_the_old_positional_chart_shape(root: Path) -> None:
+    chart = _chart(root)
 
-    result = cli("local", "up", str(chart), "--root", str(tmp_path))
+    result = cli("local", "up", str(chart))
 
     assert result.exit_code == 2
     assert "unexpected extra argument" in result.output.lower()
 
 
 def test_chart_up_delegates_profile_and_skip_installed(
-    tmp_path: Path, recorded: _RecordingLocalRun
+    root: Path, recorded: _RecordingLocalRun
 ) -> None:
-    chart = _chart(tmp_path)
+    chart = _chart(root)
 
     result = cli(
         "local",
@@ -130,8 +130,6 @@ def test_chart_up_delegates_profile_and_skip_installed(
         "--profile",
         "telemetry",
         "--skip-installed",
-        "--root",
-        str(tmp_path),
     )
 
     assert result.exit_code == 0, result.output
@@ -142,11 +140,11 @@ def test_chart_up_delegates_profile_and_skip_installed(
 
 
 def test_named_stack_up_loads_the_authored_composition(
-    tmp_path: Path, recorded: _RecordingLocalRun
+    root: Path, recorded: _RecordingLocalRun
 ) -> None:
-    _stack(tmp_path)
+    _stack(root)
 
-    result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
+    result = cli("local", "up", "--stack", "platform")
 
     assert result.exit_code == 0, result.output
     target, _options = recorded.requests[0]
@@ -157,10 +155,10 @@ def test_named_stack_up_loads_the_authored_composition(
 
 @pytest.mark.parametrize("command", ["up", "reset"])
 def test_profile_is_rejected_for_a_stack(
-    tmp_path: Path,
+    root: Path,
     command: str,
 ) -> None:
-    _stack(tmp_path)
+    _stack(root)
     result = cli(
         "local",
         command,
@@ -168,8 +166,6 @@ def test_profile_is_rejected_for_a_stack(
         "platform",
         "--profile",
         "minimal",
-        "--root",
-        str(tmp_path),
     )
 
     assert result.exit_code != 0
@@ -250,20 +246,20 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingLocalRun:
     return fake
 
 
-def _local_argv(command: str, root: Path) -> list[str]:
+def _local_argv(command: str) -> list[str]:
     """The minimum argv for one `local` verb; `up`/`reset` need a selector."""
     selector = ["--chart", "alloy"] if command in {"up", "reset"} else []
-    return ["local", command, *selector, "--root", str(root)]
+    return ["local", command, *selector]
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_every_local_command_emits_a_json_document_on_stdout(
-    tmp_path: Path, recorded: _RecordingLocalRun, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
     """One vocabulary, and the payload is the only thing on stdout."""
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "json")
+    result = cli(*_local_argv(command), "-o", "json")
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -274,11 +270,11 @@ def test_every_local_command_emits_a_json_document_on_stdout(
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_every_local_command_emits_yaml(
-    tmp_path: Path, recorded: _RecordingLocalRun, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "yaml")
+    result = cli(*_local_argv(command), "-o", "yaml")
 
     assert result.exit_code == 0, result.output
     assert parse_yaml(result.stdout)["command"] == command
@@ -286,31 +282,31 @@ def test_every_local_command_emits_yaml(
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_auto_resolves_to_json_in_ci(
-    tmp_path: Path,
+    root: Path,
     recorded: _RecordingLocalRun,
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
     """`-o auto` is the default and must go through the shared `_auto` logic."""
-    _chart(tmp_path)
+    _chart(root)
     monkeypatch.setenv("CI", "true")
 
-    result = cli(*_local_argv(command, tmp_path))
+    result = cli(*_local_argv(command))
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["command"] == command
 
 
 def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
-    tmp_path: Path, recorded: _RecordingLocalRun, monkeypatch: pytest.MonkeyPatch
+    root: Path, recorded: _RecordingLocalRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`CI` is read once, in `Settings`, so every "am I in CI" agrees."""
-    _chart(tmp_path)
+    _chart(root)
     monkeypatch.setenv("CI", "1")
     # A terminal on stdout, so only CI can make `auto` pick json.
     monkeypatch.setenv("TTY_COMPATIBLE", "1")
 
-    result = cli(*_local_argv("up", tmp_path))
+    result = cli(*_local_argv("up"))
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["command"] == "up"
@@ -320,11 +316,11 @@ def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_the_global_output_flag_reaches_every_local_command(
-    tmp_path: Path, recorded: _RecordingLocalRun, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli("-o", "json", *_local_argv(command, tmp_path))
+    result = cli("-o", "json", *_local_argv(command))
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["command"] == command
@@ -332,22 +328,20 @@ def test_the_global_output_flag_reaches_every_local_command(
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_markdown_is_rejected_rather_than_silently_rendered(
-    tmp_path: Path, recorded: _RecordingLocalRun, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
     """`md` is offered only where a markdown projection exists (cli/output.py)."""
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "md")
+    result = cli(*_local_argv(command), "-o", "md")
 
     assert result.exit_code == 2
     assert "md" in result.output
 
 
-def test_status_renders_a_human_table_on_stdout(
-    tmp_path: Path, recorded: _RecordingLocalRun
-) -> None:
+def test_status_renders_a_human_table_on_stdout(root: Path, recorded: _RecordingLocalRun) -> None:
     """The whole report is the projection, so none of it hides on stderr."""
-    result = cli("local", "status", "--root", str(tmp_path), "-o", "table")
+    result = cli("local", "status", "-o", "table")
 
     assert result.exit_code == 0, result.output
     for token in ("chart-manager", "running", "kind-chart-manager", "loki", "deployed"):
@@ -356,7 +350,7 @@ def test_status_renders_a_human_table_on_stdout(
 
 
 def test_status_exits_zero_for_an_absent_cluster(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`status` reports; it does not grade. An absent cluster is the answer."""
     monkeypatch.setattr(
@@ -364,7 +358,7 @@ def test_status_exits_zero_for_an_absent_cluster(
         "status",
         lambda **_options: DevClusterStatus(cluster_name="chart-manager", exists=False),
     )
-    result = cli("local", "status", "--root", str(tmp_path), "-o", "json")
+    result = cli("local", "status", "-o", "json")
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -388,15 +382,15 @@ def test_status_exits_zero_for_an_absent_cluster(
     ],
 )
 def test_dry_run_plans_and_mutates_nothing(
-    tmp_path: Path,
+    root: Path,
     recorded: _RecordingLocalRun,
     command: str,
     planner: str,
     mutator: str,
 ) -> None:
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "--dry-run", "-o", "json")
+    result = cli(*_local_argv(command), "--dry-run", "-o", "json")
 
     assert result.exit_code == 0, result.output
     assert recorded.calls == [planner]
@@ -406,21 +400,21 @@ def test_dry_run_plans_and_mutates_nothing(
     assert payload["command"] == command
 
 
-def test_dry_run_reset_is_marked_destructive(tmp_path: Path, recorded: _RecordingLocalRun) -> None:
+def test_dry_run_reset_is_marked_destructive(root: Path, recorded: _RecordingLocalRun) -> None:
     """`up` and `reset` share a plan; only one of them deletes the cluster first."""
-    _chart(tmp_path)
+    _chart(root)
 
-    up = cli(*_local_argv("up", tmp_path), "--dry-run", "-o", "json")
-    reset = cli(*_local_argv("reset", tmp_path), "--dry-run", "-o", "json")
+    up = cli(*_local_argv("up"), "--dry-run", "-o", "json")
+    reset = cli(*_local_argv("reset"), "--dry-run", "-o", "json")
 
     assert json.loads(up.stdout)["destroys"] is False
     assert json.loads(reset.stdout)["destroys"] is True
 
 
-def test_dry_run_renders_the_plan_as_a_table(tmp_path: Path, recorded: _RecordingLocalRun) -> None:
-    _chart(tmp_path)
+def test_dry_run_renders_the_plan_as_a_table(root: Path, recorded: _RecordingLocalRun) -> None:
+    _chart(root)
 
-    result = cli(*_local_argv("up", tmp_path), "--dry-run", "-o", "table")
+    result = cli(*_local_argv("up"), "--dry-run", "-o", "table")
 
     assert result.exit_code == 0, result.output
     assert "Dry run" in result.stdout
@@ -430,9 +424,9 @@ def test_dry_run_renders_the_plan_as_a_table(tmp_path: Path, recorded: _Recordin
     assert "nothing was changed" in result.stderr
 
 
-def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
+def test_dry_run_still_rejects_an_invalid_selection(root: Path) -> None:
     """A dry run is not a bypass: usage errors are decided before the plan."""
-    result = cli("local", "up", "--dry-run", "--root", str(tmp_path))
+    result = cli("local", "up", "--dry-run")
 
     assert result.exit_code != 0
     assert "select exactly one of --chart or --stack" in str(result.exception)

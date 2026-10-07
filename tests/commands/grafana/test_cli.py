@@ -130,7 +130,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
 #
 # `lint_paths([])` is `ok` -- that is `lint_paths` reporting "zero
 # findings", which is true. The *command* must not report the same thing as
-# success: a wrong --root or a --path that matches nothing produced a green
+# success: a wrong root or a --path that matches nothing produced a green
 # CI job that linted no files at all.
 
 
@@ -139,10 +139,10 @@ def _lint(*argv: str) -> Result:
 
 
 def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
-    tmp_path: Path,
+    root: Path,
 ) -> None:
-    write_workspace(tmp_path)
-    result = _lint("--root", str(tmp_path))
+    write_workspace(root)
+    result = _lint()
 
     assert result.exit_code == 1
     assert "no dashboards found" in result.stderr
@@ -152,10 +152,10 @@ def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
 
 
 def test_lint_dashboards_allow_empty_opts_back_into_exit_zero(
-    tmp_path: Path,
+    root: Path,
 ) -> None:
-    write_workspace(tmp_path)
-    result = _lint("--root", str(tmp_path), "--allow-empty")
+    write_workspace(root)
+    result = _lint("--allow-empty")
 
     assert result.exit_code == 0
     assert "no dashboards found" in result.stderr
