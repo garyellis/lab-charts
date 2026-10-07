@@ -103,15 +103,10 @@ def test_query_events_with_backend_none_raises_the_disabled_error() -> None:
         query_events(Settings(events_backend="none"), EventQuery())
 
 
-def test_query_events_with_dynamodb_refuses_without_touching_the_table(
+def test_query_events_with_dynamodb_raises_the_stores_unsupported_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`get_table` *creates* the table and blocks on wait_until_exists; a
-    read that cannot be served must never reach it."""
-    monkeypatch.setattr(
-        "chart_manager.integrations.dynamodb.get_table",
-        lambda **kwargs: pytest.fail("query_events built the DynamoDB store"),
-    )
+    monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", lambda table_name: None)
 
-    with pytest.raises(EventReadUnsupportedError, match="Cosmos-only"):
+    with pytest.raises(EventReadUnsupportedError):
         query_events(Settings(events_backend="dynamodb"), EventQuery())

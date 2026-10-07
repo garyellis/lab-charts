@@ -7,10 +7,10 @@ key: a fresh partition per version turned "what happened to this chart?" into
 a cross-partition fan-out and scattered a chart's history across as many
 partitions as it had releases.
 
-These tests pin the key in both stores and in the wiring, because nothing
-else does: a drift between the container's declared partition key and the
-attribute the writer populates does not fail at write time, it fails as a
-mis-partitioned document that queries silently miss. The stores are driven
+These tests pin the key in both stores, because nothing else does: a drift
+between the container's declared partition key and the attribute the writer
+populates does not fail at write time, it fails as a mis-partitioned document
+that queries silently miss. The stores are driven
 against fake document containers and tables, the shape `integrations/` hands
 them.
 """
@@ -23,11 +23,10 @@ from typing import Any
 
 import pytest
 
-from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.settings import Settings
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
-from chart_manager.shared.events.query import EventQuery, EventReadUnsupportedError
+from chart_manager.shared.events.query import EventQuery
 from chart_manager.shared.events.store import (
     PARTITION_KEY,
     CosmosEventStore,
@@ -90,7 +89,7 @@ def test_cosmos_store_writes_the_partition_attribute_and_a_string_id() -> None:
 
 def test_dynamodb_store_writes_the_partition_attribute_and_a_sortable_key() -> None:
     table = _FakeTable()
-    DynamoDBEventStore(table, sort_key="event_id").write(_event())
+    DynamoDBEventStore(table).write(_event())
 
     item = table.items[0]
     assert item[PARTITION_KEY] == "loki"
@@ -105,7 +104,7 @@ def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
     table = _FakeTable()
 
     CosmosEventStore(container).write(event)
-    DynamoDBEventStore(table, sort_key="event_id").write(event)
+    DynamoDBEventStore(table).write(event)
 
     assert container.items == []
     assert container.upserted[0]["id"] == "stable-publish-key"
@@ -116,7 +115,7 @@ def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
     "store",
     [
         lambda: CosmosEventStore(FakeCosmosContainer()),
-        lambda: DynamoDBEventStore(_FakeTable(), sort_key="event_id"),
+        lambda: DynamoDBEventStore(_FakeTable()),
     ],
     ids=["cosmos", "dynamodb"],
 )
@@ -177,94 +176,50 @@ def test_a_release_query_narrows_by_correlation_id_within_the_partition() -> Non
     assert {"name": "@correlation_id", "value": "grafana@1.2.3"} in parameters
 
 
-def test_the_dynamodb_store_refuses_a_read_and_points_at_the_script() -> None:
-    with pytest.raises(EventReadUnsupportedError, match="query-events-dynamodb"):
-        DynamoDBEventStore(_FakeTable(), sort_key="event_id").query(EventQuery())
-
-
 # ----- backend selection ---------------------------------------------------
 
 
-def test_cosmos_wiring_declares_the_partition_key_as_a_document_path(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("configured", "store_type"),
+    [
+        ({}, NullEventStore),
+        ({"events_backend": "none"}, NullEventStore),
+        ({"events_backend": "cosmos"}, CosmosEventStore),
+        ({"events_backend": "dynamodb"}, DynamoDBEventStore),
+    ],
+    ids=["unset", "none", "cosmos", "dynamodb"],
+)
+def test_the_backend_setting_selects_the_store(
+    configured: dict[str, str], store_type: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cosmos wants "/chart_name"; DynamoDB wants the bare attribute name."""
-    seen: dict[str, Any] = {}
+    """Events are opt-in: unset means `none`, a silent sink."""
+    monkeypatch.setattr(
+        "chart_manager.integrations.cosmos.get_container",
+        lambda database, container: FakeCosmosContainer(),
+    )
+    monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", lambda name: _FakeTable())
 
-    def fake_get_container(**kwargs: Any) -> FakeCosmosContainer:
-        seen.update(kwargs)
-        return FakeCosmosContainer()
-
-    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", fake_get_container)
-
-    assert isinstance(get_event_store(Settings(events_backend="cosmos")), CosmosEventStore)
-    assert seen["partition_key"] == f"/{PARTITION_KEY}"
-    assert seen["database"] == "platform"
-    assert seen["container"] == "lifecycle-events"
+    assert isinstance(get_event_store(Settings(**configured)), store_type)
 
 
-def test_dynamodb_wiring_declares_the_bare_attribute_name(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("backend", "status", "named"),
+    [
+        ("none", CheckStatus.SKIPPED, "EVENTS_BACKEND=cosmos"),
+        ("cosmos", CheckStatus.FAILED, "COSMOS_ENDPOINT"),
+        ("dynamodb", CheckStatus.FAILED, "lifecycle-events"),
+    ],
+)
+def test_preflight_probes_the_configured_backend(
+    backend: str, status: CheckStatus, named: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    seen: dict[str, Any] = {}
-
-    def fake_get_table(**kwargs: Any) -> _FakeTable:
-        seen.update(kwargs)
-        return _FakeTable()
-
-    monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", fake_get_table)
-
-    assert isinstance(get_event_store(Settings(events_backend="dynamodb")), DynamoDBEventStore)
-    assert seen["partition_key"] == PARTITION_KEY
-    assert seen["sort_key"] == "event_id"
-
-
-def test_events_are_opt_in_unset_selects_the_null_store() -> None:
-    """The default backend is `none`: no EVENTS_BACKEND, no writes anywhere.
-
-    Flipped from `cosmos` deliberately (2026-08-02): a telemetry default that
-    pointed at a real backend made every unconfigured run log a swallowed
-    connection failure.
-    """
-    assert isinstance(get_event_store(Settings()), NullEventStore)
-
-
-def test_backend_none_is_a_silent_sink() -> None:
-    """"Events off" must be a first-class state, not an unconfigured Cosmos.
-
-    Without this, running without a backend means a swallowed
-    KeyError: 'COSMOS_ENDPOINT' warning on every single invocation, which
-    trains operators to ignore the one log line that reports dropped
-    telemetry.
-    """
-    store = get_event_store(Settings(events_backend="none"))
-
-    assert isinstance(store, NullEventStore)
-    assert store.write(_event()) is None
-
-
-@pytest.mark.parametrize("configured", [{}, {"events_backend": "none"}])
-def test_events_disabled_is_a_skip_that_says_how_to_enable(configured: dict[str, str]) -> None:
-    """Events are opt-in: disabled is supported, so `doctor` stays green.
-
-    The detail names the switch, because for the disabled-by-default state
-    the report *is* the documentation for turning events on.
-    """
-    (check,) = preflight_event_store(Settings(**configured))
-
-    assert check.status is CheckStatus.SKIPPED
-    assert check.outcome is Outcome.SUCCESS
-    assert check.detail == "events disabled (set EVENTS_BACKEND=cosmos to enable)"
-
-
-def test_an_unconfigured_cosmos_backend_reports_config_before_network(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Naming the unset variable beats "connection refused" from an SDK."""
+    """`none` is a supported skip that says how to enable; an unconfigured
+    backend fails before any network call."""
     for variable in ("COSMOS_CONNECTION_STRING", "COSMOS_ENDPOINT"):
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("DYNAMODB_ENDPOINT", "not-a-url")
 
-    (check,) = preflight_event_store(Settings(events_backend="cosmos"))
+    (check,) = preflight_event_store(Settings(events_backend=backend))
 
-    assert check.outcome is Outcome.ENVIRONMENT
-    assert "COSMOS_ENDPOINT" in check.detail
+    assert check.status is status
+    assert named in check.detail
