@@ -1,7 +1,7 @@
 """The per-invocation `Container` and the surface glue every command's `cli.py` needs.
 
-  * `Container` -- the settings, the workspace and the command runner for one
-    invocation; each command wires its own adapters from them;
+  * `Container` -- the settings, the workspace, the command runner and the
+    event writer for one invocation; each command wires its own adapters from them;
   * `container()` -- returns the current invocation's `Container`;
   * `exit_if_failed()` -- the surface's rule for a result that reports its
     own failure.
@@ -16,6 +16,7 @@ and `container()` returns it, so workspace.yaml is parsed once per invocation.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import typer
@@ -23,6 +24,8 @@ import typer
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.settings import Settings, load_settings
+from chart_manager.shared.events.store import get_event_store
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
     load_repository_workspace,
@@ -59,6 +62,12 @@ class Container:
             self._workspaces[key] = compiled
             self._workspaces[compiled.root] = compiled
         return self._workspaces[key]
+
+    def event_writer(self) -> EventWriter:
+        """A lifecycle-event writer; the store is opened on its first write."""
+        return EventWriter(
+            source=self._settings.event_source, store=partial(get_event_store, self._settings)
+        )
 
     def command_runner(self) -> CommandRunner:
         """The shared subprocess runner (stateless; memoized)."""

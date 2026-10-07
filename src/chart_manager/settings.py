@@ -22,6 +22,7 @@ DEFAULT_ROOT = Path(".")
 DEFAULT_CLUSTER_NAME = "chart-manager"
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
+EventsBackend = Literal["cosmos", "dynamodb", "none"]
 
 #: Where `Settings` looks for its optional YAML file.
 #:
@@ -68,6 +69,10 @@ class Settings(BaseSettings):
     docker_host: str | None = None
     command_timeout: float | None = None
     event_source: str = "chart-manager"
+    #: Where lifecycle events go. `none` (the default): events are opt-in.
+    #: Read from the unprefixed `EVENTS_BACKEND`: an alias skips `env_prefix`,
+    #: and env names match case-insensitively.
+    events_backend: EventsBackend = Field(default="none", validation_alias="events_backend")
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
     #: The repository this invocation operates on.
@@ -143,6 +148,7 @@ __all__ = [
     "DEFAULT_CLUSTER_NAME",
     "DEFAULT_CONFIG_FILE",
     "DEFAULT_ROOT",
+    "EventsBackend",
     "LogFormat",
     "LogLevel",
     "Settings",

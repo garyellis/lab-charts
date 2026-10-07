@@ -2,7 +2,7 @@
 
 The emit path had no CLI coverage before P1.5, which is why the restructuring
 lands with it. Everything here goes through the real writer seam: the whole
-suite pins `EVENTS_BACKEND=none` (`conftest.hermetic_terminal`), and each test
+suite clears `EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test
 that cares about the payload substitutes a recording `EventWriter` at the
 module seam `commands/events/cli.py::_make_event_writer` rather than reaching into the
 store.
@@ -263,11 +263,9 @@ def test_dry_run_prints_the_composed_document_and_confirms_nothing(
     reaches it; EVENTS_BACKEND is unset, which is the shipped default.
     """
     monkeypatch.setattr(
-        events_cli,
-        "get_event_store",
-        lambda: pytest.fail("--dry-run resolved an event store"),
+        "chart_manager.cli._container.get_event_store",
+        lambda settings: pytest.fail("--dry-run resolved an event store"),
     )
-    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
 
     result = cli(
         "event", "emit", "build", "grafana@1.2.3",
@@ -428,7 +426,7 @@ def test_the_json_projection_is_the_wire_document(reader) -> None:
 
 
 def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
-    """conftest pins EVENTS_BACKEND=none, which is also the shipped default."""
+    """conftest clears EVENTS_BACKEND; `none` is the shipped default."""
     result = cli("event", "list")
 
     assert result.exit_code == EXIT_ENVIRONMENT

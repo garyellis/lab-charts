@@ -25,6 +25,7 @@ import pytest
 
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
+from chart_manager.settings import Settings
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
 from chart_manager.shared.events.query import EventQuery, EventReadUnsupportedError
 from chart_manager.shared.events.store import (
@@ -195,9 +196,8 @@ def test_cosmos_wiring_declares_the_partition_key_as_a_document_path(
         return FakeCosmosContainer()
 
     monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", fake_get_container)
-    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
 
-    assert isinstance(get_event_store(), CosmosEventStore)
+    assert isinstance(get_event_store(Settings(events_backend="cosmos")), CosmosEventStore)
     assert seen["partition_key"] == f"/{PARTITION_KEY}"
     assert seen["database"] == "platform"
     assert seen["container"] == "lifecycle-events"
@@ -213,28 +213,23 @@ def test_dynamodb_wiring_declares_the_bare_attribute_name(
         return _FakeTable()
 
     monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", fake_get_table)
-    monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
 
-    assert isinstance(get_event_store(), DynamoDBEventStore)
+    assert isinstance(get_event_store(Settings(events_backend="dynamodb")), DynamoDBEventStore)
     assert seen["partition_key"] == PARTITION_KEY
     assert seen["sort_key"] == "event_id"
 
 
-def test_events_are_opt_in_unset_selects_the_null_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_events_are_opt_in_unset_selects_the_null_store() -> None:
     """The default backend is `none`: no EVENTS_BACKEND, no writes anywhere.
 
     Flipped from `cosmos` deliberately (2026-08-02): a telemetry default that
     pointed at a real backend made every unconfigured run log a swallowed
     connection failure.
     """
-    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
-
-    assert isinstance(get_event_store(), NullEventStore)
+    assert isinstance(get_event_store(Settings()), NullEventStore)
 
 
-def test_backend_none_is_a_silent_sink(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backend_none_is_a_silent_sink() -> None:
     """"Events off" must be a first-class state, not an unconfigured Cosmos.
 
     Without this, running without a backend means a swallowed
@@ -242,66 +237,34 @@ def test_backend_none_is_a_silent_sink(monkeypatch: pytest.MonkeyPatch) -> None:
     trains operators to ignore the one log line that reports dropped
     telemetry.
     """
-    monkeypatch.setenv("EVENTS_BACKEND", "none")
-    store = get_event_store()
+    store = get_event_store(Settings(events_backend="none"))
 
     assert isinstance(store, NullEventStore)
     assert store.write(_event()) is None
 
 
-def test_unknown_backend_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EVENTS_BACKEND", "sqlite")
-
-    with pytest.raises(ValueError, match="unsupported EVENTS_BACKEND"):
-        get_event_store()
-
-
-def test_events_disabled_is_a_skip_and_not_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`EVENTS_BACKEND=none` is a supported configuration, so `doctor` stays green."""
-    monkeypatch.setenv("EVENTS_BACKEND", "none")
-
-    (check,) = preflight_event_store()
-
-    assert check.status is CheckStatus.SKIPPED
-    assert check.outcome is Outcome.SUCCESS
-
-
-def test_events_unset_is_reported_disabled_with_the_way_to_enable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Events are opt-in: no EVENTS_BACKEND is the default, not a failure.
+@pytest.mark.parametrize("configured", [{}, {"events_backend": "none"}])
+def test_events_disabled_is_a_skip_that_says_how_to_enable(configured: dict[str, str]) -> None:
+    """Events are opt-in: disabled is supported, so `doctor` stays green.
 
     The detail names the switch, because for the disabled-by-default state
     the report *is* the documentation for turning events on.
     """
-    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
-
-    (check,) = preflight_event_store()
+    (check,) = preflight_event_store(Settings(**configured))
 
     assert check.status is CheckStatus.SKIPPED
     assert check.outcome is Outcome.SUCCESS
-    assert "EVENTS_BACKEND" in check.detail
-
-
-def test_an_unknown_events_backend_is_a_spec_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nothing is down: the operator wrote something the switch does not accept."""
-    monkeypatch.setenv("EVENTS_BACKEND", "postgres")
-
-    (check,) = preflight_event_store()
-
-    assert check.outcome is Outcome.SPEC
-    assert "postgres" in check.detail
+    assert check.detail == "events disabled (set EVENTS_BACKEND=cosmos to enable)"
 
 
 def test_an_unconfigured_cosmos_backend_reports_config_before_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Naming the unset variable beats "connection refused" from an SDK."""
-    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
     for variable in ("COSMOS_CONNECTION_STRING", "COSMOS_ENDPOINT"):
         monkeypatch.delenv(variable, raising=False)
 
-    (check,) = preflight_event_store()
+    (check,) = preflight_event_store(Settings(events_backend="cosmos"))
 
     assert check.outcome is Outcome.ENVIRONMENT
     assert "COSMOS_ENDPOINT" in check.detail

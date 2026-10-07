@@ -45,7 +45,7 @@ from chart_manager.shared.events.ref import (
     parse_ref,
     parse_selector,
 )
-from chart_manager.shared.events.store import get_event_store, query_events
+from chart_manager.shared.events.store import query_events
 from chart_manager.shared.events.writer import EventWriter
 
 RefArgument = Annotated[
@@ -59,7 +59,7 @@ RefArgument = Annotated[
 
 def _make_event_writer() -> EventWriter:
     """Build the lifecycle-event writer (module-level so tests can override)."""
-    return EventWriter(source=container().settings.event_source, store=get_event_store)
+    return container().event_writer()
 
 
 def _parse_at(at: str | None) -> datetime | None:
@@ -145,7 +145,7 @@ def _emit(
 
     The writer is built by the caller, but backend resolution still happens
     lazily on first write -- i.e. inside `fn` and therefore inside the shared
-    `emit_non_fatal` boundary -- so a misconfigured EVENTS_BACKEND stays
+    `emit_non_fatal` boundary -- so a misconfigured events backend stays
     non-fatal.
 
     The confirmation line is printed only on success: `emit_non_fatal`
@@ -276,7 +276,7 @@ LimitOption = Annotated[
 
 def _query_events(request: EventQuery) -> list[dict[str, Any]]:
     """Run the read-side selection (module-level so tests can override)."""
-    return query_events(request)
+    return query_events(container().settings, request)
 
 
 def list_events(
@@ -287,8 +287,8 @@ def list_events(
 ) -> None:
     """List recent lifecycle events, newest first.
 
-    Requires an events backend that can serve reads (EVENTS_BACKEND=cosmos
-    today). The refusals are typed: `none`/unset says events are disabled
+    Requires an events backend that can serve reads
+    (EVENTS_BACKEND=cosmos today). The refusals are typed: `none`/unset says events are disabled
     and how to enable them; `dynamodb` says the read side is Cosmos-only.
     Both exit through the error's own outcome in the exit-code table --
     nothing the caller asked about failed, the environment has no readable
