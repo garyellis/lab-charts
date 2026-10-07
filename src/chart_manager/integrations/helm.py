@@ -5,13 +5,10 @@ from __future__ import annotations
 import json
 import math
 import re
-import threading
-from collections.abc import MutableMapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
-from weakref import WeakKeyDictionary
 
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
@@ -495,14 +492,6 @@ class Helm:
         args = [self._helm_bin, "get", "manifest", release, "--namespace", namespace]
         return self.runner.run(self._with_context(args), timeout=self.timeout).stdout
 
-    def status(self, release: str, *, namespace: str) -> CommandResult:
-        """Return the inspectable `helm status` result; never raise for its exit code."""
-        return self.runner.run(
-            self._with_context([self._helm_bin, "status", release, "--namespace", namespace]),
-            check=False,
-            timeout=self.timeout,
-        )
-
     def _with_context(self, args: list[str]) -> list[str]:
         """Append --kube-context when this instance is pinned to one."""
         if self._context is None:
@@ -520,7 +509,8 @@ def _resolve(
         return str(binary)
     if version is None:
         return "helm"
-    return _resolve_via_mise(runner, version)
+    result = runner.run(["mise", "where", f"helm@{version}"], check=True)
+    return f"{result.stdout.strip()}/bin/helm"
 
 
 def _helm_output_value(output: str, label: str) -> str | None:
@@ -535,41 +525,6 @@ def _helm_output_value(output: str, label: str) -> str | None:
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-
-#: Memo for `mise where helm@<version>`, keyed by the runner that resolved
-#: it and then by version. Weak on the runner so an entry dies with the
-#: runner it belongs to. The previous `@cache` on a function whose first
-#: parameter was the runner was process-global and never evicted, so it held
-#: a strong reference to every CommandRunner ever passed -- invisible in a
-#: process-per-invocation CLI, an unbounded leak in a long-lived server that
-#: builds a container (and a runner) per request.
-#:
-#: Runner identity stays part of the key: instances sharing one runner share
-#: the memo, and one with its own runner pays its own one-shot `mise where`.
-_MISE_HELM_PATHS: MutableMapping[CommandRunner, dict[str, str]] = WeakKeyDictionary()
-# `@cache` got its atomicity from lru_cache's C-level lock; a plain dict
-# needs this to be safe from the validate runner's worker threads.
-_MISE_HELM_LOCK = threading.Lock()
-
-
-def _resolve_via_mise(runner: CommandRunner, version: str) -> str:
-    """Locate a pinned helm version via `mise where`; memoized per (runner, version)."""
-    with _MISE_HELM_LOCK:
-        by_version = _MISE_HELM_PATHS.get(runner)
-        if by_version is not None and version in by_version:
-            return by_version[version]
-    result = runner.run(["mise", "where", f"helm@{version}"], check=True)
-    resolved = f"{result.stdout.strip()}/bin/helm"
-    with _MISE_HELM_LOCK:
-        _MISE_HELM_PATHS.setdefault(runner, {})[version] = resolved
-    return resolved
-
-
-def _clear_mise_cache() -> None:
-    """Drop every memoized helm path. Test seam; no production caller."""
-    with _MISE_HELM_LOCK:
-        _MISE_HELM_PATHS.clear()
 
 
 def _values_args(values: list[Path]) -> list[str]:

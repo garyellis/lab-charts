@@ -10,15 +10,9 @@ import json
 
 import pytest
 
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm, ReleaseInfo
 from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner
-
-
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
 
 
 def test_list_releases_all_namespaces_parses_json() -> None:

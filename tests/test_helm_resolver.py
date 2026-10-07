@@ -2,16 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm
 from tests.conftest import FakeCommandRunner
-
-
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
 
 
 def test_resolve_defaults_to_path_helm() -> None:
@@ -41,22 +33,9 @@ def test_resolve_binary_precedes_version() -> None:
     assert runner.calls == []
 
 
-def test_resolve_via_mise_shells_command_runner() -> None:
+def test_a_pinned_version_resolves_through_mise_where() -> None:
     runner = FakeCommandRunner(stdout="/opt/helm/3.20.0\n")
 
-    instance = Helm(runner=runner, version="3.20.0")
-
-    assert instance._helm_bin == "/opt/helm/3.20.0/bin/helm"
-    assert runner.calls == [("mise", "where", "helm@3.20.0")]
-
-
-def test_resolve_via_mise_caches_by_version() -> None:
-    # The memo is keyed by runner identity, then version. Reusing the same
-    # runner across two Helm() constructions exercises the hit path; a
-    # separate runner would (correctly) miss and reshell.
-    runner = FakeCommandRunner(stdout="/opt/helm/3.20.0\n")
-
-    Helm(runner=runner, version="3.20.0")
     instance = Helm(runner=runner, version="3.20.0")
 
     assert instance._helm_bin == "/opt/helm/3.20.0/bin/helm"

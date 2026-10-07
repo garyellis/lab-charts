@@ -14,7 +14,6 @@ import pytest
 from chart_manager.commands import plan, test, validate
 from chart_manager.commands.plan import cli as plan_cli
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.exit_codes import EXIT_SPEC
 from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import MakeChart, cli
 
@@ -231,7 +230,7 @@ def test_table_shows_reasons_warnings_and_spec_errors_and_exits_3(fake_run: Fake
 
     result = cli("plan", "-o", "table", "--changed-file", CHANGED.as_posix())
 
-    assert result.exit_code == EXIT_SPEC
+    assert result.exit_code == 3
     assert result.stdout == (
         "Validation:\n"
         "  grafana/dev\n"

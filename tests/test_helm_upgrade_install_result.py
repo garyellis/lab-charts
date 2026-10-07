@@ -11,17 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm, UpgradeResult
 from tests.conftest import FakeCommandRunner, Reply
-
-
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
-
 
 
 def _scripted(*, list_responses: list[str], upgrade_response: str = "") -> FakeCommandRunner:

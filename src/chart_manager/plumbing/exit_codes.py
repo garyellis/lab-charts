@@ -52,29 +52,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Final
 
 __all__ = [
     "EXIT_CODE",
-    "EXIT_ENVIRONMENT",
-    "EXIT_FAILED",
-    "EXIT_MISSING_BINARY",
-    "EXIT_SPEC",
-    "EXIT_SUCCESS",
-    "EXIT_TOOL",
-    "EXIT_USAGE",
     "Outcome",
     "exit_code_for",
 ]
-
-#: The canonical codes, named so no caller writes a bare integer.
-EXIT_SUCCESS: Final = 0
-EXIT_FAILED: Final = 1
-EXIT_USAGE: Final = 2
-EXIT_SPEC: Final = 3
-EXIT_TOOL: Final = 4
-EXIT_ENVIRONMENT: Final = 5
-EXIT_MISSING_BINARY: Final = 127
 
 
 class Outcome(StrEnum):
@@ -103,13 +86,13 @@ class Outcome(StrEnum):
 #: The table. Exhaustive over `Outcome` by test, so a new outcome cannot be
 #: added without a deliberate decision about what it exits with.
 EXIT_CODE: Mapping[Outcome, int] = {
-    Outcome.SUCCESS: EXIT_SUCCESS,
-    Outcome.FAILED: EXIT_FAILED,
-    Outcome.USAGE: EXIT_USAGE,
-    Outcome.SPEC: EXIT_SPEC,
-    Outcome.TOOL: EXIT_TOOL,
-    Outcome.ENVIRONMENT: EXIT_ENVIRONMENT,
-    Outcome.MISSING_BINARY: EXIT_MISSING_BINARY,
+    Outcome.SUCCESS: 0,
+    Outcome.FAILED: 1,
+    Outcome.USAGE: 2,
+    Outcome.SPEC: 3,
+    Outcome.TOOL: 4,
+    Outcome.ENVIRONMENT: 5,
+    Outcome.MISSING_BINARY: 127,
 }
 
 
