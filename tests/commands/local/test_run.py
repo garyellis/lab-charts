@@ -9,9 +9,9 @@ import pytest
 from chart_manager.commands import local
 from chart_manager.commands.local import run as local_run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.progress import ProgressEvent
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import ResolvedChartTarget
-from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.workspace import load_repository_workspace
 from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv
 

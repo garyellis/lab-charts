@@ -17,10 +17,10 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.progress import ProgressCallback, emit, step
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
-from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
 from chart_manager.shared.cluster.releases import (
     chart_name,
     helm_release,

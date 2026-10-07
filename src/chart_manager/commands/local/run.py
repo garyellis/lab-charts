@@ -35,6 +35,15 @@ from chart_manager.commands.local.status import cluster_status
 from chart_manager.commands.local.targets import ResolvedLocalTarget
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.progress import (
+    ProgressCallback,
+    detail,
+    emit,
+    failure,
+    info,
+    step,
+    warn,
+)
 from chart_manager.settings import DEFAULT_CLUSTER_NAME, Settings
 from chart_manager.shared.charts.chart import ResolvedChartTarget
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
@@ -44,15 +53,6 @@ from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
 from chart_manager.shared.cluster.local_cluster import load_cluster
-from chart_manager.shared.cluster.progress import (
-    ProgressCallback,
-    detail,
-    emit,
-    failure,
-    info,
-    step,
-    warn,
-)
 from chart_manager.shared.cluster.releases import (
     helm_release,
     lifecycle_install_plan,

@@ -16,7 +16,7 @@ chart_manager/
   settings.py     process configuration and DEFAULT_CLUSTER_NAME
   integrations/   every call to the outside world, one module per system
   api/            authored, versioned YAML contracts
-  plumbing/       errors, exit codes, YAML, paths, command runner
+  plumbing/       errors, exit codes, YAML, paths, command runner, progress
 ```
 
 Each row imports only from rows below it, except that `settings.py`,

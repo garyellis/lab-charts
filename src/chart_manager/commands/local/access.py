@@ -15,7 +15,7 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.shared.cluster.progress import ProgressCallback, emit, step, warn
+from chart_manager.plumbing.progress import ProgressCallback, emit, step, warn
 
 # A VirtualService opts in to a credential hint under its URLs with these
 # annotations. The Secret is read from the VirtualService's own namespace;

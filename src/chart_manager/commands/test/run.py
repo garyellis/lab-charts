@@ -30,6 +30,15 @@ from chart_manager.commands.test.plan import (
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
+from chart_manager.plumbing.progress import (
+    ProgressCallback,
+    detail,
+    emit,
+    failure,
+    info,
+    step,
+    warn,
+)
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
@@ -43,15 +52,6 @@ from chart_manager.shared.cluster.converge import (
     wait,
 )
 from chart_manager.shared.cluster.local_cluster import load_cluster
-from chart_manager.shared.cluster.progress import (
-    ProgressCallback,
-    detail,
-    emit,
-    failure,
-    info,
-    step,
-    warn,
-)
 from chart_manager.shared.cluster.session import Session, attach, find, provision
 from chart_manager.shared.cluster.session import teardown as delete_cluster
 from chart_manager.shared.workspace import RepositoryWorkspace

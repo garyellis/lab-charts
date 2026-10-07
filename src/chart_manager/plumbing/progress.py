@@ -1,7 +1,7 @@
-"""Progress narration for cluster work: one frozen event, one callback, no return value.
+"""Progress narration: one frozen event, one callback, no return value.
 
-Provision, bootstrap, install and test say what they are doing through these events and
-never decide how they are shown. `severity` is the only rendering hint; `label` carries
+Long-running flows say what they are doing through these events and never decide how
+they are shown. `severity` is the only rendering hint; `label` carries
 its emphasis and `message` is left alone.
 """
 
