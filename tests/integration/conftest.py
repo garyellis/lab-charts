@@ -14,10 +14,10 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 def require(*tools: str) -> None:
-    """Skip the test unless every tool is on PATH."""
+    """Fail the test unless every tool is on PATH."""
     missing = [tool for tool in tools if shutil.which(tool) is None]
     if missing:
-        pytest.skip(f"missing tools on PATH: {', '.join(missing)}")
+        pytest.fail(f"missing tools on PATH: {', '.join(missing)}")
 
 
 def fixture_chart(root: Path, name: str, **validation: Any) -> Path:

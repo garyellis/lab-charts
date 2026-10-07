@@ -24,20 +24,16 @@ Don't restate these docs here or in code:
 
 ```bash
 uv run --extra dev pytest -q                      # unit suite; addopts exclude integration
-uv run --extra dev pytest -q -m integration tests/integration  # needs helm, kubeconform, kyverno
-uv run --extra dev ruff check src/ tests/
-uv run --extra dev lint-imports                      # import contracts (CI `layering` job)
+uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py
+uv run --extra dev lint-imports                      # import contracts
 uv run --extra dev mypy src/chart_manager            # production code only
-mise run check     # CI fast gate: actionlint, chart contracts, ruff, mypy, lint-imports, dashboard lint, pytest
+mise run check     # CI fast gate: lint-imports, actionlint, ruff, mypy, vulture, drift, pytest
+mise run check:integration  # integration tests; a missing tool fails them
+mise run check:charts       # chart source contracts, dashboard lint
 ```
 
-CI's integration step runs four of the five files under `tests/integration/`:
-`test_chart_lifecycle_packaging.py`, `test_manifest_validation_schema_e2e.py`,
-`test_crd_schema_constraints.py` and `test_schema_precedence.py`. It skips
-`test_manifest_validation_policy_e2e.py`, which needs kyverno.
-
-**Done** means `mise run check` passes, plus the integration run if you touched rendering,
-schemas or packaging. Report what you actually ran.
+**Done** means `mise run check` passes, plus `mise run check:integration` if you touched
+rendering, schemas or packaging. Report what you actually ran.
 
 ## Scope
 

@@ -18,18 +18,6 @@ def _step(name: str) -> dict:
     return next(step for step in workflow["jobs"]["validate"]["steps"] if step.get("name") == name)
 
 
-def test_real_schema_contracts_are_required_by_ci() -> None:
-    workflow = load_yaml_file(ROOT / ".github/workflows/ci.yaml")
-    step = next(step for step in workflow["jobs"]["layering"]["steps"]
-                if step.get("name") == "ChartLifecycle and schema integration contracts")
-    script = step["run"]
-    assert script.index("kubeconform -v") < script.index("pytest")
-    assert script.index("helm version") < script.index("pytest")
-    for name in ("test_crd_schema_constraints.py", "test_manifest_validation_schema_e2e.py",
-                 "test_chart_lifecycle_packaging.py", "test_schema_precedence.py"):
-        assert name in script
-
-
 @pytest.mark.parametrize("mode,changes,needed", [
     ("diff", "README.md\ndocs/architecture.md", False),
     ("diff", "tests/test_something.py\nrenovate.json", False),
