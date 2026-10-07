@@ -1,11 +1,7 @@
-"""Coverage for the M1c-added Kubectl helpers.
+"""Kubectl readiness waits, best-effort listings, cluster addressing, pods and events.
 
-  * `wait_certificate_ready`: a thin wrapper around `kubectl wait`; we assert the argv shape and propagate the
-    runner's exit code as ExternalCommandError on failure.
-  * `list_virtualservices` / `list_gateway_hosts`: best-effort
-    listings used by `local status` and access discovery. Empty list
-    on missing CRD / parse error is the contract -- callers treat that
-    as "no VirtualServices / hosts yet" rather than as a hard error.
+`list_virtualservices` is best-effort: an empty list on a missing CRD or parse error is the
+contract, and callers read it as "no VirtualServices yet" rather than a hard error.
 """
 from __future__ import annotations
 
@@ -128,51 +124,6 @@ def test_list_virtualservices_ignores_malformed_json() -> None:
     assert Kubectl(runner=runner).list_virtualservices() == []
 
 
-# ----- list_gateway_hosts ---------------------------------------------------
-
-
-def _gw_payload(items: list[dict[str, object]]) -> str:
-    return json.dumps({"items": items})
-
-
-def test_list_gateway_hosts_empty_when_no_gateway_installed() -> None:
-    runner = FakeCommandRunner(returncode=1, stderr="no resources found")
-    assert Kubectl(runner=runner).list_gateway_hosts() == []
-
-
-def test_list_gateway_hosts_returns_servers_hosts_flattened() -> None:
-    runner = FakeCommandRunner(
-        stdout=_gw_payload(
-            [
-                {
-                    "spec": {
-                        "servers": [
-                            {"hosts": ["*.localhost"]},
-                            {"hosts": ["*.localhost"]},  # dedup
-                        ]
-                    }
-                }
-            ]
-        )
-    )
-    assert Kubectl(runner=runner).list_gateway_hosts() == ["*.localhost"]
-
-
-def test_list_gateway_hosts_handles_multiple_gateways() -> None:
-    runner = FakeCommandRunner(
-        stdout=_gw_payload(
-            [
-                {"spec": {"servers": [{"hosts": ["*.kind.local"]}]}},
-                {"spec": {"servers": [{"hosts": ["*.k8s.home.lab.io"]}]}},
-            ]
-        )
-    )
-    assert Kubectl(runner=runner).list_gateway_hosts() == [
-        "*.k8s.home.lab.io",
-        "*.kind.local",
-    ]
-
-
 # ----- wait_workloads_ready -------------------------------------------------
 #
 # The readiness gate lists workloads with check=False and then iterates the
@@ -266,7 +217,6 @@ def _kubectl_argvs(kubectl: Kubectl, runner: FakeCommandRunner) -> list[tuple[st
     """Exercise one call on every argv-building path and return what ran."""
     kubectl.create_namespace("obs")
     kubectl.wait_certificate_ready("apps-wildcard", namespace="istio-ingress")
-    kubectl.list_gateway_hosts()
     kubectl.list_virtualservices()
     kubectl.diagnostics("obs")
     return runner.calls
@@ -302,8 +252,8 @@ def test_get_secret_value_is_addressed_too() -> None:
 def test_two_instances_address_two_clusters_from_one_runner() -> None:
     """The point of the whole change: no ambient state between them."""
     runner = FakeCommandRunner(stdout="{}")
-    Kubectl(runner=runner, context="kind-a").list_gateway_hosts()
-    Kubectl(runner=runner, context="kind-b").list_gateway_hosts()
+    Kubectl(runner=runner, context="kind-a").list_virtualservices()
+    Kubectl(runner=runner, context="kind-b").list_virtualservices()
 
     assert [argv[-1] for argv in runner.calls] == ["kind-a", "kind-b"]
 
@@ -423,25 +373,6 @@ def test_per_call_timeout_overrides_the_instance_cap() -> None:
     kubectl.delete_pod("loki", "loki-other")
 
     assert [record.timeout for record in runner.records] == [2.0, 30.0]
-
-
-def test_get_json_returns_parsed_object_and_appends_context() -> None:
-    runner = FakeCommandRunner(stdout=json.dumps({"items": []}))
-    payload = Kubectl(runner=runner, context="kind-a").get_json(
-        ["kubectl", "get", "pods", "-o", "json"]
-    )
-
-    assert payload == {"items": []}
-    assert runner.calls[0][-2:] == ("--context", "kind-a")
-
-
-def test_get_json_non_object_payload_raises() -> None:
-    runner = FakeCommandRunner(stdout="[]")
-
-    with pytest.raises(ExternalCommandError) as excinfo:
-        Kubectl(runner=runner).get_json(["kubectl", "get", "pods", "-o", "json"])
-
-    assert "kubectl JSON payload was not an object" in str(excinfo.value)
 
 
 def test_kubectl_reports_the_ambient_context(on_path: OnPath) -> None:

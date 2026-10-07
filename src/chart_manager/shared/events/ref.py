@@ -30,10 +30,10 @@ The rules, and why each is a *domain* rule rather than a CLI rule
    knows the version it is reporting on, and the flag this replaces
    (`--version`) was already required, so this is not a new restriction.
 
-3. **The chart is required.** Design doc 7.5, kept from the scripts: *version
-   without chart is an error*. `store.py` partitions on `chart_name`, so a
-   bare version is a cross-partition suffix scan -- the worst query in the
-   system. Rejecting it here means no surface can express it by accident.
+3. **The chart is required.** A version without a chart is an error.
+   `store.py` partitions on `chart_name`, so a bare version is a
+   cross-partition suffix scan -- the worst query in the system. Rejecting it
+   here means no surface can express it by accident.
 
 4. **Whitespace around the token, and around either component, is stripped;
    whitespace inside a component is rejected.** CI hands these values through

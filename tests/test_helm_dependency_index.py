@@ -107,8 +107,7 @@ def test_unknown_dependency_name_still_indexed(tmp_path: Path) -> None:
 
 def test_malformed_yaml_is_silently_skipped(tmp_path: Path) -> None:
     # Defensive parse — a corrupt Chart.yaml does not poison the rest of
-    # the index. (This means a typo silently disables fanout; the M5 CI
-    # render phase will surface it loudly. Documented trade-off.)
+    # the index. A typo silently disables fanout; CI's render surfaces it.
     _chart(tmp_path, "broken", chart_yaml=":not yaml:\n  - [unclosed\n")
     _chart(
         tmp_path,

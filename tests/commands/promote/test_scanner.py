@@ -94,7 +94,7 @@ def test_scan_skips_non_matching_chart(tmp_path: Path) -> None:
 
 
 def test_scan_returns_match_when_already_at_target_version(tmp_path: Path) -> None:
-    # Service-layer uses the difference between current_version and target
+    # The caller uses the difference between current_version and target
     # to decide no-op; scan itself must still surface the match.
     _write(tmp_path / "prod" / "loki.yaml", _LOKI_HR)
     matches = scan(tmp_path / "prod", chart_name="loki")

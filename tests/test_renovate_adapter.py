@@ -108,7 +108,7 @@ def test_token_is_environment_only_and_excluded_from_repr(tmp_path: Path) -> Non
     assert result.stderr == "authentication failed: ***"
 
 
-def test_nonzero_exit_is_a_result_for_service_owned_reporting(tmp_path: Path) -> None:
+def test_nonzero_exit_is_returned_not_raised(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=2, stdout="partial", stderr="bad config")
 
     result = Renovate(runner=runner).run(

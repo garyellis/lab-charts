@@ -1,17 +1,9 @@
 """`chart-manager event emit build|promote`.
 
-The emit path had no CLI coverage before P1.5, which is why the restructuring
-lands with it. Everything here goes through the real writer seam: the whole
-suite clears `EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test
-that cares about the payload substitutes a recording `EventWriter` at the
-module seam `commands/events/cli.py::_make_event_writer` rather than reaching into the
-store.
-
-Alias equivalence for the old `events build|promote` spelling is not asserted
-here -- `tests/test_cli_aliases.py` owns that property for every alias at
-once. What *is* asserted here is the part the alias gate cannot see: that the
-deprecated `--chart` / `--version` flag pair still resolves to the same ref as
-the positional.
+Everything here goes through the real writer seam: the whole suite clears
+`EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test that cares about the
+payload substitutes a recording `EventWriter` at the module seam
+`commands/events/cli.py::_make_event_writer` rather than reaching into the store.
 """
 
 from __future__ import annotations
@@ -193,7 +185,6 @@ def test_strict_turns_a_failed_emit_into_a_failure(
 
     monkeypatch.setattr(events_cli, "_make_event_writer", Exploding)
 
-    # `--strict`, not `--strict-events`: P1.3 owns that rename.
     result = cli(
         "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "--strict-events"
     )

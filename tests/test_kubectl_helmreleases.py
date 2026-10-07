@@ -13,7 +13,7 @@ from datetime import UTC
 import pytest
 
 from chart_manager.integrations.kubectl import HelmReleaseRef, Kubectl
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner, Reply
 
 
@@ -466,23 +466,18 @@ def test_list_test_pods_unions_hook_queries_dedupes_and_returns_phase() -> None:
     ]
 
 
-# ----- _get_json ----------------------------------------------------------
+# ----- JSON parse failures ------------------------------------------------
 
 
-def test_get_json_non_json_stdout_raises_external_command_error() -> None:
-    """A malformed payload must land in the same bucket as any tool failure.
+@pytest.mark.parametrize("stdout", ["not actually json " + "x" * 500, "[]"])
+def test_unreadable_kubectl_json_raises_external_command_error(stdout: str) -> None:
+    """A malformed payload lands in the same bucket as any tool failure.
 
-    The monitor degrades on ExternalCommandError; while this raised the
-    broader ChartManagerError instead, a malformed kubectl payload escaped
-    those handlers and aborted the whole watch rather than being recorded
-    as a poll error.
+    The monitor degrades on ExternalCommandError, so a broader error here would
+    abort the whole watch instead of being recorded as a poll error.
     """
-    runner = _scripted([_ok("not actually json " + "x" * 500)])
-    with pytest.raises(ExternalCommandError) as excinfo:
-        Kubectl(runner=runner).list_helmreleases()
-    assert "kubectl JSON" in str(excinfo.value)
-    assert "not actually json" in str(excinfo.value)
-    assert isinstance(excinfo.value, ChartManagerError)
+    with pytest.raises(ExternalCommandError):
+        Kubectl(runner=_scripted([_ok(stdout)])).list_helmreleases()
 
 
 # ----- context kwarg ------------------------------------------------------

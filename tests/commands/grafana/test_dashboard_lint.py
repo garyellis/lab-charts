@@ -13,12 +13,12 @@ from chart_manager.commands.grafana.dashboard_lint import (
     rendered_configmap_name,
 )
 from chart_manager.commands.grafana.wire import lint_result_to_dict
-from tests.commands.grafana.conftest import PASSING_DASHBOARD as _PASSING_DASHBOARD
+from tests.conftest import PASSING_DASHBOARD
 
 
 def test_passing(tmp_path: Path) -> None:
     p = tmp_path / "ok.json"
-    p.write_text(_PASSING_DASHBOARD)
+    p.write_text(PASSING_DASHBOARD)
     assert lint_dashboard(p) == []
 
 
@@ -121,8 +121,8 @@ def test_expand_targets_recurses_into_a_directory(tmp_path: Path) -> None:
     """`--path DIR` lints the JSON under it, as the default discovery does."""
     tree = tmp_path / "dashboards"
     (tree / "nested").mkdir(parents=True)
-    (tree / "a.json").write_text(_PASSING_DASHBOARD)
-    (tree / "nested" / "b.json").write_text(_PASSING_DASHBOARD)
+    (tree / "a.json").write_text(PASSING_DASHBOARD)
+    (tree / "nested" / "b.json").write_text(PASSING_DASHBOARD)
     (tree / "notes.txt").write_text("not a dashboard")
 
     assert expand_targets([tree]) == [tree / "a.json", tree / "nested" / "b.json"]
@@ -183,7 +183,7 @@ def _link(url: str) -> Any:
 )
 def test_lint_rejects(tmp_path: Path, edit: Any, rule: str) -> None:
     dashboard = tmp_path / "dashboard.json"
-    payload = json.loads(_PASSING_DASHBOARD)
+    payload = json.loads(PASSING_DASHBOARD)
     edit(payload)
     dashboard.write_text(json.dumps(payload))
 
@@ -195,8 +195,8 @@ def test_lint_paths_rejects_duplicate_uids(tmp_path: Path) -> None:
     second = tmp_path / "two" / "b.json"
     first.parent.mkdir()
     second.parent.mkdir()
-    first.write_text(_PASSING_DASHBOARD)
-    second.write_text(_PASSING_DASHBOARD)
+    first.write_text(PASSING_DASHBOARD)
+    second.write_text(PASSING_DASHBOARD)
 
     result = lint_paths([first, second])
 

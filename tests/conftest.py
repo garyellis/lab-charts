@@ -345,6 +345,16 @@ spec:
 """
 
 
+#: A Grafana dashboard that satisfies every lint rule.
+PASSING_DASHBOARD = """{
+  "title": "T", "uid": "u", "schemaVersion": 38, "editable": true,
+  "panels": [{"id": 1, "title": "p",
+              "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
+              "targets":[{"expr":"rate(x[$__rate_interval])"}]}],
+  "templating": {"list":[{"type":"datasource","name":"DS_PROMETHEUS"}]}
+}"""
+
+
 #: Chart.lock for one `foo 1.0.0` dependency on https://example.test/charts.
 ONE_DEPENDENCY_LOCK = (
     "dependencies:\n"

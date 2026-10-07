@@ -29,14 +29,14 @@ property of the stream the projection lands on. Lifted from
 
 `json` implies `--quiet`
 ------------------------
-Design doc 6.2. A caller asking for JSON is feeding a parser, and progress
+A caller asking for JSON is feeding a parser, and progress
 chatter interleaved on stderr is at best noise in their logs. Resolving to
 `json` therefore silences narration process-wide via `cli/streams.py`.
 Errors are *not* silenced -- see `streams.error_console`.
 
 `--output` is a format; a file is `--to`
 ----------------------------------------
-Design commitment 4, and the reason `grafana dashboard export` was renamed:
+This is why `grafana dashboard export` was renamed:
 as `grafana export-dashboard`, its `-o` named the *destination file*, so
 `chart-manager -o json grafana export-dashboard UID` wrote the dashboard
 into a file called `json` -- silently, exiting 0. The command now takes

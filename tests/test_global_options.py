@@ -176,7 +176,7 @@ def test_environment_root_reaches_a_nested_group(
 
     result = cli("grafana", "dashboard", "lint")
 
-    # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
+    # No dashboards under `elsewhere` -> the empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
     assert result.exit_code == 1
     assert "no dashboards found" in result.stderr

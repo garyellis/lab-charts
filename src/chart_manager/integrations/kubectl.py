@@ -478,14 +478,27 @@ class Kubectl:
     def list_virtualservices(self) -> list[VirtualService]:
         """Return every VirtualService across the cluster: namespace, hosts, annotations.
 
-        Best-effort: when the CRD isn't installed (lab pre-istio, or the
-        sandbox-test path entirely) we return [] rather than surfacing the
-        kubectl error -- the caller treats "no VirtualServices" as the
+        Best-effort: when kubectl fails (e.g. the CRD isn't installed, lab
+        pre-istio or the sandbox-test path) or prints unreadable JSON, we
+        return [] rather than surfacing the error -- the caller treats "no VirtualServices" as the
         normal early-install state. Non-string hosts and annotation values
         are dropped; order is kubectl's (namespace, then name).
         """
+        result = self.runner.run(
+            self._with_context(["kubectl", "get", "virtualservice", "-A", "-o", "json"]),
+            check=False,
+            timeout=self.timeout,
+        )
+        if result.returncode != 0:
+            return []
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return []
         found: list[VirtualService] = []
-        for item in self._list_items("virtualservice"):
+        for item in payload.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
             metadata = item.get("metadata") or {}
             hosts = (item.get("spec") or {}).get("hosts", []) or []
             annotations = metadata.get("annotations") or {}
@@ -501,42 +514,6 @@ class Kubectl:
                 )
             )
         return found
-
-    def list_gateway_hosts(self) -> list[str]:
-        """Return all Gateway `.spec.servers[].hosts[]` across the cluster.
-
-        Best-effort like `list_virtualservices`; dedup'd and sorted.
-        Used to derive the lab apps-domain for access URLs -- the
-        gateway's hosts are the source of truth for the domain the
-        gateway listener will admit.
-        """
-        hosts: set[str] = set()
-        for item in self._list_items("gateway"):
-            for server in (item.get("spec") or {}).get("servers", []) or []:
-                for host in (server or {}).get("hosts", []) or []:
-                    if isinstance(host, str) and host:
-                        hosts.add(host)
-        return sorted(hosts)
-
-    def _list_items(self, resource: str) -> list[dict[str, Any]]:
-        """Shared `kubectl get <resource> -A -o json` -> `.items[]`.
-
-        Best-effort: a non-zero kubectl, missing CRD, or unparseable
-        JSON yields []. Any future addition (e.g. an HTTPRoute variant
-        for gateway-api) only writes the per-item projection.
-        """
-        result = self.runner.run(
-            self._with_context(["kubectl", "get", resource, "-A", "-o", "json"]),
-            check=False,
-            timeout=self.timeout,
-        )
-        if result.returncode != 0:
-            return []
-        try:
-            payload = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
-        return [item for item in payload.get("items", []) or [] if isinstance(item, dict)]
 
     def workload_names(
         self, kind: str, *, namespace: str, selector: str | None = None
@@ -622,7 +599,7 @@ class Kubectl:
         else:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._get_json(args, timeout=timeout)
         refs: list[HelmReleaseRef] = []
         for item in payload.get("items", []) or []:
             ref = _ref_from_item(item)
@@ -641,7 +618,7 @@ class Kubectl:
             "kubectl", "-n", ref.namespace, "get",
             "helmreleases.helm.toolkit.fluxcd.io", ref.name, "-o", "json",
         ]
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._get_json(args, timeout=timeout)
         observed_at = datetime.now(UTC)
         return _status_from_item(payload, ref, observed_at)
 
@@ -652,15 +629,11 @@ class Kubectl:
         timeout: float | None = None,
     ) -> list[WorkloadRollout]:
         """List workloads labeled as owned by this release, with rollout convergence."""
-        selector = (
-            f"helm.toolkit.fluxcd.io/name={ref.name},"
-            f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
-        )
         args = [
             "kubectl", "get", "deployment,statefulset,daemonset",
-            "-A", "-l", selector, "-o", "json",
+            "-A", "-l", _flux_owner_selector(ref), "-o", "json",
         ]
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._get_json(args, timeout=timeout)
         rollouts: list[WorkloadRollout] = []
         for item in payload.get("items", []) or []:
             rollout = _rollout_from_item(item)
@@ -679,18 +652,14 @@ class Kubectl:
         Queries the target namespace for both `helm.sh/hook=test` and the
         legacy `test-success` label, deduping pods that carry both.
         """
-        base = (
-            f"helm.toolkit.fluxcd.io/name={ref.name},"
-            f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
-        )
         seen: set[tuple[str, str]] = set()
         pods: list[tuple[str, str, str]] = []
         for hook in ("test", "test-success"):
             args = [
                 "kubectl", "-n", ref.target_namespace, "get", "pods",
-                "-l", f"{base},helm.sh/hook={hook}", "-o", "json",
+                "-l", f"{_flux_owner_selector(ref)},helm.sh/hook={hook}", "-o", "json",
             ]
-            payload = self.get_json(args, timeout=timeout)
+            payload = self._get_json(args, timeout=timeout)
             for item in payload.get("items", []) or []:
                 metadata = item.get("metadata") or {}
                 ns = str(metadata.get("namespace") or "")
@@ -705,9 +674,7 @@ class Kubectl:
                 pods.append((ns, name, phase))
         return pods
 
-    # --- pods and events ---------------------------------------------------
-
-    def get_json(
+    def _get_json(
         self, args: Sequence[str], *, timeout: float | None = None
     ) -> dict[str, Any]:
         """Run `kubectl <args>` and parse stdout as a JSON object.
@@ -719,6 +686,8 @@ class Kubectl:
             self._with_context(list(args)), timeout=self._budget(timeout)
         )
         return _parse_json(result.stdout)
+
+    # --- pods and events ---------------------------------------------------
 
     def delete_pod(
         self, namespace: str, name: str, *, timeout: float | None = None
@@ -909,6 +878,14 @@ def _kubeconfig_unreadable(detail: str) -> Check:
         f"could not read the kubeconfig: {detail}",
         remediation="check KUBECONFIG and that ~/.kube/config is readable",
         outcome=Outcome.ENVIRONMENT,
+    )
+
+
+def _flux_owner_selector(ref: HelmReleaseRef) -> str:
+    """The label selector Flux stamps on every object a HelmRelease owns."""
+    return (
+        f"helm.toolkit.fluxcd.io/name={ref.name},"
+        f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
     )
 
 

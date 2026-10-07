@@ -12,8 +12,7 @@ from chart_manager.commands.grafana.dashboard_export import ExportRequest, canon
 from chart_manager.commands.grafana.dashboard_lint import lint_paths
 from chart_manager.commands.grafana.wire import lint_result_to_dict
 from chart_manager.plumbing.yaml_files import parse_yaml
-from tests.commands.grafana.conftest import PASSING_DASHBOARD as _PASSING_DASHBOARD
-from tests.conftest import cli, write_workspace
+from tests.conftest import PASSING_DASHBOARD, cli, write_workspace
 
 # --- surface: --to is the file, -o is the format ---------------------------
 #
@@ -166,7 +165,7 @@ def test_lint_dashboards_exit_zero_still_means_a_clean_lint(
     tmp_path: Path,
 ) -> None:
     good = tmp_path / "good.json"
-    good.write_text(_PASSING_DASHBOARD)
+    good.write_text(PASSING_DASHBOARD)
 
     result = _lint("--path", str(good))
 
@@ -210,7 +209,7 @@ def test_json_and_yaml_projections_are_the_same_wire_document(
 def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:
     """`md` is offered only where a markdown projection exists (cli/output.py)."""
     good = tmp_path / "good.json"
-    good.write_text(_PASSING_DASHBOARD)
+    good.write_text(PASSING_DASHBOARD)
 
     result = _lint("--path", str(good), "-o", "md")
 
