@@ -90,34 +90,26 @@ def preflight(
     all of them have resolved.
     """
     root = root.resolve()
-    identities: set[ExternallySatisfiedLifecycle] = set()
-    lint_targets: list[tuple[Path, list[Path]]] = []
-    for release in cluster.spec.bootstrap.releases:
-        if not isinstance(release, BootstrapLifecycleRelease):
-            continue
-        catalog, plan = lifecycle_install_plan(root, release, source="bootstrap chart")
-        for entry in plan:
-            chart = catalog.get(entry.chart)
-            profile = require_chart_test_profile(chart.spec, entry.profile)
-            # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
-            if profile.hooks is not None:
-                raise SpecError(
-                    f"bootstrap chart {entry.chart}:{entry.profile} declares "
-                    "chart-test hooks, which bootstrap does not run"
-                )
-            identities.add(
-                ExternallySatisfiedLifecycle(
-                    chart_path=chart.path.resolve(),
-                    chart=entry.chart,
-                    profile=entry.profile,
-                    namespace=profile.namespace,
-                )
+    releases = [
+        resolved
+        for authored in cluster.spec.bootstrap.releases
+        if isinstance(authored, BootstrapLifecycleRelease)
+        for resolved in _releases(root, authored, {})
+    ]
+    identities = set()
+    for release, profile in releases:
+        chart = Path(release.chart)
+        if helm is not None:
+            ensure_dependencies(helm, chart)
+            helm.lint(chart, list(release.values))
+        identities.add(
+            ExternallySatisfiedLifecycle(
+                chart_path=chart.resolve(),
+                chart=release.name,
+                profile=profile,
+                namespace=release.namespace,
             )
-            lint_targets.append((chart.path, catalog.value_paths(chart, entry.profile)))
-    if helm is not None:
-        for chart_path, values in lint_targets:
-            ensure_dependencies(helm, chart_path)
-            helm.lint(chart_path, values)
+        )
     return frozenset(identities)
 
 
@@ -132,6 +124,12 @@ def _releases(
         for entry in plan:
             chart = catalog.get(entry.chart)
             profile = require_chart_test_profile(chart.spec, entry.profile)
+            # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
+            if profile.hooks is not None:
+                raise SpecError(
+                    f"bootstrap chart {entry.chart}:{entry.profile} declares "
+                    "chart-test hooks, which bootstrap does not run"
+                )
             is_root = entry.chart == root_chart and entry.profile == authored.profile
             releases.append(
                 (
