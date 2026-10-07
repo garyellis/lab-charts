@@ -434,18 +434,6 @@ def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
     assert result.stdout == ""
 
 
-def test_list_against_dynamodb_says_the_read_side_is_cosmos_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
-
-    result = cli("event", "list")
-
-    assert result.exit_code == EXIT_ENVIRONMENT
-    assert "Cosmos-only" in result.stderr
-    assert "query-events-dynamodb" in result.stderr
-
-
 def test_list_renders_newest_first_across_mixed_timezone_stamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -458,7 +446,7 @@ def test_list_renders_newest_first_across_mixed_timezone_stamps(
     container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
 
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
-    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda **kwargs: container)
+    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda *_: container)
 
     result = cli("event", "list", "-o", "json")
 

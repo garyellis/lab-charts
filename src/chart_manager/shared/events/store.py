@@ -27,14 +27,16 @@ of the queries operators actually run is not.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.events.model import PlatformLifecycleEvent
 from chart_manager.shared.events.query import (
     EventQuery,
+    EventReadUnsupportedError,
     EventsDisabledError,
-    dynamodb_read_unsupported,
     newest_first,
 )
 
@@ -43,14 +45,15 @@ from chart_manager.shared.events.query import (
 if TYPE_CHECKING:
     from chart_manager.integrations.cosmos import CosmosContainer
     from chart_manager.integrations.dynamodb import DynamoDBTable
-    from chart_manager.settings import Settings
+    from chart_manager.settings import EventsBackend, Settings
 
-# The attribute both backends partition on. Named once so the writer, the
-# stores, and scripts/query-events cannot drift apart.
+# The attribute both backends partition on, and DynamoDB's range key. Named
+# once so the stores and scripts/provision-event-store cannot drift apart.
 PARTITION_KEY = "chart_name"
+SORT_KEY = "event_id"
 
-# Where the events live, named once so `preflight_event_store` probes exactly
-# what `get_event_store` would write to.
+# Where the events live, named once so `preflight_event_store` probes and
+# scripts/provision-event-store creates exactly what `get_event_store` writes to.
 COSMOS_DATABASE = "platform"
 EVENTS_RESOURCE = "lifecycle-events"
 
@@ -126,9 +129,9 @@ class CosmosEventStore:
 
         Indexing assumption: a single-field `ORDER BY c.timestamp` needs only
         Cosmos's *default* indexing policy (every path range-indexed), which
-        is exactly what `integrations/cosmos.py::get_container` creates -- it
-        never customizes the policy. A future composite ORDER BY (say,
-        timestamp within chart) would need a composite index declared there.
+        is exactly what `scripts/provision-event-store` creates -- it never
+        customizes the policy. A future composite ORDER BY (say, timestamp
+        within chart) would need a composite index declared there.
         """
         clauses: list[str] = []
         parameters: list[dict[str, Any]] = [{"name": "@limit", "value": query.limit}]
@@ -149,10 +152,9 @@ class CosmosEventStore:
 class DynamoDBEventStore:
     """Write lifecycle events to DynamoDB (chart_name HASH + synthesized sort key)."""
 
-    def __init__(self, table: DynamoDBTable, *, sort_key: str = "event_id") -> None:
-        """Bind the DynamoDB document table and the range-key attribute name."""
+    def __init__(self, table: DynamoDBTable) -> None:
+        """Bind the DynamoDB document table."""
         self._table = table
-        self._sort_key = sort_key
 
     def write(self, event: PlatformLifecycleEvent) -> None:
         """Persist one event; requires chart_name (the partition key)."""
@@ -163,7 +165,7 @@ class DynamoDBEventStore:
         # Authoritative retry-safe transitions use a stable range key and
         # overwrite their prior attempt. Events without a key remain an
         # append-only, time-ordered stream.
-        item[self._sort_key] = (
+        item[SORT_KEY] = (
             f"idempotent#{event.idempotency_key}"
             if event.idempotency_key is not None
             else f"{item['timestamp']}#{item['uuid']}"
@@ -177,93 +179,86 @@ class DynamoDBEventStore:
         self._table.put(item)
 
     def query(self, query: EventQuery) -> list[dict[str, Any]]:
-        """Refuse with the Cosmos-only message; the write path is unaffected.
+        """Refuse: the read side is Cosmos-only; the write path is unaffected.
 
         The all-charts view needs either a Scan or a `chart_name`/`timestamp`
         GSI, and the sort key's `idempotent#` prefix breaks time-ordering
         within a partition -- both deliberately deferred with the DynamoDB
-        read side. `scripts/query-events-dynamodb` remains the dev tool.
+        read side.
         """
-        raise dynamodb_read_unsupported()
+        raise EventReadUnsupportedError(
+            "the events read side is Cosmos-only for now; set EVENTS_BACKEND=cosmos to read events"
+        )
 
 
-def _build_cosmos_store() -> CosmosEventStore:
-    """Wire a CosmosEventStore against the platform/lifecycle-events container."""
+def _cosmos_store() -> CosmosEventStore:
     from chart_manager.integrations import cosmos
 
-    container = cosmos.get_container(
-        database=COSMOS_DATABASE,
-        container=EVENTS_RESOURCE,
-        partition_key=f"/{PARTITION_KEY}",
-    )
-    return CosmosEventStore(container)
+    return CosmosEventStore(cosmos.get_container(COSMOS_DATABASE, EVENTS_RESOURCE))
 
-def _build_dynamodb_store() -> DynamoDBEventStore:
-    """Wire a DynamoDBEventStore against the lifecycle-events table."""
+
+def _cosmos_preflight() -> Check:
+    from chart_manager.integrations import cosmos
+
+    return cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE)
+
+
+def _dynamodb_store() -> DynamoDBEventStore:
     from chart_manager.integrations import dynamodb
 
-    table = dynamodb.get_table(
-        table_name=EVENTS_RESOURCE,
-        partition_key=PARTITION_KEY,
-        sort_key="event_id",
-    )
-    return DynamoDBEventStore(table, sort_key="event_id")
+    return DynamoDBEventStore(dynamodb.get_table(EVENTS_RESOURCE))
+
+
+def _dynamodb_preflight() -> Check:
+    from chart_manager.integrations import dynamodb
+
+    return dynamodb.preflight(EVENTS_RESOURCE)
+
+
+@dataclass(frozen=True, slots=True)
+class _Backend:
+    """How one `events_backend` value builds its store and probes it."""
+
+    store: Callable[[], EventStore]
+    preflight: Callable[[], Check]
+
+
+# chart-manager's events-backend switch; scripts/provision-event-store keeps
+# its own to create the resources. `none` answers its own preflight: there is
+# nothing to reach, a supported configuration rather than a failure, and the
+# detail names the switch so the report doubles as the instruction.
+_BACKENDS: dict[EventsBackend, _Backend] = {
+    "none": _Backend(
+        store=NullEventStore,
+        preflight=lambda: Check.skipped(
+            "events-backend", "events disabled (set EVENTS_BACKEND=cosmos to enable)"
+        ),
+    ),
+    "cosmos": _Backend(store=_cosmos_store, preflight=_cosmos_preflight),
+    "dynamodb": _Backend(store=_dynamodb_store, preflight=_dynamodb_preflight),
+}
+
 
 def get_event_store(settings: Settings) -> EventStore:
-    """Select and build the event store from `settings.events_backend` (default none: opt-in)."""
-    if settings.events_backend == "cosmos":
-        return _build_cosmos_store()
-    if settings.events_backend == "dynamodb":
-        return _build_dynamodb_store()
-    return NullEventStore()
+    """Build the event store `settings.events_backend` selects (default none: opt-in)."""
+    return _BACKENDS[settings.events_backend].store()
 
 
 def query_events(settings: Settings, query: EventQuery) -> list[dict[str, Any]]:
-    """Run one read-side selection against the configured backend.
-
-    Lives beside `get_event_store` because this module owns the
-    events-backend switch. It short-circuits `dynamodb` on the setting
-    rather than calling `get_event_store().query(...)` blind for one
-    reason: building the DynamoDB store *provisions* its table
-    (`get_table` creates it and blocks on `wait_until_exists`), and a read
-    that cannot be served must not touch -- let alone create --
-    infrastructure. The `none` case does go through the store, so
-    `NullEventStore.query` stays an exercised path rather than a stub.
+    """Run one read-side selection against the configured backend's store.
 
     Results are re-sorted newest-first client-side; see
     `query.newest_first` for why the backend's string ORDER BY is not
     trusted as chronology.
     """
-    if settings.events_backend == "dynamodb":
-        raise dynamodb_read_unsupported()
     return newest_first(get_event_store(settings).query(query))
 
 
 def preflight_event_store(settings: Settings) -> tuple[Check, ...]:
     """Report whether the configured events backend is usable.
 
-    Lives beside `get_event_store` rather than in `doctor` because this is
-    the module that owns the events-backend switch: a new backend adds a
-    branch here and is reported by `doctor` with no edit to the surface, and
-    the two branch tables cannot drift.
-
-    The reachability probe itself belongs to each backend's client, which is
-    the integration that knows what "reachable" means for it. This function
-    only dispatches -- and answers for `none`, where there is nothing to
-    reach: a supported configuration, not a failure. An unsupported value
-    never gets here; `load_settings` rejects it.
+    Lives beside `get_event_store` so a new backend adds one `_BACKENDS`
+    entry and `doctor` reports it with no edit. The probe itself belongs to
+    each backend's integration, which knows what "reachable" means for it.
     """
-    if settings.events_backend == "cosmos":
-        from chart_manager.integrations import cosmos
-
-        return (cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
-    if settings.events_backend == "dynamodb":
-        from chart_manager.integrations import dynamodb
-
-        return (dynamodb.preflight(EVENTS_RESOURCE),)
-    # The detail names the switch, so the report doubles as the instruction.
-    return (
-        Check.skipped(
-            "events-backend", "events disabled (set EVENTS_BACKEND=cosmos to enable)"
-        ),
-    )
+    return (_BACKENDS[settings.events_backend].preflight(),)

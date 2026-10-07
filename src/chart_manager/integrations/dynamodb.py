@@ -52,43 +52,18 @@ class DynamoDBTable:
         self._table.put_item(Item=item)
 
 
-def get_table(table_name: str, partition_key: str, sort_key: str) -> DynamoDBTable:
-    """Create the table (string HASH+RANGE keys, on-demand billing) if missing; return it.
-
-    If the table already exists, its key schema is NOT verified against the
-    given keys — a mismatch surfaces later at query time.
-    """
-    resource = get_dynamodb_resource()
-    client = resource.meta.client
-
-    try:
-        table = resource.create_table(
-            TableName=table_name,
-            KeySchema=[
-                {"AttributeName": partition_key, "KeyType": "HASH"},
-                {"AttributeName": sort_key, "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": partition_key, "AttributeType": "S"},
-                {"AttributeName": sort_key, "AttributeType": "S"},
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-    except client.exceptions.ResourceInUseException:
-        table = resource.Table(table_name)
-
-    table.wait_until_exists()
-    return DynamoDBTable(table)
+def get_table(table_name: str) -> DynamoDBTable:
+    """Return a handle on an existing table; nothing is created or checked."""
+    return DynamoDBTable(get_dynamodb_resource().Table(table_name))
 
 
 def preflight(table_name: str, *, timeout: float = PROBE_TIMEOUT) -> Check:
     """Report whether the lifecycle-events table is reachable and present.
 
-    `describe_table`, never `get_table`: the latter *creates* the table and
-    then blocks on `wait_until_exists`, so running it as a diagnostic would
-    provision infrastructure and could sit there for a minute. This asks one
-    read-only question with retries disabled and both socket timeouts capped,
-    because an unreachable endpoint is precisely the condition being probed.
+    `get_table` is a lazy handle that never touches the network, so this asks
+    `describe_table` instead: one read-only question with retries disabled and
+    both socket timeouts capped, because an unreachable endpoint is precisely
+    the condition being probed.
     """
     where = os.environ.get("DYNAMODB_ENDPOINT") or (
         f"region {os.environ.get('AWS_REGION', 'us-east-1')}"
@@ -110,8 +85,8 @@ def preflight(table_name: str, *, timeout: float = PROBE_TIMEOUT) -> Check:
             "events-backend",
             f"{target} unavailable at {where}: {first_line(str(exc)) or type(exc).__name__}",
             remediation=(
-                "check AWS credentials and AWS_REGION (or DYNAMODB_ENDPOINT), and "
-                f"that the {table_name} table exists"
+                "check AWS credentials and AWS_REGION (or DYNAMODB_ENDPOINT); "
+                "create a missing table with `mise run events:provision`"
             ),
             outcome=Outcome.ENVIRONMENT,
         )

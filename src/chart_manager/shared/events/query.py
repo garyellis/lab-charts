@@ -30,7 +30,6 @@ __all__ = [
     "EventReadError",
     "EventReadUnsupportedError",
     "EventsDisabledError",
-    "dynamodb_read_unsupported",
     "newest_first",
 ]
 
@@ -54,24 +53,11 @@ class EventReadError(ChartManagerError):
 
 
 class EventsDisabledError(EventReadError):
-    """EVENTS_BACKEND is unset or `none`: there is no ledger to read."""
+    """Events are disabled: there is no ledger to read."""
 
 
 class EventReadUnsupportedError(EventReadError):
     """The configured backend has no read side (DynamoDB, for now)."""
-
-
-def dynamodb_read_unsupported() -> EventReadUnsupportedError:
-    """The one wording for "reads are Cosmos-only".
-
-    Raised from two places -- `DynamoDBEventStore.query` and the
-    dispatch in `store.query_events` that refuses before building the
-    store -- which must not drift into two different instructions.
-    """
-    return EventReadUnsupportedError(
-        "the events read side is Cosmos-only for now (EVENTS_BACKEND=dynamodb); "
-        "read the DynamoDB ledger with scripts/query-events-dynamodb"
-    )
 
 
 @dataclass(frozen=True, slots=True)
