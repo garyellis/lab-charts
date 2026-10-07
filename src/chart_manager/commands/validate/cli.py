@@ -101,7 +101,8 @@ def validate(
         float,
         typer.Option(
             "--tool-timeout",
-            help="Seconds allowed per helm, kubeconform or kyverno call. 0 = no limit.",
+            help="Seconds allowed per helm (dependency updates too), kubeconform or kyverno "
+            "call. 0 = no limit.",
         ),
     ] = 0.0,
     fail_fast: Annotated[

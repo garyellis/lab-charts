@@ -322,6 +322,12 @@ class _Checker:
             shutil.rmtree(out)
         try:
             self._ensure_dependencies(helm, chart)
+        except MissingToolError:
+            raise
+        except ExternalCommandError as exc:
+            # A failed fetch says nothing about the chart; only `helm template` can reject it.
+            return CheckResult(status="error", detail=str(exc))
+        try:
             helm.template(
                 row.release,
                 chart.path,
