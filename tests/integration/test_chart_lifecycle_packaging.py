@@ -12,6 +12,7 @@ import pytest
 from chart_manager.api.v1alpha1.common import API_VERSION
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.shared.charts.lifecycle import LIFECYCLE_FILENAME
+from tests.integration.conftest import require
 
 pytestmark = pytest.mark.integration
 
@@ -43,8 +44,7 @@ def _stage_without_dependencies(chart_dir: Path, staging_root: Path) -> Path:
 def test_every_production_chart_package_contains_chart_lifecycle(
     tmp_path: Path,
 ) -> None:
-    if shutil.which("helm") is None:
-        pytest.skip("missing tool on PATH: helm")
+    require("helm")
 
     chart_dirs = sorted(path.parent for path in (REPO_ROOT / "charts").glob("*/Chart.yaml"))
     assert chart_dirs

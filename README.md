@@ -189,8 +189,8 @@ and that file is always canonical JSON regardless of `-o`.
 CI runs the same commands you run locally.
 
 ```text
-layering (import contract, lint, types, unit tests) ────────────────────┐
-chart-contracts (offline rendered-chart contracts) ────────────────────┤
+chart-manager (import contracts, check, integration tests) ─────────────┐
+chart-contracts (chart source contracts, dashboard lint) ──────────────┤
 prep ──┬── validate ───────────────────────────────────────────────────┤
        └── sandbox-test (matrix per chart) ────────────────────────────┴── publish
 ```
@@ -262,8 +262,8 @@ If upstream synchronization fails, CI runs render-only validation and uploads
 retained manifests; this diagnostic fallback never turns the failure green.
 Template rejection is a validation failure, dependency-fetch failure is an
 environment failure, and process crashes remain tool failures.
-The fast CI gate also runs the real Helm/kubeconform packaging and schema
-integration suites; missing tools fail that gate instead of silently skipping tests.
+The `chart-manager` job also runs every integration test (`mise run check:integration`);
+a missing tool fails a test instead of skipping it.
 
 The cache lives under `$XDG_CACHE_HOME/chart-manager/schemas/v3/`
 (`~/.cache/chart-manager/schemas/v3/` when `XDG_CACHE_HOME` is unset or relative),

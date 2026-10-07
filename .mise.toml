@@ -28,22 +28,31 @@ description = "Run the Python unit test suite."
 run = "uv run --extra dev pytest"
 
 [tasks.check]
-description = "Run the same fast workflow, lint, type, and unit-test gates as CI."
+description = "Run chart-manager's fast gates: import contracts, workflow lint, ruff, mypy, dead code, drift and unit tests."
+depends = ["check:imports"]
 run = [
   "actionlint .github/workflows/ci.yaml",
-  "scripts/check-chart-source-contracts",
-  "uv run --extra dev ruff check src/ tests/",
+  "uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py",
   "uv run --extra dev mypy src/chart_manager",
-  "uv run --extra dev lint-imports",
   "uv run --extra dev vulture",
   "scripts/check-drift",
-  "uv run chart-manager grafana dashboard lint -o table",
   "uv run --extra dev pytest -q",
 ]
 
-[tasks.lint-layering]
-description = "Enforce the [tool.importlinter] contracts (same command as the CI `layering` job)."
+[tasks."check:imports"]
+description = "Enforce the [tool.importlinter] contracts."
 run = "uv run --extra dev lint-imports"
+
+[tasks."check:integration"]
+description = "Run the integration tests against the real tools."
+run = "uv run --extra dev pytest -q -m integration tests/integration"
+
+[tasks."check:charts"]
+description = "Check chart content: source contracts and Grafana dashboard lint."
+run = [
+  "scripts/check-chart-source-contracts",
+  "uv run chart-manager grafana dashboard lint -o table",
+]
 
 [tasks.charts]
 description = "List known chart wrappers."
