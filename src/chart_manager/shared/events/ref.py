@@ -1,54 +1,21 @@
 """`CHART@VERSION` -- the one grammar for naming a chart release.
 
-The token is not a CLI convenience. It is already the events wire format:
-`PlatformLifecycleEvent.correlation_id` is `f"{chart_name}@{chart_version}"`
-(`model.py`), the join key that makes one version's timeline a timeline.
-A surface that accepted `--chart` and `--version` separately would be
-splitting a token the system composes anyway, and would then own the rule for
-how the halves go back together -- in `commands/events/cli.py`, where a REST
-handler or a Slack listener could not reach it.
+The token is the events wire format: `PlatformLifecycleEvent.correlation_id`
+is `f"{chart_name}@{chart_version}"`. Surfaces pass what the user typed to
+`parse_ref` or `parse_selector`.
 
-So the grammar lives here, and the surface passes through what the user typed:
-the surface never derives a request field from a heuristic -- it passes what
-the user typed to a resolver.
-`commands/events/cli.py` calls `parse_ref` and looks for no `@` itself.
+Rules:
 
-The rules, and why each is a *domain* rule rather than a CLI rule
------------------------------------------------------------------
+1. Exactly one `@`. Neither a Helm chart name nor a SemVer version may
+   contain one, so `a@b@c` is malformed, not ambiguous.
+2. The version is required by `parse_ref`; without one, the event's
+   `correlation_id` would be `"grafana@None"`.
+3. The chart is required. A bare version would be a scan across every
+   `chart_name` partition.
+4. Whitespace around the token or a component is stripped; whitespace inside
+   a component is rejected.
 
-1. **Exactly one `@`.** A Helm chart name is an RFC 1123 label (lowercase
-   alphanumerics and `-`) and a SemVer version admits only alphanumerics,
-   `.`, `-` and `+`. Neither may contain `@`, so `a@b@c` is not an ambiguous
-   split to be resolved by picking the first or last separator -- there is no
-   reading of it under which some component is legitimate. It is malformed
-   input, and saying so beats silently choosing a partition key.
-
-2. **The version is required.** `chart_version` is nullable in the schema
-   (None while a PR is open and nothing is published yet), but a ref with no
-   version composes `correlation_id = "grafana@None"` -- a join key that
-   joins nothing, written into a real ledger. Anything *emitting* an event
-   knows the version it is reporting on, and the flag this replaces
-   (`--version`) was already required, so this is not a new restriction.
-
-3. **The chart is required.** A version without a chart is an error.
-   `store.py` partitions on `chart_name`, so a bare version is a
-   cross-partition suffix scan -- the worst query in the system. Rejecting it
-   here means no surface can express it by accident.
-
-4. **Whitespace around the token, and around either component, is stripped;
-   whitespace inside a component is rejected.** CI hands these values through
-   shell variables, where a stray space is a transport artefact rather than
-   something the caller meant. A space in the middle of a name is not.
-
-`ChartRef` validates in `__post_init__` rather than trusting its two
-constructors, so the invariant belongs to the type: a reader side that
-builds a ref some third way cannot skip the rules.
-
-The read side's form is `CHART[@VERSION]`: `event list`
-may address a whole chart, where an *emitter* always knows the version it
-reports on. That optional-version grammar is `ChartSelector`/`parse_selector`
-below; `parse_ref` is the emit-side reading of the same token with the
-version made mandatory, so the two forms cannot drift on what a component is.
+The read side's form is `CHART[@VERSION]` (`ChartSelector`/`parse_selector`).
 """
 
 from __future__ import annotations
@@ -66,32 +33,22 @@ __all__ = [
     "parse_selector",
 ]
 
-#: The one character that joins the two halves. Named so the schema comment
-#: in `model.py`, this grammar and any future formatter cannot drift.
+#: The one character that joins the two halves.
 SEPARATOR = "@"
 
-#: Quoted in every rejection, because a grammar error the caller cannot act
-#: on is only marginally better than a traceback.
+#: Quoted in every rejection.
 _EXPECTED = f"expected CHART{SEPARATOR}VERSION, for example 'grafana{SEPARATOR}1.2.3'"
 
 
 class ChartRefError(ChartManagerError):
-    """Raised when a chart ref does not parse.
-
-    A `ChartManagerError` so a non-CLI surface gets a domain failure it can
-    map to its own status code. `commands/events/cli.py` narrows it to
-    `typer.BadParameter` (exit 2, usage), matching how `_parse_at` already
-    reports a malformed `--at` on the same commands.
-    """
+    """Raised when a chart ref does not parse."""
 
 
 @dataclass(frozen=True, slots=True)
 class ChartRef:
     """One chart at one version -- the addressable unit of the event ledger.
 
-    `str(ref)` is exactly the `correlation_id` the writer composes, which is
-    the point: the ref and the join key are the same token, not two
-    representations that have to be kept in agreement.
+    `str(ref)` is exactly the `correlation_id` the writer composes.
     """
 
     name: str
@@ -112,11 +69,7 @@ class ChartSelector:
     """`CHART[@VERSION]` -- the read side's optional-version selection.
 
     A bare chart selects a whole history; a versioned one selects a single
-    release timeline. Distinct from `ChartRef` on purpose: a ref *names a
-    record* and composes a `correlation_id`, where a selector *narrows a
-    query* and may legitimately leave the version open. Making the version
-    nullable on `ChartRef` instead would let an emitter compose
-    `"grafana@None"` into a real ledger (rule 2).
+    release timeline.
     """
 
     name: str
@@ -130,11 +83,7 @@ class ChartSelector:
 
     @property
     def correlation_id(self) -> str | None:
-        """The join key this selector narrows to; None selects the whole chart.
-
-        Composed through `ChartRef` so a selector and a ref cannot disagree
-        about how the halves go back together.
-        """
+        """The join key this selector narrows to; None selects the whole chart."""
         if self.version is None:
             return None
         return str(ChartRef(name=self.name, version=self.version))
@@ -143,9 +92,7 @@ class ChartSelector:
 def parse_selector(text: str) -> ChartSelector:
     """Parse a `CHART[@VERSION]` token -- the read side's form.
 
-    Accepts everything `parse_ref` accepts plus a bare chart name. Every
-    rejection is shared with `parse_ref`: empty token, more than one
-    separator, an empty half, a version with no chart.
+    Accepts everything `parse_ref` accepts plus a bare chart name.
     """
     token = text.strip()
     if not token:
@@ -162,9 +109,7 @@ def parse_selector(text: str) -> ChartSelector:
 
     name, version = (part.strip() for part in parts)
     if not name:
-        # Called out separately from the generic empty-component message
-        # because the reason is specific and worth telling the caller: see
-        # rule 3.
+        # Rule 3, with its own message.
         raise ChartRefError(
             f"{token!r} names a version with no chart; {_EXPECTED}. A version "
             "alone would have to be scanned for across every chart."
@@ -175,10 +120,8 @@ def parse_selector(text: str) -> ChartSelector:
 def parse_ref(text: str) -> ChartRef:
     """Parse a `CHART@VERSION` token -- the emit-side form, version mandatory.
 
-    One reading of the token (`parse_selector`) plus one extra rejection:
-    raises `ChartRefError` when the token is empty, carries no `@`, carries
-    more than one, or has an empty half. See the module docstring for why
-    each of those is rejected rather than guessed at.
+    Raises `ChartRefError` when the token is empty, carries no `@`, carries
+    more than one, or has an empty half.
     """
     selector = parse_selector(text)
     if selector.version is None:

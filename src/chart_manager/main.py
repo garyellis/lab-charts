@@ -70,13 +70,7 @@ promote_app = typer.Typer(
     no_args_is_help=True,
     help="Operate on Flux HelmRelease resources in a separate GitOps repo.",
 )
-# Grafana-specific subcommands. Anything that knows about Grafana JSON / API
-# conventions lives here, not under the generic `chart` group.
 grafana_app = typer.Typer(no_args_is_help=True, help="Grafana-specific tooling.")
-# `<noun> <verb>` one level down: everything Grafana-specific this tool does
-# today acts on a dashboard, and naming the noun leaves room for the things
-# that are not dashboards (datasources, alert rules) to arrive as siblings
-# rather than as more hyphenated verbs on the group itself.
 grafana_dashboard_app = typer.Typer(
     no_args_is_help=True,
     help="Export and lint Grafana dashboard JSON.",
@@ -92,23 +86,14 @@ schemas_app = typer.Typer(
 
 @dataclass(frozen=True)
 class GlobalOptions:
-    """The resolved global options for one invocation.
-
-    Stashed on `ctx.obj` so a command can read what the caller asked for
-    globally without re-deriving it. Repository roots are discovered lazily
-    by repository-bound commands, never by this callback.
-    """
+    """The resolved global options for one invocation, stashed on `ctx.obj`."""
 
     config: Path
     quiet: bool
     verbosity: int
     no_color: bool
-    #: The invocation-wide `-o`. Read by `cli/output.resolve` via `ctx.obj`
-    #: and deliberately NOT seeded into `ctx.default_map`: seeding by
-    #: parameter *name* would hand the global value to every parameter that
-    #: happens to be called `output`, whatever it means there, and would
-    #: erase the `None`-means-not-given distinction the resolver's precedence
-    #: rests on. See `cli/output.py` for the full note.
+    #: The invocation-wide `-o`, read by `cli/output.resolve`. Not put in
+    #: `ctx.default_map`, which would hand it to every parameter named `output`.
     output: str
 
 
@@ -144,41 +129,20 @@ def global_options(
     A command's own `-o` still wins, so `chart-manager -o json plan -o table`
     prints a table. Commands that have no projection ignore it.
 
-    `-o` is a *format* everywhere on this surface, with no exception left:
-    `grafana dashboard export` was the last command where it named a file,
-    and that meaning moved to `--to` when the command was renamed. Writing to
-    a path is always `--to`. The global still travels on `ctx.obj` rather
-    than through `ctx.default_map` -- see `cli/output.py` for why the
-    repository discovery is the wrong mechanism for this one.
-
-    Deliberately absent, and not an oversight:
-
-    * **No global `--version` flag.** `--version` already means the *chart*
-      version on `chart publish` and all three `promote` commands. One
-      flag, two meanings by position, is a bad flag -- so the CLI's own
-      version is the `version` command.
+    There is no global `--version` flag: `--version` means the chart version
+    on `chart publish` and `promote`, so the CLI's own is the `version` command.
     """
-    # Order matters: the config file must be located before anything reads
-    # Settings, because Settings is where the config file's values enter.
+    # The config file must be set before anything reads Settings.
     set_config_file(config)
     settings = start_invocation().settings
 
     # NO_COLOR is a convention, not a value: the spec says any non-empty
     # value disables color.
     disable_color = no_color or bool(os.environ.get("NO_COLOR"))
-    # These are the whole surface's three consoles, not this module's: every
-    # `cli/` module imports them from `cli/streams.py`, so setting the flag
-    # here reaches `chart validate` and `chart publish` too. It did not while
-    # each module derived its own.
+    # The surface's three shared consoles (`cli/streams.py`).
     for sink in (console, narration, errors):
         sink.no_color = disable_color
-    # Only narration is silenced. `console` carries the projection the caller
-    # asked for and `errors` carries why it failed; `-q` must not swallow
-    # either, or `-q` becomes indistinguishable from `2>/dev/null`.
-    #
-    # Process-wide rather than `narration.quiet = quiet`: `commands/promote/cli.py`
-    # builds a narration console per invocation, so assigning only to the
-    # shared one would leave `-q` a no-op there.
+    # Process-wide, so it also reaches per-invocation narration consoles.
     set_narration_quiet(quiet)
 
     if verbose:
@@ -197,12 +161,7 @@ def global_options(
 
 
 def _package_version() -> str:
-    """Return the installed distribution version.
-
-    `PackageNotFoundError` means chart_manager is on `sys.path` without being
-    installed -- a source tree run directly. Say so rather than inventing a
-    number a bug report would then quote.
-    """
+    """Return the installed distribution version, or say it is not installed."""
     try:
         return metadata.version("chart-manager")
     except metadata.PackageNotFoundError:
@@ -260,20 +219,11 @@ app.add_typer(schemas_app, name="schemas")
 
 # --- errors become exit codes ----------------------------------------------
 
-#: Which raised error means which outcome. Ordered most specific first --
-#: `_outcome_for` returns on the first `isinstance` match -- so
-#: `MissingToolError` has to precede the `ExternalCommandError` it subclasses,
-#: and both have to precede the `ChartManagerError` catch-all that closes the
-#: table and makes the lookup total.
-#:
-#: This is where exit codes 3, 4 and 127 come from: an unparseable
-#: `chart-lifecycle.yaml` is not the same event as a helm that ran and
-#: failed, which is not the same event as a helm that is not installed, and
-#: before this every one of them exited 1 (except the absent binary, which
-#: already had its own clause). A `CapabilityUnavailableError` deliberately
-#: falls through to `FAILED`: asking a chart for a capability it has switched
-#: off is not invalid configuration, so it is not a spec error. A missing
-#: `workspace.yaml` is an environment error (5).
+#: Which raised error means which outcome. Ordered most specific first, since
+#: `_outcome_for` returns on the first `isinstance` match (`MissingToolError`
+#: must come before `ExternalCommandError`, its parent class); the
+#: `ChartManagerError` catch-all closes the table. A `CapabilityUnavailableError`
+#: falls through to `FAILED`: it is not a spec error.
 _ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
     (MissingToolError, Outcome.MISSING_BINARY),
     (ExternalCommandError, Outcome.TOOL),
@@ -299,11 +249,7 @@ def _outcome_for(exc: ChartManagerError) -> Outcome:
 
 
 def _os_error_text(exc: OSError) -> str:
-    """A one-line reason for an OSError, naming the file when there is one.
-
-    `str(OSError)` reads "[Errno 21] Is a directory: 'charts/'", which is a
-    Python artifact; the operator wants the sentence without the errno.
-    """
+    """A one-line reason for an OSError without the errno, naming the file if any."""
     if exc.strerror is None:
         return str(exc)
     return f"{exc.strerror.lower()}: {exc.filename}" if exc.filename else exc.strerror.lower()
@@ -312,18 +258,8 @@ def _os_error_text(exc: OSError) -> str:
 def main() -> None:
     """Entry point: turn an escaped exception into a mapped exit code.
 
-    Everything below writes one `error:` line and exits with a number from
-    `plumbing/exit_codes.py`. Nothing may reach the operator as a traceback:
-    a traceback is not a diagnostic to anyone who did not write this code,
-    and it carries no exit code a pipeline can branch on.
-
-    The two non-domain arms are ordered, and the order is the point.
-    `FileNotFoundError` -- a data file the caller named is not there -- stays
-    a plain failure (1), so a wrapper keying on 127 to say "install helm"
-    does not fire for a missing values file. Every *other* `OSError` is the
-    machine refusing rather than the run failing (a directory where a file
-    was expected, a permission denial, a refused connection -- `socket`
-    errors are `OSError` too), which is the environment error, 5.
+    `FileNotFoundError` must precede `OSError`: a missing file the caller
+    named is a plain failure, while any other `OSError` is an environment error.
     """
     try:
         settings = load_settings()
