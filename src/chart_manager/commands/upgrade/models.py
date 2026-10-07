@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 
 
 class UpgradeError(ChartManagerError):
@@ -31,6 +32,16 @@ class UpgradeStatus(StrEnum):
     PR_OPEN = "pr_open"
     PR_UPDATED = "pr_updated"
     STATUS_UNKNOWN = "status_unknown"
+
+
+#: The exit outcome of each `UpgradeStatus`; an unknown pull request status is a `TOOL` failure.
+UPGRADE_OUTCOME: Mapping[UpgradeStatus, Outcome] = {
+    UpgradeStatus.DRY_RUN: Outcome.SUCCESS,
+    UpgradeStatus.NO_CHANGES: Outcome.SUCCESS,
+    UpgradeStatus.PR_OPEN: Outcome.SUCCESS,
+    UpgradeStatus.PR_UPDATED: Outcome.SUCCESS,
+    UpgradeStatus.STATUS_UNKNOWN: Outcome.TOOL,
+}
 
 
 @dataclass(frozen=True)

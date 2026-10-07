@@ -11,6 +11,7 @@ import pytest
 from chart_manager.commands.upgrade import FinalizeResult, UpgradeResult, UpgradeStatus
 from chart_manager.commands.upgrade import cli as upgrade_cli
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from tests.conftest import cli, write_workspace
 
 _DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
@@ -163,6 +164,28 @@ def test_a_pull_request_without_a_number_is_still_reported(
         "number": None,
     }
     assert "pull request: https://example.test/pull/7\n" in as_table.stdout
+
+
+def test_an_unknown_pull_request_status_exits_as_a_tool_failure_and_still_reports(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The branch was pushed but the PR lookup failed: CI must not read that as a clean run."""
+    _fake_upgrade(
+        monkeypatch,
+        UpgradeResult(
+            **{
+                **vars(OPENED),
+                "outcome": UpgradeStatus.STATUS_UNKNOWN,
+                "pr_url": None,
+                "pr_number": None,
+            }
+        ),
+    )
+
+    result = cli("chart", "upgrade", "charts/loki", "-o", "json")
+
+    assert result.exit_code == exit_code_for(Outcome.TOOL)
+    assert '"outcome":"status_unknown"' in result.stdout
 
 
 @pytest.mark.parametrize("chart", ["loki", "charts/loki"], ids=["name", "path"])

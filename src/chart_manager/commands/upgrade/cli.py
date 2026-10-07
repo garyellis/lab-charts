@@ -16,10 +16,15 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.commands.upgrade import finalize
 from chart_manager.commands.upgrade.finalize import load_update_data
-from chart_manager.commands.upgrade.models import FinalizeRequest, UpgradeRequest
+from chart_manager.commands.upgrade.models import (
+    UPGRADE_OUTCOME,
+    FinalizeRequest,
+    UpgradeRequest,
+)
 from chart_manager.commands.upgrade.run import run
 from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.charts.chart import resolve_chart_target
 
 #: `upgrade-finalize` keeps `--format text|json`: `renovate-global.json`'s allowlist pins the
@@ -78,6 +83,7 @@ def upgrade(
         renovate_token=container.settings.renovate_token,
     )
     _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
+    raise typer.Exit(code=exit_code_for(UPGRADE_OUTCOME[result.outcome]))
 
 
 def upgrade_finalize(
