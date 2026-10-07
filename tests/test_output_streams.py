@@ -50,18 +50,18 @@ from .conftest import cli, write_workspace
 
 
 @pytest.fixture
-def root(tmp_path: Path) -> Path:
+def root(root: Path) -> Path:
     """An empty repository root: every command below is cluster-free."""
-    write_workspace(tmp_path)
-    return tmp_path
+    write_workspace(root)
+    return root
 
 
-def _argv(name: str, root: Path) -> list[str]:
+def _argv(name: str) -> list[str]:
     """Commands that reach a real projection without a cluster or network."""
     return {
         "validate-json": [
             "chart", "validate", "--all", "--output", "json",
-            "--progress", "none", "--root", str(root),
+            "--progress", "none",
         ],
         # Deliberately does NOT name `--output json`: it lets `auto` resolve
         # to json, which is what happens off a terminal and therefore what
@@ -72,11 +72,9 @@ def _argv(name: str, root: Path) -> list[str]:
         # See `cli/output.resolve` for why auto-resolved json is not quiet.
         "validate-json-with-warning": [
             "chart", "validate", "--all",
-            "--progress", "none", "--github-step-summary", "--root", str(root),
+            "--progress", "none", "--github-step-summary",
         ],
-        "chart-test-matrix": [
-            "plan", "-o", "github", "--all", "--root", str(root),
-        ],
+        "chart-test-matrix": ["plan", "-o", "github", "--all"],
     }[name]
 
 
@@ -95,7 +93,7 @@ def test_json_projections_are_parseable_on_stdout(
     `json.loads` raised -- exactly what a `| jq` consumer would hit.
     """
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    result = cli(*_argv(command, root))
+    result = cli(*_argv(command))
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -110,7 +108,7 @@ def test_the_warning_case_actually_warns(root: Path, monkeypatch: pytest.MonkeyP
     while no longer testing anything.
     """
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    result = cli(*_argv("validate-json-with-warning", root))
+    result = cli(*_argv("validate-json-with-warning"))
 
     assert "GITHUB_STEP_SUMMARY" in result.stderr
     assert "GITHUB_STEP_SUMMARY" not in result.stdout
@@ -119,12 +117,12 @@ def test_the_warning_case_actually_warns(root: Path, monkeypatch: pytest.MonkeyP
 def _narration_case(name: str, root: Path) -> tuple[list[str], str]:
     """(argv, the narration fragment it must print) for cluster-free commands."""
     if name == "nothing-to-clean":
-        return ["chart", "cache", "clean", "--root", str(root)], "nothing to clean"
+        return ["chart", "cache", "clean"], "nothing to clean"
     if name == "cleaned":
         (root / ".chart-manager" / "rendered").mkdir(parents=True)
-        return ["chart", "cache", "clean", "--root", str(root)], "cleaned:"
+        return ["chart", "cache", "clean"], "cleaned:"
     if name == "no-dashboards":
-        return ["grafana", "dashboard", "lint", "--root", str(root)], "no dashboards found"
+        return ["grafana", "dashboard", "lint"], "no dashboards found"
     raise AssertionError(f"unknown narration case: {name}")
 
 
@@ -144,7 +142,7 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
     This is the property that makes `cmd >/dev/null` a safe way to silence
     a mutating command without also silencing its errors.
     """
-    result = cli("chart", "cache", "clean", "--root", str(root))
+    result = cli("chart", "cache", "clean")
 
     assert result.stdout == ""
     assert result.stderr != ""

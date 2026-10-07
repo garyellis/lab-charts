@@ -12,24 +12,24 @@ from tests.conftest import MakeChart, cli
 
 
 def test_chart_list_yaml_carries_the_same_document(
-    chart_root: Path, make_chart: MakeChart
+    root: Path, make_chart: MakeChart
 ) -> None:
     """One document, two encoders -- `-o yaml` must not be a second shape."""
     make_chart("alloy")
 
-    as_json = cli("chart", "list", "-o", "json", "--root", str(chart_root))
-    as_yaml = cli("chart", "list", "-o", "yaml", "--root", str(chart_root))
+    as_json = cli("chart", "list", "-o", "json")
+    as_yaml = cli("chart", "list", "-o", "yaml")
 
     assert parse_yaml(as_yaml.stdout) == json.loads(as_json.stdout)
 
 
 def test_chart_list_table_is_the_projection_a_terminal_gets(
-    chart_root: Path, make_chart: MakeChart
+    root: Path, make_chart: MakeChart
 ) -> None:
     """`-o table` keeps the human inventory: headers plus one row per chart."""
     make_chart("alloy")
 
-    result = cli("chart", "list", "-o", "table", "--root", str(chart_root))
+    result = cli("chart", "list", "-o", "table")
 
     assert result.exit_code == 0, result.output
     assert "Manifest validation" in result.stdout
@@ -37,7 +37,7 @@ def test_chart_list_table_is_the_projection_a_terminal_gets(
 
 
 def test_chart_list_off_a_terminal_resolves_auto_to_json(
-    chart_root: Path, make_chart: MakeChart
+    root: Path, make_chart: MakeChart
 ) -> None:
     """`auto` asks about stdout, and under CliRunner stdout is a pipe.
 
@@ -47,14 +47,14 @@ def test_chart_list_off_a_terminal_resolves_auto_to_json(
     """
     make_chart("alloy")
 
-    result = cli("chart", "list", "--root", str(chart_root))
+    result = cli("chart", "list")
 
     assert json.loads(result.stdout)["charts"][0]["name"] == "alloy"
 
 
 @pytest.mark.parametrize("output", ["json", "table"])
 def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
-    chart_root: Path, make_chart: MakeChart, output: str
+    root: Path, make_chart: MakeChart, output: str
 ) -> None:
     """A pipeline reads the exit code; a jq filter reads `error`. Both work.
 
@@ -65,7 +65,7 @@ def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
     chart = make_chart("broken")
     (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
-    result = cli("chart", "list", "-o", output, "--root", str(chart_root))
+    result = cli("chart", "list", "-o", output)
 
     assert result.exit_code == 3
     assert "broken" in result.stdout
@@ -78,12 +78,12 @@ def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
     ids=["list", "show"],
 )
 def test_a_projection_neither_command_has_is_rejected_at_parse_time(
-    chart_root: Path, make_chart: MakeChart, command: list[str]
+    root: Path, make_chart: MakeChart, command: list[str]
 ) -> None:
     """Neither has a markdown form, so `-o md` is a usage error, not a table."""
     make_chart("alloy")
 
-    result = cli(*command, "-o", "md", "--root", str(chart_root))
+    result = cli(*command, "-o", "md")
 
     assert result.exit_code == 2
     assert "md" in result.output
@@ -91,12 +91,12 @@ def test_a_projection_neither_command_has_is_rejected_at_parse_time(
 
 @pytest.mark.parametrize("output", [[], ["-o", "yaml"]], ids=["auto-json", "yaml"])
 def test_chart_show_prints_the_authored_envelope(
-    chart_root: Path, make_chart: MakeChart, output: list[str]
+    root: Path, make_chart: MakeChart, output: list[str]
 ) -> None:
     """The point of `-o json|yaml` is that it can be diffed against the source."""
     make_chart("alloy")
 
-    result = cli("chart", "show", "alloy", *output, "--root", str(chart_root))
+    result = cli("chart", "show", "alloy", *output)
 
     assert result.exit_code == 0, result.output
     document = parse_yaml(result.stdout)
@@ -107,12 +107,12 @@ def test_chart_show_prints_the_authored_envelope(
 
 
 def test_chart_show_table_flattens_the_envelope_onto_dotted_fields(
-    chart_root: Path, make_chart: MakeChart
+    root: Path, make_chart: MakeChart
 ) -> None:
     """`-o table` used to be unreachable: the command hardcoded JSON."""
     make_chart("alloy", profiles={"minimal": {"values": ["values.yaml"]}})
 
-    result = cli("chart", "show", "alloy", "-o", "table", "--root", str(chart_root))
+    result = cli("chart", "show", "alloy", "-o", "table")
 
     assert result.exit_code == 0, result.output
     assert "spec.chartTest.profiles.minimal.values" in result.stdout
