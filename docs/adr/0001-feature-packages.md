@@ -32,7 +32,7 @@ chart_manager/
   shared/         charts cluster events workspace.py
   settings.py     process configuration (env, config file) and its defaults
   integrations/   every call to the outside world, one module per external system
-  plumbing/       errors, yaml, paths, command runner
+  plumbing/       errors, yaml, paths, command runner, progress
 ```
 
 - **Command packages** (`commands/<name>`) are named after the CLI subcommand: `chart validate`

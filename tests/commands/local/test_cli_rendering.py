@@ -28,7 +28,7 @@ from chart_manager.commands.local.models import (
     DevClusterEntryOutcome,
     DevClusterResult,
 )
-from chart_manager.shared.cluster.progress import detail, failure, info, step, warn
+from chart_manager.plumbing.progress import detail, failure, info, step, warn
 
 
 @pytest.fixture

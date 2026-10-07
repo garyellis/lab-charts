@@ -24,7 +24,7 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.shared.cluster.progress import ProgressEvent
+from chart_manager.plumbing.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
 # behaviour gets new attributes (e.g. VS host list, port mapping set) and

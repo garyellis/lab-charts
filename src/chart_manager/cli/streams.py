@@ -37,7 +37,7 @@ import weakref
 from rich.console import Console
 from rich.markup import escape
 
-from chart_manager.shared.cluster.progress import ProgressEvent
+from chart_manager.plumbing.progress import ProgressEvent
 
 #: Every narration console handed out, so `set_narration_quiet` can reach the
 #: ones built at import time here as well as the ones `commands/promote/cli.py` builds
