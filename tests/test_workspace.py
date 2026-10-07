@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from chart_manager import main
 from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
-from chart_manager.cli._container import Container, reset_invocation
+from chart_manager.cli._container import Container, container, reset_invocation
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
@@ -164,6 +164,11 @@ def test_missing_workspace_exit_code_through_main(
 
     assert excinfo.value.code == 5
     assert "no .chart-manager/workspace.yaml" in capsys.readouterr().err
+
+
+def test_the_container_is_unavailable_before_an_invocation_starts() -> None:
+    with pytest.raises(RuntimeError, match="start_invocation"):
+        container()
 
 
 @pytest.mark.parametrize("key", ["charts_dir", "local_config"])

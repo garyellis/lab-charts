@@ -33,9 +33,9 @@ from chart_manager.shared.workspace import (
 class Container:
     """One invocation's settings, workspace and command runner. Construct once; the caller holds it."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        """Bind settings (defaults reproduce today's CLI behavior)."""
-        self._settings = settings if settings is not None else load_settings()
+    def __init__(self, settings: Settings) -> None:
+        """Bind the invocation's settings."""
+        self._settings = settings
         self._command_runner: CommandRunner | None = None
         self._workspaces: dict[Path | None, RepositoryWorkspace] = {}
 
@@ -74,7 +74,7 @@ _invocation: Container | None = None
 def start_invocation() -> Container:
     """Build the invocation's container (after `--config` is applied)."""
     global _invocation
-    _invocation = Container()
+    _invocation = Container(load_settings())
     return _invocation
 
 
@@ -84,17 +84,14 @@ def reset_invocation() -> None:
     _invocation = None
 
 
-def container(settings: Settings | None = None) -> Container:
-    """Return the current invocation's `Container`, or one bound to `settings`.
+def container() -> Container:
+    """Return the current invocation's `Container`.
 
-    `settings=None` resolves the process configuration
-    (`CHART_MANAGER_* env > config.yaml > defaults`), which is what every
-    command does. Passing one is the injection point for a test.
+    Raises `RuntimeError` when no invocation has started: the root callback
+    calls `start_invocation()` before any command runs.
     """
-    if settings is not None:
-        return Container(settings)
     if _invocation is None:
-        return Container()
+        raise RuntimeError("no invocation has started; call start_invocation() first")
     return _invocation
 
 
