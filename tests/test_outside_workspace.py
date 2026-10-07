@@ -25,23 +25,7 @@ from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.workspace import discover_workspace_root
 
-from .conftest import FakeCommandRunner, cli
-
-_PASSING_DASHBOARD = {
-    "title": "T",
-    "uid": "u",
-    "schemaVersion": 38,
-    "editable": True,
-    "panels": [
-        {
-            "id": 1,
-            "title": "p",
-            "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-            "targets": [{"expr": "rate(x[$__rate_interval])"}],
-        }
-    ],
-    "templating": {"list": [{"type": "datasource", "name": "DS_PROMETHEUS"}]},
-}
+from .conftest import PASSING_DASHBOARD, FakeCommandRunner, cli
 
 
 @pytest.fixture(autouse=True)
@@ -178,7 +162,7 @@ def test_event_list(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_grafana_dashboard_lint_with_an_explicit_path(outside: Path) -> None:
     dashboard = outside / "ok.json"
-    dashboard.write_text(json.dumps(_PASSING_DASHBOARD), encoding="utf-8")
+    dashboard.write_text(PASSING_DASHBOARD, encoding="utf-8")
 
     result = cli("grafana", "dashboard", "lint", "--path", str(dashboard))
 
@@ -195,7 +179,7 @@ def test_grafana_dashboard_lint_without_a_path_needs_the_workspace() -> None:
 
 def test_grafana_dashboard_export(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        dashboard_export, "export", lambda _request, _kubectl: dict(_PASSING_DASHBOARD)
+        dashboard_export, "export", lambda _request, _kubectl: json.loads(PASSING_DASHBOARD)
     )
 
     result = cli("grafana", "dashboard", "export", "u", "-o", "json")

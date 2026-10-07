@@ -50,7 +50,7 @@ def test_table_is_exhaustive_over_every_outcome() -> None:
         (Outcome.MISSING_BINARY, 127),
     ],
 )
-def test_each_outcome_maps_to_the_code_design_6_1_assigns_it(
+def test_each_outcome_maps_to_its_exit_code(
     outcome: Outcome,
     expected: int,
 ) -> None:

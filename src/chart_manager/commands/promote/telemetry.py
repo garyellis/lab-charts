@@ -8,7 +8,7 @@ rollout starts, when it converges, and whether `helm test` went green -- but
 neither could reach `EventWriter`, so `PromotionPhase.WAITING_ROLLOUT`,
 `ROLLOUT_OK` and `HELM_TEST_*` were emitted nowhere. The promotion timeline
 had a start (`FLUX_PR_OPEN`, from `commands/promote/pr.py`) and no end, which
-is exactly what makes DESIGN.md's "duration from renovate PR propagation to
+is exactly what makes the "duration from renovate PR propagation to
 all envs" uncomputable.
 
 The *failure policy* itself lives in `shared/events/failure.py`, shared with

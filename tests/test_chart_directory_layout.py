@@ -144,14 +144,9 @@ spec:
     assert result.spec_errors == ()
 
 
-def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path) -> None:
-    """One container's workspace answers for every command that reads it.
-
-    Each of these three was once constructed at the surface from a layout of
-    its own, so the container's configuration was not what answered the
-    question. Write a nested `chartsDir` once and `chart list`, `local up`
-    and `chart cache clean` all address it.
-    """
+def test_every_command_reads_charts_dir_from_one_workspace(tmp_path: Path) -> None:
+    """Write a nested `chartsDir` once and `chart list`, `local up` and
+    `chart cache clean` all address it."""
     _write_chart(tmp_path, "demo")
     write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())

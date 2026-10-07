@@ -63,12 +63,6 @@ class _RecordingKubectl:
             raise self._vs_raise
         return list(self._virtualservices)
 
-    # Returns [] because this file's tests don't exercise the
-    # gateway-host path; gateway-host-driven assertions live in
-    # test_apps_domain_detection.py.
-    def list_gateway_hosts(self) -> list[str]:
-        return []
-
     def create_namespace(self, _namespace: str) -> None:
         pass
 

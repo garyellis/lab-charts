@@ -8,7 +8,7 @@ from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomi
 from chart_manager.commands.validate.schemas.models import AuthoredSchemaPolicy
 from chart_manager.commands.validate.schemas.sync import (
     KubeconformSchemaSyncRequest,
-    KubeconformSchemaSyncService,
+    sync,
 )
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
@@ -50,13 +50,12 @@ def test_plain_sync_never_resolves_refs_or_changes_lock_even_after_chart_changes
     write_schema_lock_atomic(req.lock_path, lock)
     before = req.lock_path.read_bytes()
     source = Source(lock)
-    service = KubeconformSchemaSyncService(store, source)
-    assert service.sync(req).generation_published
+    assert sync(req, store=store, source=source).generation_published
     # Broken chart data cannot interfere with caching upstream repositories.
     chart = tmp_path / "charts/new/templates/broken.yaml"
     chart.parent.mkdir(parents=True)
     chart.write_text("{{ broken")
-    assert not service.sync(req).generation_published
+    assert not sync(req, store=store, source=source).generation_published
     assert req.lock_path.read_bytes() == before
     assert not source.calls
 
@@ -65,7 +64,7 @@ def test_update_resolves_both_pins_then_publishes_lock(tmp_path):
     lock, store, _ = schema_store(tmp_path)
     source = Source(lock)
     req = request(tmp_path, update=True)
-    result = KubeconformSchemaSyncService(store, source).sync(req)
+    result = sync(req, store=store, source=source)
     assert result.lock_updated
     assert len(source.calls) == 2
     assert req.lock_path.is_file()
@@ -83,7 +82,7 @@ def test_failed_update_keeps_previous_lock(tmp_path, monkeypatch):
 
     monkeypatch.setattr(snapshots, "checkout", failed)
     with pytest.raises(KubeconformSchemaSourceEnvironmentError):
-        KubeconformSchemaSyncService(store, Source(lock)).sync(req)
+        sync(req, store=store, source=Source(lock))
     assert req.lock_path.read_bytes() == before
 
 
@@ -93,5 +92,5 @@ def test_policy_mismatch_fails_without_download(tmp_path):
     req = request(tmp_path)
     write_schema_lock_atomic(req.lock_path, changed)
     with pytest.raises(KubeconformSchemaLockError):
-        KubeconformSchemaSyncService(store, Source(lock)).sync(req)
+        sync(req, store=store, source=Source(lock))
     assert not snapshots.calls

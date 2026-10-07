@@ -44,55 +44,49 @@ class KubeconformSchemaSyncResult:
     generation_published: bool
 
 
-class KubeconformSchemaSyncService:
-    def __init__(self, store: KubeconformSchemaStore, source: KubeconformSchemaSource) -> None:
-        self.store = store
-        self.source = source
-
-    def sync(self, request: KubeconformSchemaSyncRequest) -> KubeconformSchemaSyncResult:
-        if request.update:
-            policy = request.policy
-            try:
-                kubernetes = RepositoryPin(
-                    repository=policy.kubernetes_repository,
-                    track=policy.kubernetes_track,
-                    resolved=self.source.resolve_ref(
-                        policy.kubernetes_repository, policy.kubernetes_track
-                    ),
-                )
-                catalog = RepositoryPin(
-                    repository=policy.catalog_repository,
-                    track=policy.catalog_track,
-                    resolved=self.source.resolve_ref(
-                        policy.catalog_repository, policy.catalog_track
-                    ),
-                )
-            except GitHubKubeconformSchemaSourceError as exc:
-                raise KubeconformSchemaSourceEnvironmentError(str(exc)) from exc
-            lock = build_lock(
-                workspace=request.workspace,
-                policy=LockedSchemaPolicy(
-                    kubernetes_version=policy.normalized_version(),
-                    generate_from_crds=policy.generate_from_crds,
-                    kubernetes=kubernetes,
-                    catalog=catalog,
-                ),
+def sync(
+    request: KubeconformSchemaSyncRequest,
+    *,
+    store: KubeconformSchemaStore,
+    source: KubeconformSchemaSource,
+) -> KubeconformSchemaSyncResult:
+    if request.update:
+        policy = request.policy
+        try:
+            kubernetes = RepositoryPin(
+                repository=policy.kubernetes_repository,
+                track=policy.kubernetes_track,
+                resolved=source.resolve_ref(policy.kubernetes_repository, policy.kubernetes_track),
             )
-        else:
-            if not request.lock_path.is_file():
-                raise KubeconformSchemaLockError(
-                    "schema lock is missing; run `chart-manager schemas sync --update`"
-                )
-            lock = load_schema_lock(request.lock_path)
-            mismatches = lock_policy_mismatches(request.policy, lock, workspace=request.workspace)
-            if mismatches:
-                raise KubeconformSchemaLockError(
-                    "schema policy differs from lock; run "
-                    "`chart-manager schemas sync --update`: " + "; ".join(mismatches)
-                )
-        published = self.store.sync(lock)
-        if request.update:
-            write_schema_lock_atomic(request.lock_path, lock)
-        return KubeconformSchemaSyncResult(
-            lock, self.store.generation_path(), request.update, published
+            catalog = RepositoryPin(
+                repository=policy.catalog_repository,
+                track=policy.catalog_track,
+                resolved=source.resolve_ref(policy.catalog_repository, policy.catalog_track),
+            )
+        except GitHubKubeconformSchemaSourceError as exc:
+            raise KubeconformSchemaSourceEnvironmentError(str(exc)) from exc
+        lock = build_lock(
+            workspace=request.workspace,
+            policy=LockedSchemaPolicy(
+                kubernetes_version=policy.normalized_version(),
+                generate_from_crds=policy.generate_from_crds,
+                kubernetes=kubernetes,
+                catalog=catalog,
+            ),
         )
+    else:
+        if not request.lock_path.is_file():
+            raise KubeconformSchemaLockError(
+                "schema lock is missing; run `chart-manager schemas sync --update`"
+            )
+        lock = load_schema_lock(request.lock_path)
+        mismatches = lock_policy_mismatches(request.policy, lock, workspace=request.workspace)
+        if mismatches:
+            raise KubeconformSchemaLockError(
+                "schema policy differs from lock; run "
+                "`chart-manager schemas sync --update`: " + "; ".join(mismatches)
+            )
+    published = store.sync(lock)
+    if request.update:
+        write_schema_lock_atomic(request.lock_path, lock)
+    return KubeconformSchemaSyncResult(lock, store.generation_path(), request.update, published)

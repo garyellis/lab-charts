@@ -199,7 +199,7 @@ class Stage(StrEnum):
 
 
 #: The phase emitted when a stage starts working, i.e. the opening bracket of
-#: the interval DESIGN.md wants measured.
+#: the interval being measured.
 START_PHASE: Mapping[Stage, PromotionPhase] = {
     Stage.ROLLOUT: PromotionPhase.WAITING_ROLLOUT,
     Stage.HELM_TEST: PromotionPhase.HELM_TEST_RUN,

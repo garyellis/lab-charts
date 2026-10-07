@@ -698,11 +698,8 @@ def test_promote_rejects_an_unknown_output_mode(monkeypatch: pytest.MonkeyPatch)
     """`--output yaml` must fail, not silently fall back to table.
 
     Exit 2, not 1: naming a projection a command does not have is a *usage*
-    error, and P1.4 made every `--output` speak one vocabulary with one
-    rejection path (`typer.BadParameter`, via `cli/output.py`). This command
-    used to raise `ChartManagerError` and exit 1 while `chart validate`
-    rejected its equivalent with exit 2 -- unifying the vocabularies
-    necessarily unified that too. This is not the P2.1 exit-code work.
+    error, and every `--output` shares one rejection path
+    (`typer.BadParameter`, via `cli/output.py`).
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
     res = cli(*_PROMOTE_BASE, "--output", "yaml")

@@ -13,7 +13,7 @@ Partitioning
 Both backends partition on `chart_name`, not on `correlation_id`.
 
 `correlation_id` (`chart@version`) stays the *join* key -- it is what makes a
-version's timeline a timeline, and DESIGN.md's duration is grouped by
+version's timeline a timeline, and promotion duration is grouped by
 `(correlation_id, environment)`. But it is a poor partition key: it mints a
 fresh partition per version, so the most common question ("what has happened
 to this chart?") becomes a cross-partition fan-out, and a chart's history is
