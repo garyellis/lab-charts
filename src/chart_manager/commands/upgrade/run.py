@@ -8,6 +8,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from pydantic import SecretStr
+
 from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE, wrapper_version
 from chart_manager.commands.upgrade.models import (
     UpgradeError,
@@ -44,6 +46,7 @@ def run(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     events: EventWriter,
+    renovate_token: SecretStr | None,
 ) -> UpgradeResult:
     """Run Renovate for one chart and report the pull request it opened or updated."""
     root = workspace.root
@@ -69,8 +72,7 @@ def run(
         additional_config_path=chart_config if chart_config.is_file() else None,
         runtime_overlay=plan.runtime_overlay,
         dry_run="full" if request.dry_run else None,
-        # Renovate's own name first, then the token GitHub Actions provides.
-        token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
+        token=renovate_token.get_secret_value() if renovate_token is not None else None,
     )
     if request.dry_run:
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))

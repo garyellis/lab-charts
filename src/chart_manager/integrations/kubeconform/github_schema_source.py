@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from pydantic import SecretStr
 
 from chart_manager.plumbing.errors import ChartManagerError
 
@@ -63,17 +64,15 @@ class GitHubKubeconformSchemaSource:
         *,
         timeout: float = 15.0,
         opener: OpenUrl | None = None,
-        github_token: str | None = None,
+        github_token: SecretStr | None,
     ) -> None:
         if timeout <= 0:
             raise ValueError("schema source timeout must be positive")
         self.timeout = timeout
         self._opener = opener or build_opener(_GitHubRedirectHandler()).open
-        # Renovate maintenance uses its GitHub token for API ref resolution.
+        # None resolves refs anonymously, at GitHub's lower rate limit.
         # _read only sends credentials to api.github.com, never artifact hosts.
-        self._github_token = (
-            github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("RENOVATE_TOKEN")
-        )
+        self._github_token = github_token
 
     def resolve_ref(self, repository: str, ref: str) -> str:
         url = f"https://api.github.com/repos/{repository}/commits/{quote(ref, safe='')}"
@@ -102,7 +101,7 @@ class GitHubKubeconformSchemaSource:
             "User-Agent": "chart-manager-kubeconform-schema-sync",
         }
         if self._github_token and urlsplit(url).hostname == "api.github.com":
-            headers["Authorization"] = f"Bearer {self._github_token}"
+            headers["Authorization"] = f"Bearer {self._github_token.get_secret_value()}"
         request = Request(url, headers=headers)
         try:
             with self._opener(request, timeout=self.timeout) as response:

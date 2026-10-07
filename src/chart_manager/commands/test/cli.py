@@ -139,6 +139,7 @@ def chart_test(
     """
     output_mod.require_dry_run(output, dry_run=dry_run)
     target, workspace = _target(chart)
+    container = _container()
     request = test.ChartTestRequest(
         chart=target,
         profile=profile,
@@ -148,12 +149,11 @@ def chart_test(
         include_dependent_tests=dependent_tests,
         skip_requires=skip_requires,
         lint=lint,
-        run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
+        run_provision_hooks=provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci),
     )
     if dry_run:
         _render_test_plan(plan(request, workspace=workspace), ctx=ctx, output=output)
         return
-    container = _container()
     outcome = run(
         request,
         workspace=workspace,

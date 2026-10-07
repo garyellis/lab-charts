@@ -6,7 +6,6 @@ Flags, the downgrade guard, output mode and rendering; each handler calls its st
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -58,17 +57,14 @@ def _setup_logging_for_mode(mode: str) -> None:
 def _is_interactive() -> bool:
     """True when it is legitimate to block the run on a prompt.
 
-    Never prompt when stdin is not a TTY or `CI=true`. Both
-    legs matter. `isatty()` alone misses a runner that sets `CI=true` while
-    still allocating a pty -- there the prompt would not EOF, it would sit
-    there until the job's wall-clock timeout. `CI=true` alone misses a
-    `cron` job or a `docker run` without `-i`, where stdin is closed and
-    `typer.confirm` raises `Abort` on EOF instead of asking anything.
-
-    The `CI` test is spelled exactly as `cli/output.py` spells it, so "am I
-    in CI" cannot mean two different things inside one command.
+    Never prompt when stdin is not a TTY or in CI. Both legs matter.
+    `isatty()` alone misses a runner that sets `CI=true` while still
+    allocating a pty -- there the prompt would not EOF, it would sit there
+    until the job's wall-clock timeout. CI alone misses a `cron` job or a
+    `docker run` without `-i`, where stdin is closed and `typer.confirm`
+    raises `Abort` on EOF instead of asking anything.
     """
-    if os.environ.get("CI") == "true":
+    if _container().settings.ci:
         return False
     try:
         return sys.stdin.isatty()
@@ -342,7 +338,7 @@ def pr(
             raise typer.BadParameter(
                 f"refusing to downgrade {chart_name} to {target}: "
                 f"{len(downgrades)} HelmRelease(s) are at a newer version and "
-                "stdin is not a terminal (or CI=true), so the confirmation "
+                "stdin is not a terminal (or running in CI), so the confirmation "
                 "prompt cannot be answered. Re-run with --allow-downgrade to "
                 "promote anyway."
             )

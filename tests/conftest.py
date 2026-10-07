@@ -74,6 +74,7 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     calls run after this fixture, so they still win.
     """
     for var in (
+        "CI",
         "GITHUB_ACTIONS",
         "GITHUB_REPOSITORY",
         "GITHUB_STEP_SUMMARY",

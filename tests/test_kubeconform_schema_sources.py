@@ -5,6 +5,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import pytest
+from pydantic import SecretStr
 
 from chart_manager.integrations.kubeconform.github_schema_source import (
     GitHubKubeconformSchemaNotFoundError,
@@ -31,7 +32,7 @@ def test_source_rejects_disallowed_hosts_before_io(url: str) -> None:
         pytest.fail("disallowed URL reached network")
 
     with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="must use HTTPS"):
-        GitHubKubeconformSchemaSource(opener=unexpected)._read(url, max_bytes=100)
+        GitHubKubeconformSchemaSource(opener=unexpected, github_token=None)._read(url, max_bytes=100)
     with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="must use HTTPS"):
         _GitHubRedirectHandler().redirect_request(
             Request("https://api.github.com/repos/a/b"), None, 302, "found", {}, url
@@ -69,6 +70,7 @@ class _Response:
 def test_ref_resolution_requires_a_full_lowercase_sha() -> None:
     client = GitHubKubeconformSchemaSource(
         opener=lambda *_args, **_kwargs: _Response(b'{"sha":"' + b"a" * 40 + b'"}'),
+        github_token=None,
     )
 
     assert client.resolve_ref("owner/repo", "feature/ref") == "a" * 40
@@ -77,6 +79,7 @@ def test_ref_resolution_requires_a_full_lowercase_sha() -> None:
 def test_ref_resolution_rejects_invalid_github_payload() -> None:
     client = GitHubKubeconformSchemaSource(
         opener=lambda *_args, **_kwargs: _Response(b'{"sha":"short"}'),
+        github_token=None,
     )
 
     with pytest.raises(
@@ -91,7 +94,7 @@ def test_http_not_found_is_distinct_from_environment_failure() -> None:
         raise HTTPError("https://raw.githubusercontent.com", 404, "missing", {}, None)
 
     with pytest.raises(GitHubKubeconformSchemaNotFoundError):
-        GitHubKubeconformSchemaSource(opener=missing)._read("https://raw.githubusercontent.com", max_bytes=100)
+        GitHubKubeconformSchemaSource(opener=missing, github_token=None)._read("https://raw.githubusercontent.com", max_bytes=100)
 
     def offline(*_args, **_kwargs):
         raise URLError("network down")
@@ -100,11 +103,13 @@ def test_http_not_found_is_distinct_from_environment_failure() -> None:
         GitHubKubeconformSchemaSourceEnvironmentError,
         match="unreachable",
     ):
-        GitHubKubeconformSchemaSource(opener=offline)._read("https://raw.githubusercontent.com", max_bytes=100)
+        GitHubKubeconformSchemaSource(opener=offline, github_token=None)._read("https://raw.githubusercontent.com", max_bytes=100)
 
 
 def test_ref_response_is_size_bounded():
-    client = GitHubKubeconformSchemaSource(opener=lambda *args, **kwargs: _Response(b"123"))
+    client = GitHubKubeconformSchemaSource(
+        opener=lambda *args, **kwargs: _Response(b"123"), github_token=None
+    )
     with pytest.raises(GitHubKubeconformSchemaSourceIntegrityError, match="exceeds"):
         client._read("https://api.github.com/repos/x/y", max_bytes=2)
 
@@ -116,7 +121,7 @@ def test_token_is_sent_only_to_github_api() -> None:
         requests.append(request)
         return _Response(b'{"sha":"' + b"a" * 40 + b'"}')
 
-    client = GitHubKubeconformSchemaSource(opener=opener, github_token="secret")
+    client = GitHubKubeconformSchemaSource(opener=opener, github_token=SecretStr("secret"))
     client.resolve_ref("owner/repo", "main")
     client._read("https://raw.githubusercontent.com/x", max_bytes=100)
 
@@ -124,16 +129,14 @@ def test_token_is_sent_only_to_github_api() -> None:
     assert requests[1].get_header("Authorization") is None
 
 
-def test_unset_token_sends_no_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
+def test_unset_token_sends_no_authorization_header() -> None:
     requests = []
 
     def opener(request, **_kwargs):
         requests.append(request)
         return _Response(b'{"sha":"' + b"a" * 40 + b'"}')
 
-    GitHubKubeconformSchemaSource(opener=opener).resolve_ref("owner/repo", "main")
+    GitHubKubeconformSchemaSource(opener=opener, github_token=None).resolve_ref("owner/repo", "main")
 
     assert requests[0].get_header("Authorization") is None
 
@@ -143,10 +146,7 @@ def test_unset_token_sends_no_authorization_header(monkeypatch: pytest.MonkeyPat
 def test_github_api_rate_limit_has_actionable_diagnostic(
     status: int,
     token: str | None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
 
     def limited(request, **_kwargs):
         raise HTTPError(
@@ -157,7 +157,9 @@ def test_github_api_rate_limit_has_actionable_diagnostic(
             None,
         )
 
-    client = GitHubKubeconformSchemaSource(opener=limited, github_token=token)
+    client = GitHubKubeconformSchemaSource(
+        opener=limited, github_token=None if token is None else SecretStr(token)
+    )
     with pytest.raises(
         GitHubKubeconformSchemaSourceEnvironmentError,
     ) as caught:
@@ -178,7 +180,7 @@ def test_github_permission_denied_is_not_reported_as_rate_limit() -> None:
     def forbidden(request, **_kwargs):
         raise HTTPError(request.full_url, 403, "forbidden", {}, None)
 
-    client = GitHubKubeconformSchemaSource(opener=forbidden, github_token="secret")
+    client = GitHubKubeconformSchemaSource(opener=forbidden, github_token=SecretStr("secret"))
     with pytest.raises(GitHubKubeconformSchemaSourceEnvironmentError) as caught:
         client.resolve_ref("owner/repo", "main")
     assert "HTTP 403" in str(caught.value)

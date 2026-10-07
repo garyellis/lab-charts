@@ -12,7 +12,6 @@ The bar for moving one here is that two groups must agree on it forever:
 
 from __future__ import annotations
 
-import os
 from typing import Annotated
 
 import typer
@@ -33,11 +32,9 @@ ProvisionHooksOption = Annotated[
 ]
 
 
-def provision_hooks_enabled(override: bool | None) -> bool:
+def provision_hooks_enabled(override: bool | None, *, ci: bool) -> bool:
     """Resolve the explicit dual flag over the conventional CI default."""
-    if override is not None:
-        return override
-    return os.environ.get("CI", "").strip().lower() not in {"1", "true", "yes", "on"}
+    return override if override is not None else not ci
 
 
 __all__ = [

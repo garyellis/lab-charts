@@ -75,6 +75,7 @@ def upgrade(
         workspace=workspace,
         runner=container.command_runner(),
         events=container.event_writer(),
+        renovate_token=container.settings.renovate_token,
     )
     _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
 

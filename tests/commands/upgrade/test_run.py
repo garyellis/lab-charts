@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from chart_manager.commands.upgrade import (
     UpgradeError,
@@ -96,6 +97,7 @@ def _upgrade(
         workspace=workspace_for(tmp_path),
         runner=runner,
         events=EventWriter(source="chart-manager", store=lambda: events if events is not None else _EventLog()),
+        renovate_token=SecretStr("renovate-token"),
     )
 
 
@@ -112,18 +114,7 @@ def _branch_reads(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
 # ----- what Renovate is handed ---------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("tokens", "expected"),
-    [
-        ({"GITHUB_TOKEN": "ci-token"}, "ci-token"),
-        ({"RENOVATE_TOKEN": "renovate-token", "GITHUB_TOKEN": "ci-token"}, "renovate-token"),
-    ],
-)
-def test_dry_run_drives_git_and_renovate_through_the_runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: dict[str, str], expected: str
-) -> None:
-    for name, value in tokens.items():
-        monkeypatch.setenv(name, value)
+def test_dry_run_drives_git_and_renovate_through_the_runner(tmp_path: Path) -> None:
     (tmp_path / "charts" / "my-chart").mkdir(parents=True)
     (tmp_path / "charts" / "my-chart" / "renovate.json").write_text("{}\n", encoding="utf-8")
     runner = _runner(renovate=Reply(stdout="renovate complete\n"))
@@ -143,8 +134,7 @@ def test_dry_run_drives_git_and_renovate_through_the_runner(
     ]  # fmt: skip
     env = _renovate_env(runner)
     assert env["RENOVATE_DRY_RUN"] == "full"
-    # RENOVATE_TOKEN first, then the token GitHub Actions provides.
-    assert env["RENOVATE_TOKEN"] == expected
+    assert env["RENOVATE_TOKEN"] == "renovate-token"
     assert env["RENOVATE_CONFIG_FILE"] == str((tmp_path / "renovate-global.json").resolve())
     assert env["RENOVATE_ADDITIONAL_CONFIG_FILE"] == str(
         (tmp_path / "charts/my-chart/renovate.json").resolve()
