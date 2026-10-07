@@ -153,8 +153,8 @@ def local_up(
     root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
-    hooks_enabled = provision_hooks_enabled(run_provision_hooks)
     container = _container()
+    hooks_enabled = provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci)
     workspace = container.workspace(root)
     if dry_run:
         _render_plan(
@@ -241,8 +241,8 @@ def local_reset(
     root = repository_root()
     resolved = _resolve_local_selection(root.resolve(), chart=chart, stack=stack)
     _validate_local_profile(resolved, profile)
-    hooks_enabled = provision_hooks_enabled(run_provision_hooks)
     container = _container()
+    hooks_enabled = provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci)
     workspace = container.workspace(root)
     if dry_run:
         _render_plan(

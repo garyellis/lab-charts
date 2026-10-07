@@ -20,8 +20,8 @@ for one it cannot is a usage error rather than a silently different answer.
 
 `auto`, and why it asks about stdout
 ------------------------------------
-The default is `auto`: `table` when stdout is a terminal and `CI` is not
-`true`, else `json`. The probe is deliberately about *stdout* and not about
+The default is `auto`: `table` when stdout is a terminal and not in CI
+(`Settings.ci`), else `json`. The probe is deliberately about *stdout* and not about
 stderr or "is there a tty anywhere" -- the question `auto` answers is "is the
 data I am about to emit going to a human or to a pipe", and that is a
 property of the stream the projection lands on. Lifted from
@@ -58,7 +58,6 @@ exclusion list someone has to remember to update.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from typing import Annotated, Any
 
@@ -67,6 +66,7 @@ from rich.console import Console
 from rich.table import Table
 
 from chart_manager.cli import streams
+from chart_manager.cli._container import container
 from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Resolved from the environment rather than named by the caller.
@@ -315,7 +315,7 @@ def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
 
 def _auto(console: Console | None) -> str:
     """`table` for a human at a terminal, `json` for everything else."""
-    if os.environ.get("CI") == "true":
+    if container().settings.ci:
         return JSON
     probe = console if console is not None else streams.data_console()
     return TABLE if probe.is_terminal else JSON

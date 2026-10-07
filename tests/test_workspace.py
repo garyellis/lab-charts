@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from chart_manager import main
 from chart_manager import settings as settings_module
@@ -249,6 +249,41 @@ def test_the_schema_cache_root_override_expands_home_and_must_be_absolute(
 
     monkeypatch.setenv("CHART_MANAGER_SCHEMA_CACHE_ROOT", "relative/x")
     with pytest.raises(SpecError, match="schema_cache_root"):
+        load_settings()
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, False), ("", False), ("1", True)])
+def test_ci_is_read_from_the_unprefixed_variable(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, expected: bool
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("CI", value)
+
+    assert load_settings().ci is expected
+
+
+def test_each_token_is_read_only_from_its_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "g")
+    monkeypatch.setenv("RENOVATE_TOKEN", "")
+    settings = load_settings()
+    assert settings.github_token == SecretStr("g")
+    assert settings.renovate_token is None
+
+    monkeypatch.delenv("GITHUB_TOKEN")
+    monkeypatch.setenv("RENOVATE_TOKEN", "r")
+    settings = load_settings()
+    assert settings.github_token is None
+    assert settings.renovate_token == SecretStr("r")
+
+
+def test_the_events_backend_is_one_of_the_supported_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    assert load_settings().events_backend == "cosmos"
+
+    monkeypatch.setenv("EVENTS_BACKEND", "sqlite")
+    with pytest.raises(SpecError, match="events_backend"):
         load_settings()
 
 

@@ -301,6 +301,23 @@ def test_auto_resolves_to_json_in_ci(
     assert json.loads(result.stdout)["command"] == command
 
 
+def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
+    tmp_path: Path, recorded: _RecordingService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`CI` is read once, in `Settings`, so every "am I in CI" agrees."""
+    _chart(tmp_path)
+    monkeypatch.setenv("CI", "1")
+    # A terminal on stdout, so only CI can make `auto` pick json.
+    monkeypatch.setenv("TTY_COMPATIBLE", "1")
+
+    result = cli(*_local_argv("up", tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["command"] == "up"
+    _target, options = recorded.requests[0]
+    assert options["run_hooks"] is False
+
+
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_the_global_output_flag_reaches_every_local_command(
     tmp_path: Path, recorded: _RecordingService, command: str

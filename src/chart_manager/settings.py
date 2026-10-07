@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -63,6 +63,7 @@ class Settings(BaseSettings):
         env_prefix="CHART_MANAGER_",
         frozen=True,
         extra="forbid",
+        env_ignore_empty=True,
     )
 
     kube_context: str | None = None
@@ -82,6 +83,13 @@ class Settings(BaseSettings):
     root: Path = DEFAULT_ROOT
     #: Where pinned upstream schema snapshots and derived CRD schemas are cached.
     schema_cache_root: Path = Field(default_factory=_default_schema_cache_root)
+    #: Running in CI: the conventional, unprefixed `CI` (1/true/yes/on).
+    ci: bool = Field(default=False, validation_alias="CI")
+    #: GitHub API token for schema pin resolution (`schemas sync`).
+    github_token: SecretStr | None = Field(default=None, validation_alias="GITHUB_TOKEN")
+    #: Renovate's token for `chart upgrade`: a PAT, because PRs opened with the
+    #: Actions `GITHUB_TOKEN` trigger no workflows.
+    renovate_token: SecretStr | None = Field(default=None, validation_alias="RENOVATE_TOKEN")
 
     @classmethod
     def settings_customise_sources(

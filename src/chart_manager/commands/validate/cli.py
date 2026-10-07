@@ -332,7 +332,8 @@ def sync(
             container.command_runner(), container.settings.schema_cache_root
         ),
         source=GitHubKubeconformSchemaSource(
-            timeout=timeout if timeout is not None and timeout > 0 else 15.0
+            timeout=timeout if timeout is not None and timeout > 0 else 15.0,
+            github_token=container.settings.github_token,
         ),
         update=update,
     )

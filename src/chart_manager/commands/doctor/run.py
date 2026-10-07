@@ -55,7 +55,9 @@ def run(
         "kind": Kind(runner, docker_host=settings.docker_host, timeout=timeout).preflight,
         "git": Git(root, runner).preflight,
         "github": Github(root, runner).preflight,
-        "renovate": Renovate(runner).preflight,
+        "renovate": partial(
+            Renovate(runner).preflight, token_configured=settings.renovate_token is not None
+        ),
         "schemas": schemas.preflight,
         "events": partial(preflight_event_store, settings),
     }
