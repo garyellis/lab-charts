@@ -1,7 +1,7 @@
 """Kubectl readiness waits, best-effort listings, cluster addressing, pods and events.
 
-`list_virtualservices` is best-effort: an empty list on a missing CRD or parse error is the
-contract, and callers read it as "no VirtualServices yet" rather than a hard error.
+`list_virtualservices` returns an empty list only when the VirtualService CRD isn't
+installed; any other kubectl failure or unreadable JSON raises.
 """
 from __future__ import annotations
 
@@ -72,9 +72,8 @@ def _vs_payload(items: list[dict[str, object]]) -> str:
     return json.dumps({"items": items})
 
 
-def test_list_virtualservices_empty_when_kubectl_fails() -> None:
-    # Missing CRD -> kubectl exits non-zero -- list_virtualservices
-    # is best-effort and returns an empty list rather than raising.
+def test_list_virtualservices_empty_when_crd_missing() -> None:
+    # No istio yet (lab pre-istio, sandbox-test): kubectl doesn't know the resource type.
     runner = FakeCommandRunner(returncode=1, stderr="error: the server doesn't have a resource type \"virtualservice\"")
     assert Kubectl(runner=runner).list_virtualservices() == []
 
@@ -119,9 +118,14 @@ def test_list_virtualservices_drops_empty_and_non_string_hosts() -> None:
     assert vs.hosts == ("ok.localhost",)
 
 
-def test_list_virtualservices_ignores_malformed_json() -> None:
-    runner = FakeCommandRunner(stdout="this is not json")
-    assert Kubectl(runner=runner).list_virtualservices() == []
+@pytest.mark.parametrize(
+    "reply", [{"returncode": 1, "stderr": "connection refused"}, {"stdout": "not json"}],
+    ids=["cluster-unreachable", "unreadable-json"],
+)
+def test_list_virtualservices_raises_on_other_failures(reply: dict[str, int | str]) -> None:
+    runner = FakeCommandRunner(**reply)
+    with pytest.raises(ExternalCommandError):
+        Kubectl(runner=runner).list_virtualservices()
 
 
 # ----- wait_workloads_ready -------------------------------------------------

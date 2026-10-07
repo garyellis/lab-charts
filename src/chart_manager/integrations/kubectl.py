@@ -478,23 +478,22 @@ class Kubectl:
     def list_virtualservices(self) -> list[VirtualService]:
         """Return every VirtualService across the cluster: namespace, hosts, annotations.
 
-        Best-effort: when kubectl fails (e.g. the CRD isn't installed, lab
-        pre-istio or the sandbox-test path) or prints unreadable JSON, we
-        return [] rather than surfacing the error -- the caller treats "no VirtualServices" as the
-        normal early-install state. Non-string hosts and annotation values
-        are dropped; order is kubectl's (namespace, then name).
+        Returns [] when the CRD isn't installed (lab pre-istio, the
+        sandbox-test path); any other kubectl failure or unreadable JSON
+        raises ExternalCommandError, so a dead cluster doesn't read as "no
+        routes". Non-string hosts and annotation values are dropped; order
+        is kubectl's (namespace, then name).
         """
-        result = self.runner.run(
-            self._with_context(["kubectl", "get", "virtualservice", "-A", "-o", "json"]),
-            check=False,
-            timeout=self.timeout,
-        )
-        if result.returncode != 0:
-            return []
         try:
-            payload = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
+            result = self.runner.run(
+                self._with_context(["kubectl", "get", "virtualservice", "-A", "-o", "json"]),
+                timeout=self.timeout,
+            )
+        except ExternalCommandError as exc:
+            if "doesn't have a resource type" in exc.stderr:
+                return []
+            raise
+        payload = _parse_json(result.stdout)
         found: list[VirtualService] = []
         for item in payload.get("items", []) or []:
             if not isinstance(item, dict):
