@@ -27,6 +27,10 @@ from tests.conftest import (
 
 RENDER: frozenset[CheckName] = frozenset({"render"})
 CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
+APP_WITH_ONE_DEPENDENCY = (
+    "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
+    "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
+)
 
 
 def _run(
@@ -502,10 +506,7 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     app = write_validation_chart(tmp_path, "app")
-    (app / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
-        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
-    )
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
 
     def updates(argv: tuple[str, ...]) -> bool:
         if argv[1:3] != ("dependency", "update"):
@@ -540,10 +541,7 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
     app = write_validation_chart(
         tmp_path, "app", environments={env: {"values": ["values.yaml"]} for env in envs}
     )
-    (app / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
-        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
-    )
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
     runner = FakeCommandRunner()
 
     outcome = _run(
@@ -558,6 +556,23 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
         for record in runner.records
         if record.args[1:3] == ("dependency", "update")
     ] == [(("helm", "dependency", "update", str(app)), 600.0)]
+
+
+def test_a_failed_dependency_update_is_a_tool_error_not_a_chart_failure(tmp_path: Path) -> None:
+    app = write_validation_chart(tmp_path, "app")
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
+    runner = FakeCommandRunner().respond(
+        ("helm", "dependency", "update"), returncode=1, stderr="registry unreachable"
+    )
+
+    outcome = _run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("app",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert outcome.rows[0].checks["render"].status == "error"
+    assert outcome.outcome() is Outcome.TOOL
 
 
 def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
