@@ -19,6 +19,7 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.commands.local.targets import ResolvedStackTarget
 from chart_manager.plumbing.yaml_files import parse_yaml
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import resolve_chart_target
 from tests.conftest import cli
 
@@ -423,7 +424,7 @@ def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
 def test_chart_name_and_directory_resolve_to_the_same_target(tmp_path: Path) -> None:
     chart = _chart(tmp_path, "cert-manager")
 
-    workspace = _container.container().workspace(tmp_path)
+    workspace = _container.Container(Settings()).workspace(tmp_path)
     by_name = resolve_chart_target(workspace, "cert-manager")
     by_path = resolve_chart_target(workspace, "./charts/cert-manager")
 
