@@ -1,10 +1,10 @@
-"""EventStore protocol and backend selection (EVENTS_BACKEND: cosmos | dynamodb | none).
+"""EventStore protocol and backend selection (`Settings.events_backend`: cosmos | dynamodb | none).
 
 Events are opt-in
 -----------------
 Unset means `none`: no event is written anywhere until an operator exports
-EVENTS_BACKEND=cosmos (or dynamodb). A default that pointed at a real backend
-meant every unconfigured run paid for a doomed connection attempt and logged
+EVENTS_BACKEND=cosmos (or dynamodb). A default that pointed at a
+real backend meant every unconfigured run paid for a doomed connection attempt and logged
 a swallowed failure -- noise that trains operators to ignore the one warning
 that reports genuinely dropped telemetry.
 
@@ -27,10 +27,8 @@ of the queries operators actually run is not.
 """
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any, Protocol
 
-from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.events.model import PlatformLifecycleEvent
 from chart_manager.shared.events.query import (
@@ -45,6 +43,7 @@ from chart_manager.shared.events.query import (
 if TYPE_CHECKING:
     from chart_manager.integrations.cosmos import CosmosContainer
     from chart_manager.integrations.dynamodb import DynamoDBTable
+    from chart_manager.settings import Settings
 
 # The attribute both backends partition on. Named once so the writer, the
 # stores, and scripts/query-events cannot drift apart.
@@ -54,10 +53,6 @@ PARTITION_KEY = "chart_name"
 # what `get_event_store` would write to.
 COSMOS_DATABASE = "platform"
 EVENTS_RESOURCE = "lifecycle-events"
-
-#: The backend when EVENTS_BACKEND is unset. `none`: events are opt-in, and
-#: an environment that never asked for telemetry writes nothing anywhere.
-DEFAULT_BACKEND = "none"
 
 
 class EventStore(Protocol):
@@ -78,7 +73,7 @@ class EventStore(Protocol):
         ...
 
 class NullEventStore:
-    """Drop every event. Selected when EVENTS_BACKEND is unset (the default) or `none`.
+    """Drop every event. Selected when the events backend is unset (the default) or `none`.
 
     Makes "events are off" a first-class, silent state -- and the default
     one. Without it the only way to run without a backend is to leave Cosmos
@@ -214,23 +209,20 @@ def _build_dynamodb_store() -> DynamoDBEventStore:
     )
     return DynamoDBEventStore(table, sort_key="event_id")
 
-def get_event_store() -> EventStore:
-    """Select and build the event store from EVENTS_BACKEND (default none: opt-in)."""
-    backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
-    if backend == "cosmos":
+def get_event_store(settings: Settings) -> EventStore:
+    """Select and build the event store from `settings.events_backend` (default none: opt-in)."""
+    if settings.events_backend == "cosmos":
         return _build_cosmos_store()
-    if backend == "dynamodb":
+    if settings.events_backend == "dynamodb":
         return _build_dynamodb_store()
-    if backend == "none":
-        return NullEventStore()
-    raise ValueError(f"unsupported EVENTS_BACKEND: {backend!r}")
+    return NullEventStore()
 
 
-def query_events(query: EventQuery) -> list[dict[str, Any]]:
+def query_events(settings: Settings, query: EventQuery) -> list[dict[str, Any]]:
     """Run one read-side selection against the configured backend.
 
     Lives beside `get_event_store` because this module owns the
-    EVENTS_BACKEND switch. It short-circuits `dynamodb` on the variable
+    events-backend switch. It short-circuits `dynamodb` on the setting
     rather than calling `get_event_store().query(...)` blind for one
     reason: building the DynamoDB store *provisions* its table
     (`get_table` creates it and blocks on `wait_until_exists`), and a read
@@ -242,49 +234,36 @@ def query_events(query: EventQuery) -> list[dict[str, Any]]:
     `query.newest_first` for why the backend's string ORDER BY is not
     trusted as chronology.
     """
-    if os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND) == "dynamodb":
+    if settings.events_backend == "dynamodb":
         raise dynamodb_read_unsupported()
-    return newest_first(get_event_store().query(query))
+    return newest_first(get_event_store(settings).query(query))
 
 
-def preflight_event_store() -> tuple[Check, ...]:
+def preflight_event_store(settings: Settings) -> tuple[Check, ...]:
     """Report whether the configured events backend is usable.
 
     Lives beside `get_event_store` rather than in `doctor` because this is
-    the module that owns the EVENTS_BACKEND switch: a new backend adds a
+    the module that owns the events-backend switch: a new backend adds a
     branch here and is reported by `doctor` with no edit to the surface, and
     the two branch tables cannot drift.
 
     The reachability probe itself belongs to each backend's client, which is
     the integration that knows what "reachable" means for it. This function
-    only dispatches -- and answers for the two cases where there is nothing
-    to reach: `none`, which is a supported configuration and not a failure,
-    and an unrecognised value, which is `Outcome.SPEC` because the operator
-    wrote something wrong rather than the environment being down.
+    only dispatches -- and answers for `none`, where there is nothing to
+    reach: a supported configuration, not a failure. An unsupported value
+    never gets here; `load_settings` rejects it.
     """
-    backend = os.environ.get("EVENTS_BACKEND", DEFAULT_BACKEND)
-    if backend == "none":
-        # Disabled is the default; the unset case names the switch so the
-        # report doubles as the instruction for turning events on.
-        detail = (
-            "EVENTS_BACKEND=none (events disabled)"
-            if "EVENTS_BACKEND" in os.environ
-            else "events disabled (EVENTS_BACKEND unset; set EVENTS_BACKEND=cosmos to enable)"
-        )
-        return (Check.skipped("events-backend", detail),)
-    if backend == "cosmos":
+    if settings.events_backend == "cosmos":
         from chart_manager.integrations import cosmos
 
         return (cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE),)
-    if backend == "dynamodb":
+    if settings.events_backend == "dynamodb":
         from chart_manager.integrations import dynamodb
 
         return (dynamodb.preflight(EVENTS_RESOURCE),)
+    # The detail names the switch, so the report doubles as the instruction.
     return (
-        Check.failed(
-            "events-backend",
-            f"unsupported EVENTS_BACKEND: {backend!r}",
-            remediation="set EVENTS_BACKEND to one of: cosmos, dynamodb, none",
-            outcome=Outcome.SPEC,
+        Check.skipped(
+            "events-backend", "events disabled (set EVENTS_BACKEND=cosmos to enable)"
         ),
     )

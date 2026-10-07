@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from functools import partial
 
 from chart_manager.commands import validate
 from chart_manager.commands.doctor.models import DoctorReport
@@ -56,7 +57,7 @@ def run(
         "github": Github(root, runner).preflight,
         "renovate": Renovate(runner).preflight,
         "schemas": schemas.preflight,
-        "events": preflight_event_store,
+        "events": partial(preflight_event_store, settings),
     }
     results = (result for name, check in checks.items() for result in _run_check(name, check))
     return DoctorReport(checks=tuple(results))

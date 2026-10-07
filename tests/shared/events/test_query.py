@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from chart_manager.settings import Settings
 from chart_manager.shared.events.query import (
     DEFAULT_LIMIT,
     EventQuery,
@@ -97,13 +98,9 @@ def test_the_null_store_refuses_a_read_and_says_how_to_enable() -> None:
 # ----- backend dispatch -----------------------------------------------------
 
 
-def test_query_events_with_backend_none_raises_the_disabled_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("EVENTS_BACKEND", "none")
-
+def test_query_events_with_backend_none_raises_the_disabled_error() -> None:
     with pytest.raises(EventsDisabledError):
-        query_events(EventQuery())
+        query_events(Settings(events_backend="none"), EventQuery())
 
 
 def test_query_events_with_dynamodb_refuses_without_touching_the_table(
@@ -111,11 +108,10 @@ def test_query_events_with_dynamodb_refuses_without_touching_the_table(
 ) -> None:
     """`get_table` *creates* the table and blocks on wait_until_exists; a
     read that cannot be served must never reach it."""
-    monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
     monkeypatch.setattr(
         "chart_manager.integrations.dynamodb.get_table",
         lambda **kwargs: pytest.fail("query_events built the DynamoDB store"),
     )
 
     with pytest.raises(EventReadUnsupportedError, match="Cosmos-only"):
-        query_events(EventQuery())
+        query_events(Settings(events_backend="dynamodb"), EventQuery())

@@ -83,14 +83,13 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "CHART_MANAGER_OCI_REPOSITORY",
         "CHART_MANAGER_OCI_CA_FILE",
         "CHART_MANAGER_SCHEMA_CACHE_ROOT",
+        # Never inherit a developer's event sink and persist records in Cosmos DB.
+        "EVENTS_BACKEND",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.setenv("TERM", "dumb")
     monkeypatch.setenv("NO_COLOR", "1")
-    # Unit and integration tests must never inherit a developer's external
-    # event sink configuration and persist records in Cosmos DB.
-    monkeypatch.setenv("EVENTS_BACKEND", "none")
 
 
 @pytest.fixture(autouse=True)
