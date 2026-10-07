@@ -1,18 +1,7 @@
 """The fragments of a failure report that monitor and test must render alike.
 
-Deliberately small. `monitor.run` and `test.run` produce genuinely
-different reports past the first two sections -- one lists workload rollouts
-and their events, the other lists test pods and their logs -- and folding
-those into one parameterised builder would trade a little duplication for a
-function with two disjoint halves and a flag to pick between them.
-
-What *is* shared is the part an operator uses to orient: the heading that
-names the release and the verdict, and the condition table underneath it.
-Those two had drifted only in their condition tuples, and the events
-placeholder had drifted outright -- the same failure rendered as
-`Events: (unavailable: ...)` in one report and `<events unavailable: ...>`
-in the other, which is the kind of difference that makes a grep across
-CI logs quietly miss half the failures.
+Only the heading and the condition table are shared; past those, the two
+reports differ (workload rollouts and events versus test pods and logs).
 """
 from __future__ import annotations
 
@@ -57,10 +46,8 @@ def conditions(status: HelmReleaseStatus, cond_types: Iterable[str]) -> list[str
 def failure_detail(exc: ExternalCommandError) -> str:
     """Render `exc` as the one capped line a report bullet has room for.
 
-    Every best-effort cluster read on the failure path needs the same thing:
-    the stderr that says *why*, so RBAC-denied, apiserver-unreachable and
-    finalizer-stuck stop rendering identically in the one artifact anybody
-    reads after a failure.
+    Keeps the stderr, so RBAC-denied, apiserver-unreachable and finalizer-stuck
+    failures render differently.
     """
     stderr = (exc.stderr or str(exc)).strip()
     return stderr[:DETAIL_MAX]
@@ -69,9 +56,7 @@ def failure_detail(exc: ExternalCommandError) -> str:
 def safe_events(fetch: Callable[[], str]) -> str:
     """Run `fetch`, returning a placeholder line instead of raising.
 
-    Events are supporting evidence. A cluster that has become unreachable
-    while we were composing a failure report must not replace the report --
-    the verdict we already have is the thing the caller asked for.
+    An unreachable cluster must not replace a report whose verdict we already have.
     """
     try:
         blob = fetch()

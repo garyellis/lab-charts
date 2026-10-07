@@ -1,23 +1,8 @@
 """The promotion status model shared by monitor, test, and promote.
 
-Before this module the vertical carried three disconnected vocabularies: two
-`Literal` verdict sets (`monitor.Verdict` and `test.TestVerdict`, overlapping
-by four members with no shared supertype), a free-form `reason: str` whose
-value set was implicit across ~24 literal call sites, and
-`events.model.PromotionPhase`, which nothing in monitor or test could
-reach. Every consumer -- renderer, wire projection, CLI exit code -- then
-re-derived run state from those primitives independently, which is how "which
-verdicts count as success" ended up copy-pasted into six places across two
-layers and how the promotion timeline ended up with a start and no end.
-
-`StrEnum` is deliberate, not cosmetic. Members compare equal to their wire
-strings, hash like them (so `"ready" in PASSING_VERDICTS` still works for a
-caller holding a plain string), and `json.dump` writes the value verbatim.
-
-The three phase tables below are data, not code, on purpose: mapping a
-terminal state to a lifecycle event is the kind of decision that gets
-silently forked the moment it is expressed as an if-chain in each caller,
-which is exactly what `pr.py` and `commands/promote/cli.py` had done.
+The enums are `StrEnum`s so members compare and hash equal to their wire
+strings and `json.dump` writes them verbatim. The phase tables are data so
+callers don't each re-derive them.
 """
 from __future__ import annotations
 
@@ -53,9 +38,7 @@ __all__ = [
 class Verdict(StrEnum):
     """Terminal state of one watched or tested HelmRelease.
 
-    One enum for both stages. `READY` is what a converged rollout reports
-    and `PASSED` is what a green `helm test` reports -- the deliberate rename
-    that previously forced two disjoint types; everything else is shared.
+    `READY` is a converged rollout; `PASSED` is a green `helm test`.
     """
 
     READY = "ready"
@@ -68,14 +51,7 @@ class Verdict(StrEnum):
 
     @property
     def is_passing(self) -> bool:
-        """True when this verdict counts toward a successful run.
-
-        The single home for the rule that used to be six hardcoded tuples --
-        three in `monitor.py`, one in `helm_test.py`, and two more in
-        `commands/promote/render.py` where `ok_count` re-implemented
-        `MonitorResult.ok`'s predicate. A seventh verdict added to only some
-        of them made the headline count and the process exit code disagree.
-        """
+        """True when this verdict counts toward a successful run."""
         return self in PASSING_VERDICTS
 
 
@@ -86,12 +62,8 @@ PASSING_VERDICTS: frozenset[Verdict] = frozenset(
     {Verdict.READY, Verdict.PASSED, Verdict.SKIPPED_SUSPENDED}
 )
 
-#: Synthetic ref that carries `Verdict.NO_MATCH`. A run that matched nothing
-#: reports one outcome rather than an empty tuple, so every surface renders
-#: "nothing matched" through the same path it renders a failure -- an empty
-#: result set is the shape most callers forget to handle.
-#:
-#: Lives with the verdict it accompanies: the two are one decision.
+#: Synthetic ref that carries `Verdict.NO_MATCH`, so a run that matched nothing
+#: reports one outcome rather than an empty tuple.
 NO_MATCH_REF = HelmReleaseRef(
     name="<no-match>",
     namespace="",
@@ -101,9 +73,8 @@ NO_MATCH_REF = HelmReleaseRef(
     target_namespace="",
 )
 
-#: Worst-first fold order for `run_verdict`. FAILED outranks TIMED_OUT because
-#: it is the more specific diagnosis: a timeout says only that we stopped
-#: looking, a failure says the cluster told us why.
+#: Worst-first fold order for `run_verdict`. FAILED outranks TIMED_OUT as the
+#: more specific diagnosis.
 _SEVERITY: tuple[Verdict, ...] = (
     Verdict.FAILED,
     Verdict.TIMED_OUT,
@@ -115,12 +86,7 @@ _SEVERITY: tuple[Verdict, ...] = (
 class Reason(StrEnum):
     """The reason values this codebase authors itself.
 
-    Deliberately NOT the closed set of everything a `reason` field can hold:
-    `monitor.run` passes Flux's `Ready` condition reason straight through
-    from the CRD, so the field is typed `ReasonLike` and unknown values stay
-    raw strings. Modelling that explicitly is the point -- pretending the set
-    is closed would invite an exhaustive `match` that silently mis-handles
-    whatever Flux ships next.
+    Not closed: Flux reasons pass through as raw strings (see `ReasonLike`).
     """
 
     # --- shared -----------------------------------------------------------
@@ -158,8 +124,6 @@ class Reason(StrEnum):
 ReasonLike = Reason | str
 
 #: `Ready=False` reasons Flux will not retry out of, so the watcher stops.
-#: Declared here rather than in monitor.py because it is part of the reason
-#: vocabulary, not of the polling loop.
 TERMINAL_READY_REASONS: frozenset[Reason] = frozenset(
     {
         Reason.INSTALL_FAILED,
@@ -172,12 +136,7 @@ TERMINAL_READY_REASONS: frozenset[Reason] = frozenset(
 
 
 def coerce_reason(value: str) -> ReasonLike:
-    """Return the `Reason` member for `value`, or `value` itself if unmodelled.
-
-    The open tail of `ReasonLike` made real: a Flux reason we have never seen
-    survives as a plain string rather than raising, and one we do model
-    arrives at consumers as a comparable member.
-    """
+    """Return the `Reason` member for `value`, or `value` itself if unmodelled."""
     try:
         return Reason(value)
     except ValueError:
@@ -187,11 +146,8 @@ def coerce_reason(value: str) -> ReasonLike:
 class Stage(StrEnum):
     """Which half of the promotion lifecycle produced a verdict.
 
-    `Verdict.FAILED` means "the rollout never converged" from `monitor.run`
-    and "helm test exited non-zero" from `test.run` -- two different
-    `PromotionPhase` values. Keying the phase tables on (stage, verdict)
-    keeps that ambiguity visible instead of resolving it by accident, and it
-    is why one `PromotionTelemetry` can serve both stages.
+    The phase tables key on (stage, verdict) because `Verdict.FAILED` maps to
+    a different `PromotionPhase` in each stage.
     """
 
     ROLLOUT = "rollout"
@@ -206,23 +162,10 @@ START_PHASE: Mapping[Stage, PromotionPhase] = {
 }
 
 #: (stage, run verdict) -> every phase that finished run should emit, in
-#: lifecycle order.
-#:
-#: A rollout that fails or times out maps to ABANDONED: `PromotionPhase` has
-#: no ROLLOUT_FAILED member, and ABANDONED is already its "this version did
-#: not reach the environment" terminal. The emitted `detail` carries the
-#: stage, verdict and failure count, so a consumer can still tell a declined
-#: downgrade (pr.py's ABANDONED) from a stuck rollout.
-#:
-#: A green `helm test` is what makes a promotion *verified* live, so it also
-#: carries PROMOTED. A monitor-only pipeline therefore closes at ROLLOUT_OK
-#: and never reports PROMOTED -- deliberate: nothing has checked that the
-#: workload actually works.
-#:
-#: (stage, verdict) pairs absent from this table emit nothing on purpose. A
-#: run where every HelmRelease was suspended, or where none matched, is not a
-#: state transition -- recording one would put a phantom endpoint on the
-#: timeline.
+#: lifecycle order. A failed or timed-out rollout is ABANDONED; the event's
+#: `detail` names the stage, so it reads apart from a declined promote.
+#: Only a green `helm test` emits PROMOTED. Absent pairs (all
+#: suspended, none matched) emit nothing: they are not a state transition.
 TERMINAL_PHASES: Mapping[tuple[Stage, Verdict], tuple[PromotionPhase, ...]] = {
     (Stage.ROLLOUT, Verdict.READY): (PromotionPhase.ROLLOUT_OK,),
     (Stage.ROLLOUT, Verdict.FAILED): (PromotionPhase.ABANDONED,),
@@ -239,15 +182,9 @@ TERMINAL_PHASES: Mapping[tuple[Stage, Verdict], tuple[PromotionPhase, ...]] = {
 def run_verdict(verdicts: Iterable[Verdict], *, success: Verdict) -> Verdict:
     """Fold per-HelmRelease verdicts into the one verdict describing the run.
 
-    A run is only as good as its worst release, so any non-passing verdict
-    wins over `success`. A run that mixes skips with real successes reports
-    `success`: reporting SKIPPED_SUSPENDED there would make a healthy
-    promotion look stalled on the timeline.
-
-    A run where *every* release was suspended is the exception, and reports
-    SKIPPED_SUSPENDED. Folding it to `success` claimed a green rollout and a
-    verified-live PROMOTED from zero executed tests -- see `TERMINAL_PHASES`,
-    which has no SKIPPED_SUSPENDED row precisely so this emits nothing.
+    Any non-passing verdict wins over `success`; skips mixed with successes
+    report `success`. A run where every release was suspended reports
+    SKIPPED_SUSPENDED, which `TERMINAL_PHASES` maps to no phase.
     """
     seen = set(verdicts)
     for verdict in _SEVERITY:
@@ -260,23 +197,15 @@ def run_verdict(verdicts: Iterable[Verdict], *, success: Verdict) -> Verdict:
 
 @dataclass(frozen=True)
 class Transition:
-    """A timestamped phase change observed while watching or testing a HelmRelease.
-
-    Domain, not plumbing: `phase` is the vocabulary an operator reads in the
-    live progress table and in the "Recent transitions" section of a failure
-    report, and `MonitorOutcome`/`TestOutcome` both carry a tuple of these
-    across the wire contract. It sits beside `Verdict`/`Reason` because it is
-    the same model observed mid-run instead of at the end.
-    """
+    """A timestamped phase change observed while watching or testing a HelmRelease."""
 
     at: datetime
     phase: str
     detail: str
 
 
-#: Cap for a `Transition.detail` and for any other operator-facing one-liner
-#: built from a condition message or kubectl stderr. Both are unbounded; a
-#: progress-table row and a report bullet are one line wide.
+#: Cap for a `Transition.detail` and other one-liners built from a condition
+#: message or kubectl stderr.
 DETAIL_MAX = 200
 
 
@@ -292,11 +221,7 @@ class PromoteStatus(StrEnum):
 
 
 #: promote status -> the phase it records, or None for states that are not a
-#: transition at all. A dry run changed nothing and a no-op promotion moved
-#: nothing, so neither may leave a mark on the timeline.
-#:
-#: PUSHED shares FLUX_PR_OPEN with PR_OPENED: it is the same transition
-#: observed through a `gh` response that carried no URL, not a different one.
+#: transition. PUSHED is PR_OPENED seen through a `gh` response with no URL.
 PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
     PromoteStatus.NO_CHANGES: None,
     PromoteStatus.DRY_RUN: None,
@@ -307,35 +232,10 @@ PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
 }
 
 
-#: promote status -> did the caller get what they asked for. The third table
-#: classifying the same six states, and the same kind of thing as
-#: `PROMOTE_PHASE` above: data, not an if-chain re-derived per consumer.
-#:
-#: This is the *only* place that answers "was this promote a success", and
-#: both consumers read it: `wire.promote_to_dict` publishes
-#: `ok = outcome is Outcome.SUCCESS`, and `commands/promote/cli.py` exits with
-#: `exit_code_for(outcome)`. Splitting that judgement in two is how promote
-#: shipped a state (`ABORTED`) that printed a failure and exited 0.
-#:
-#: Note there are no exit codes here. `Outcome` is a semantic vocabulary from
-#: `plumbing/exit_codes.py`; what number `FAILED` is worth is that module's
-#: business, not this vertical's -- see its docstring for why the table is
-#: keyed on `Outcome` rather than on `PromoteStatus` directly.
-#:
-#: Why each arm:
-#:   PR_OPENED / PUSHED  -- the PR exists; that is the whole request.
-#:   ALREADY_OPEN        -- idempotent re-run; the requested PR is open, and
-#:                          `PROMOTE_PHASE` records it as a real forward
-#:                          transition (AWAITING_MERGE), not a failure.
-#:   NO_CHANGES          -- every match is already at the target version, so
-#:                          the desired state holds. A promote must be safe
-#:                          to re-run in CI.
-#:   DRY_RUN             -- a dry run prints the plan and exits 0.
-#:   ABORTED             -- an aborted or declined promote is a FAILED case.
-#:                          Nothing was promoted.
-#:
-#: Deliberately no `Outcome.USAGE` arm: a usage error is raised by the
-#: surface during argument handling and never reaches a `PromoteResult`.
+#: promote status -> did the caller get what they asked for. Both the wire `ok`
+#: field (`wire.promote_to_dict`) and the exit code (`commands/promote/cli.py`)
+#: derive from this table. Only ABORTED fails: re-runs that change nothing
+#: (NO_CHANGES, ALREADY_OPEN) must be safe in CI.
 PROMOTE_OUTCOME: Mapping[PromoteStatus, Outcome] = {
     PromoteStatus.NO_CHANGES: Outcome.SUCCESS,
     PromoteStatus.DRY_RUN: Outcome.SUCCESS,
