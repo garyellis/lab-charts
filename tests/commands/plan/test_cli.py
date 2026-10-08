@@ -14,7 +14,6 @@ import pytest
 from chart_manager.commands import plan, test, validate
 from chart_manager.commands.plan import cli as plan_cli
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import MakeChart, cli
 
 CHANGED = Path("charts/grafana/values-dev.yaml")
@@ -25,23 +24,18 @@ def outcome_with(*, spec_errors: tuple[str, ...] = (), warnings: tuple[str, ...]
     reason = validate.Reason(validate.ReasonCode.VALIDATION_TRIGGER, CHANGED, "triggered")
     return plan.PlanOutcome(
         changed_files=(CHANGED.as_posix(),),
-        validation=validate.Selection(
-            rows=(validate.Row("grafana", "dev", "grafana", "lab-dev", {}),),
-            reasons={("grafana", "dev"): (reason,)},
-            spec_errors=spec_errors,
-            warnings=warnings,
-        ),
-        chart_tests=test.Selection(
-            (
-                test.SelectedTest(
-                    "grafana",
-                    "minimal",
-                    (test.Reason(test.ReasonCode.CHART_CHANGE, CHANGED, "grafana changed"),),
-                ),
-                test.SelectedTest("loki", "full"),
-            )
+        validation=(plan.PlannedRow("grafana", "dev", "grafana", "lab-dev", (reason,)),),
+        chart_tests=(
+            test.SelectedTest(
+                "grafana",
+                "minimal",
+                (test.Reason(test.ReasonCode.CHART_CHANGE, CHANGED, "grafana changed"),),
+            ),
+            test.SelectedTest("loki", "full"),
         ),
         publish=("grafana",),
+        spec_errors=spec_errors,
+        warnings=warnings,
     )
 
 
@@ -90,7 +84,7 @@ def test_github_prints_the_compact_matrix_ci_reads(
 
 
 def test_github_prints_an_empty_include_when_nothing_is_selected(fake_run: FakeRun) -> None:
-    fake_run.result = plan.PlanOutcome((), validate.Selection(rows=()), test.Selection(()), ())
+    fake_run.result = plan.PlanOutcome((), (), (), ())
 
     result = cli("plan", "-o", "github", "--base", "abc123")
 
@@ -145,18 +139,16 @@ def test_publish_table_prints_one_changed_chart_per_line(
     assert fake_run.requests == []
 
 
-@pytest.mark.parametrize(("output", "load"), [("json", json.loads), ("yaml", parse_yaml)])
-def test_publish_machine_output_is_a_bare_list(
-    fake_run: FakeRun, chart_root: Path, make_chart: MakeChart, output: str, load: object
+def test_publish_json_is_a_bare_list(
+    fake_run: FakeRun, chart_root: Path, make_chart: MakeChart
 ) -> None:
     make_chart("alpha")
     changed = chart_root / "changed.txt"
     changed.write_text("charts/alpha/values.yaml\n")
 
-    result = cli("plan", "--for", "publish", "-o", output, "--changed-files", str(changed))
+    result = cli("plan", "--for", "publish", "-o", "json", "--changed-files", str(changed))
 
-    assert result.exit_code == 0
-    assert load(result.stdout) == ["alpha"]  # type: ignore[operator]
+    assert (result.exit_code, json.loads(result.stdout)) == (0, ["alpha"])
 
 
 def test_publish_ignores_a_broken_spec_in_an_unchanged_chart(
@@ -261,47 +253,26 @@ def test_for_narrows_the_table(fake_run: FakeRun, kind: str, present: str, absen
     assert "unmatched x" in result.stdout
 
 
-@pytest.mark.parametrize(("output", "load"), [("json", json.loads), ("yaml", parse_yaml)])
-def test_machine_output_is_the_whole_document_whatever_for_says(
-    fake_run: FakeRun, output: str, load: object
-) -> None:
-    result = cli(
-        "plan", "-o", output, "--for", "validate", "--changed-file", CHANGED.as_posix()
-    )
+def test_json_is_the_whole_document_whatever_for_says(fake_run: FakeRun) -> None:
+    fake_run.result = outcome_with(spec_errors=("grafana: bad",), warnings=("unmatched x",))
 
-    assert result.exit_code == 0
-    assert load(result.stdout) == {  # type: ignore[operator]
-        "changed_files": ["charts/grafana/values-dev.yaml"],
-        "validation": [
-            {
-                "chart": "grafana",
-                "environment": "dev",
-                "release": "grafana",
-                "namespace": "lab-dev",
-                "reasons": [
-                    {
-                        "code": "validation-trigger",
-                        "changed_file": "charts/grafana/values-dev.yaml",
-                        "detail": "triggered",
-                    }
-                ],
-            }
-        ],
+    result = cli("plan", "-o", "json", "--for", "validate", "--changed-file", CHANGED.as_posix())
+
+    changed = CHANGED.as_posix()
+    assert (result.exit_code, json.loads(result.stdout)) == (3, {
+        "changed_files": [changed],
+        "validation": [{
+            "chart": "grafana", "env": "dev", "release": "grafana", "namespace": "lab-dev",
+            "reasons": [{"code": "validation-trigger", "changed_file": changed, "detail": "triggered"}],
+        }],
         "chart_tests": [
             {
-                "chart": "grafana",
-                "profile": "minimal",
-                "reasons": [
-                    {
-                        "code": "chart-change",
-                        "changed_file": "charts/grafana/values-dev.yaml",
-                        "detail": "grafana changed",
-                    }
-                ],
+                "chart": "grafana", "profile": "minimal",
+                "reasons": [{"code": "chart-change", "changed_file": changed, "detail": "grafana changed"}],
             },
             {"chart": "loki", "profile": "full", "reasons": []},
         ],
         "publish": ["grafana"],
-        "spec_errors": [],
-        "warnings": [],
-    }
+        "spec_errors": ["grafana: bad"],
+        "warnings": ["unmatched x"],
+    })

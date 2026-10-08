@@ -38,11 +38,11 @@ def _with_validation(chart: Path, *envs: str) -> None:
 
 
 def _rows(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
-    return [(row.chart, row.env) for row in outcome.validation.rows]
+    return [(row.chart, row.env) for row in outcome.validation]
 
 
 def _tests(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
-    return [(entry.chart, entry.profile) for entry in outcome.chart_tests.tests]
+    return [(entry.chart, entry.profile) for entry in outcome.chart_tests]
 
 
 def test_a_chart_change_selects_its_validation_its_chart_tests_and_its_publish(
@@ -55,9 +55,7 @@ def test_a_chart_change_selects_its_validation_its_chart_tests_and_its_publish(
 
     assert outcome.changed_files == ("charts/source/values.yaml",)
     assert _rows(outcome) == [("source", "dev"), ("source", "prod")]
-    assert [r.code for r in outcome.validation.reasons[("source", "dev")]] == [
-        "validation-trigger"
-    ]
+    assert [r.code for r in outcome.validation[0].reasons] == ["validation-trigger"]
     assert _tests(outcome) == [("consumer", "full"), ("source", "minimal")]
     assert outcome.publish == ("source",)
     assert outcome.spec_errors == ()

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
@@ -24,7 +24,6 @@ from chart_manager.commands import publish, test, validate
 from chart_manager.commands.plan.models import PlanOutcome, PlanRequest
 from chart_manager.commands.plan.run import run
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
 _OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML, output_mod.GITHUB)
 _KINDS = ("validate", "test", "publish", "all")
@@ -111,18 +110,13 @@ def plan(
         if request.changes is None and outcome.spec_errors:
             detail = "\n".join(f"- {error}" for error in outcome.spec_errors)
             raise SpecError(f"lifecycle impact analysis found spec errors:\n{detail}")
-        include = [{"chart": t.chart, "profile": t.profile} for t in outcome.chart_tests.tests]
+        include = [{"chart": t.chart, "profile": t.profile} for t in outcome.chart_tests]
         typer.echo(json.dumps({"include": include}, separators=(",", ":"), sort_keys=True))
         return
 
     request = PlanRequest(changes=_changed_paths(changed_files, changed_file))
     outcome = run(request, workspace=workspace, runner=container.command_runner())
-    if mode == output_mod.TABLE:
-        _print_table(outcome, for_)
-    else:
-        output_mod.emit(_to_dict(outcome), mode=mode)
-    if outcome.spec_errors:
-        raise typer.Exit(code=exit_code_for(Outcome.SPEC))
+    output_mod.finish(outcome, mode=mode, render=lambda outcome: _print_table(outcome, for_))
 
 
 def _changed_paths(changed_files: Path | None, changed_file: list[str]) -> tuple[str, ...]:
@@ -153,21 +147,21 @@ def _print_table(outcome: PlanOutcome, for_: str) -> None:
     """Each selected row and chart test with its reasons; warnings and spec errors always."""
     if for_ in {"validate", "all"}:
         typer.echo("Validation:")
-        if not outcome.validation.rows:
+        if not outcome.validation:
             typer.echo("  none")
-        for row in outcome.validation.rows:
+        for row in outcome.validation:
             typer.echo(f"  {row.chart}/{row.env}")
-            _print_reasons(outcome.validation.reasons[(row.chart, row.env)])
+            _print_reasons(row.reasons)
     if for_ in {"test", "all"}:
         typer.echo("Chart tests:")
-        if not outcome.chart_tests.tests:
+        if not outcome.chart_tests:
             typer.echo("  none")
-        for entry in outcome.chart_tests.tests:
+        for entry in outcome.chart_tests:
             typer.echo(f"  {entry.chart}/{entry.profile}")
             _print_reasons(entry.reasons)
-    if outcome.validation.warnings:
+    if outcome.warnings:
         typer.echo("Warnings:")
-        for warning in outcome.validation.warnings:
+        for warning in outcome.warnings:
             typer.echo(f"  - {warning}")
     if outcome.spec_errors:
         typer.echo("Spec errors:")
@@ -179,37 +173,3 @@ def _print_reasons(reasons: tuple[validate.Reason, ...] | tuple[test.Reason, ...
     for reason in reasons:
         typer.echo(f"    - {reason.code}: {reason.changed_file.as_posix()} — {reason.detail}")
 
-
-def _to_dict(outcome: PlanOutcome) -> dict[str, Any]:
-    """The JSON/YAML document."""
-    return {
-        "changed_files": list(outcome.changed_files),
-        "validation": [
-            {
-                "chart": row.chart,
-                "environment": row.env,
-                "release": row.release,
-                "namespace": row.namespace,
-                "reasons": _reasons(outcome.validation.reasons[(row.chart, row.env)]),
-            }
-            for row in outcome.validation.rows
-        ],
-        "chart_tests": [
-            {"chart": entry.chart, "profile": entry.profile, "reasons": _reasons(entry.reasons)}
-            for entry in outcome.chart_tests.tests
-        ],
-        "publish": list(outcome.publish),
-        "spec_errors": list(outcome.spec_errors),
-        "warnings": list(outcome.validation.warnings),
-    }
-
-
-def _reasons(reasons: tuple[validate.Reason, ...] | tuple[test.Reason, ...]) -> list[dict[str, str]]:
-    return [
-        {
-            "code": reason.code.value,
-            "changed_file": reason.changed_file.as_posix(),
-            "detail": reason.detail,
-        }
-        for reason in reasons
-    ]
