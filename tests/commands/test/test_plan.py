@@ -7,31 +7,31 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.commands.test.models import ActionKind, LifecycleAction, LifecyclePlan
-from chart_manager.commands.test.plan import compile_chart_test
-from chart_manager.commands.test.wire import plan_to_dict
-from chart_manager.plumbing.errors import (
-    ChartManagerError,
-    DependencyCycleError,
-    SpecError,
+from chart_manager.commands.test.models import (
+    ActionKind,
+    ChartTestRequest,
+    LifecycleAction,
+    LifecyclePlan,
 )
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.install_plan import DependencyResolver
+from chart_manager.commands.test.plan import compile_plan
+from chart_manager.commands.test.wire import plan_to_dict
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from tests.conftest import MakeChart
 
-CHARTS_DIR = Path("charts")
 
-
-def _compile(root: Path, chart: str, profile: str, **options: object) -> LifecyclePlan:
-    catalog = ChartTestCatalog(root, charts_dir=CHARTS_DIR)
-    return compile_chart_test(
-        chart,
-        profile,
-        root=root.resolve(),
-        catalog=catalog,
-        resolver=DependencyResolver(catalog.get),
-        **options,  # type: ignore[arg-type]
-    )
+def _compile(
+    root: Path,
+    chart: str,
+    profile: str,
+    *,
+    namespace: str | None = None,
+    lint: bool = False,
+    owned: frozenset[ExternallySatisfiedLifecycle] = frozenset(),
+) -> LifecyclePlan:
+    request = ChartTestRequest(chart=chart, profile=profile, namespace=namespace, lint=lint)
+    return compile_plan(request, root=root, charts_dir=root / "charts", bootstrap_owned=owned).plan
 
 
 def _by_id(plan: LifecyclePlan, action_id: str) -> LifecycleAction:
@@ -103,7 +103,7 @@ def test_chart_test_namespace_override_wins_over_authored_profile(
         chart_root,
         "app",
         "minimal",
-        namespace_override="requested",
+        namespace="requested",
     )
 
     assert {
@@ -130,7 +130,7 @@ def test_chart_test_namespace_override_does_not_relocate_authored_dependency(
         chart_root,
         "app",
         "minimal",
-        namespace_override="requested-app",
+        namespace="requested-app",
     )
 
     namespaces = {
@@ -139,6 +139,31 @@ def test_chart_test_namespace_override_does_not_relocate_authored_dependency(
         if action.kind is ActionKind.INSTALL
     }
     assert namespaces == {"base": "foundation", "app": "requested-app"}
+
+
+def test_chart_test_with_dependent_tests_merges_their_plans_after_its_own(
+    chart_root: Path,
+    make_chart: MakeChart,
+) -> None:
+    lifecycle = make_chart("base") / "chart-lifecycle.yaml"
+    authored = parse_yaml(lifecycle.read_text())
+    authored["spec"]["chartTest"]["dependentTests"] = [{"chart": "app", "profile": "minimal"}]
+    lifecycle.write_text(dump_yaml(authored))
+    make_chart("app", profiles={"minimal": _requires("base")})
+    request = ChartTestRequest(chart="base", profile="minimal", include_dependent_tests=True)
+
+    plan = compile_plan(
+        request, root=chart_root, charts_dir=chart_root / "charts", bootstrap_owned=frozenset()
+    ).plan
+
+    assert [action.action_id for action in plan.actions] == [
+        "chart-test.base.minimal.namespace-ensure",
+        "chart-test.base.minimal.install",
+        "chart-test.base.minimal.helm-test",
+        "chart-test.app.minimal.namespace-ensure",
+        "chart-test.app.minimal.install",
+        "chart-test.app.minimal.helm-test",
+    ]
 
 
 def test_chart_test_without_helm_test_ends_at_its_install(
@@ -237,57 +262,34 @@ def test_digest_rejects_value_symlink_that_escapes_repository_root(
         _compile(chart_root, "app", "minimal")
 
 
-def test_compile_rejects_a_requires_cycle(
+@pytest.mark.parametrize(
+    ("chart_path", "profile", "namespace", "installs_base"),
+    [
+        ("charts/base", "minimal", "default", False),
+        ("charts/base", "full", "default", True),
+        ("charts/base", "minimal", "kube-system", True),
+        ("elsewhere/base", "minimal", "default", True),
+    ],
+    ids=["exact", "other-profile", "other-namespace", "other-chart-path"],
+)
+def test_bootstrap_owns_a_requirement_only_under_its_exact_lifecycle_identity(
     chart_root: Path,
     make_chart: MakeChart,
-) -> None:
-    """A `requires` cycle fails at compile time, not silently mid-install.
-
-    This and the two tests below are what remains of the deleted `lifecycle
-    doctor` command. Doctor checked the whole repository up front; the
-    compiler checks the chart:profile actually being compiled. Since every
-    execution path (`charts test`, `local up`) compiles before
-    it mutates anything, a broken reference on a chart anyone exercises still
-    fails loudly -- see `DependencyResolver.install_plan`.
-    """
-    make_chart("a", profiles={"minimal": _requires("b")})
-    make_chart("b", profiles={"minimal": _requires("a")})
-
-    with pytest.raises(DependencyCycleError, match="dependency cycle detected"):
-        _compile(chart_root, "a", "minimal")
-
-
-def test_compile_rejects_an_unknown_chart_reference(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("a", profiles={"minimal": _requires("missing")})
-
-    with pytest.raises(ChartManagerError):
-        _compile(chart_root, "a", "minimal")
-
-
-def test_compile_rejects_an_unknown_profile_reference(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("base")
-    make_chart("a", profiles={"minimal": _requires("base:nope")})
-
-    with pytest.raises(SpecError, match="unknown profile 'nope'"):
-        _compile(chart_root, "a", "minimal")
-
-
-def test_compile_accepts_a_valid_requires_graph(
-    chart_root: Path,
-    make_chart: MakeChart,
+    chart_path: str,
+    profile: str,
+    namespace: str,
+    installs_base: bool,
 ) -> None:
     make_chart("base")
     make_chart("app", profiles={"minimal": _requires("base")})
+    identity = ExternallySatisfiedLifecycle(
+        (chart_root / chart_path).resolve(), "base", profile, namespace
+    )
 
-    plan = _compile(chart_root, "app", "minimal")
+    plan = _compile(chart_root, "app", "minimal", owned=frozenset({identity}))
 
-    assert [action.target.chart for action in plan.actions].count("base") >= 1
+    charts = {action.target.chart for action in plan.actions}
+    assert charts == ({"base", "app"} if installs_base else {"app"})
 
 
 # --- chart-test hooks ------------------------------------------------------

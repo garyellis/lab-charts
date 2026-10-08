@@ -69,7 +69,7 @@ def test_raw_local_and_oci_releases_never_claim_managed_lifecycle_identity(
         ]
     )
 
-    assert bootstrap.preflight(cluster, root=tmp_path) == frozenset()
+    assert bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path)) == frozenset()
 
 
 def test_preflight_resolves_bootstrap_lifecycle_identities(tmp_path: Path) -> None:
@@ -103,7 +103,7 @@ spec:
         ]
     )
 
-    identities = bootstrap.preflight(cluster, root=tmp_path)
+    identities = bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path))
 
     assert identities == frozenset(
         {

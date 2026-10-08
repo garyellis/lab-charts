@@ -32,8 +32,7 @@ The policy and algorithms over `api/` models and `Chart.yaml` live in
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/dependency_update.py` | Whether to run `helm dependency update` (only when stale) and its default timeout |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
-| `shared/charts/chart_tests.py` | `ChartTestCatalog`: charts composed with their enabled chart tests |
-| `shared/charts/install_plan.py` | Dependency resolution and install order |
+| `shared/charts/install_plan.py` | `install_plan`: a chart-test profile and its requirements, dependencies first, each resolved to namespace, values and timeout |
 | `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
 | `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
