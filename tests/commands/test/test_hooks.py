@@ -36,7 +36,6 @@ def _action(
         action_id=f"chart-test.app.minimal.{kind.value}",
         kind=kind,
         target=ActionTarget(chart="app", profile="minimal", release="app", namespace="apps"),
-        input_digest="digest",
         chart_path=root / "charts" / "app",
         timeout=timeout,
         command=command,

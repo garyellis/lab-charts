@@ -1,4 +1,4 @@
-"""`chart test` plan compilation: action order, inputs, digests and hooks."""
+"""`chart test` plan compilation: action order, inputs and hooks."""
 
 from __future__ import annotations
 
@@ -89,8 +89,6 @@ def test_chart_test_compiles_dependency_first_actions_and_effective_inputs(
         "values.yaml",
         "values-full.yaml",
     ]
-    assert app_install.metadata == ()
-    assert all(action.metadata == () for action in plan.actions)
 
 
 def test_chart_test_namespace_override_wins_over_authored_profile(
@@ -213,53 +211,6 @@ def test_plan_projection_is_deterministic_and_json_serializable(
     assert first["actions"][0]["action_id"].startswith("chart-test.app.minimal.")
     assert first["actions"][0]["target"]["chart"] == "app"
     assert "edges" not in first
-
-
-def test_generated_dependency_contents_do_not_change_compiled_input_digest(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    before = _compile(chart_root, "app", "minimal")
-
-    generated = chart / "charts"
-    generated.mkdir()
-    (generated / "dependency-1.2.3.tgz").write_bytes(b"downloaded later")
-    after = _compile(chart_root, "app", "minimal")
-
-    assert [action.input_digest for action in before.actions] == [
-        action.input_digest for action in after.actions
-    ]
-
-    templates = chart / "templates"
-    templates.mkdir()
-    (templates / "deployment.yaml").write_text("kind: Deployment\n")
-    source_changed = _compile(chart_root, "app", "minimal")
-
-    assert [action.input_digest for action in after.actions] != [
-        action.input_digest for action in source_changed.actions
-    ]
-
-    (chart / "Chart.lock").write_text("dependencies: []\n")
-    lock_changed = _compile(chart_root, "app", "minimal")
-    assert [action.input_digest for action in source_changed.actions] != [
-        action.input_digest for action in lock_changed.actions
-    ]
-
-
-def test_digest_rejects_value_symlink_that_escapes_repository_root(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    chart = make_chart("app")
-    outside = chart_root.parent / "outside-values.yaml"
-    outside.write_text("{}\n")
-    values = chart / "values.yaml"
-    values.unlink()
-    values.symlink_to(outside)
-
-    with pytest.raises(SpecError, match="digest input escapes repository root"):
-        _compile(chart_root, "app", "minimal")
 
 
 @pytest.mark.parametrize(
@@ -391,26 +342,6 @@ def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
         ("chart-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
     ]
     assert plan.actions[-1].kind is ActionKind.HOOK_CLEANUP
-
-
-def test_hook_digest_covers_argv_and_repo_script_content(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    script = _script(chart_root, "scripts/prepare", "#!/bin/sh\necho one\n")
-
-    def pre_digest(argv: list[str]) -> str:
-        make_chart("app", profiles={"minimal": {"hooks": {"preInstall": argv}}})
-        plan = _compile(chart_root, "app", "minimal")
-        return _by_id(plan, "chart-test.app.minimal.hook-pre-install").input_digest
-
-    original = pre_digest([script, "--flag"])
-    assert pre_digest([script, "--flag"]) == original
-    assert pre_digest([script, "--other"]) != original
-
-    edited_before = pre_digest([script, "--flag"])
-    _script(chart_root, "scripts/prepare", "#!/bin/sh\necho two\n")
-    assert pre_digest([script, "--flag"]) != edited_before
 
 
 @pytest.mark.parametrize(
