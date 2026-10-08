@@ -1,96 +1,72 @@
 import pytest
 
+from chart_manager.commands.validate.schemas import lock as schema_lock
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaLockError,
     KubeconformSchemaSourceEnvironmentError,
 )
 from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
-from chart_manager.commands.validate.schemas.models import AuthoredSchemaPolicy
-from chart_manager.commands.validate.schemas.sync import (
-    KubeconformSchemaSyncRequest,
-    sync,
-)
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 
-from .schema_fixtures import schema_store
+from .schema_fixtures import schema_store, workspace
 
 
-class Source:
-    def __init__(self, lock):
-        self.lock = lock
-        self.calls = []
+def resolver(lock, calls):
+    pins = {p.repository: p.resolved for p in (lock.policy.kubernetes, lock.policy.catalog)}
 
-    def resolve_ref(self, repository, ref):
-        self.calls.append((repository, ref))
-        return next(
-            p.resolved
-            for p in (self.lock.policy.kubernetes, self.lock.policy.catalog)
-            if p.repository == repository
-        )
+    def resolve_ref(repository, track):
+        calls.append((repository, track))
+        return pins[repository]
+
+    return resolve_ref
 
 
-def request(root, *, update=False):
-    return KubeconformSchemaSyncRequest(
-        workspace="lab",
-        lock_path=root / SCHEMA_LOCK_FILE,
-        policy=AuthoredSchemaPolicy(
-            kubernetes_version="1.35.3",
-            generate_from_crds=True,
-            catalog_repository="datreeio/CRDs-catalog",
-            catalog_track="main",
-        ),
-        update=update,
-    )
-
-
-def test_plain_sync_never_resolves_refs_or_changes_lock_even_after_chart_changes(tmp_path):
-    lock, store, _ = schema_store(tmp_path)
-    req = request(tmp_path)
-    write_schema_lock_atomic(req.lock_path, lock)
-    before = req.lock_path.read_bytes()
-    source = Source(lock)
-    assert sync(req, store=store, source=source).generation_published
+def test_plain_sync_keeps_lock_and_needs_no_charts_even_broken_ones(tmp_path):
+    lock, store, snapshots = schema_store(tmp_path)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    before = (tmp_path / SCHEMA_LOCK_FILE).read_bytes()
+    result = schema_lock.sync(workspace(tmp_path), store)
+    assert result.published
+    assert result.lock == lock
+    assert len(snapshots.calls) == 2
     # Broken chart data cannot interfere with caching upstream repositories.
     chart = tmp_path / "charts/new/templates/broken.yaml"
     chart.parent.mkdir(parents=True)
     chart.write_text("{{ broken")
-    assert not sync(req, store=store, source=source).generation_published
-    assert req.lock_path.read_bytes() == before
-    assert not source.calls
+    assert not schema_lock.sync(workspace(tmp_path), store).published
+    assert (tmp_path / SCHEMA_LOCK_FILE).read_bytes() == before
 
 
 def test_update_resolves_both_pins_then_publishes_lock(tmp_path):
     lock, store, _ = schema_store(tmp_path)
-    source = Source(lock)
-    req = request(tmp_path, update=True)
-    result = sync(req, store=store, source=source)
-    assert result.lock_updated
-    assert len(source.calls) == 2
-    assert req.lock_path.is_file()
+    calls = []
+    result = schema_lock.update(workspace(tmp_path), store, resolve_ref=resolver(lock, calls))
+    assert calls == [("yannh/kubernetes-json-schema", "master"), ("datreeio/CRDs-catalog", "main")]
+    assert result.lock == lock
+    assert (tmp_path / SCHEMA_LOCK_FILE).is_file()
     assert store.inspect(result.lock).ready
 
 
 def test_failed_update_keeps_previous_lock(tmp_path, monkeypatch):
     lock, store, snapshots = schema_store(tmp_path)
-    req = request(tmp_path, update=True)
-    write_schema_lock_atomic(req.lock_path, lock)
-    before = req.lock_path.read_bytes()
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    before = (tmp_path / SCHEMA_LOCK_FILE).read_bytes()
 
     def failed(*args, **kwargs):
         raise ExternalCommandError("offline")
 
     monkeypatch.setattr(snapshots, "checkout", failed)
     with pytest.raises(KubeconformSchemaSourceEnvironmentError):
-        sync(req, store=store, source=Source(lock))
-    assert req.lock_path.read_bytes() == before
+        schema_lock.update(workspace(tmp_path), store, resolve_ref=resolver(lock, []))
+    assert (tmp_path / SCHEMA_LOCK_FILE).read_bytes() == before
 
 
 def test_policy_mismatch_fails_without_download(tmp_path):
     lock, store, snapshots = schema_store(tmp_path)
-    changed = lock.model_copy(update={"workspace": "another"})
-    req = request(tmp_path)
-    write_schema_lock_atomic(req.lock_path, changed)
+    write_schema_lock_atomic(
+        tmp_path / SCHEMA_LOCK_FILE, lock.model_copy(update={"workspace": "another"})
+    )
     with pytest.raises(KubeconformSchemaLockError):
-        sync(req, store=store, source=Source(lock))
+        schema_lock.sync(workspace(tmp_path), store)
     assert not snapshots.calls

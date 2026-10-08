@@ -38,11 +38,7 @@ class KubeconformSchemaStoreError(KubeconformSchemaIntegrityError):
     """An immutable store generation is incomplete or corrupt."""
 
 
-class KubeconformSchemaSourceError(KubeconformSchemaError):
-    """Base class for immutable schema-source access failures."""
-
-
-class KubeconformSchemaSourceEnvironmentError(KubeconformSchemaSourceError):
+class KubeconformSchemaSourceEnvironmentError(KubeconformSchemaError):
     """A schema source could not be reached from the caller's environment."""
 
     outcome = Outcome.ENVIRONMENT
@@ -55,6 +51,5 @@ __all__ = [
     "KubeconformSchemaLockError",
     "KubeconformSchemaRenderError",
     "KubeconformSchemaSourceEnvironmentError",
-    "KubeconformSchemaSourceError",
     "KubeconformSchemaStoreError",
 ]

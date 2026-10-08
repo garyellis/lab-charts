@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from pydantic import SecretStr
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
 
 _MAX_REF_BYTES = 1024 * 1024
 
@@ -20,6 +21,8 @@ OpenUrl = Callable[..., Any]
 
 class GitHubKubeconformSchemaSourceError(ChartManagerError):
     """Base class for GitHub kubeconform schema source failures."""
+
+    outcome = Outcome.ENVIRONMENT
 
 
 class GitHubKubeconformSchemaSourceEnvironmentError(GitHubKubeconformSchemaSourceError):
