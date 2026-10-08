@@ -64,7 +64,7 @@ chart_cache_app = typer.Typer(
 )
 local_app = typer.Typer(
     no_args_is_help=True,
-    help="Create, inspect, stop, and reset local Kubernetes chart development environments.",
+    help="Create, inspect, stop and reset the dev cluster.",
 )
 promote_app = typer.Typer(
     no_args_is_help=True,

@@ -90,7 +90,7 @@ def test_progress_events_render_label_then_message(
 # ----- summary table --------------------------------------------------------
 
 
-def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -> None:
+def test_dev_cluster_result_renders_every_bucket(captured: Console, narrated: Console) -> None:
     """The table is the projection; the failure tally narrates alongside it."""
     result = DevClusterResult(
         applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),),
@@ -98,10 +98,10 @@ def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -
         failed=(DevClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
-    cli_local._render_development_cluster_result(result, "table", command="up")
+    cli_local._render_dev_cluster_result(result, "table", command="up")
     out = captured.export_text()
 
-    assert "Lab install summary" in out
+    assert "Dev cluster install summary" in out
     for token in ("applied", "grafana", "no-change", "loki", "failed", "mimir"):
         assert token in out
     # Not in `out`: a tally is not part of the table a caller pipes.
@@ -112,7 +112,7 @@ def test_lab_result_renders_every_bucket(captured: Console, narrated: Console) -
 def test_lab_result_omits_the_failure_line_when_ok(
     captured: Console, narrated: Console
 ) -> None:
-    cli_local._render_development_cluster_result(
+    cli_local._render_dev_cluster_result(
         DevClusterResult(
             applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),)
         ),
