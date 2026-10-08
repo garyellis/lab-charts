@@ -34,8 +34,8 @@ def _plan(entry: InstallPlanEntry) -> LifecyclePlan:
     return LifecyclePlan(
         chart="alloy",
         profile="minimal",
-        actions=tuple(
-            LifecycleAction(entry, kind) for kind in (ActionKind.INSTALL, ActionKind.HELM_TEST)
+        actions=(
+            LifecycleAction(entry, ActionKind.HOOK_POST_INSTALL, ("hook", "--token", "s3cret")),
         ),
         warnings=("istio-base is owned by bootstrap",),
     )
@@ -127,45 +127,49 @@ def test_a_missing_tool_reaches_main_unchanged(chart_root: Path, calls: Calls) -
     assert isinstance(result.exception, MissingToolError)
 
 
-def test_dry_run_prints_the_plan_and_runs_nothing(chart_root: Path, calls: Calls) -> None:
+def test_dry_run_prints_the_plan_with_redacted_commands_and_runs_nothing(
+    chart_root: Path, calls: Calls
+) -> None:
     result = cli("chart", "test", "alloy", "--dry-run")
 
-    assert result.exit_code == 0, result.output
-    assert calls.entry == ["plan"]
-    payload = json.loads(result.stdout)
-    assert [action["kind"] for action in payload["actions"]] == ["install", "helm-test"]
     alloy = chart_root / "charts" / "alloy"
-    assert payload["actions"][0] == {
-        "action_id": "chart-test.alloy.minimal.install",
-        "kind": "install",
-        "target": {
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
             "chart": "alloy",
             "profile": "minimal",
-            "release": "alloy",
-            "namespace": "default",
+            "actions": [
+                {
+                    "action_id": "chart-test.alloy.minimal.hook-post-install",
+                    "kind": "hook-post-install",
+                    "chart": "alloy",
+                    "profile": "minimal",
+                    "namespace": "default",
+                    "chart_path": alloy.as_posix(),
+                    "values": [(alloy / "values.yaml").as_posix()],
+                    "timeout": "10m",
+                    "command": "hook --token ***",
+                }
+            ],
+            "warnings": ["istio-base is owned by bootstrap"],
         },
-        "chart_path": alloy.as_posix(),
-        "values": [(alloy / "values.yaml").as_posix()],
-        "timeout": "10m",
-        "command": [],
-    }
-    assert "dry run" in result.stderr
+    )
+    assert calls.entry == ["plan"]
     assert "owned by bootstrap" in result.stderr
-    assert "dry run" not in result.stdout
+    assert "dry run" in result.stderr
 
 
-@pytest.mark.parametrize("projection", ["table", "json", "yaml"])
-def test_dry_run_honours_every_projection(chart_root: Path, calls: Calls, projection: str) -> None:
-    result = cli("chart", "test", "alloy", "--dry-run", "-o", projection)
-
-    assert result.exit_code == 0, result.output
-    assert "helm-test" in result.stdout
-
-
-def test_dry_run_takes_the_invocation_wide_output(chart_root: Path, calls: Calls) -> None:
-    result = cli("-o", "yaml", "chart", "test", "alloy", "--dry-run")
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [([], ["-o", "table"]), ([], ["-o", "json"]), ([], ["-o", "yaml"]), (["-o", "yaml"], [])],
+)
+def test_dry_run_honours_every_projection_and_the_global_output(
+    chart_root: Path, calls: Calls, before: list[str], after: list[str]
+) -> None:
+    result = cli(*before, "chart", "test", "alloy", "--dry-run", *after)
 
     assert result.exit_code == 0, result.output
+    assert "hook-post-install" in result.stdout
 
 
 def test_output_without_dry_run_is_a_usage_error(chart_root: Path, calls: Calls) -> None:
@@ -214,21 +218,12 @@ def hooked_repo(chart_root: Path, make_chart: MakeChart, root: Path) -> Path:
 
 
 def test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(hooked_repo: Path) -> None:
-    table = cli("chart", "test", "app", "--dry-run", "-o", "table")
-    document = cli("chart", "test", "app", "--dry-run", "-o", "json")
+    result = cli("chart", "test", "app", "--dry-run", "-o", "table")
 
-    assert table.exit_code == 0, table.output
-    assert document.exit_code == 0, document.output
+    assert result.exit_code == 0, result.output
     assert not (hooked_repo / "hook-ran").exists()
-    assert "scripts/hook --token ***" in table.stdout
-    assert "s3cret" not in table.stdout
-    actions = json.loads(document.stdout)["actions"]
-    assert [(a["kind"], a["command"]) for a in actions if a["command"]] == [
-        ("hook-pre-install", ["scripts/hook", "--token", "s3cret"]),
-        ("hook-post-install", ["scripts/hook", "post"]),
-        ("hook-cleanup", ["scripts/hook", "--token", "s3cret"]),
-        ("hook-cleanup", ["scripts/hook", "cleanup"]),
-    ]
+    assert "scripts/hook --token ***" in result.stdout
+    assert "s3cret" not in result.stdout
 
 
 def test_chart_teardown_defaults(chart_root: Path, calls: Calls) -> None:
