@@ -28,12 +28,15 @@ def test_chart_list_table_is_the_projection_a_terminal_gets(
 ) -> None:
     """`-o table` keeps the human inventory: headers plus one row per chart."""
     make_chart("alloy")
+    broken = make_chart("broken")
+    (broken / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
 
     result = cli("chart", "list", "-o", "table")
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 3
     assert "Manifest validation" in result.stdout
     assert "alloy" in result.stdout
+    assert "invalid" in result.stdout
 
 
 def test_chart_list_off_a_terminal_resolves_auto_to_json(
@@ -52,24 +55,46 @@ def test_chart_list_off_a_terminal_resolves_auto_to_json(
     assert json.loads(result.stdout)["charts"][0]["name"] == "alloy"
 
 
-@pytest.mark.parametrize("output", ["json", "table"])
-def test_chart_list_reports_a_broken_chart_in_the_payload_and_the_exit_code(
-    root: Path, make_chart: MakeChart, output: str
+def test_chart_list_json_is_the_catalog_and_a_broken_chart_exits_3(
+    root: Path, make_chart: MakeChart
 ) -> None:
-    """A pipeline reads the exit code; a jq filter reads `error`. Both work.
+    """A jq filter reads `error`; a pipeline reads exit 3, a spec error."""
+    make_chart("alloy")
+    lifecycle = make_chart("other") / "chart-lifecycle.yaml"
+    lifecycle.write_text(lifecycle.read_text().replace("name: other", "name: alloy"))
 
-    The code is 3, not 1: what failed is the *authoring* of a
-    `chart-lifecycle.yaml`, which is a spec error. `chart list`
-    itself did its job and printed every row that parsed.
-    """
-    chart = make_chart("broken")
-    (chart / "chart-lifecycle.yaml").write_text("version: [wrong\n", encoding="utf-8")
+    result = cli("chart", "list", "-o", "json")
 
-    result = cli("chart", "list", "-o", output)
-
-    assert result.exit_code == 3
-    assert "broken" in result.stdout
-    assert "invalid" in result.stdout
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        3,
+        {
+            "charts": [
+                {
+                    "name": "alloy",
+                    "version": "0.1.0",
+                    "chart_type": "application",
+                    "dependencies": [],
+                    "lifecycle_status": "enabled",
+                    "validation": "absent",
+                    "chart_test": "enabled",
+                    "profiles": ["minimal"],
+                    "error": None,
+                },
+                {
+                    "name": "other",
+                    "version": "?",
+                    "chart_type": "?",
+                    "dependencies": [],
+                    "lifecycle_status": "invalid",
+                    "validation": "absent",
+                    "chart_test": "absent",
+                    "profiles": [],
+                    "error": f"{lifecycle} metadata.name 'alloy' does not match chart "
+                    "directory 'other' and Chart.yaml name 'other'",
+                },
+            ]
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -89,21 +114,35 @@ def test_a_projection_neither_command_has_is_rejected_at_parse_time(
     assert "md" in result.output
 
 
-@pytest.mark.parametrize("output", [[], ["-o", "yaml"]], ids=["auto-json", "yaml"])
-def test_chart_show_prints_the_authored_envelope(
-    root: Path, make_chart: MakeChart, output: list[str]
-) -> None:
-    """The point of `-o json|yaml` is that it can be diffed against the source."""
+def test_chart_show_json_is_the_authored_envelope(root: Path, make_chart: MakeChart) -> None:
+    """The point of `-o json` is that it can be diffed against the source."""
     make_chart("alloy")
 
-    result = cli("chart", "show", "alloy", *output)
+    result = cli("chart", "show", "alloy", "-o", "json")
 
-    assert result.exit_code == 0, result.output
-    document = parse_yaml(result.stdout)
-    assert document["apiVersion"] == "chartmanager.io/v1alpha1"
-    assert document["kind"] == "ChartLifecycle"
-    assert document["metadata"] == {"name": "alloy"}
-    assert document["spec"]["chartTest"]["enabled"] is True
+    profile = {
+        "helmTest": True,
+        "namespace": "default",
+        "requires": [],
+        "timeout": "10m",
+        "values": ["values.yaml"],
+    }
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "apiVersion": "chartmanager.io/v1alpha1",
+            "kind": "ChartLifecycle",
+            "metadata": {"name": "alloy"},
+            "spec": {
+                "chartTest": {
+                    "dependentTests": [],
+                    "enabled": True,
+                    "profiles": {"minimal": profile},
+                },
+                "enabled": True,
+            },
+        },
+    )
 
 
 def test_chart_show_table_flattens_the_envelope_onto_dotted_fields(
