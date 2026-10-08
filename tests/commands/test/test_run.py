@@ -50,7 +50,9 @@ def repo(chart_root: Path, make_chart: MakeChart) -> Path:
                 "requires": [{"chart": "db", "profile": "minimal"}],
             }
         },
+        dependent_tests=[("web", "minimal")],
     )
+    make_chart("web", profiles={"minimal": {"requires": [{"chart": "app", "profile": "minimal"}]}})
     return chart_root
 
 
@@ -242,7 +244,7 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
 def test_plan_lists_namespace_install_and_helm_test_per_chart_requires_first(repo: Path) -> None:
     lifecycle_plan = plan(test.ChartTestRequest(chart="app"), workspace=load_workspace(repo))
 
-    assert [(a.target.chart, a.kind.value) for a in lifecycle_plan.actions] == [
+    assert [(a.entry.chart.name, a.kind.value) for a in lifecycle_plan.actions] == [
         ("db", "namespace-ensure"),
         ("db", "install"),
         ("db", "helm-test"),
@@ -263,17 +265,17 @@ def test_no_ensure_cluster_attaches_without_creating_anything(repo: Path) -> Non
     assert install[install.index("--kube-context") + 1] == "kind-lab"
 
 
-def test_skip_requires_on_a_new_cluster_installs_requirements_but_tests_only_the_target(
+def test_skip_requires_on_a_new_cluster_installs_requirements_but_tests_only_selected_charts(
     repo: Path,
 ) -> None:
     runner = kind_runner()
 
-    outcome = _run(repo, runner, skip_requires=True)
+    outcome = _run(repo, runner, skip_requires=True, include_dependent_tests=True)
 
     assert outcome.ok
     steps = _steps(runner)
-    assert [s[3] for s in steps if s[:2] == ("helm", "upgrade")] == ["cni", "db", "app"]
-    assert [s[2] for s in steps if s[:2] == ("helm", "test")] == ["app"]
+    assert [s[3] for s in steps if s[:2] == ("helm", "upgrade")] == ["cni", "db", "app", "web"]
+    assert [s[2] for s in steps if s[:2] == ("helm", "test")] == ["app", "web"]
 
 
 def test_lint_runs_before_each_charts_install_and_fails_it(repo: Path) -> None:

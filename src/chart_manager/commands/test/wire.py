@@ -8,11 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from chart_manager.commands.test.models import (
-    ActionTarget,
-    LifecycleAction,
-    LifecyclePlan,
-)
+from chart_manager.commands.test.models import LifecycleAction, LifecyclePlan
 
 __all__ = ["plan_to_dict"]
 
@@ -29,22 +25,18 @@ def plan_to_dict(plan: LifecyclePlan) -> dict[str, Any]:
 
 def _action(action: LifecycleAction) -> dict[str, Any]:
     """JSON-serialize one planned action in compiled execution order."""
+    entry = action.entry
     return {
         "action_id": action.action_id,
         "kind": action.kind.value,
-        "target": _target(action.target),
-        "chart_path": action.chart_path.as_posix(),
-        "values": [path.as_posix() for path in action.values],
-        "timeout": action.timeout,
+        "target": {
+            "chart": entry.chart.name,
+            "profile": entry.profile,
+            "release": entry.chart.name,
+            "namespace": entry.namespace,
+        },
+        "chart_path": entry.chart.path.as_posix(),
+        "values": [path.as_posix() for path in entry.values],
+        "timeout": entry.spec.timeout,
         "command": list(action.command),
-    }
-
-
-def _target(target: ActionTarget) -> dict[str, Any]:
-    """JSON-serialize the coordinates one action acts on."""
-    return {
-        "chart": target.chart,
-        "profile": target.profile,
-        "release": target.release,
-        "namespace": target.namespace,
     }

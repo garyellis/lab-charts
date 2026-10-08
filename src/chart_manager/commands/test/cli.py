@@ -72,13 +72,14 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
 def _plan_table(plan: LifecyclePlan) -> Table:
     table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release", "Command")
     for step, action in enumerate(plan.actions, start=1):
+        entry = action.entry
         table.add_row(
             str(step),
             action.kind.value,
-            action.target.chart,
-            action.target.profile or "",
-            action.target.namespace or "",
-            action.target.release or "",
+            entry.chart.name,
+            entry.profile,
+            entry.namespace,
+            entry.chart.name,
             escape(redact(action.command)),
         )
     return table

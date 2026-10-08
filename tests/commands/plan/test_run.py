@@ -37,13 +37,6 @@ def _with_validation(chart: Path, *envs: str) -> None:
     path.write_text(dump_yaml(lifecycle))
 
 
-def _depends_on(chart: Path, *, target: str, profile: str) -> None:
-    path = chart / "chart-lifecycle.yaml"
-    lifecycle = parse_yaml(path.read_text())
-    lifecycle["spec"]["chartTest"]["dependentTests"] = [{"chart": target, "profile": profile}]
-    path.write_text(dump_yaml(lifecycle))
-
-
 def _rows(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
     return [(row.chart, row.env) for row in outcome.validation.rows]
 
@@ -55,10 +48,8 @@ def _tests(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
 def test_a_chart_change_selects_its_validation_its_chart_tests_and_its_publish(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    source = make_chart("source")
-    _with_validation(source, "dev", "prod")
+    _with_validation(make_chart("source", dependent_tests=[("consumer", "full")]), "dev", "prod")
     make_chart("consumer", profiles={"minimal": {}, "full": {}})
-    _depends_on(source, target="consumer", profile="full")
 
     outcome = _run(chart_root, plan.PlanRequest(changes=("charts/source/values.yaml",)))
 
@@ -120,7 +111,7 @@ def test_a_workspace_file_change_selects_every_validation_row_and_chart_test(
 def test_chart_test_spec_errors_reach_the_plan_outcome(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    _depends_on(make_chart("source"), target="source", profile="nope")
+    make_chart("source", dependent_tests=[("source", "nope")])
 
     outcome = _run(chart_root, plan.PlanRequest(changes=("charts/source/values.yaml",)))
 

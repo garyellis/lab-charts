@@ -8,6 +8,7 @@ operator creates from the release's custom resources), and its CRDs becoming
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from chart_manager.plumbing.errors import (
 from chart_manager.plumbing.yaml_files import parse_yaml_documents
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster.session import Session
+
+_LOG = logging.getLogger(__name__)
 
 WORKLOAD_KINDS = ("deployment", "statefulset", "daemonset")
 #: The install and wait budget when a release names none.
@@ -66,6 +69,9 @@ def converge(session: Session, release: Release) -> Literal["applied", "no-chang
     Raises `ReleaseFailed` with diagnostics when a step fails. A missing tool or a
     configuration error is raised as it is: it is not this release's failure.
     """
+    _LOG.info(
+        "installing %s (%s) into namespace %s", release.name, release.chart, release.namespace
+    )
     step: Step = "dependency update"
     try:
         if isinstance(release.chart, Path):
