@@ -15,7 +15,9 @@ from typing import Any
 import pytest
 
 from chart_manager.commands.events import cli as events_cli
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
+from chart_manager.shared.events.query import EventsDisabledError
 from tests.conftest import FakeCosmosContainer, cli
 
 
@@ -411,8 +413,9 @@ def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
     """conftest clears EVENTS_BACKEND; `none` is the shipped default."""
     result = cli("event", "list")
 
-    assert result.exit_code == 5
-    assert "EVENTS_BACKEND" in result.stderr
+    assert isinstance(result.exception, EventsDisabledError)
+    assert exit_code_for(result.exception.outcome) == 5
+    assert "EVENTS_BACKEND" in str(result.exception)
     assert result.stdout == ""
 
 

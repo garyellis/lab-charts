@@ -1,8 +1,16 @@
 """Exception hierarchy for expected chart-manager failures."""
 
+from chart_manager.plumbing.exit_codes import Outcome
+
 
 class ChartManagerError(Exception):
-    """Base exception for expected CLI failures."""
+    """Base exception for expected CLI failures.
+
+    `outcome` is the exit outcome `main` reports. A subclass sets it only
+    when it differs from its parent's.
+    """
+
+    outcome = Outcome.FAILED
 
 
 class YamlError(ChartManagerError):
@@ -12,9 +20,13 @@ class YamlError(ChartManagerError):
 class SpecError(ChartManagerError):
     """Raised when authored chart-manager configuration is missing or invalid."""
 
+    outcome = Outcome.SPEC
+
 
 class WorkspaceNotFoundError(ChartManagerError):
     """Raised when no `.chart-manager/workspace.yaml` marks the repository."""
+
+    outcome = Outcome.ENVIRONMENT
 
 
 class CapabilityUnavailableError(ChartManagerError):
@@ -32,6 +44,8 @@ class DependencyCycleError(SpecError):
 class ExternalCommandError(ChartManagerError):
     """Raised when an external command fails."""
 
+    outcome = Outcome.TOOL
+
     def __init__(
         self,
         message: str = "",
@@ -48,11 +62,13 @@ class ExternalCommandError(ChartManagerError):
 class MissingToolError(ExternalCommandError):
     """Raised when an external tool is not on PATH.
 
-    Distinct from a tool that ran and failed: the surface maps this to exit
-    127 ("command not found"), so a missing binary is not reported as a
-    missing data file, and best-effort handlers can degrade on it
-    the same way they degrade on any other ExternalCommandError.
+    Distinct from a tool that ran and failed: it exits 127 ("command not
+    found"), so a missing binary is not reported as a missing data file, and
+    best-effort handlers can degrade on it the same way they degrade on any
+    other ExternalCommandError.
     """
+
+    outcome = Outcome.MISSING_BINARY
 
 
 class CommandTimeout(ExternalCommandError):

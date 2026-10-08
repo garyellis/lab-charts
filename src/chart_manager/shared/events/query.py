@@ -41,15 +41,11 @@ DEFAULT_LIMIT = 20
 class EventReadError(ChartManagerError):
     """A read-side request the configured backend cannot serve.
 
-    Carries the semantic `Outcome` so a surface maps it through
-    `exit_code_for` -- both concrete cases are `ENVIRONMENT`: nothing the
-    caller asked about failed, the environment simply has no readable ledger.
+    An environment failure: nothing the caller asked about failed, the
+    environment has no readable ledger.
     """
 
-    def __init__(self, message: str, *, outcome: Outcome = Outcome.ENVIRONMENT) -> None:
-        """Attach the exit-code outcome this failure is worth."""
-        super().__init__(message)
-        self.outcome = outcome
+    outcome = Outcome.ENVIRONMENT
 
 
 class EventsDisabledError(EventReadError):

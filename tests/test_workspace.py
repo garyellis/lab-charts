@@ -147,7 +147,7 @@ def test_missing_workspace_exits_with_the_environment_code(
     # `CliRunner` stops at Click; the exception is what `main()` maps.
     assert isinstance(result.exception, WorkspaceNotFoundError)
     assert "set CHART_MANAGER_ROOT" in str(result.exception)
-    assert exit_code_for(main._outcome_for(result.exception)) == 5
+    assert exit_code_for(result.exception.outcome) == 5
 
 
 def test_missing_workspace_exit_code_through_main(

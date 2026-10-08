@@ -11,14 +11,12 @@ from __future__ import annotations
 import pytest
 
 from chart_manager.plumbing.errors import (
-    CapabilityUnavailableError,
     ChartManagerError,
-    ChartNotFoundError,
-    CommandTimeout,
     DependencyCycleError,
     ExternalCommandError,
     MissingToolError,
     SpecError,
+    WorkspaceNotFoundError,
 )
 from chart_manager.plumbing.exit_codes import (
     EXIT_CODE,
@@ -85,25 +83,18 @@ def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (MissingToolError("helm not found"), 127),
-        (ExternalCommandError("helm template exploded"), 4),
-        (CommandTimeout("kubeconform timed out"), 4),
+        (ChartManagerError("something went wrong"), 1),
         (SpecError("chart-lifecycle.yaml is not valid"), 3),
         (DependencyCycleError("a -> b -> a"), 3),
-        (CapabilityUnavailableError("chart tests are disabled"), 1),
-        (ChartNotFoundError("chart not found: nope"), 1),
-        (ChartManagerError("something went wrong"), 1),
+        (ExternalCommandError("helm template exploded"), 4),
+        (WorkspaceNotFoundError("no .chart-manager/workspace.yaml"), 5),
+        (MissingToolError("helm not found"), 127),
     ],
 )
-def test_a_domain_error_exits_with_the_code_its_type_earns(
+def test_a_domain_error_exits_with_its_outcome(
     exc: ChartManagerError, expected: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Before this, all eight of these exited 1 except the missing binary.
-
-    The distinctions are the product: "your yaml is wrong" (3), "helm ran
-    and failed" (4) and "the run failed" (1) send an operator to three
-    different places, and a pipeline can branch on them.
-    """
+    """One row per outcome an error can carry; a subclass inherits its parent's."""
     assert _exit_code_from_main(exc, monkeypatch) == expected
 
 
