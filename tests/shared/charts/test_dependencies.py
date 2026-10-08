@@ -105,22 +105,10 @@ def test_deps_are_fresh_reads_helm_gzip_extra_header(tmp_path: Path) -> None:
     assert chart_deps.deps_are_fresh(chart) is True
 
 
-@pytest.mark.parametrize(
-    "chart_yaml",
-    [
-        "apiVersion: v2\nname: demo\nversion: 0.1.0\n",
-        # Helm itself reports a malformed chart when it renders it.
-        "not: : valid: yaml:\n  - [\n",
-        "apiVersion: v2\nname: demo\nversion: 0.1.0\ndependencies: not-a-list\n",
-    ],
-    ids=["no-dependencies", "malformed-yaml", "non-list-dependencies"],
-)
-def test_a_chart_without_readable_dependencies_skips_the_update(
-    tmp_path: Path, chart_yaml: str
-) -> None:
+def test_a_chart_without_dependencies_skips_the_update(tmp_path: Path) -> None:
     chart = tmp_path / "demo"
     chart.mkdir()
-    (chart / "Chart.yaml").write_text(chart_yaml)
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: demo\nversion: 0.1.0\n")
 
     assert _ran_update(chart) is False
 
@@ -205,11 +193,16 @@ def test_a_wrong_materialized_artifact_runs_the_update(
     assert _ran_update(chart) is True
 
 
-def test_a_malformed_chart_package_runs_the_update(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "artifact", ["foo-1.0.0.tgz", "foo/Chart.yaml"], ids=["packaged", "expanded"]
+)
+def test_a_malformed_downloaded_chart_runs_the_update(tmp_path: Path, artifact: str) -> None:
     chart = tmp_path / "demo"
     _write_chart(chart)
     _locked(chart)
-    (chart / "charts" / "foo-1.0.0.tgz").write_text("not a tar archive")
+    path = chart / "charts" / artifact
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("not: : valid: yaml:\n")
 
     assert _ran_update(chart) is True
 

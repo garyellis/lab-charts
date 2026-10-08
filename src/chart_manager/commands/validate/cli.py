@@ -33,7 +33,7 @@ from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.shared.charts.chart import resolve_chart_target
 
@@ -139,7 +139,7 @@ def validate(
     if len(selected) == 1:
         try:
             target = resolve_chart_target(workspace, selected[0])
-        except SpecError:
+        except ChartNotFoundError:
             target = None
         if target is not None:
             selected = (target.name,)

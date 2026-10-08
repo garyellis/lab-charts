@@ -28,7 +28,7 @@ The policy and algorithms over `api/` models and `Chart.yaml` live in
 
 | Module | What it decides |
 |---|---|
-| `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
+| `shared/charts/chart.py` | `load_chart`: one `Chart` from its directory, `Chart.yaml` and lifecycle, names agreeing; `chart_names` |
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/dependency_update.py` | Whether to run `helm dependency update` (only when stale) and its default timeout |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |

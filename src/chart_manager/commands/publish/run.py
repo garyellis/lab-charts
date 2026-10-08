@@ -22,7 +22,7 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.semver import SemVer, parse_semver
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import load_chart
 from chart_manager.shared.charts.dependency_update import update_dependencies
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase
@@ -87,9 +87,10 @@ def run(
     helm = Helm(
         runner, verbose=False, context=settings.kube_context, timeout=settings.command_timeout
     )
-    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
     with tempfile.TemporaryDirectory(prefix="chart-manager-publish-") as work:
-        prepared = [_prepare(name, request, repository, helm, Path(work)) for name in charts]
+        prepared = [
+            _prepare(workspace.chart_path(name), request, helm, Path(work)) for name in charts
+        ]
         rows = tuple(
             row if request.dry_run else _push(row, package, request, helm)
             for row, package in prepared
@@ -117,10 +118,11 @@ def run(
 
 
 def _prepare(
-    name: str, request: PublishRequest, repository: ChartRepository, helm: Helm, output: Path
+    path: Path, request: PublishRequest, helm: Helm, output: Path
 ) -> tuple[PublishedChart, PackageResult]:
     """Package one chart at its target version; its row names the push target."""
-    chart = repository.get(name)
+    chart = load_chart(path)
+    name = chart.name
     base_version = chart.metadata.version
     if base_version is None:
         raise SpecError(f"chart '{name}' has no version in Chart.yaml")

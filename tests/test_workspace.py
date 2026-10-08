@@ -17,7 +17,7 @@ from chart_manager.commands.validate.render_dir import clean_render_dir, render_
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.settings import Settings, load_settings
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import chart_names
 from chart_manager.shared.workspace import (
     SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
@@ -571,9 +571,7 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     dashboard.parent.mkdir(parents=True)
     dashboard.write_text("{}", encoding="utf-8")
 
-    repository = ChartRepository(tmp_path, charts_dir=Path("."))
-
-    assert repository.list_names() == ["alpha", "grafana-dashboards"]
+    assert chart_names(tmp_path / ".") == ["alpha", "grafana-dashboards"]
     workspace = workspace_for(tmp_path, chartsDir=Path("."))
     assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
     assert discover_dashboards(workspace=workspace) == [dashboard]

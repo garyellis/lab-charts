@@ -28,14 +28,9 @@ from chart_manager.commands.validate.schemas.models import (
     SchemaScope,
     content_digest,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.shared.charts.chart import (
-    Chart,
-    ChartRepository,
-    load_chart,
-    load_chart_metadata,
-)
+from chart_manager.shared.charts.chart import Chart, chart_names, load_chart
 from chart_manager.shared.charts.dependencies import deps_are_fresh
 from chart_manager.shared.charts.lifecycle import (
     CapabilityStatus,
@@ -188,22 +183,22 @@ def _possible_crd_bytes(name: str, data: bytes, *, depth: int = 0) -> bool:
     return False
 
 
-def _possible_crd_provider(path: Path) -> bool:
+def _possible_crd_provider(chart: Chart) -> bool:
+    dependencies = chart.metadata.dependencies
     try:
-        metadata = load_chart_metadata(path / "Chart.yaml")
-        if metadata.dependencies and (
-            not deps_are_fresh(path)
-            or any((dep.repository or "").startswith("file:") for dep in metadata.dependencies)
+        if dependencies and (
+            not deps_are_fresh(chart.path)
+            or any((dep.repository or "").startswith("file:") for dep in dependencies)
         ):
             return True
-        for item in path.rglob("*"):
+        for item in chart.path.rglob("*"):
             if item.is_symlink():
                 return True
             if item.is_file() and _possible_crd_bytes(
-                item.relative_to(path).as_posix(), item.read_bytes()
+                item.relative_to(chart.path).as_posix(), item.read_bytes()
             ):
                 return True
-    except (OSError, SpecError):
+    except OSError:
         return True
     return False
 
@@ -260,18 +255,17 @@ def providers(workspace: RepositoryWorkspace) -> list[Chart]:
 
     A chart whose dependencies are stale always counts; update them first to narrow this.
     """
-    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
     charts: list[Chart] = []
     errors: list[str] = []
-    for name in repository.list_names():
-        if not _possible_crd_provider(repository.charts_dir / name):
-            continue
+    for name in chart_names(workspace.charts_root):
         try:
             chart = load_chart(workspace.chart_path(name))
         except ChartManagerError as exc:
             errors.append(f"{name}: {exc}")
             continue
-        if validation_status(chart.lifecycle) is CapabilityStatus.ENABLED:
+        if validation_status(chart.lifecycle) is CapabilityStatus.ENABLED and (
+            _possible_crd_provider(chart)
+        ):
             charts.append(chart)
     if errors:
         raise KubeconformSchemaConfigurationError(

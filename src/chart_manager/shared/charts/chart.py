@@ -1,9 +1,9 @@
-"""Typed Helm-chart metadata and repository-backed chart loading."""
+"""Load a chart directory: its Helm metadata and its optional lifecycle."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ChartTestSpec
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
@@ -39,15 +39,6 @@ class ChartMetadata:
 
 
 @dataclass(frozen=True)
-class HelmChart:
-    """A Helm chart, independent of chart-test configuration."""
-
-    name: str
-    path: Path
-    metadata: ChartMetadata
-
-
-@dataclass(frozen=True)
 class Chart:
     """A chart directory: its Helm metadata and its optional lifecycle, names agreeing."""
 
@@ -59,56 +50,22 @@ class Chart:
 
 def load_chart(path: Path) -> Chart:
     """Load the chart in ``path``; directory, Chart.yaml and lifecycle names must agree."""
-    helm = load_helm_chart(path)
-    lifecycle = load_optional_chart_lifecycle(path / LIFECYCLE_FILENAME)
-    if lifecycle is not None:
-        validate_chart_lifecycle_identity(lifecycle, chart_name=helm.name, chart_directory=path)
-    return Chart(name=helm.name, path=path, metadata=helm.metadata, lifecycle=lifecycle)
-
-
-def load_helm_chart(path: Path) -> HelmChart:
-    """Load the Helm metadata in ``path``; its name must match the directory."""
     chart_yaml = path / "Chart.yaml"
     if not chart_yaml.exists():
-        raise ChartNotFoundError(f"chart not found: {path.name}")
-    metadata = load_chart_metadata(chart_yaml)
+        raise ChartNotFoundError(f"chart not found: {path}")
+    metadata = _load_metadata(chart_yaml)
     if metadata.name != path.name:
         raise SpecError(
             f"{chart_yaml} name '{metadata.name}' does not match directory '{path.name}'"
         )
-    return HelmChart(name=path.name, path=path, metadata=metadata)
+    lifecycle = load_optional_chart_lifecycle(path / LIFECYCLE_FILENAME)
+    if lifecycle is not None:
+        validate_chart_lifecycle_identity(lifecycle, chart_name=metadata.name, chart_directory=path)
+    return Chart(name=metadata.name, path=path, metadata=metadata, lifecycle=lifecycle)
 
 
-@dataclass(frozen=True)
-class ChartUnderTest:
-    """A Helm chart paired with its live-chart test configuration."""
-
-    chart: HelmChart
-    spec: ChartTestSpec
-
-    @property
-    def name(self) -> str:
-        """Return the underlying Helm chart name."""
-        return self.chart.name
-
-    @property
-    def path(self) -> Path:
-        """Return the underlying Helm chart directory."""
-        return self.chart.path
-
-    @property
-    def metadata(self) -> ChartMetadata:
-        """Return the underlying Helm metadata."""
-        return self.chart.metadata
-
-
-def load_chart_metadata(path: Path) -> ChartMetadata:
-    """Strictly load the chart-manager subset of a Helm ``Chart.yaml``.
-
-    The loader raises ``SpecError`` for malformed YAML or fields of the wrong
-    shape. Callers performing best-effort repository scans may catch that
-    error, while callers loading an explicitly requested chart surface it.
-    """
+def _load_metadata(path: Path) -> ChartMetadata:
+    """Strictly load the ``Chart.yaml`` at ``path``; ``SpecError`` when it is malformed."""
     try:
         data = load_yaml_file(path)
     except YamlError as exc:
@@ -134,9 +91,7 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
             ChartDependency(
                 name=_required_string(dependency, "name", path, parent=field),
                 version=_optional_string(dependency, "version", path, parent=field),
-                repository=_optional_string(
-                    dependency, "repository", path, parent=field
-                ),
+                repository=_optional_string(dependency, "repository", path, parent=field),
                 alias=_optional_string(dependency, "alias", path, parent=field),
             )
         )
@@ -149,50 +104,43 @@ def load_chart_metadata(path: Path) -> ChartMetadata:
     )
 
 
-def load_chart_name(path: Path) -> str:
-    """Load only the required chart name without validating unrelated metadata."""
-    try:
-        data = load_yaml_file(path)
-    except YamlError as exc:
-        raise SpecError(f"failed to load {path}: {exc}") from exc
-    return _required_string(data, "name", path)
-
-
-class ChartRepository:
-    """Discover and load Helm charts under the configured repository directory."""
-
-    def __init__(self, root: Path, *, charts_dir: Path) -> None:
-        """Anchor the repository at the resolved repo root."""
-        self.root = root.resolve()
-        self.charts_dir = self.root / charts_dir
-
-    def list_names(self) -> list[str]:
-        """Return sorted names of chart directories containing a Chart.yaml."""
-        if not self.charts_dir.exists():
-            return []
-        names = [
-            path.name
-            for path in self.charts_dir.iterdir()
-            if path.is_dir() and (path / "Chart.yaml").exists()
-        ]
-        return sorted(names)
-
-    def get(self, name: str) -> HelmChart:
-        """Load Helm metadata; no chart-test configuration is required."""
-        return load_helm_chart(self.charts_dir / name)
+def chart_names(charts_dir: Path) -> list[str]:
+    """Return sorted names of the directories in ``charts_dir`` that contain a Chart.yaml."""
+    if not charts_dir.exists():
+        return []
+    names = [
+        path.name
+        for path in charts_dir.iterdir()
+        if path.is_dir() and (path / "Chart.yaml").exists()
+    ]
+    return sorted(names)
 
 
 @dataclass(frozen=True)
-class ResolvedChartTarget:
-    """A chart directory selected on the command line."""
+class ChartUnderTest:
+    """A chart paired with its live-chart test configuration."""
 
-    name: str
-    path: Path
-    kind: Literal["chart"] = "chart"
+    chart: Chart
+    spec: ChartTestSpec
+
+    @property
+    def name(self) -> str:
+        """Return the underlying chart name."""
+        return self.chart.name
+
+    @property
+    def path(self) -> Path:
+        """Return the underlying chart directory."""
+        return self.chart.path
+
+    @property
+    def metadata(self) -> ChartMetadata:
+        """Return the underlying Helm metadata."""
+        return self.chart.metadata
 
 
-def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> ResolvedChartTarget:
-    """Resolve a chart name under the workspace's charts directory, or a chart directory.
+def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> Chart:
+    """Load a chart named under the workspace's charts directory, or a chart directory.
 
     A bare name that is not a path under the repository root is looked up in `chartsDir`.
     """
@@ -206,18 +154,14 @@ def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> Resolved
     return chart_target(root, path)
 
 
-def chart_target(root: Path, path: Path) -> ResolvedChartTarget:
-    """Describe the chart directory at `path`, which must sit inside `root`."""
-    absolute = inside_root(root, path)
-    chart_yaml = absolute / "Chart.yaml"
-    if not chart_yaml.is_file():
-        raise SpecError(f"chart directory has no Chart.yaml: {path}")
-    name = load_chart_name(chart_yaml)
+def chart_target(root: Path, path: Path) -> Chart:
+    """Load the chart directory at `path`, which must sit inside `root`."""
+    chart = load_chart(inside_root(root, path))
     try:
-        dns_label(name, field="Chart.yaml name")
+        dns_label(chart.name, field="Chart.yaml name")
     except ValueError as exc:
         raise SpecError(f"invalid chart target {path}: {exc}") from exc
-    return ResolvedChartTarget(name=name, path=absolute)
+    return chart
 
 
 def _required_string(

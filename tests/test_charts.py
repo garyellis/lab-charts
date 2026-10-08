@@ -1,4 +1,4 @@
-"""ChartRepository discovery and values resolution.
+"""Chart discovery and values resolution.
 
 Asserted against a synthetic chart tree, not the repo's own `charts/`
 directory -- see tests/conftest.py for why. The one real-tree test at the
@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.errors import CapabilityUnavailableError, SpecError
+from chart_manager.plumbing.errors import CapabilityUnavailableError
 from chart_manager.plumbing.yaml_files import dump_yaml
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import chart_names
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from tests.conftest import CHARTS_DIR
 
@@ -24,9 +24,7 @@ def test_list_charts_discovers_wrappers(chart_root: Path, make_chart: MakeChart)
     make_chart("alloy")
     make_chart("grafana")
 
-    repository = ChartRepository(chart_root, charts_dir=CHARTS_DIR)
-
-    assert repository.list_names() == ["alloy", "grafana", "tempo"]
+    assert chart_names(chart_root / CHARTS_DIR) == ["alloy", "grafana", "tempo"]
 
 
 def test_list_charts_ignores_directories_without_a_chart_yaml(
@@ -37,11 +35,11 @@ def test_list_charts_ignores_directories_without_a_chart_yaml(
     (chart_root / "charts" / "scratch").mkdir()
     (chart_root / "charts" / "README.md").write_text("", encoding="utf-8")
 
-    assert ChartRepository(chart_root, charts_dir=CHARTS_DIR).list_names() == ["alloy"]
+    assert chart_names(chart_root / CHARTS_DIR) == ["alloy"]
 
 
 def test_list_charts_is_empty_when_there_is_no_charts_dir(tmp_path: Path) -> None:
-    assert ChartRepository(tmp_path, charts_dir=CHARTS_DIR).list_names() == []
+    assert chart_names(tmp_path / CHARTS_DIR) == []
 
 
 def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart) -> None:
@@ -56,21 +54,6 @@ def test_value_paths_are_chart_relative(chart_root: Path, make_chart: MakeChart)
 
     chart_dir = (chart_root / "charts" / "prometheus-operator").resolve()
     assert paths == [chart_dir / "values.yaml", chart_dir / "values-ci.yaml"]
-
-
-def test_get_loads_library_chart_without_test_spec(chart_root: Path) -> None:
-    chart_dir = chart_root / "charts" / "common"
-    chart_dir.mkdir()
-    (chart_dir / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: common\nversion: 1.2.3\ntype: library\n",
-        encoding="utf-8",
-    )
-
-    chart = ChartRepository(chart_root, charts_dir=CHARTS_DIR).get("common")
-
-    assert chart.name == "common"
-    assert chart.metadata.version == "1.2.3"
-    assert chart.metadata.chart_type == "library"
 
 
 def test_chart_test_catalog_requires_chart_manager_configuration(
@@ -130,21 +113,9 @@ def test_enabled_chart_test_names_exclude_unmanaged_and_disabled_charts(
     assert ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).enabled_names() == ["enabled"]
 
 
-def test_get_rejects_invalid_dependency_shape(chart_root: Path) -> None:
-    chart_dir = chart_root / "charts" / "broken"
-    chart_dir.mkdir()
-    (chart_dir / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: broken\nversion: 1.2.3\ndependencies: wrong\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(SpecError, match="'dependencies' must be a list"):
-        ChartRepository(chart_root, charts_dir=CHARTS_DIR).get("broken")
-
-
 def test_the_repo_chart_tree_loads() -> None:
     """Smoke test over the real charts/ tree: contents, not inventory."""
-    names = ChartRepository(REPO_ROOT, charts_dir=CHARTS_DIR).list_names()
+    names = chart_names(REPO_ROOT / CHARTS_DIR)
 
     assert names, "the repo should ship at least one chart"
     assert names == sorted(names)

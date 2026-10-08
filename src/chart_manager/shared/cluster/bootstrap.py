@@ -21,11 +21,7 @@ from chart_manager.plumbing.progress import ProgressCallback, emit, step
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
-from chart_manager.shared.cluster.releases import (
-    chart_name,
-    helm_release,
-    lifecycle_install_plan,
-)
+from chart_manager.shared.cluster.releases import helm_release, lifecycle_install_plan
 from chart_manager.shared.cluster.session import Session
 
 
@@ -118,8 +114,7 @@ def _releases(
 ) -> list[tuple[Release, str]]:
     """The Helm releases one authored bootstrap release installs, with their row label."""
     if isinstance(authored, BootstrapLifecycleRelease):
-        catalog, plan = lifecycle_install_plan(root, authored, source="bootstrap chart")
-        root_chart = chart_name(root, authored.chart)
+        catalog, plan = lifecycle_install_plan(root, authored)
         releases = []
         for entry in plan:
             chart = catalog.get(entry.chart)
@@ -130,7 +125,7 @@ def _releases(
                     f"bootstrap chart {entry.chart}:{entry.profile} declares "
                     "chart-test hooks, which bootstrap does not run"
                 )
-            is_root = entry.chart == root_chart and entry.profile == authored.profile
+            is_root = entry.chart == authored.chart.name and entry.profile == authored.profile
             releases.append(
                 (
                     Release(

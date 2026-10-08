@@ -11,7 +11,7 @@ from chart_manager.commands.local import run as local_run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.progress import ProgressEvent
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.workspace import load_repository_workspace
 from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, kind_runner, plain_argv
 
@@ -51,8 +51,8 @@ def repo(chart_root: Path, make_chart: MakeChart) -> Path:
     return chart_root
 
 
-def _target(repo: Path) -> ResolvedChartTarget:
-    return ResolvedChartTarget(name="app", path=(repo / "charts" / "app").resolve())
+def _target(repo: Path) -> Chart:
+    return load_chart((repo / "charts" / "app").resolve())
 
 
 def _installs(runner: FakeCommandRunner) -> list[str]:

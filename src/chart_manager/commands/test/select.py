@@ -9,6 +9,7 @@ from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.plumbing.errors import CapabilityUnavailableError, ChartManagerError, SpecError
+from chart_manager.shared.charts.chart import chart_names
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -90,7 +91,7 @@ def _default_profile(chart: str, catalog: ChartTestCatalog) -> str:
 def _explicit(charts: Sequence[str], catalog: ChartTestCatalog) -> tuple[SelectedTest, ...]:
     """The named charts at their default profiles, or every bad name in one error."""
     requested = sorted(set(charts))
-    known = set(catalog.repository.list_names())
+    known = set(chart_names(catalog.charts_dir))
     unknown = [chart for chart in requested if chart not in known]
     unavailable: list[str] = []
     selected: list[SelectedTest] = []

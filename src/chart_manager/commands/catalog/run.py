@@ -7,7 +7,7 @@ from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.shared.charts.chart import ChartDependency, ChartRepository, load_chart
+from chart_manager.shared.charts.chart import ChartDependency, chart_names, load_chart
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
     CapabilityStatus,
@@ -34,8 +34,7 @@ class ChartCatalogEntry:
 
 def list_charts(workspace: RepositoryWorkspace) -> list[ChartCatalogEntry]:
     """Return every chart, retaining malformed metadata/intent diagnostics."""
-    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
-    return [_entry(repository.charts_dir / name) for name in repository.list_names()]
+    return [_entry(workspace.chart_path(name)) for name in chart_names(workspace.charts_root)]
 
 
 def show_chart(workspace: RepositoryWorkspace, name: str) -> ChartLifecycle:

@@ -22,10 +22,11 @@ from chart_manager.api.v1alpha1.releases import (
 from chart_manager.plumbing.errors import SpecError, YamlError
 from chart_manager.plumbing.paths import inside_root, validate_hook_executable
 from chart_manager.plumbing.yaml_files import load_yaml_file
-from chart_manager.shared.charts.chart import load_chart_metadata
+from chart_manager.shared.charts.chart import load_chart
 from chart_manager.shared.charts.lifecycle import (
-    LIFECYCLE_FILENAME,
-    load_chart_lifecycle,
+    CapabilityStatus,
+    chart_test_status,
+    require_chart_test,
     require_chart_test_profile,
 )
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -62,31 +63,21 @@ def load_resource[M: BaseModel](path: Path, model: type[M]) -> M:
 def validate_release(root: Path, release: BootstrapRelease | StackRelease) -> None:
     """Check the chart directory, its lifecycle and the values files a release names."""
     if isinstance(release, (LifecycleRelease, LocalChartRelease)):
-        chart = inside_root(root, release.chart)
-        if not chart.is_dir():
+        chart_dir = inside_root(root, release.chart)
+        if not chart_dir.is_dir():
             raise SpecError(f"release.chart directory does not exist: {release.chart}")
-        chart_yaml = chart / "Chart.yaml"
-        if not chart_yaml.is_file():
-            raise SpecError(f"release.chart has no Chart.yaml: {release.chart}")
-        chart_name = load_chart_metadata(chart_yaml).name
-        if isinstance(release, LocalChartRelease) and release.name != chart_name:
+        chart = load_chart(chart_dir)
+        if isinstance(release, LocalChartRelease) and release.name != chart.name:
             raise SpecError(
                 f"local release name {release.name!r} does not match "
-                f"{chart_yaml} name {chart_name!r}"
+                f"{chart_dir / 'Chart.yaml'} name {chart.name!r}"
             )
         if isinstance(release, LifecycleRelease):
-            lifecycle_path = chart / LIFECYCLE_FILENAME
-            lifecycle = load_chart_lifecycle(lifecycle_path)
-            if lifecycle.metadata.name != chart_name:
-                raise SpecError(
-                    f"{lifecycle_path} metadata.name {lifecycle.metadata.name!r} "
-                    f"does not match {chart_yaml} name {chart_name!r}"
-                )
-            chart_test = lifecycle.spec.chart_test
-            if not lifecycle.spec.enabled or chart_test is None or not chart_test.enabled:
+            if chart_test_status(chart.lifecycle) is not CapabilityStatus.ENABLED:
                 raise SpecError(
                     f"lifecycle release chart {release.chart} has no enabled chartTest"
                 )
+            chart_test = require_chart_test(chart.lifecycle, chart_name=chart.name)
             require_chart_test_profile(chart_test, release.profile)
     if isinstance(release, (LocalChartRelease, OciChartRelease, RepoChartRelease)):
         for path in release.values:

@@ -18,7 +18,7 @@ from chart_manager.api.v1alpha1.chart_lifecycle import (
 )
 from chart_manager.commands.validate.models import Row
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.shared.charts.chart import Chart, ChartRepository, load_chart
+from chart_manager.shared.charts.chart import Chart, chart_names, load_chart
 from chart_manager.shared.charts.dependencies import build_helm_dependency_index
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
@@ -126,7 +126,7 @@ def _load(workspace: RepositoryWorkspace) -> tuple[dict[str, Chart], list[str], 
     charts: dict[str, Chart] = {}
     errors: list[str] = []
     warnings: list[str] = []
-    for name in ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir).list_names():
+    for name in chart_names(workspace.charts_root):
         try:
             chart = load_chart(workspace.chart_path(name))
         except ChartManagerError as exc:
