@@ -1,4 +1,4 @@
-"""`local up/down/reset/status`: the persistent development cluster."""
+"""`local up/down/reset/status`: the dev cluster."""
 
 from chart_manager.commands.local.models import (
     DevClusterActionResult,

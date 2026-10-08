@@ -178,7 +178,7 @@ def local_up(
         run_hooks=hooks_enabled,
         progress=_print_progress,
     )
-    _render_development_cluster_result(result, output, command="up")
+    _render_dev_cluster_result(result, output, command="up")
     _exit_if_failed(result.ok)
 
 
@@ -266,7 +266,7 @@ def local_reset(
         run_hooks=hooks_enabled,
         progress=_print_progress,
     )
-    _render_development_cluster_result(result, output, command="reset")
+    _render_dev_cluster_result(result, output, command="reset")
     _exit_if_failed(result.ok)
 
 
@@ -370,7 +370,7 @@ def _render_plan(plan: DevClusterPlan, output: str) -> None:
     narration.print("[dim]dry run: nothing was changed[/dim]")
 
 
-def _render_development_cluster_result(
+def _render_dev_cluster_result(
     result: DevClusterResult,
     output: str,
     *,
@@ -389,7 +389,7 @@ def _render_development_cluster_result(
     payload does not carry them.
     """
     if output == output_mod.TABLE:
-        table = Table("Status", "Chart", "Profile", "Namespace", title="Lab install summary")
+        table = Table("Status", "Chart", "Profile", "Namespace", title="Dev cluster install summary")
         for entry in result.applied:
             table.add_row("[green]applied[/green]", entry.chart, entry.profile, entry.namespace)
         for entry in result.no_change:

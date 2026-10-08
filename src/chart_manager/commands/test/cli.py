@@ -125,7 +125,7 @@ def chart_test(
     output: DryRunOutputOption = None,
     run_provision_hooks: ProvisionHooksOption = None,
 ) -> None:
-    """Install and exercise one chart on an ephemeral local Kubernetes cluster.
+    """Install and exercise one chart on a test cluster.
 
     `--dry-run` prints the compiled lifecycle plan -- every namespace,
     install and helm test the run would perform, in order -- and exits 0
