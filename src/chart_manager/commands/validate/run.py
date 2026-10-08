@@ -25,10 +25,8 @@ from chart_manager.commands.validate.models import (
 )
 from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.schemas import generated
-from chart_manager.commands.validate.schemas.runtime import (
-    KubeconformSchemaRuntime,
-    load_kubeconform_schema_runtime,
-)
+from chart_manager.commands.validate.schemas import lock as schema_lock
+from chart_manager.commands.validate.schemas.lock import UpstreamSchemas
 from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
@@ -199,7 +197,7 @@ class _Checker:
         self.progress = progress
         self.kubeconform = Kubeconform(runner, timeout=request.tool_timeout)
         self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
-        self.schemas: KubeconformSchemaRuntime | None = None
+        self.schemas: tuple[tuple[str, ...], UpstreamSchemas] | None = None
         self.schemas_lock = threading.Lock()
         # Rows run in parallel: one chart's rows share one dependency update.
         self.dependency_locks: dict[Path, threading.Lock] = {}
@@ -221,12 +219,16 @@ class _Checker:
             if skip:
                 checks["schema"] = self._skipped(row, "schema", skip)
             else:
-                schemas = self._schemas()
-                locations = _schema_locations(self.workspace.root, chart.name, spec)
+                crds, upstream = self._schemas()
+                locations = [
+                    *crds,
+                    *_schema_locations(self.workspace.root, chart.name, spec),
+                    *upstream.locations,
+                ]
                 checks["schema"] = self._timed(
                     row,
                     "schema",
-                    lambda: _schema(self.kubeconform, schemas, spec, locations, rendered),
+                    lambda: _schema(self.kubeconform, upstream, spec, locations, rendered),
                 )
         if "policy" in self.request.checks:
             skip = _skip_reason(spec.validators.policy, checks, rendered)
@@ -255,17 +257,17 @@ class _Checker:
         self.progress.on_event(row, name, "skipped")
         return CheckResult("skipped", reason)
 
-    def _schemas(self) -> KubeconformSchemaRuntime:
-        """The locked schema generation plus schemas generated from CRDs, loaded on first use."""
+    def _schemas(self) -> tuple[tuple[str, ...], UpstreamSchemas]:
+        """Schemas generated from CRDs and the locked upstream schemas, loaded on first use."""
         with self.schemas_lock:
             if self.schemas is None:
                 store = open_schema_store(self.runner, self.schema_cache_root)
-                runtime = load_kubeconform_schema_runtime(self.workspace, store)
+                upstream = schema_lock.locations(self.workspace, store)
                 self._update_dependencies(generated.providers(self.workspace))
                 crds = generated.prepare(
                     self.workspace, render=self._render_crds, cache_root=store.cache_root
                 )
-                self.schemas = replace(runtime, generated_schema_locations=crds)
+                self.schemas = (crds, upstream)
             return self.schemas
 
     def _render_crds(self, charts: Sequence[Chart], out: Path) -> list[str]:
@@ -368,22 +370,17 @@ def _skip_reason(
 
 def _schema(
     kubeconform: Kubeconform,
-    schemas: KubeconformSchemaRuntime,
+    upstream: UpstreamSchemas,
     spec: ManifestValidationSpec,
-    chart_locations: list[str],
+    locations: list[str],
     rendered: Path,
 ) -> CheckResult:
-    locations = schemas.locations()
     try:
         report = kubeconform.validate(
             rendered,
-            kubernetes_version=schemas.lock.policy.kubernetes_version,
-            schema_locations=[
-                *locations.generated_schema_locations,
-                *chart_locations,
-                *locations.fallback_schema_locations,
-            ],
-            skip_kinds=[*schemas.ignored_missing_kinds(), *spec.ignore_missing_schemas],
+            kubernetes_version=upstream.kubernetes_version,
+            schema_locations=locations,
+            skip_kinds=[*upstream.skip_kinds, *spec.ignore_missing_schemas],
         )
     except MissingToolError:
         raise

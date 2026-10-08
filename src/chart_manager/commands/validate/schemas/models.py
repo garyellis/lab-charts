@@ -168,50 +168,6 @@ class MaterializedSchema:
             )
 
 
-@dataclass(frozen=True)
-class AuthoredSchemaPolicy:
-    kubernetes_version: str
-    generate_from_crds: bool
-    catalog_repository: str
-    catalog_track: str
-    kubernetes_repository: str = "yannh/kubernetes-json-schema"
-    kubernetes_track: str = "master"
-
-    def normalized_version(self) -> str:
-        return self.kubernetes_version.removeprefix("v")
-
-
-def lock_policy_mismatches(
-    policy: AuthoredSchemaPolicy,
-    lock: SchemaLock,
-    *,
-    workspace: str | None = None,
-) -> tuple[str, ...]:
-    """Compare every authored field that controls locked schema bytes."""
-    comparisons: list[tuple[str, object, object]] = []
-    if workspace is not None:
-        comparisons.append(("workspace", lock.workspace, workspace))
-    comparisons.extend(
-        (
-            ("kubernetesVersion", lock.policy.kubernetes_version, policy.normalized_version()),
-            ("generateFromCRDs", lock.policy.generate_from_crds, policy.generate_from_crds),
-            (
-                "kubernetes.repository",
-                lock.policy.kubernetes.repository,
-                policy.kubernetes_repository,
-            ),
-            ("kubernetes.track", lock.policy.kubernetes.track, policy.kubernetes_track),
-            ("catalog.repository", lock.policy.catalog.repository, policy.catalog_repository),
-            ("catalog.track", lock.policy.catalog.track, policy.catalog_track),
-        )
-    )
-    return tuple(
-        f"{name}: lock={locked!r}, workspace={authored!r}"
-        for name, locked, authored in comparisons
-        if locked != authored
-    )
-
-
 def content_digest(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
@@ -234,7 +190,6 @@ def build_lock(*, workspace: str, policy: LockedSchemaPolicy) -> SchemaLock:
 
 
 __all__ = [
-    "AuthoredSchemaPolicy",
     "GroupVersionKind",
     "LockedSchemaPolicy",
     "MaterializedSchema",
@@ -243,5 +198,4 @@ __all__ = [
     "SchemaScope",
     "build_lock",
     "content_digest",
-    "lock_policy_mismatches",
 ]

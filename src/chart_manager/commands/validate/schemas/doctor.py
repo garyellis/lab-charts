@@ -5,13 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from chart_manager.api.v1alpha1.chart_workspace import WorkspaceValidation
 from chart_manager.commands.validate.schemas.errors import KubeconformSchemaLockError
-from chart_manager.commands.validate.schemas.lock import load_schema_lock
-from chart_manager.commands.validate.schemas.models import (
-    AuthoredSchemaPolicy,
-    SchemaLock,
-    lock_policy_mismatches,
+from chart_manager.commands.validate.schemas.lock import (
+    KUBERNETES_REPOSITORY,
+    KUBERNETES_TRACK,
+    _mismatches,
+    load_schema_lock,
 )
+from chart_manager.commands.validate.schemas.models import SchemaLock
 from chart_manager.commands.validate.schemas.store import (
     StoreStatus,
     open_schema_store,
@@ -95,9 +97,9 @@ class KubeconformSchemaDoctor:
     @staticmethod
     def _policy_check(
         workspace: RepositoryWorkspace,
-    ) -> tuple[Check, AuthoredSchemaPolicy | None]:
-        validation = workspace.spec.validation
-        if validation is None:
+    ) -> tuple[Check, WorkspaceValidation | None]:
+        policy = workspace.spec.validation
+        if policy is None:
             return (
                 Check.failed(
                     "schema-policy",
@@ -111,24 +113,19 @@ class KubeconformSchemaDoctor:
                 ),
                 None,
             )
-        policy = AuthoredSchemaPolicy(
-            kubernetes_version=validation.kubernetes_version,
-            generate_from_crds=validation.schemas.generate_from_crds,
-            catalog_repository=validation.schemas.catalog.repository,
-            catalog_track=validation.schemas.catalog.track,
-        )
+        catalog = policy.schemas.catalog
         data = _policy_data(workspace.name, policy)
         detail = (
-            f"workspace={workspace.name}; kubernetes={policy.normalized_version()}; "
-            f"generateFromCRDs={str(policy.generate_from_crds).lower()}; "
-            f"catalog={policy.catalog_repository}@{policy.catalog_track}"
+            f"workspace={workspace.name}; kubernetes={policy.kubernetes_version}; "
+            f"generateFromCRDs={str(policy.schemas.generate_from_crds).lower()}; "
+            f"catalog={catalog.repository}@{catalog.track}"
         )
         return Check.ok("schema-policy", detail, data=data), policy
 
     @staticmethod
     def _lock_check(
         workspace: RepositoryWorkspace,
-        policy: AuthoredSchemaPolicy,
+        policy: WorkspaceValidation,
     ) -> tuple[Check, SchemaLock | None]:
         path = workspace.root / SCHEMA_LOCK_FILE
         if not path.is_file():
@@ -155,7 +152,7 @@ class KubeconformSchemaDoctor:
                 ),
                 None,
             )
-        mismatches = _policy_mismatches(workspace.name, policy, lock)
+        mismatches = _mismatches(workspace.name, policy, lock)
         data: dict[str, Any] = {
             "path": str(path),
             "present": True,
@@ -230,29 +227,18 @@ def _store_check(
     )
 
 
-def _policy_data(workspace: str, policy: AuthoredSchemaPolicy) -> dict[str, Any]:
+def _policy_data(workspace: str, policy: WorkspaceValidation) -> dict[str, Any]:
     return {
         "configured": True,
         "workspace": workspace,
-        "kubernetesVersion": policy.normalized_version(),
-        "generateFromCRDs": policy.generate_from_crds,
-        "kubernetes": {
-            "repository": policy.kubernetes_repository,
-            "track": policy.kubernetes_track,
-        },
+        "kubernetesVersion": policy.kubernetes_version,
+        "generateFromCRDs": policy.schemas.generate_from_crds,
+        "kubernetes": {"repository": KUBERNETES_REPOSITORY, "track": KUBERNETES_TRACK},
         "catalog": {
-            "repository": policy.catalog_repository,
-            "track": policy.catalog_track,
+            "repository": policy.schemas.catalog.repository,
+            "track": policy.schemas.catalog.track,
         },
     }
-
-
-def _policy_mismatches(
-    workspace: str,
-    policy: AuthoredSchemaPolicy,
-    lock: SchemaLock,
-) -> tuple[str, ...]:
-    return lock_policy_mismatches(policy, lock, workspace=workspace)
 
 
 __all__ = ["KubeconformSchemaDoctor"]
