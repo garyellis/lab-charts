@@ -10,6 +10,7 @@ from typing import Any
 
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.shared.charts.chart import Chart
 
 
 class UpgradeError(ChartManagerError):
@@ -20,7 +21,7 @@ class UpgradeError(ChartManagerError):
 class UpgradeRequest:
     """Ask Renovate to discover and apply updates for one wrapper chart."""
 
-    chart_path: Path
+    chart: Chart
     dry_run: bool = False
 
 
@@ -99,7 +100,7 @@ class UpdateMetadata:
 class FinalizeRequest:
     """Finalize Renovate's edits to one chart against its Chart.yaml at HEAD."""
 
-    chart_path: Path
+    chart: Chart
     update_data: Mapping[str, Any]
 
 

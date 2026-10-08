@@ -17,11 +17,6 @@ from chart_manager.commands.upgrade.models import (
     UpdateMetadata,
     UpgradeError,
 )
-from chart_manager.commands.upgrade.paths import (
-    CHART_FILE,
-    resolve_chart_path,
-    safe_output_path,
-)
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError, MissingToolError, YamlError
@@ -36,6 +31,7 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 #: Inside Renovate's checkout, stderr is the only record of a finalize run.
 _LOG = logging.getLogger(__name__)
 
+CHART_FILE = "Chart.yaml"
 _HEADING = re.compile(r"^##\s")
 _BASELINE_REF = "HEAD"
 _CHANGELOG_FILE = "changelog.md"
@@ -131,11 +127,8 @@ def run(
     runner: CommandRunner,
 ) -> FinalizeResult:
     """Finalize Renovate's edits without trusting an upstream wrapper version."""
-    root, chart_path, _ = resolve_chart_path(
-        workspace.root,
-        request.chart_path,
-        charts_dir=workspace.spec.charts_dir,
-    )
+    root = workspace.root
+    chart_path = request.chart.path
     chart_rel = chart_path.relative_to(root)
     _LOG.info(
         "upgrade finalize started: chart=%s path=%s baseline_ref=%s",
@@ -264,6 +257,30 @@ def _write(chart_path: Path, current: SemVer, bump: _Bump) -> tuple[bool, bool]:
     if new_changelog != old_changelog:
         changelog_file.write_text(new_changelog, encoding="utf-8")
     return chart_changed, new_changelog != old_changelog
+
+
+def reject_symlinks(path: Path, stop: Path) -> None:
+    """Refuse a write path with a symlink anywhere between ``path`` and ``stop``."""
+    current = path
+    while current != stop:
+        if current.is_symlink():
+            raise UpgradeError(f"upgrade path must not contain symlinks: {current}")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+
+def safe_output_path(chart_path: Path, filename: str) -> Path:
+    """Return a direct child output path, rejecting symlink redirection."""
+    target = chart_path / filename
+    if target.is_symlink():
+        raise UpgradeError(f"refusing to write through symlink: {target}")
+    try:
+        target.parent.resolve(strict=True).relative_to(chart_path.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise UpgradeError(f"output escapes chart directory: {target}") from exc
+    return target
 
 
 def _is_major(update: UpdateMetadata) -> bool:

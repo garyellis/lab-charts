@@ -95,7 +95,7 @@ def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
         '"repository":"owner/repository"}\n'
     )
     (request,) = fake.requests
-    assert request.chart_path == Path("charts/loki")
+    assert request.chart.path == repo / "charts" / "loki"
     assert request.dry_run is True
 
 
@@ -197,7 +197,7 @@ def test_the_chart_argument_takes_a_name_or_a_repository_relative_path(
     result = cli("chart", "upgrade", chart)
 
     assert result.exit_code == 0
-    assert fake.requests[0].chart_path == Path("charts/loki")
+    assert fake.requests[0].chart.path == repo / "charts" / "loki"
 
 
 def test_upgrade_without_a_chart_is_a_usage_error(
@@ -254,7 +254,7 @@ def test_finalize_is_hidden_and_reads_callback_data_from_outside_the_repository(
         '"repository":null}\n'
     )
     (request,) = fake.requests
-    assert request.chart_path == Path("charts/loki")
+    assert request.chart.path == repo / "charts" / "loki"
     assert request.update_data["updates"][0]["depName"] == "grafana"
 
 
@@ -319,4 +319,26 @@ def test_finalize_refuses_unsafe_callback_data_before_run(
 
     assert isinstance(result.exception, ChartManagerError)
     assert message in str(result.exception)
+    assert fake.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("charts/linked", "upgrade path must not contain symlinks: {repo}/charts/linked"),
+        ("linked", "chart not found: {repo}/linked"),
+    ],
+    ids=["symlink", "bare-name"],
+)
+def test_finalize_refuses_a_symlinked_or_bare_chart_path_before_run(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, path: str, message: str
+) -> None:
+    (repo / "charts" / "linked").symlink_to(repo / "charts" / "loki", target_is_directory=True)
+    data_file = repo / "renovate-data.json"
+    data_file.write_text('{"updates":[]}', encoding="utf-8")
+    fake = _fake_finalize(monkeypatch)
+
+    result = cli("upgrade-finalize", "--path", path, "--data-file", str(data_file))
+
+    assert str(result.exception) == message.format(repo=repo)
     assert fake.requests == []
