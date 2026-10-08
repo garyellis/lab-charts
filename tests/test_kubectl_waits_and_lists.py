@@ -15,7 +15,7 @@ from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
-from tests.conftest import FakeCommandRunner, OnPath, Reply, checks_by_name
+from tests.conftest import FakeCommandRunner, OnPath, Reply, checks_by_name, scripted
 
 # ----- wait_certificate_ready -----------------------------------------------
 
@@ -137,22 +137,12 @@ def test_list_virtualservices_raises_on_other_failures(reply: dict[str, int | st
 # cluster was unreachable. These pin both halves of the contract.
 
 
-
-def _scripted(replies: list[Reply]) -> FakeCommandRunner:
-    """One reply per call, in order; an unscripted call fails the test.
-
-    Strict on purpose: `wait_workloads_ready` issues a listing per workload
-    kind and a rollout wait per name, so an extra or missing call is exactly
-    the regression these tests exist to catch.
-    """
-    return FakeCommandRunner(when_exhausted="raise").script(*replies)
-
-
 def _ok(stdout: str = "") -> Reply:
     return Reply(stdout=stdout)
 
+# Strict on purpose: an extra or missing call is the regression.
 def test_wait_workloads_ready_rolls_out_each_listed_workload() -> None:
-    runner = _scripted(
+    runner = scripted(
         [
             _ok("web api"),  # deployments
             _ok(),           # rollout web
@@ -173,7 +163,7 @@ def test_wait_workloads_ready_rolls_out_each_listed_workload() -> None:
 
 def test_wait_workloads_ready_raises_when_the_listing_fails() -> None:
     """A listing failure must not be read as "the namespace has no workloads"."""
-    runner = _scripted([Reply(returncode=1, stderr="Unauthorized")])
+    runner = scripted([Reply(returncode=1, stderr="Unauthorized")])
 
     with pytest.raises(ExternalCommandError) as exc:
         Kubectl(runner=runner).wait_workloads_ready("obs")
@@ -185,7 +175,7 @@ def test_wait_workloads_ready_raises_when_the_listing_fails() -> None:
 
 
 def test_wait_workloads_ready_accepts_a_genuinely_empty_namespace() -> None:
-    runner = _scripted([_ok(""), _ok(""), _ok("")])
+    runner = scripted([_ok(""), _ok(""), _ok("")])
 
     Kubectl(runner=runner).wait_workloads_ready("empty")
 
@@ -194,7 +184,7 @@ def test_wait_workloads_ready_accepts_a_genuinely_empty_namespace() -> None:
 
 
 def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
-    runner = _scripted([_ok("web"), _ok(), _ok(""), _ok("")])
+    runner = scripted([_ok("web"), _ok(), _ok(""), _ok("")])
 
     Kubectl(runner=runner).wait_workloads_ready(
         "shared",

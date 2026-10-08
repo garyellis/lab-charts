@@ -27,12 +27,11 @@ from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import (
     CHART,
     VERSION,
-    EventLog,
     cluster,
     condition,
     helmrelease,
 )
-from tests.conftest import FakeCommandRunner, Reply, argv_prefix
+from tests.conftest import EventLog, FakeCommandRunner, Reply, argv_prefix
 
 ENV = "dev"
 FAILED = (condition("Ready", "False", "InstallFailed"),)

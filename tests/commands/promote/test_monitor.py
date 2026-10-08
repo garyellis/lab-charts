@@ -18,7 +18,6 @@ from tests.commands.promote.conftest import (
     HR,
     VERSION,
     Clock,
-    EventLog,
     calls,
     cluster,
     condition,
@@ -28,7 +27,7 @@ from tests.commands.promote.conftest import (
     items,
     workloads,
 )
-from tests.conftest import FakeCommandRunner, Reply, argv_prefix
+from tests.conftest import EventLog, FakeCommandRunner, Reply, argv_prefix
 
 PROGRESSING = (condition("Ready", "Unknown", "Progressing"),)
 INSTALL_FAILED = (condition("Ready", "False", "InstallFailed", "bad"),)

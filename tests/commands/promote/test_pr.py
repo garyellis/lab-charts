@@ -16,8 +16,8 @@ from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.shared.events.model import PromotionPhase
 from chart_manager.shared.events.writer import EventWriter
-from tests.commands.promote.conftest import EventLog, calls
-from tests.conftest import FakeCommandRunner, argv_prefix
+from tests.commands.promote.conftest import calls
+from tests.conftest import EventLog, FakeCommandRunner, argv_prefix
 
 URL = "git@github.com:org/lab-fluxcd.git"
 PR_URL = "https://github.com/org/flux/pull/42"
