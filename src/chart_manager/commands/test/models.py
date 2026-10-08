@@ -32,7 +32,6 @@ class ActionTarget:
 
     chart: str
     profile: str | None = None
-    environment: str | None = None
     release: str | None = None
     namespace: str | None = None
 
@@ -44,11 +43,9 @@ class LifecycleAction:
     action_id: str
     kind: ActionKind
     target: ActionTarget
-    input_digest: str
     chart_path: Path
     values: tuple[Path, ...] = ()
     timeout: str | None = None
-    metadata: tuple[tuple[str, str], ...] = ()
     #: A hook action's argv; empty otherwise.
     command: tuple[str, ...] = ()
 
@@ -60,7 +57,6 @@ class LifecyclePlan:
     chart: str
     actions: tuple[LifecycleAction, ...]
     profile: str | None = None
-    environment: str | None = None
     warnings: tuple[str, ...] = ()
 
 

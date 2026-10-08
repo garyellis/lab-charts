@@ -39,7 +39,6 @@ def _plan() -> LifecyclePlan:
                 action_id=f"chart-test.alloy.minimal.{kind.value}",
                 kind=kind,
                 target=ActionTarget("alloy", "minimal", release="alloy", namespace="observability"),
-                input_digest=f"sha256:{kind.value}",
                 chart_path=Path("charts/alloy"),
             )
             for kind in (ActionKind.INSTALL, ActionKind.HELM_TEST)

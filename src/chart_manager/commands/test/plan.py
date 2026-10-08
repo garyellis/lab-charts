@@ -8,8 +8,6 @@ hook may write into it.
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -22,14 +20,13 @@ from chart_manager.commands.test.models import (
     LifecyclePlan,
     PlanError,
 )
-from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.paths import validate_hook_executable
 from chart_manager.shared.charts.chart import load_chart
 from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from chart_manager.shared.charts.lifecycle import require_chart_test
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
-#: Changing this string changes every `action_id` and therefore every `input_digest`.
+#: The first part of every action id, e.g. `chart-test.app.minimal.install`.
 _CHART_TEST_PREFIX = "chart-test"
 
 EXTERNAL_BOOTSTRAP_WARNING_PREFIX = "environment bootstrap externally satisfies chart(s): "
@@ -82,7 +79,7 @@ def compile_plan(
         )
         plans.append(
             exclude_bootstrap_owned_charts(
-                compile_chart_test(entries, root=root, lint=request.lint), owned, root=root
+                compile_chart_test(entries, root=root, lint=request.lint), owned
             )
         )
     plan = merge_plans(plans)
@@ -107,23 +104,14 @@ def compile_chart_test(entries: list[InstallPlanEntry], *, root: Path, lint: boo
             *,
             action_values: tuple[Path, ...] = (),
             timeout: str | None = None,
-            metadata: tuple[tuple[str, str], ...] = (),
             path: Path = entry.chart.path,
             prefix: tuple[str, ...] = prefix,
             target: ActionTarget = target,
         ) -> LifecycleAction:
-            action_id = _action_id(*prefix, kind)
             return LifecycleAction(
-                action_id=action_id,
+                action_id=_action_id(*prefix, kind),
                 kind=kind,
                 target=target,
-                input_digest=_input_digest(
-                    root=root,
-                    action_id=action_id,
-                    chart_path=path,
-                    values=action_values,
-                    metadata=metadata,
-                ),
                 chart_path=path.resolve(),
                 values=action_values,
                 timeout=timeout,
@@ -148,7 +136,6 @@ def compile_chart_test(entries: list[InstallPlanEntry], *, root: Path, lint: boo
             )
             if argv
         }
-        timed = (("timeout", entry.spec.timeout),)
         actions.append(action(ActionKind.NAMESPACE_ENSURE))
         if lint:
             actions.append(action(ActionKind.HELM_LINT, action_values=values))
@@ -159,12 +146,7 @@ def compile_chart_test(entries: list[InstallPlanEntry], *, root: Path, lint: boo
             actions.append(post_install)
         if entry.spec.helm_test:
             actions.append(
-                action(
-                    ActionKind.HELM_TEST,
-                    action_values=values,
-                    timeout=entry.spec.timeout,
-                    metadata=timed,
-                )
+                action(ActionKind.HELM_TEST, action_values=values, timeout=entry.spec.timeout)
             )
         if cleanup := hook_actions.get(ActionKind.HOOK_CLEANUP):
             actions.append(cleanup)
@@ -185,22 +167,12 @@ def _hook_action(
     timeout: str,
     field: str,
 ) -> LifecycleAction:
-    """Compile one hook; a repository script is digested like a values file."""
-    script = validate_hook_executable(root, command[0], field=field, require_on_path=True)
-    action_id = _action_id(*prefix, kind)
+    """Compile one hook after checking its executable."""
+    validate_hook_executable(root, command[0], field=field, require_on_path=True)
     return LifecycleAction(
-        action_id=action_id,
+        action_id=_action_id(*prefix, kind),
         kind=kind,
         target=target,
-        input_digest=_input_digest(
-            root=root,
-            action_id=action_id,
-            chart_path=chart_path,
-            values=(),
-            metadata=(),
-            command=command,
-            script=script,
-        ),
         chart_path=chart_path.resolve(),
         timeout=timeout,
         command=command,
@@ -208,7 +180,7 @@ def _hook_action(
 
 
 def exclude_bootstrap_owned_charts(
-    plan: LifecyclePlan, owned: frozenset[tuple[str, str]], *, root: Path
+    plan: LifecyclePlan, owned: frozenset[tuple[str, str]]
 ) -> LifecyclePlan:
     """Drop the work for the chart:profile pairs in `owned`, which bootstrap installed.
 
@@ -229,21 +201,7 @@ def exclude_bootstrap_owned_charts(
             action_id = _action_id(
                 _CHART_TEST_PREFIX, plan.chart, plan.profile, ActionKind.WORKLOAD_READY
             )
-            digest = _input_digest(
-                root=root,
-                action_id=action_id,
-                chart_path=action.chart_path,
-                values=action.values,
-                metadata=(("timeout", action.timeout or ""),),
-            )
-            kept.append(
-                replace(
-                    action,
-                    kind=ActionKind.WORKLOAD_READY,
-                    action_id=action_id,
-                    input_digest=digest,
-                )
-            )
+            kept.append(replace(action, kind=ActionKind.WORKLOAD_READY, action_id=action_id))
             removed.add(action.target.chart)
         else:
             removed.add(action.target.chart)
@@ -341,83 +299,8 @@ def merge_plans(plans: list[LifecyclePlan]) -> LifecyclePlan:
 
 
 def _action_id(*parts: object) -> str:
-    """Build a deterministic, evidence-path-safe human-readable action ID."""
-    candidate = ".".join(
-        str(part.value if isinstance(part, ActionKind) else part) for part in parts
-    )
-    if len(candidate) <= 128 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", candidate):
-        return candidate
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", candidate)
-    suffix = hashlib.sha256(candidate.encode()).hexdigest()[:16]
-    return f"{safe[:111]}.{suffix}"
-
-
-def _clean_metadata(metadata: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
-    """Omit empty optional values from projections and digest inputs."""
-    return tuple((key, value) for key, value in metadata if value)
-
-
-def _input_digest(
-    *,
-    root: Path,
-    action_id: str,
-    chart_path: Path,
-    values: tuple[Path, ...],
-    metadata: tuple[tuple[str, str], ...],
-    command: tuple[str, ...] = (),
-    script: Path | None = None,
-) -> str:
-    """Digest action intent and the local authored files that determine it."""
-    root = root.resolve()
-    digest = hashlib.sha256()
-    digest.update(action_id.encode())
-    digest.update(b"\0")
-    for key, value in sorted(_clean_metadata(metadata)):
-        digest.update(key.encode())
-        digest.update(b"=")
-        digest.update(value.encode())
-        digest.update(b"\0")
-    # Empty for non-hook actions, so their digests are unchanged.
-    for arg in command:
-        digest.update(b"argv=")
-        digest.update(arg.encode())
-        digest.update(b"\0")
-    # The top-level ``charts/`` directory contains generated/downloaded Helm
-    # dependency artifacts. ``helm dependency update`` is allowed to create
-    # or replace those without making the just-compiled plan instantly stale;
-    # Chart.yaml and Chart.lock capture the authored dependency intent.
-    candidates: set[Path] = set()
-    for path in chart_path.rglob("*"):
-        if path.relative_to(chart_path).parts[0] == "charts":
-            continue
-        if path.is_symlink():
-            _resolve_digest_input(path, root)
-        if path.is_file():
-            candidates.add(_resolve_digest_input(path, root))
-    candidates.update(_resolve_digest_input(path, root) for path in values)
-    if script is not None:
-        candidates.add(_resolve_digest_input(script, root))
-    for resolved in sorted(candidates):
-        label = str(resolved.relative_to(root))
-        digest.update(label.encode())
-        digest.update(b"\0")
-        if resolved.is_file():
-            digest.update(b"file\0")
-            digest.update(resolved.read_bytes())
-        elif resolved.is_dir():
-            digest.update(b"directory")
-        else:
-            digest.update(b"missing")
-        digest.update(b"\0")
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _resolve_digest_input(path: Path, root: Path) -> Path:
-    """Resolve a digest input and reject symlinks escaping the repository."""
-    resolved = path.resolve()
-    if not resolved.is_relative_to(root):
-        raise SpecError(f"digest input escapes repository root: {path} resolves to {resolved}")
-    return resolved
+    """Join the parts with dots, e.g. `chart-test.app.minimal.install`."""
+    return ".".join(str(part) for part in parts)
 
 
 def cleanup_tail(actions: Iterable[LifecycleAction]) -> tuple[LifecycleAction, ...]:

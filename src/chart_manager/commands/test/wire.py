@@ -22,7 +22,6 @@ def plan_to_dict(plan: LifecyclePlan) -> dict[str, Any]:
     return {
         "chart": plan.chart,
         "profile": plan.profile,
-        "environment": plan.environment,
         "actions": [_action(action) for action in plan.actions],
         "warnings": list(plan.warnings),
     }
@@ -34,13 +33,9 @@ def _action(action: LifecycleAction) -> dict[str, Any]:
         "action_id": action.action_id,
         "kind": action.kind.value,
         "target": _target(action.target),
-        # The digest is what makes a plan comparable across two compilations
-        # of the same inputs; it is the key a consumer caches or diffs on.
-        "input_digest": action.input_digest,
         "chart_path": action.chart_path.as_posix(),
         "values": [path.as_posix() for path in action.values],
         "timeout": action.timeout,
-        "metadata": dict(action.metadata),
         "command": list(action.command),
     }
 
@@ -50,7 +45,6 @@ def _target(target: ActionTarget) -> dict[str, Any]:
     return {
         "chart": target.chart,
         "profile": target.profile,
-        "environment": target.environment,
         "release": target.release,
         "namespace": target.namespace,
     }

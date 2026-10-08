@@ -14,8 +14,6 @@ from chart_manager.commands.test.plan import (
     exclude_required_lifecycles,
 )
 
-ROOT = Path.cwd()
-
 
 def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
     return LifecycleAction(
@@ -27,7 +25,6 @@ def action(chart: str, suffix: str, kind: ActionKind) -> LifecycleAction:
             release=chart,
             namespace="monitoring",
         ),
-        input_digest=f"digest-{chart}-{suffix}",
         chart_path=Path("charts") / chart,
     )
 
@@ -60,7 +57,6 @@ def test_removes_bootstrap_chart_actions() -> None:
     projected = exclude_bootstrap_owned_charts(
         original,
         frozenset({("cilium", "minimal")}),
-        root=ROOT,
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -82,9 +78,7 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
     original = cluster_plan()
     original_action_ids = [item.action_id for item in original.actions]
 
-    projected = exclude_bootstrap_owned_charts(
-        original, frozenset({("cilium", "minimal")}), root=ROOT
-    )
+    projected = exclude_bootstrap_owned_charts(original, frozenset({("cilium", "minimal")}))
 
     assert [item.action_id for item in projected.actions] == [
         item for item in original_action_ids if ":cilium:" not in item
@@ -95,18 +89,12 @@ def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install(
     projected = exclude_bootstrap_owned_charts(
         cluster_plan(),
         frozenset({("grafana", "minimal"), ("cilium", "minimal")}),
-        root=ROOT,
     )
 
     assert [(a.target.chart, a.kind) for a in projected.actions] == [
         ("grafana", ActionKind.WORKLOAD_READY)
     ]
-    ready = projected.actions[0]
-    assert ready.action_id == "chart-test.grafana.minimal.workload-ready"
-    install = next(
-        a for a in cluster_plan().actions if a.action_id.endswith("grafana:minimal:install")
-    )
-    assert ready.input_digest != install.input_digest
+    assert projected.actions[0].action_id == "chart-test.grafana.minimal.workload-ready"
 
 
 def test_skip_requires_removes_every_required_action_including_tests() -> None:
