@@ -1,7 +1,7 @@
 """The promotion status model shared by monitor, test, and promote.
 
-The enums are `StrEnum`s so members compare and hash equal to their wire
-strings and `json.dump` writes them verbatim. The phase tables are data so
+The enums are `StrEnum`s so members compare and hash equal to the strings
+a document shows. The phase tables are data so
 callers don't each re-derive them.
 """
 from __future__ import annotations
@@ -232,9 +232,8 @@ PROMOTE_PHASE: Mapping[PromoteStatus, PromotionPhase | None] = {
 }
 
 
-#: promote status -> did the caller get what they asked for. Both the wire `ok`
-#: field (`wire.promote_to_dict`) and the exit code (`commands/promote/cli.py`)
-#: derive from this table. Only ABORTED fails: re-runs that change nothing
+#: promote status -> did the caller get what they asked for. `PromoteResult.outcome`,
+#: and so the exit code, derives from this table. Only ABORTED fails: re-runs that change nothing
 #: (NO_CHANGES, ALREADY_OPEN) must be safe in CI.
 PROMOTE_OUTCOME: Mapping[PromoteStatus, Outcome] = {
     PromoteStatus.NO_CHANGES: Outcome.SUCCESS,

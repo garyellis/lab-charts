@@ -1,45 +1,28 @@
 """Terminal renderers and the progress table for `promote monitor/test`.
 
-Module-level functions, no Renderer protocol/ABC -- the CLI handler picks one
-of four functions based on (command, mode). ProgressTable is the
+Module-level functions, no Renderer protocol/ABC. ProgressTable is the
 only stateful piece, used as a context manager during pretty runs to hold a
 Rich Live table; thread-safe under the monitor/test executor.
 
-Everything here is terminal-shaped: Rich tables, color styles, panels, and
-the encoder settings for the CLI's JSON stream. The *payload* those JSON
-writers emit is not defined here -- it is a wire contract owned by
-`commands.promote.wire`, so an HTTP/Slack/RPC surface can return the same
-bytes without importing anything under `cli/`.
+Everything here is terminal-shaped: Rich tables, color styles and panels.
+The json form of each result is its document (`plumbing.documents.to_document`).
 """
 from __future__ import annotations
 
-import json
 import logging
 import threading
-from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from chart_manager.commands.promote.monitor import MonitorResult
-from chart_manager.commands.promote.pr import PromoteResult
 from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS, Transition
 from chart_manager.commands.promote.test import TestResult
-from chart_manager.commands.promote.wire import monitor_to_dict, promote_to_dict, test_to_dict
 from chart_manager.integrations.kubectl import HelmReleaseRef
 
 _LOG = logging.getLogger(__name__)
-
-# Encoder settings for the JSON stream. Compact + sorted keys makes the
-# output diffable and jq-friendly; `default=str` is a backstop for any
-# stray non-JSON scalar the wire layer did not stringify.
-_JSON_DUMP_KWARGS: dict[str, Any] = {
-    "sort_keys": True,
-    "separators": (",", ":"),
-    "default": str,
-}
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -58,20 +41,15 @@ def _summary_line(*, ok_count: int, total: int, duration: float) -> str:
     return f"{ok_count}/{total} ready in {_fmt_duration(duration)}"
 
 
-def render_monitor_pretty(
-    result: MonitorResult,
-    console: Console,
-    *,
-    chart: str,
-    version: str,
-) -> None:
+def render_monitor_pretty(result: MonitorResult, console: Console) -> None:
     """Render monitor results as headline + table + failure panels."""
     # NO_MATCH_REF is a sentinel outcome meaning zero HRs matched; identity
     # check drops it from the table.
     real_outcomes = tuple(o for o in result.outcomes if o.ref is not NO_MATCH_REF)
     if not real_outcomes:
         console.print(
-            f"[yellow]no helmreleases matched[/yellow] chart={chart} version={version}"
+            f"[yellow]no helmreleases matched[/yellow] chart={result.chart} "
+            f"version={result.version}"
         )
         return
 
@@ -83,7 +61,8 @@ def render_monitor_pretty(
         ok_count=ok_count, total=len(real_outcomes), duration=result.total_duration_seconds
     )
     headline_style = "green" if result.ok else "red"
-    console.print(f"[{headline_style}]{summary}[/{headline_style}]  chart={chart}@{version}")
+    subject = f"chart={result.chart}@{result.version}"
+    console.print(f"[{headline_style}]{summary}[/{headline_style}]  {subject}")
 
     table = Table("Namespace", "Name", "Verdict", "Duration", "Ready Reason")
     for o in real_outcomes:
@@ -117,35 +96,14 @@ def render_monitor_pretty(
         )
 
 
-def render_monitor_json(
-    result: MonitorResult,
-    file: IO[str],
-    *,
-    chart: str,
-    version: str,
-) -> None:
-    """Write the monitor result as a single JSON line to `file`.
-
-    Transport only: the payload comes from `commands.promote.wire`.
-    """
-    json.dump(monitor_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
-    file.write("\n")
-    file.flush()
-
-
-def render_test_pretty(
-    result: TestResult,
-    console: Console,
-    *,
-    chart: str,
-    version: str,
-) -> None:
+def render_test_pretty(result: TestResult, console: Console) -> None:
     """Render test results as headline + table + failure panels."""
     # Same NO_MATCH_REF sentinel filtering as render_monitor_pretty.
     real_outcomes = tuple(o for o in result.outcomes if o.ref is not NO_MATCH_REF)
     if not real_outcomes:
         console.print(
-            f"[yellow]no helmreleases matched[/yellow] chart={chart} version={version}"
+            f"[yellow]no helmreleases matched[/yellow] chart={result.chart} "
+            f"version={result.version}"
         )
         return
 
@@ -155,7 +113,8 @@ def render_test_pretty(
         f"{ok_count}/{len(real_outcomes)} passed in "
         f"{_fmt_duration(result.total_duration_seconds)}"
     )
-    console.print(f"[{headline_style}]{summary}[/{headline_style}]  chart={chart}@{version}")
+    subject = f"chart={result.chart}@{result.version}"
+    console.print(f"[{headline_style}]{summary}[/{headline_style}]  {subject}")
 
     table = Table("Namespace", "Name", "Verdict", "Duration", "Reason")
     for o in real_outcomes:
@@ -184,46 +143,6 @@ def render_test_pretty(
         console.print(
             Panel(body, title=f"{o.ref.namespace}/{o.ref.name} [{o.verdict}]", border_style="red")
         )
-
-
-def render_test_json(
-    result: TestResult,
-    file: IO[str],
-    *,
-    chart: str,
-    version: str,
-) -> None:
-    """Write the test result as a single JSON line to `file`.
-
-    Transport only: the payload comes from `commands.promote.wire`.
-    """
-    json.dump(test_to_dict(result, chart=chart, version=version), file, **_JSON_DUMP_KWARGS)
-    file.write("\n")
-    file.flush()
-
-
-def render_promote_json(
-    result: PromoteResult,
-    file: IO[str],
-    *,
-    chart: str,
-    version: str,
-    environment: str,
-    path: Path,
-) -> None:
-    """Write the promote result as a single JSON line to `file`.
-
-    Transport only: the payload comes from `commands.promote.wire`.
-    """
-    json.dump(
-        promote_to_dict(
-            result, chart=chart, version=version, environment=environment, path=path
-        ),
-        file,
-        **_JSON_DUMP_KWARGS,
-    )
-    file.write("\n")
-    file.flush()
 
 
 def _verdict_style(verdict: str) -> str:

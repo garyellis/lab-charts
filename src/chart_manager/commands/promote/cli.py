@@ -22,19 +22,15 @@ from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult
 from chart_manager.commands.promote.pr import run as run_pr
 from chart_manager.commands.promote.render import (
     ProgressTable,
-    render_monitor_json,
     render_monitor_pretty,
-    render_promote_json,
-    render_test_json,
     render_test_pretty,
 )
 from chart_manager.commands.promote.scanner import HelmReleaseMatch
-from chart_manager.commands.promote.state import PROMOTE_OUTCOME, PromoteStatus
+from chart_manager.commands.promote.state import PromoteStatus
 from chart_manager.commands.promote.test import TestRequest
 from chart_manager.commands.promote.test import run as run_test
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 
 # --- helpers --------------------------------------------------------------
 
@@ -183,13 +179,7 @@ def monitor(
             request, runner=runner, settings=container.settings, events=events, progress=None
         )
 
-    if mode == output_mod.TABLE:
-        render_monitor_pretty(result, console, chart=chart, version=version)
-    else:
-        render_monitor_json(result, sys.stdout, chart=chart, version=version)
-
-    if not result.ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
+    output_mod.finish(result, mode=mode, render=lambda r: render_monitor_pretty(r, console))
 
 
 def test(
@@ -253,13 +243,7 @@ def test(
             request, runner=runner, settings=container.settings, events=events, progress=None
         )
 
-    if mode == output_mod.TABLE:
-        render_test_pretty(result, console, chart=chart, version=version)
-    else:
-        render_test_json(result, sys.stdout, chart=chart, version=version)
-
-    if not result.ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
+    output_mod.finish(result, mode=mode, render=lambda r: render_test_pretty(r, console))
 
 
 def pr(
@@ -312,7 +296,7 @@ def pr(
     # Every status line below is narration and goes to stderr, in `pretty`
     # mode too: promote's human output is a running commentary on a mutation,
     # not a document, so `promote >/dev/null` must still show what happened.
-    # The one thing on stdout is the json projection, written at the end.
+    # The one thing on stdout is the json document, written at the end.
     console = _make_console(no_color)
     narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
@@ -390,24 +374,8 @@ def pr(
         case PromoteStatus.PUSHED:
             narration.print(f"[green]pushed[/green] branch={result.branch}")
 
-    if mode == output_mod.JSON:
-        render_promote_json(
-            result,
-            sys.stdout,
-            chart=chart_name,
-            version=version,
-            environment=environment,
-            path=path,
-        )
-
-    # Two lookups, one judgement. `PROMOTE_OUTCOME` answers "did this promote
-    # succeed" -- the same lookup `wire.promote_to_dict` publishes as the
-    # payload's `ok` -- and `exit_code_for` answers "what number is that
-    # worth". Neither re-derives the other's half, so the exit
-    # status and the json a CI step reads cannot disagree.
-    exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    # The narration above is the table form, so a table run prints nothing to stdout.
+    output_mod.finish(result, mode=mode, render=lambda _result: None)
 
 
 __all__ = ["monitor", "pr", "test"]
