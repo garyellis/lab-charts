@@ -26,7 +26,7 @@ def emit_pr_open(
     `previously_proposed` is the wrapper version already on the open
     branch before this run; None when no pull request was open.
     """
-    if result.outcome not in _PROPOSED:
+    if result.status not in _PROPOSED:
         return
 
     # An unchanged proposal is a re-run, not a transition.
@@ -47,7 +47,7 @@ def emit_pr_open(
 
     # str/int/bool only: boto3's DynamoDB serializer rejects float.
     detail: dict[str, object] = {
-        "outcome": result.outcome,
+        "outcome": result.status,
         "previous_version": result.current_version,
         "group": result.group,
     }

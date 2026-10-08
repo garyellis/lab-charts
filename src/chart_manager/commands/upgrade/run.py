@@ -76,7 +76,7 @@ def run(
     )
     if request.dry_run:
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
-        outcome, current_pr = UpgradeStatus.DRY_RUN, None
+        status, current_pr = UpgradeStatus.DRY_RUN, None
         previously_proposed = proposed_version = None
     else:
         existing_pr, found_existing = _find_pull_request(github, plan.branch_prefix, diagnostics)
@@ -85,10 +85,10 @@ def run(
         previously_proposed, _ = _proposed_version(plan, github, existing_pr)
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
         current_pr, found_current = _find_pull_request(github, plan.branch_prefix, diagnostics)
-        outcome = _outcome(
+        status = _outcome(
             existing_pr, current_pr, lookup_failed=not (found_existing and found_current)
         )
-        if outcome is UpgradeStatus.NO_CHANGES:
+        if status is UpgradeStatus.NO_CHANGES:
             diagnostics.append(
                 f"Renovate completed without an open pull request under "
                 f"{plan.branch_prefix}; no eligible update was proposed"
@@ -104,7 +104,7 @@ def run(
         # The branch Renovate actually opened; None when no PR is open for this chart.
         branch=current_pr.branch if current_pr is not None else None,
         group=plan.group,
-        outcome=outcome,
+        status=status,
         diagnostics=tuple(diagnostics),
         repository=repository,
         pr_url=current_pr.url if current_pr is not None else None,
@@ -113,10 +113,10 @@ def run(
     # Emitted last: the upgrade is already pushed, so telemetry can only cost latency.
     emit_pr_open(events, upgrade_result, previously_proposed=previously_proposed)
     _LOG.info(
-        "Upgrade result for %s: outcome=%s current=%s proposed=%s branch=%s pr=%s "
+        "Upgrade result for %s: status=%s current=%s proposed=%s branch=%s pr=%s "
         "diagnostics=%d",
         plan.chart,
-        upgrade_result.outcome,
+        upgrade_result.status,
         upgrade_result.current_version,
         upgrade_result.proposed_version or "(none)",
         upgrade_result.branch or "(none)",

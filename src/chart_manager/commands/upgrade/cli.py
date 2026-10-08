@@ -1,14 +1,9 @@
-"""`chart upgrade` and the hidden `upgrade-finalize`: flags, output encoding and rendering.
-
-`commands/upgrade/wire.py` owns the machine-readable payload.
-"""
+"""`chart upgrade` and the hidden `upgrade-finalize`: flags and rendering."""
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
@@ -17,44 +12,21 @@ from chart_manager.cli._container import container as _container
 from chart_manager.commands.upgrade import finalize
 from chart_manager.commands.upgrade.finalize import load_update_data, reject_symlinks
 from chart_manager.commands.upgrade.models import (
-    UPGRADE_OUTCOME,
     FinalizeRequest,
+    FinalizeResult,
     UpgradeRequest,
+    UpgradeResult,
 )
 from chart_manager.commands.upgrade.run import run
-from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
+from chart_manager.plumbing.documents import to_document
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.charts.chart import chart_target, resolve_chart_target
 
-#: `upgrade-finalize` keeps `--format text|json`: `renovate-global.json`'s allowlist pins the
-#: command Renovate runs, so its surface does not follow `chart upgrade`'s `-o`.
-_FINALIZE_FORMATS = ("text", "json")
 _CALLBACK_DATA_ENV = "RENOVATE_POST_UPGRADE_COMMAND_DATA_FILE"
 
-_UPGRADE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
+_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
-
-def _format_choice(value: str) -> str:
-    if value not in _FINALIZE_FORMATS:
-        raise typer.BadParameter(
-            f"unknown format: {value} (allowed: {', '.join(_FINALIZE_FORMATS)})",
-            param_hint="--format",
-        )
-    return value
-
-
-FormatOption = Annotated[
-    str,
-    typer.Option(
-        "--format",
-        help="Output format: text (default) or json.",
-        callback=_format_choice,
-    ),
-]
-
-#: The public `chart upgrade`'s output flag.
-OutputOption = Annotated[str | None, output_mod.output_option(*_UPGRADE_OUTPUTS)]
+OutputOption = Annotated[str | None, output_mod.output_option(*_OUTPUTS)]
 
 
 def upgrade(
@@ -69,7 +41,7 @@ def upgrade(
     output: OutputOption = None,
 ) -> None:
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
-    mode = output_mod.resolve(output, ctx, allowed=_UPGRADE_OUTPUTS)
+    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS)
     container = _container()
     workspace = container.workspace()
     result = run(
@@ -79,11 +51,11 @@ def upgrade(
         events=container.event_writer(),
         renovate_token=container.settings.renovate_token,
     )
-    _emit(upgrade_to_dict(result), as_json=mode == output_mod.JSON)
-    raise typer.Exit(code=exit_code_for(UPGRADE_OUTCOME[result.outcome]))
+    output_mod.finish(result, mode=mode, render=_render_text)
 
 
 def upgrade_finalize(
+    ctx: typer.Context,
     path: Annotated[Path, typer.Option("--path", help="Repository-relative wrapper chart path.")],
     data_file: Annotated[
         Path | None,
@@ -93,9 +65,10 @@ def upgrade_finalize(
             help="Renovate callback data file (normally supplied by the callback environment).",
         ),
     ] = None,
-    format: FormatOption = "text",
+    output: OutputOption = None,
 ) -> None:
     """Finalize the Renovate callback (internal; invoked by trusted configuration)."""
+    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS)
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
     container = _container()
@@ -109,49 +82,18 @@ def upgrade_finalize(
         workspace=workspace,
         runner=container.command_runner(),
     )
-    _emit(finalize_to_dict(result, chart_path=path), as_json=format == "json")
+    output_mod.finish(result, mode=mode, render=_render_text)
 
 
-def _emit(payload: Mapping[str, Any], *, as_json: bool) -> None:
-    """Encode one wire payload as JSON or as text."""
-    if as_json:
-        typer.echo(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-        return
-    typer.echo(_render_text(payload))
-
-
-def _render_text(payload: Mapping[str, Any]) -> str:
-    """Render every contract field in a fixed order, including absent values."""
-    pull_request = payload["pull_request"]
-    if pull_request is None:
-        pr = "-"
-    elif pull_request["url"] and pull_request["number"] is not None:
-        pr = f"#{pull_request['number']} {pull_request['url']}"
-    else:
-        pr = str(pull_request["url"] or pull_request["number"] or "-")
-
-    diagnostics = payload["diagnostics"]
-    lines = [
-        f"repository: {_shown(payload.get('repository'))}",
-        f"base: {_shown(payload.get('base'))}",
-        f"chart: {_shown(payload.get('chart'))}",
-        f"path: {_shown(payload.get('path'))}",
-        f"current wrapper version: {_shown(payload.get('current_wrapper_version'))}",
-        f"proposed wrapper version: {_shown(payload.get('proposed_wrapper_version'))}",
-        f"branch: {_shown(payload.get('branch'))}",
-        f"outcome: {_shown(payload.get('outcome'))}",
-        f"pull request: {pr}",
-        "diagnostics:",
-    ]
-    if diagnostics:
-        lines.extend(f"- {item}" for item in diagnostics)
-    else:
-        lines.append("- none")
-    return "\n".join(lines)
-
-
-def _shown(value: Any) -> str:
-    return "-" if value is None or value == "" else str(value)
+def _render_text(result: UpgradeResult | FinalizeResult) -> None:
+    """Print each field of the result's document on its own line, `-` for an absent value."""
+    for key, value in to_document(result).items():
+        if isinstance(value, list):
+            typer.echo(f"{key}:")
+            for item in value or ["none"]:
+                typer.echo(f"- {item}")
+        else:
+            typer.echo(f"{key}: {'-' if value is None else value}")
 
 
 __all__ = [

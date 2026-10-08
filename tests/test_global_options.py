@@ -392,9 +392,9 @@ def test_upgrade_finalize_parsing_is_unchanged() -> None:
     assert "upgrade-finalize" in command.commands
     assert "--path" in declared
 
-    # Nothing the callback declares may also be a flag on this command: an
-    # option name owned by both would change which parser consumes it.
-    assert declared.isdisjoint(_root_option_names())
+    # Beyond the shared `-o`, nothing the callback declares may also be a root
+    # flag: an option name owned by both would change which parser consumes it.
+    assert (declared - {"-o", "--output"}).isdisjoint(_root_option_names())
 
     # The regex allows `--path <value>` and nothing else after the name, so
     # a *required* new flag would break Renovate even though it parses here.

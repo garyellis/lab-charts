@@ -55,11 +55,16 @@ class UpgradeResult:
     proposed_version: str | None
     branch: str | None
     group: str
-    outcome: UpgradeStatus
+    status: UpgradeStatus
     diagnostics: tuple[str, ...] = ()
     repository: str | None = None
     pr_url: str | None = None
     pr_number: int | None = None
+
+    @property
+    def outcome(self) -> Outcome:
+        """How the run ended, for its exit code."""
+        return UPGRADE_OUTCOME[self.status]
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,11 @@ class FinalizeResult:
     previous_version: str
     version: str
     changed: bool
+
+    @property
+    def outcome(self) -> Outcome:
+        """Finalize either succeeds or raises."""
+        return Outcome.SUCCESS
 
 
 @dataclass(frozen=True)
