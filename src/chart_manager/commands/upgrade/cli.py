@@ -15,7 +15,7 @@ import typer
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.commands.upgrade import finalize
-from chart_manager.commands.upgrade.finalize import load_update_data
+from chart_manager.commands.upgrade.finalize import load_update_data, reject_symlinks
 from chart_manager.commands.upgrade.models import (
     UPGRADE_OUTCOME,
     FinalizeRequest,
@@ -25,7 +25,7 @@ from chart_manager.commands.upgrade.run import run
 from chart_manager.commands.upgrade.wire import finalize_to_dict, upgrade_to_dict
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import exit_code_for
-from chart_manager.shared.charts.chart import resolve_chart_target
+from chart_manager.shared.charts.chart import chart_target, resolve_chart_target
 
 #: `upgrade-finalize` keeps `--format text|json`: `renovate-global.json`'s allowlist pins the
 #: command Renovate runs, so its surface does not follow `chart upgrade`'s `-o`.
@@ -73,10 +73,7 @@ def upgrade(
     container = _container()
     workspace = container.workspace()
     result = run(
-        UpgradeRequest(
-            chart_path=resolve_chart_target(workspace, chart).path.relative_to(workspace.root),
-            dry_run=dry_run,
-        ),
+        UpgradeRequest(chart=resolve_chart_target(workspace, chart), dry_run=dry_run),
         workspace=workspace,
         runner=container.command_runner(),
         events=container.event_writer(),
@@ -104,8 +101,11 @@ def upgrade_finalize(
     container = _container()
     workspace = container.workspace()
     update_data = load_update_data(data_file)
+    # The loader follows symlinks, so check the same repository-relative path first.
+    chart_dir = workspace.root / path
+    reject_symlinks(chart_dir, workspace.root)
     result = finalize.run(
-        FinalizeRequest(chart_path=path, update_data=update_data),
+        FinalizeRequest(chart=chart_target(workspace.root, chart_dir), update_data=update_data),
         workspace=workspace,
         runner=container.command_runner(),
     )

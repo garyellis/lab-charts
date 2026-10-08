@@ -18,11 +18,10 @@ from chart_manager.commands import validate
 from chart_manager.commands.catalog import run as catalog
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
-from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.integrations.git import Git
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import chart_names, load_chart
+from chart_manager.shared.charts.chart import chart_names, load_chart, resolve_chart_target
 from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
@@ -103,12 +102,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     changed = Git(tmp_path, runner=runner).changed_files()
     assert {workspace.chart_name_from_repo_path(path) for path in changed} - {None} == {"demo"}
 
-    _, resolved, _ = resolve_chart_path(
-        tmp_path,
-        Path("demo"),
-        charts_dir=workspace.spec.charts_dir,
-    )
-    assert resolved == chart.resolve()
+    assert resolve_chart_target(workspace, "demo").path == chart.resolve()
     assert discover_dashboards(workspace=workspace) == [dashboard]
 
 

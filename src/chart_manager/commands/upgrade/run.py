@@ -10,7 +10,11 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
-from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE, wrapper_version
+from chart_manager.commands.upgrade.finalize import (
+    CHART_FILE,
+    DATA_FILE_TEMPLATE,
+    wrapper_version,
+)
 from chart_manager.commands.upgrade.models import (
     UpgradeError,
     UpgradePlan,
@@ -18,7 +22,6 @@ from chart_manager.commands.upgrade.models import (
     UpgradeResult,
     UpgradeStatus,
 )
-from chart_manager.commands.upgrade.paths import CHART_FILE, resolve_chart_path
 from chart_manager.commands.upgrade.telemetry import emit_pr_open
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
@@ -26,6 +29,7 @@ from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
+from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -53,11 +57,7 @@ def run(
     git = Git(root, runner)
     github = Github(root, runner)
     repository = _repository(git)
-    plan = _build_upgrade_plan(
-        root,
-        request.chart_path,
-        charts_dir=workspace.spec.charts_dir,
-    )
+    plan = _build_upgrade_plan(root, request.chart)
     _LOG.info("Planning dependency upgrade for chart %s", plan.chart)
     _LOG.debug("Chart path: %s", plan.chart_path)
     _LOG.debug("Renovate branch prefix: %s", plan.branch_prefix)
@@ -276,25 +276,15 @@ def _renovate_warnings(output: str) -> tuple[str, ...]:
     )
 
 
-def _build_upgrade_plan(
-    root: Path,
-    chart_path: Path,
-    *,
-    charts_dir: Path,
-) -> UpgradePlan:
+def _build_upgrade_plan(root: Path, chart: Chart) -> UpgradePlan:
     """Build deterministic chart identity, branch, group and callback overlay."""
-    repo_root, resolved, chart = resolve_chart_path(
-        root,
-        chart_path,
-        charts_dir=charts_dir,
-    )
-    version = str(wrapper_version(chart.get("version"), source="Chart.yaml version"))
-    name = resolved.name
+    version = str(wrapper_version(chart.metadata.version, source="Chart.yaml version"))
+    name = chart.name
     group = _GROUP.format(chart=name)
     # Renovate prunes stale branches by `branchPrefix` alone; a per-chart prefix keeps a
     # one-chart run from autoclosing every other chart's pull request.
     branch_prefix = _BRANCH_PREFIX.format(chart=name)
-    relative = resolved.relative_to(repo_root).as_posix()
+    relative = chart.path.relative_to(root).as_posix()
     overlay: Mapping[str, object] = {
         # `force` survives the merge with the repository's renovate.json, so a stray
         # branchPrefix there cannot break the per-chart scope.
@@ -325,8 +315,8 @@ def _build_upgrade_plan(
         },
     }
     return UpgradePlan(
-        repo_root=repo_root,
-        chart_path=resolved,
+        repo_root=root,
+        chart_path=chart.path,
         chart=name,
         current_version=version,
         branch_prefix=branch_prefix,

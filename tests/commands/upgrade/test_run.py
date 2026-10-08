@@ -14,6 +14,7 @@ from chart_manager.commands.upgrade import (
 )
 from chart_manager.commands.upgrade.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.shared.charts.chart import load_chart
 from chart_manager.shared.events.model import BuildPhase
 from chart_manager.shared.events.writer import EventWriter
 from tests.conftest import EventLog, FakeCommandRunner, Reply, workspace_for
@@ -76,7 +77,7 @@ def _upgrade(
     )
     (tmp_path / "renovate-global.json").write_text("{}\n", encoding="utf-8")
     return run(
-        UpgradeRequest(chart_path=chart, dry_run=dry_run),
+        UpgradeRequest(chart=load_chart(chart), dry_run=dry_run),
         workspace=workspace_for(tmp_path),
         runner=runner,
         events=EventWriter(source="chart-manager", store=lambda: events),
