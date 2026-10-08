@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from chart_manager.cli import _container
 from chart_manager.commands.local import run as local_run
 from chart_manager.commands.local.models import (
+    DevClusterAccessHints,
     DevClusterActionResult,
+    DevClusterCredentials,
+    DevClusterEntryFailure,
+    DevClusterEntryOutcome,
     DevClusterPlan,
     DevClusterPlanEntry,
     DevClusterRelease,
@@ -198,12 +204,11 @@ class _RecordingLocalRun:
 
     def down(self, **_options: object) -> DevClusterActionResult:
         self.calls.append("down")
-        return DevClusterActionResult("chart-manager", changed=True)
+        return DevClusterActionResult(changed=True)
 
     def status(self, **_options: object) -> DevClusterStatus:
         self.calls.append("status")
         return DevClusterStatus(
-            cluster_name="chart-manager",
             exists=True,
             context="kind-chart-manager",
             provider="kind",
@@ -215,26 +220,19 @@ class _RecordingLocalRun:
             urls=("https://loki.localhost/",),
         )
 
-    def plan(
-        self, target: object, *, profile: str | None, destroys: bool = False, **_options: object
-    ) -> DevClusterPlan:
+    def plan(self, target: object, *, destroys: bool = False, **_options: object) -> DevClusterPlan:
         self.calls.append("plan")
         return DevClusterPlan(
-            command="reset" if destroys else "up",
-            cluster_name="chart-manager",
-            target=getattr(target, "name", None),
-            target_kind=getattr(target, "kind", None),
+            target="alloy",
+            target_kind="chart",
             destroys=destroys,
-            entries=(
-                DevClusterPlanEntry(
-                    chart="alloy", profile=profile or "minimal", namespace="obs", source="target"
-                ),
-            ),
+            entries=(DevClusterPlanEntry("alloy", "minimal", "obs", "target"),),
+            provisioning_hooks=(("preProvision", ("./prepare", "arg")),),
         )
 
     def plan_down(self) -> DevClusterPlan:
         self.calls.append("plan_down")
-        return DevClusterPlan(command="down", cluster_name="chart-manager")
+        return DevClusterPlan()
 
 
 @pytest.fixture
@@ -252,32 +250,78 @@ def _local_argv(command: str) -> list[str]:
     return ["local", command, *selector]
 
 
+_CONVERGED = {"applied": [], "no_change": [], "failed": []}
+
+#: The document each command prints for `_RecordingLocalRun`'s results.
+_DOCUMENTS = {
+    "up": _CONVERGED,
+    "reset": _CONVERGED,
+    "down": {"changed": True},
+    "status": {
+        "exists": True,
+        "context": "kind-chart-manager",
+        "provider": "kind",
+        "releases": [
+            {"name": "loki", "namespace": "observability", "revision": 2, "status": "deployed"}
+        ],
+        "releases_error": None,
+        "urls": ["https://loki.localhost/"],
+        "urls_error": None,
+        "drift": {"missing": [], "error": None},
+    },
+}
+
+
+@pytest.mark.parametrize(("mode", "load"), [("json", json.loads), ("yaml", parse_yaml)])
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
-def test_every_local_command_emits_a_json_document_on_stdout(
-    root: Path, recorded: _RecordingLocalRun, command: str
+def test_every_local_command_prints_its_document(
+    root: Path, recorded: _RecordingLocalRun, command: str, mode: str, load: Callable[[str], Any]
 ) -> None:
-    """One vocabulary, and the payload is the only thing on stdout."""
+    """One vocabulary, and the document is the only thing on stdout."""
     _chart(root)
 
-    result = cli(*_local_argv(command), "-o", "json")
+    result = cli(*_local_argv(command), "-o", mode)
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["command"] == command
-    assert payload["cluster_name"] == "chart-manager"
-    assert payload["ok"] is True
+    assert (result.exit_code, load(result.stdout)) == (0, _DOCUMENTS[command])
 
 
-@pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
-def test_every_local_command_emits_yaml(
-    root: Path, recorded: _RecordingLocalRun, command: str
+def test_a_failed_converge_exits_1_and_its_document_has_no_credentials(
+    root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Access hints can carry a login, so they never reach the document."""
     _chart(root)
+    hints = DevClusterAccessHints(
+        urls=("https://app.localhost/",),
+        credentials=(DevClusterCredentials("https://app.localhost/", "admin", "s3cret"),),
+    )
+    monkeypatch.setattr(
+        local_run,
+        "up",
+        lambda _target, **_options: DevClusterResult(
+            applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),),
+            failed=(DevClusterEntryFailure("loki", "minimal", "observability", "boom"),),
+            hints=hints,
+        ),
+    )
 
-    result = cli(*_local_argv(command), "-o", "yaml")
+    result = cli(*_local_argv("up"), "-o", "json")
 
-    assert result.exit_code == 0, result.output
-    assert parse_yaml(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        1,
+        {
+            "applied": [{"chart": "grafana", "profile": "minimal", "namespace": "observability"}],
+            "no_change": [],
+            "failed": [
+                {
+                    "chart": "loki",
+                    "profile": "minimal",
+                    "namespace": "observability",
+                    "error": "boom",
+                }
+            ],
+        },
+    )
+    assert "s3cret" not in result.stdout
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
@@ -293,8 +337,7 @@ def test_auto_resolves_to_json_in_ci(
 
     result = cli(*_local_argv(command))
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _DOCUMENTS[command])
 
 
 def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
@@ -308,8 +351,7 @@ def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
 
     result = cli(*_local_argv("up"))
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["command"] == "up"
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _CONVERGED)
     _target, options = recorded.requests[0]
     assert options["run_hooks"] is False
 
@@ -322,8 +364,7 @@ def test_the_global_output_flag_reaches_every_local_command(
 
     result = cli("-o", "json", *_local_argv(command))
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _DOCUMENTS[command])
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
@@ -356,14 +397,23 @@ def test_status_exits_zero_for_an_absent_cluster(
     monkeypatch.setattr(
         local_run,
         "status",
-        lambda **_options: DevClusterStatus(cluster_name="chart-manager", exists=False),
+        lambda **_options: DevClusterStatus(exists=False),
     )
     result = cli("local", "status", "-o", "json")
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["exists"] is False
-    assert payload["ok"] is False
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "exists": False,
+            "context": None,
+            "provider": None,
+            "releases": [],
+            "releases_error": None,
+            "urls": [],
+            "urls_error": None,
+            "drift": {"missing": [], "error": None},
+        },
+    )
 
 
 # ----- --dry-run -------------------------------------------------------------
@@ -395,20 +445,46 @@ def test_dry_run_plans_and_mutates_nothing(
     assert result.exit_code == 0, result.output
     assert recorded.calls == [planner]
     assert mutator not in recorded.calls
-    payload = json.loads(result.stdout)
-    assert payload["dry_run"] is True
-    assert payload["command"] == command
 
 
-def test_dry_run_reset_is_marked_destructive(root: Path, recorded: _RecordingLocalRun) -> None:
+@pytest.mark.parametrize(("command", "destroys"), [("up", False), ("reset", True)])
+def test_dry_run_prints_the_plan_document(
+    root: Path, recorded: _RecordingLocalRun, command: str, destroys: bool
+) -> None:
     """`up` and `reset` share a plan; only one of them deletes the cluster first."""
     _chart(root)
 
-    up = cli(*_local_argv("up"), "--dry-run", "-o", "json")
-    reset = cli(*_local_argv("reset"), "--dry-run", "-o", "json")
+    result = cli(*_local_argv(command), "--dry-run", "-o", "json")
 
-    assert json.loads(up.stdout)["destroys"] is False
-    assert json.loads(reset.stdout)["destroys"] is True
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "target": "alloy",
+            "target_kind": "chart",
+            "destroys": destroys,
+            "entries": [
+                {"chart": "alloy", "profile": "minimal", "namespace": "obs", "source": "target"}
+            ],
+            "provisioning_hooks_enabled": True,
+            "provisioning_hooks": [["preProvision", ["./prepare", "arg"]]],
+        },
+    )
+
+
+def test_dry_run_down_prints_an_empty_plan(root: Path, recorded: _RecordingLocalRun) -> None:
+    result = cli("local", "down", "--dry-run", "-o", "json")
+
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "target": None,
+            "target_kind": None,
+            "destroys": False,
+            "entries": [],
+            "provisioning_hooks_enabled": True,
+            "provisioning_hooks": [],
+        },
+    )
 
 
 def test_dry_run_renders_the_plan_as_a_table(root: Path, recorded: _RecordingLocalRun) -> None:

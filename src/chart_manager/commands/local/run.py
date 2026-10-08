@@ -141,7 +141,7 @@ def down(
     emit(progress, step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
     stopped = stop(attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings))
     _LOG.info("dev cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
-    return DevClusterActionResult(cluster_name=DEFAULT_CLUSTER_NAME, changed=stopped)
+    return DevClusterActionResult(changed=stopped)
 
 
 def status(
@@ -191,8 +191,6 @@ def plan(
         )
     hooks = prepared.cluster.spec.cluster.hooks
     return DevClusterPlan(
-        command="reset" if destroys else "up",
-        cluster_name=DEFAULT_CLUSTER_NAME,
         target=target.name,
         target_kind="chart" if isinstance(target, Chart) else target.kind,
         destroys=destroys,
@@ -215,7 +213,7 @@ def plan(
 
 def plan_down() -> DevClusterPlan:
     """The plan for `down`: stop this cluster, install nothing."""
-    return DevClusterPlan(command="down", cluster_name=DEFAULT_CLUSTER_NAME)
+    return DevClusterPlan()
 
 
 def _prepare(

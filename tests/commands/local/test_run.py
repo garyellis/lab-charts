@@ -9,6 +9,7 @@ import pytest
 from chart_manager.commands import local
 from chart_manager.commands.local import run as local_run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.progress import ProgressEvent
 from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import Chart, load_chart
@@ -76,7 +77,7 @@ def test_up_provisions_bootstraps_and_converges_the_chart_after_its_requirements
 
     result = _up(repo, runner)
 
-    assert result.ok
+    assert result.outcome is Outcome.SUCCESS
     assert _installs(runner) == ["cni", "db", "app"]
     assert [(o.chart, o.namespace) for o in result.applied] == [
         ("cni", "kube-system"),
@@ -95,7 +96,7 @@ def test_up_records_a_failed_release_and_keeps_converging(repo: Path) -> None:
 
     result = _up(repo, runner)
 
-    assert not result.ok
+    assert result.outcome is Outcome.FAILED
     assert [(f.chart, f.namespace) for f in result.failed] == [("db", "data")]
     assert "app" in _installs(runner)
 

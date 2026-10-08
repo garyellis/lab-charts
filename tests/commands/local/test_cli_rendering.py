@@ -15,7 +15,6 @@ rule; these pin the per-block content.
 from __future__ import annotations
 
 import pytest
-import typer
 from rich.console import Console
 
 from chart_manager.cli import streams
@@ -90,38 +89,19 @@ def test_progress_events_render_label_then_message(
 # ----- summary table --------------------------------------------------------
 
 
-def test_dev_cluster_result_renders_every_bucket(captured: Console, narrated: Console) -> None:
-    """The table is the projection; the failure tally narrates alongside it."""
+def test_dev_cluster_result_renders_every_bucket(captured: Console) -> None:
     result = DevClusterResult(
         applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),),
         no_change=(DevClusterEntryOutcome("loki", "minimal", "observability"),),
         failed=(DevClusterEntryFailure("mimir", "minimal", "observability", "boom"),),
     )
 
-    cli_local._render_dev_cluster_result(result, "table", command="up")
+    cli_local._print_converge(result)
     out = captured.export_text()
 
     assert "Dev cluster install summary" in out
     for token in ("applied", "grafana", "no-change", "loki", "failed", "mimir"):
         assert token in out
-    # Not in `out`: a tally is not part of the table a caller pipes.
-    assert "1 chart(s) failed" in narrated.export_text()
-    assert "chart(s) failed" not in out
-
-
-def test_lab_result_omits_the_failure_line_when_ok(
-    captured: Console, narrated: Console
-) -> None:
-    cli_local._render_dev_cluster_result(
-        DevClusterResult(
-            applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),)
-        ),
-        "table",
-        command="up",
-    )
-
-    assert "chart(s) failed" not in narrated.export_text()
-    assert "chart(s) failed" not in captured.export_text()
 
 
 # ----- access hints ---------------------------------------------------------
@@ -227,32 +207,20 @@ def test_ca_hint_skipped_when_the_owning_chart_did_not_sync(narrated: Console) -
 
 
 def test_cluster_action_reports_the_change(narrated: Console) -> None:
-    cli_local._render_cluster_action(
-        DevClusterActionResult(cluster_name="chart-manager", changed=True),
-        "table",
-        command="down",
-        verb="stopped",
-        absent="not running",
-    )
+    cli_local._print_cluster_action(DevClusterActionResult(changed=True))
     out = narrated.export_text()
 
     assert "dev cluster stopped: chart-manager" in out
 
 
 def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
-    cli_local._render_cluster_action(
-        DevClusterActionResult(cluster_name="chart-manager", changed=False),
-        "table",
-        command="down",
-        verb="deleted",
-        absent="not present",
-    )
+    cli_local._print_cluster_action(DevClusterActionResult(changed=False))
     out = narrated.export_text()
 
-    assert "dev cluster not present: chart-manager" in out
+    assert "dev cluster not running: chart-manager" in out
 
 
-# ----- markup safety and exit codes ------------------------------------------
+# ----- markup safety -------------------------------------------------------
 #
 # Progress messages carry raw subprocess output. Rich parses `[...]` as
 # markup, and an unmatched *closing* tag raises MarkupError -- so a
@@ -283,37 +251,3 @@ def test_progress_still_styles_the_label(narrated: Console) -> None:
     streams.print_progress(step("Applying", "grafana:minimal"))
 
     assert "Applying grafana:minimal" in narrated.export_text()
-
-
-def _result(*, failed: bool) -> DevClusterResult:
-    entry = DevClusterEntryOutcome(chart="grafana", profile="minimal", namespace="obs")
-    return DevClusterResult(
-        applied=[entry],
-        no_change=[],
-        failed=(
-            [
-                DevClusterEntryFailure(
-                    chart="loki", profile="minimal", namespace="obs", error="boom"
-                )
-            ]
-            if failed
-            else []
-        ),
-        hints=DevClusterAccessHints(),
-    )
-
-
-def test_a_converge_with_failures_exits_non_zero(captured: Console) -> None:
-    """`local up` rendered the failure line and then exited 0.
-
-    DevClusterResult.ok exists so a surface can branch on it; CI wrappers and
-    `mise run lab-up` read success from a run in which charts failed.
-    """
-    with pytest.raises(typer.Exit) as exc:
-        cli_local._exit_if_failed(_result(failed=True).ok)
-
-    assert exc.value.exit_code == 1
-
-
-def test_a_clean_converge_does_not_exit(captured: Console) -> None:
-    cli_local._exit_if_failed(_result(failed=False).ok)
