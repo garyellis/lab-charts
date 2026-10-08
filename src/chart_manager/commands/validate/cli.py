@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
@@ -23,7 +22,7 @@ from chart_manager.commands.validate.models import (
     ValidateOutcome,
     ValidateRequest,
 )
-from chart_manager.commands.validate.output import details, to_json, to_markdown, to_table
+from chart_manager.commands.validate.output import details, to_markdown, to_table
 from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.render_dir import (
     RenderDirState,
@@ -179,12 +178,17 @@ def validate(
     except RequestError as exc:
         raise typer.BadParameter(str(exc), param_hint=exc.flag) from exc
     try:
-        _emit(
-            outcome, mode=mode, rendered=rendered, timings=timings, step_summary=github_step_summary
+        markdown = to_markdown(outcome, timings=timings)
+        _write_summaries(
+            outcome, markdown, mode=mode, rendered=rendered, step_summary=github_step_summary
+        )
+        output_mod.finish(
+            outcome,
+            mode=mode,
+            render=lambda result: _render(result, markdown=markdown, mode=mode, timings=timings),
         )
     finally:
         _retain(rendered, keep=keep or out is not None, outcome=outcome)
-    raise typer.Exit(code=exit_code_for(outcome.outcome()))
 
 
 def _changes(
@@ -229,33 +233,34 @@ def _display(progress: str, mode: str, verbose: bool) -> Progress:
     return LiveTable() if progress == "live" or mode == output_mod.TABLE else PlainNarration()
 
 
-def _emit(
-    outcome: ValidateOutcome, *, mode: str, rendered: Path, timings: bool, step_summary: bool
-) -> None:
-    """Print the run in `mode`; with `all`, also write summary.md and summary.json into `rendered`."""
-    markdown = to_markdown(outcome, timings=timings)
-    if mode == output_mod.JSON:
-        sys.stdout.write(json.dumps(to_json(outcome, rendered=rendered), indent=2) + "\n")
-    elif mode == output_mod.MD:
+def _render(outcome: ValidateOutcome, *, markdown: str, mode: str, timings: bool) -> None:
+    """Print the run as markdown for `md`, else as the table with its details and narration."""
+    if mode == output_mod.MD:
         sys.stdout.write(markdown)
-    else:
-        console.print(to_table(outcome, timings=timings))
-        for block in details(outcome):
-            console.print(block)
-        for warning in outcome.warnings:
-            narration.print(f"[yellow]warn:[/yellow] {warning}")
-        for error in outcome.spec_errors:
-            narration.print(f"[red]spec error:[/red] {error}")
-        summary = [f"{len(outcome.spec_errors)} spec error(s)"] if outcome.spec_errors else []
-        summary += [] if outcome.rows else ["0 rows"]
-        if summary:
-            narration.print(f"[bold]summary:[/bold] {'; '.join(summary)}")
+        return
+    console.print(to_table(outcome, timings=timings))
+    for block in details(outcome):
+        console.print(block)
+    for warning in outcome.warnings:
+        narration.print(f"[yellow]warn:[/yellow] {warning}")
+    for error in outcome.spec_errors:
+        narration.print(f"[red]spec error:[/red] {error}")
+    summary = [f"{len(outcome.spec_errors)} spec error(s)"] if outcome.spec_errors else []
+    summary += [] if outcome.rows else ["0 rows"]
+    if summary:
+        narration.print(f"[bold]summary:[/bold] {'; '.join(summary)}")
+
+
+def _write_summaries(
+    outcome: ValidateOutcome, markdown: str, *, mode: str, rendered: Path, step_summary: bool
+) -> None:
+    """With `all`, write summary.md and summary.json into `rendered`; append the step summary."""
     if mode == output_mod.ALL:
         try:
             rendered.mkdir(parents=True, exist_ok=True)
             (rendered / "summary.md").write_text(markdown)
-            payload = json.dumps(to_json(outcome, rendered=rendered), indent=2) + "\n"
-            (rendered / "summary.json").write_text(payload)
+            document = output_mod.to_json(to_document(outcome))
+            (rendered / "summary.json").write_text(document + "\n")
         except OSError as exc:
             narration.print(f"[yellow]warning: could not write summaries ({exc})[/yellow]")
     if step_summary:
@@ -279,7 +284,7 @@ def _retain(rendered: Path, *, keep: bool, outcome: ValidateOutcome) -> None:
     """Delete the render dir after a clean run unless kept (or DEBUG=true); never raises."""
     if (
         keep
-        or outcome.outcome() is not Outcome.SUCCESS
+        or outcome.outcome is not Outcome.SUCCESS
         or os.environ.get("DEBUG", "").lower() == "true"
     ):
         return

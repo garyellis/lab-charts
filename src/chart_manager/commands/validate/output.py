@@ -1,9 +1,8 @@
-"""`chart validate`'s output: the terminal table, markdown and JSON forms of one run."""
+"""`chart validate`'s output: the terminal table and markdown forms of one run."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 from typing import get_args
 
 from rich.table import Table
@@ -18,49 +17,10 @@ from chart_manager.commands.validate.models import (
     Row,
     ValidateOutcome,
 )
-from chart_manager.plumbing.exit_codes import exit_code_for
 
 _CHECKS: tuple[CheckName, ...] = get_args(CheckName)
 _EMOJI = {"passed": "✅", "failed": "❌", "error": "⚠️", "skipped": "➖"}  # noqa: RUF001
 _NOT_RUN = "·"
-
-
-def to_json(outcome: ValidateOutcome, *, rendered: Path) -> dict[str, object]:
-    """The run as a jq-friendly dict; `elapsed_seconds` is always present."""
-    passing, failing, _ = _tally(outcome)
-    return {
-        "exit_code": exit_code_for(outcome.outcome()),
-        "rendered_root": str(rendered),
-        "summary": {
-            "rows": len(outcome.rows),
-            "passing_rows": passing,
-            "failing_rows": failing,
-            "spec_errors": len(outcome.spec_errors),
-        },
-        "rows": [
-            {
-                "chart": row.chart,
-                "env": row.env,
-                "release": row.release,
-                "namespace": row.namespace,
-                "checks": {
-                    name: {
-                        "status": result.status,
-                        "detail": result.detail,
-                        "elapsed_seconds": (
-                            None
-                            if result.elapsed_seconds is None
-                            else round(result.elapsed_seconds, 3)
-                        ),
-                    }
-                    for name, result in row.checks.items()
-                },
-            }
-            for row in outcome.rows
-        ],
-        "spec_errors": list(outcome.spec_errors),
-        "warnings": list(outcome.warnings),
-    }
 
 
 def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:

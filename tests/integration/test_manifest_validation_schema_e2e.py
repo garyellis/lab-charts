@@ -106,19 +106,19 @@ def test_new_kinds_and_changed_crds_validate_without_sync_or_lock_changes(
         return outcome
 
     with caplog.at_level(logging.INFO):
-        assert validated().outcome() is Outcome.SUCCESS
+        assert validated().outcome is Outcome.SUCCESS
     assert "Preparing CRD schemas: 0 providers cached, 1 to render" in caplog.messages
     # A newly introduced built-in kind comes from the full pinned snapshot.
     (consumer / "templates/new.yaml").write_text(
         "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata: {name: demo}\n"
     )
-    assert validated().outcome() is Outcome.SUCCESS
+    assert validated().outcome is Outcome.SUCCESS
     # Current generated CRDs override the permissive catalog schema immediately.
     (provider / "templates/resources.yaml").write_text(crd_manifest(nested_type="integer"))
     outcome = validated()
-    assert outcome.outcome() is Outcome.FAILED
+    assert outcome.outcome is Outcome.FAILED
     assert "want integer" in outcome.rows[0].checks["schema"].detail
     (consumer / "templates/resources.yaml").write_text(
         "apiVersion: example.io/v1\nkind: Widget\nmetadata: {name: demo}\nspec: {name: 12}\n"
     )
-    assert validated().outcome() is Outcome.SUCCESS
+    assert validated().outcome is Outcome.SUCCESS

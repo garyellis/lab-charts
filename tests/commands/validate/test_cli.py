@@ -10,7 +10,6 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.plumbing.errors import MissingToolError, SpecError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from tests.conftest import RENDER_DIR, cli, write_workspace
 
 PASSED = validate.CheckResult("passed")
@@ -100,12 +99,6 @@ def test_all_or_a_named_chart_skips_change_detection(fake_run, argv, charts, cha
     assert (fake_run.requests[0].charts, fake_run.requests[0].changes) == (charts, changes)
 
 
-def test_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no-untyped-def]
-    fake_run.result = outcome_with("error")
-
-    assert cli("chart", "validate", "--all", "-o", "json").exit_code == exit_code_for(Outcome.TOOL)
-
-
 @pytest.mark.parametrize(
     ("argv", "error"),
     [(("--all",), MissingToolError), (("charts/broken",), SpecError)],
@@ -124,17 +117,21 @@ def test_a_domain_error_reaches_main_unchanged(fake_run, tmp_path: Path, argv, e
     assert isinstance(result.exception, error)
 
 
-def test_json_output_lists_each_row_with_its_checks(fake_run) -> None:  # type: ignore[no-untyped-def]
-    fake_run.result = outcome_with("failed")
+def test_json_output_is_the_run_document_and_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("error", warnings=("slow",))
 
-    payload = json.loads(cli("chart", "validate", "--all", "-o", "json").stdout)
+    result = cli("chart", "validate", "--all", "-o", "json")
 
-    assert payload["exit_code"] == exit_code_for(Outcome.FAILED)
-    assert payload["rows"][0]["checks"]["schema"] == {
-        "status": "failed",
-        "detail": "Widget/demo: bad",
-        "elapsed_seconds": None,
-    }
+    row = {"chart": "demo", "env": "dev", "release": "demo", "namespace": "lab-dev"}
+    passed = {"status": "passed", "detail": "", "elapsed_seconds": None}
+    error = {"status": "error", "detail": "Widget/demo: bad", "elapsed_seconds": None}
+    rows = [{**row, "checks": {"render": passed, "schema": error}}]
+    empty = ("requested_charts", "requested_envs", "ignored_changes", "unmatched_changes")
+    diagnostics = {"rows_filtered_out": 0, "charts_unvalidated": 0} | {key: [] for key in empty}
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        4,
+        {"rows": rows, "spec_errors": [], "warnings": ["slow"], "diagnostics": diagnostics},
+    )
 
 
 def test_output_all_writes_the_summaries_and_the_step_summary(
@@ -157,10 +154,11 @@ def test_output_all_writes_the_summaries_and_the_step_summary(
     )
 
     out = fake_run.requests[0].out
-    assert result.exit_code == exit_code_for(Outcome.FAILED)
+    assert result.exit_code == 1
     assert "demo" in result.stdout
     assert (out / "summary.md").read_text() == step_summary.read_text()
-    assert json.loads((out / "summary.json").read_text())["rows"][0]["chart"] == "demo"
+    document = cli("chart", "validate", "--all", "-o", "json").stdout
+    assert json.loads((out / "summary.json").read_text()) == json.loads(document)
 
 
 @pytest.mark.parametrize(
