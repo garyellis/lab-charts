@@ -38,6 +38,8 @@ from chart_manager.plumbing.commands import (
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.shared.events.model import PlatformLifecycleEvent, PromotionPhase
+from chart_manager.shared.events.store import EventQuery
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Repo root, anchored to this file rather than the process cwd.
@@ -637,6 +639,11 @@ def _as_predicate(matcher: Matcher) -> Predicate:
     return matcher
 
 
+def scripted(replies: list[Reply]) -> FakeCommandRunner:
+    """One reply per call, in order; an unscripted call fails the test."""
+    return FakeCommandRunner(when_exhausted="raise").script(*replies)
+
+
 def plain_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
     """Argv with the binary reduced to its name and a pinned kube context dropped."""
     head = (Path(argv[0]).name, *argv[1:])
@@ -650,6 +657,15 @@ def plain_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
 def argv_prefix(*prefix: str) -> Callable[[tuple[str, ...]], bool]:
     """A `FakeCommandRunner` matcher on the start of `plain_argv`."""
     return lambda argv: plain_argv(argv)[: len(prefix)] == prefix
+
+
+def kind_runner(*clusters: str) -> FakeCommandRunner:
+    """kind lists `clusters` and the apiserver is ready."""
+    return (
+        FakeCommandRunner()
+        .respond(argv_prefix("kind", "get", "clusters"), stdout="\n".join(clusters))
+        .respond(argv_prefix("kubectl", "get", "--raw=/readyz"), stdout="ok")
+    )
 
 
 class FakeCosmosContainer:
@@ -669,3 +685,23 @@ class FakeCosmosContainer:
     ) -> list[dict[str, Any]]:
         self.queries.append((sql, parameters, partition_key))
         return list(self.documents)
+
+
+class EventLog:
+    """A fake `EventStore` that records each event, and raises `raises` after recording it."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.events: list[PlatformLifecycleEvent] = []
+        self.raises = raises
+
+    def write(self, event: PlatformLifecycleEvent) -> None:
+        self.events.append(event)
+        if self.raises is not None:
+            raise self.raises
+
+    def query(self, query: EventQuery) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @property
+    def phases(self) -> list[PromotionPhase | None]:
+        return [event.promotion_phase for event in self.events]

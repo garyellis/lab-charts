@@ -17,27 +17,19 @@ from chart_manager.commands.publish.run import run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, SpecError
 from chart_manager.settings import Settings
 from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
-from chart_manager.shared.events.store import EventQuery
 from chart_manager.shared.events.writer import EventWriter
-from tests.conftest import FakeCommandRunner, MakeChart, plain_argv, workspace_for
+from tests.conftest import EventLog, FakeCommandRunner, MakeChart, plain_argv, workspace_for
 
 REPOSITORY = "oci://registry.local/library"
 
 
-class _Store:
-    """An event store that records each event and fails for `fail_chart`."""
-
-    def __init__(self, *, fail_chart: str | None = None) -> None:
-        self.events: list[PlatformLifecycleEvent] = []
-        self.fail_chart = fail_chart
+class _FailsForAlpha(EventLog):
+    """Records each event, and raises for alpha's."""
 
     def write(self, event: PlatformLifecycleEvent) -> None:
         self.events.append(event)
-        if event.chart_name == self.fail_chart:
+        if event.chart_name == "alpha":
             raise RuntimeError("events backend unavailable")
-
-    def query(self, query: EventQuery) -> list[dict[str, object]]:
-        raise NotImplementedError
 
 
 def _helm(*charts: str, fail: tuple[str, str] | None = None) -> FakeCommandRunner:
@@ -61,14 +53,14 @@ def _step(argv: tuple[str, ...]) -> tuple[str, str]:
 
 
 def _run(
-    root: Path, request: PublishRequest, runner: FakeCommandRunner, store: _Store | None = None
+    root: Path, request: PublishRequest, runner: FakeCommandRunner, store: EventLog
 ) -> PublishOutcome:
     return run(
         request,
         workspace=workspace_for(root),
         runner=runner,
         settings=Settings(kube_context="lab"),
-        events=EventWriter(source="chart-manager", store=lambda: store or _Store()),
+        events=EventWriter(source="chart-manager", store=lambda: store),
     )
 
 
@@ -83,6 +75,7 @@ def test_every_chart_is_prepared_before_any_push(chart_root: Path, make_chart: M
             ("alpha", "beta"), REPOSITORY, version_suffix="pr.8", ca_file=Path("ca.crt")
         ),
         runner,
+        EventLog(),
     )
 
     assert [_step(argv) for argv in runner.calls] == [
@@ -121,7 +114,7 @@ def test_a_preparation_failure_pushes_nothing(
 ) -> None:
     make_chart("alpha")
     make_chart("beta")
-    runner, store = _helm("alpha", "beta", fail=fail), _Store()
+    runner, store = _helm("alpha", "beta", fail=fail), EventLog()
 
     with pytest.raises(error):
         _run(chart_root, PublishRequest(charts, REPOSITORY), runner, store)
@@ -135,7 +128,7 @@ def test_push_failures_are_consolidated_and_the_other_pushes_continue(
 ) -> None:
     make_chart("alpha")
     make_chart("beta")
-    runner, store = _helm("alpha", "beta", fail=("push", "alpha")), _Store()
+    runner, store = _helm("alpha", "beta", fail=("push", "alpha")), EventLog()
 
     outcome = _run(chart_root, PublishRequest(("alpha", "beta"), REPOSITORY), runner, store)
 
@@ -158,7 +151,7 @@ def test_each_push_emits_a_retry_safe_build_event(
 ) -> None:
     make_chart("alpha", version="1.0.0")
     make_chart("beta", version="2.0.0")
-    store = _Store()
+    store = EventLog()
     request = PublishRequest(
         ("alpha", "beta"),
         REPOSITORY,
@@ -200,7 +193,7 @@ def test_an_event_failure_is_reported_without_failing_the_push(
 ) -> None:
     make_chart("alpha")
     make_chart("beta")
-    store = _Store(fail_chart="alpha")
+    store = _FailsForAlpha()
 
     outcome = _run(
         chart_root, PublishRequest(("alpha", "beta"), REPOSITORY), _helm("alpha", "beta"), store
@@ -218,11 +211,11 @@ def test_a_dry_run_prepares_like_a_real_publish_then_pushes_nothing_and_emits_no
 ) -> None:
     make_chart("alpha", version="1.0.0")
     make_chart("beta", version="2.0.0")
-    planning, real, store = _helm("alpha", "beta"), _helm("alpha", "beta"), _Store()
+    planning, real, store = _helm("alpha", "beta"), _helm("alpha", "beta"), EventLog()
     request = PublishRequest(("alpha", "beta"), f"{REPOSITORY}/", version_suffix="pr.8")
 
     planned = _run(chart_root, replace(request, dry_run=True), planning, store)
-    _run(chart_root, request, real, _Store())
+    _run(chart_root, request, real, EventLog())
 
     assert [_step(argv) for argv in real.calls] == [
         *(_step(argv) for argv in planning.calls),
@@ -262,7 +255,10 @@ def test_the_published_version_and_kind(
     make_chart("alpha", version=chart_version)
 
     outcome = _run(
-        chart_root, PublishRequest(("alpha",), REPOSITORY, dry_run=True, **request_), _helm("alpha")
+        chart_root,
+        PublishRequest(("alpha",), REPOSITORY, dry_run=True, **request_),
+        _helm("alpha"),
+        EventLog(),
     )
 
     assert (outcome.charts[0].version, outcome.kind) == (version, kind)
@@ -297,6 +293,6 @@ def test_an_invalid_request_is_rejected_before_any_helm_call(
     request = replace(PublishRequest(charts, REPOSITORY, dry_run=True), **request_)
 
     with pytest.raises(SpecError, match=message):
-        _run(chart_root, request, runner)
+        _run(chart_root, request, runner, EventLog())
 
     assert runner.calls == []

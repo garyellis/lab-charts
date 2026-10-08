@@ -19,7 +19,6 @@ from tests.commands.promote.conftest import (
     HR,
     VERSION,
     Clock,
-    EventLog,
     calls,
     cluster,
     condition,
@@ -29,7 +28,7 @@ from tests.commands.promote.conftest import (
     items,
     pod,
 )
-from tests.conftest import FakeCommandRunner, Reply, argv_prefix, plain_argv
+from tests.conftest import EventLog, FakeCommandRunner, Reply, argv_prefix, plain_argv
 
 HELM_TEST = ("helm", "test", "loki", "--namespace", "loki")
 TEST_FAILED = failure("Error: bare failure")

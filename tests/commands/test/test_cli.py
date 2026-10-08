@@ -30,13 +30,6 @@ LOCAL_CLUSTER = (
 )
 
 
-def _chart(root: Path, name: str = "alloy") -> Path:
-    path = root / "charts" / name
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "Chart.yaml").write_text(f"apiVersion: v2\nname: {name}\nversion: 0.1.0\n")
-    return path
-
-
 def _plan() -> LifecyclePlan:
     return LifecyclePlan(
         chart="alloy",
@@ -68,8 +61,8 @@ class Calls:
 
 
 @pytest.fixture
-def calls(chart_root: Path, root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
-    _chart(chart_root)
+def calls(make_chart: MakeChart, root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
+    make_chart("alloy")
     recorded = Calls()
 
     def record(entry: str, result: Any):

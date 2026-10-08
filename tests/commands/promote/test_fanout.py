@@ -17,7 +17,7 @@ from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.shared.events.writer import EventWriter
-from tests.commands.promote.conftest import EventLog
+from tests.conftest import EventLog
 
 
 def _ref(name: str, namespace: str = "loki") -> HelmReleaseRef:

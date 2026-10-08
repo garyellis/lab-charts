@@ -1,4 +1,4 @@
-"""Cluster objects, a clock and an event log for driving the promote stages through `FakeCommandRunner`.
+"""Cluster objects and a clock for driving the promote stages through `FakeCommandRunner`.
 
 `cluster(...)` answers `kubectl get` for HelmReleases the way a real cluster would; anything a
 test does not script reads as an empty list.
@@ -10,8 +10,6 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from chart_manager.shared.events.model import PlatformLifecycleEvent, PromotionPhase
-from chart_manager.shared.events.store import EventQuery
 from tests.conftest import FakeCommandRunner, Predicate, Reply, argv_prefix, plain_argv
 
 CHART = "loki"
@@ -31,26 +29,6 @@ class Clock:
 
     def sleep(self, seconds: float) -> None:
         self.t += seconds
-
-
-class EventLog:
-    """An event store that records each event, and raises `raises` after recording it."""
-
-    def __init__(self, *, raises: Exception | None = None) -> None:
-        self.events: list[PlatformLifecycleEvent] = []
-        self.raises = raises
-
-    def write(self, event: PlatformLifecycleEvent) -> None:
-        self.events.append(event)
-        if self.raises is not None:
-            raise self.raises
-
-    def query(self, query: EventQuery) -> list[dict[str, object]]:
-        raise NotImplementedError
-
-    @property
-    def phases(self) -> list[PromotionPhase | None]:
-        return [event.promotion_phase for event in self.events]
 
 
 def condition(type_: str, status: str, reason: str = "", message: str = "") -> dict[str, str]:
