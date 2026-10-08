@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import PROBE_TIMEOUT, CheckStatus
@@ -87,61 +89,42 @@ def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
 # ----- ensure_cluster on stopped cluster ------------------------------------
 
 
-def test_ensure_cluster_starts_stopped_cluster() -> None:
+@pytest.mark.parametrize(
+    ("running", "every", "started"),
+    [
+        pytest.param(
+            "",
+            "chart-manager-control-plane\n",
+            "chart-manager-control-plane",
+            id="all-stopped",
+        ),
+        # Gating on any-running would no-op here and leave the worker stopped.
+        pytest.param(
+            "chart-manager-control-plane\n",
+            "chart-manager-control-plane\nchart-manager-worker\n",
+            "chart-manager-worker",
+            id="partial-state",
+        ),
+    ],
+)
+def test_ensure_cluster_starts_only_the_stopped_nodes(
+    running: str, every: str, started: str
+) -> None:
     """`kind get clusters` lists the cluster even when its containers are
-    stopped -- ensure_cluster must detect that and start them rather than
-    no-op'ing or trying to re-create.
+    stopped -- ensure_cluster must start the stopped subset (the `-a` listing
+    minus the running one) rather than no-op'ing or trying to re-create.
     """
     runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
-    # Running query returns empty -> stopped.
-    runner.respond(_is_docker_ps(running_only=True), stdout="")
-    # docker ps -a returns the stopped containers.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\n",
-    )
-    kind = Kind(runner=runner)
-
-    kind.ensure_cluster("chart-manager")
-
-    # Must NOT have called `kind create cluster`.
-    assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
-    # Must have issued `docker start` on the discovered containers.
-    start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    assert start_calls == [("docker", "start", "chart-manager-control-plane")]
-
-
-def test_ensure_cluster_starts_only_stopped_nodes_in_partial_state() -> None:
-    """Multi-node partial state: one node running, one stopped.
-
-    The bug this guards against: pre-fix ensure_cluster gated on
-    `is_running` (any-running), which returned True here and silently
-    no-op'd, leaving the stopped worker stopped. The fix diffs the
-    "with -a" and "without -a" listings and issues `docker start` only
-    on the stopped subset.
-    """
-    runner = FakeCommandRunner()
-    runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
-    # Running set: control-plane only.
-    runner.respond(
-        _is_docker_ps(running_only=True),
-        stdout="chart-manager-control-plane\n",
-    )
-    # Full set (running + stopped): control-plane + a stopped worker.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\nchart-manager-worker\n",
-    )
+    runner.respond(_is_docker_ps(running_only=True), stdout=running)
+    runner.respond(_is_docker_ps(running_only=False), stdout=every)
     kind = Kind(runner=runner)
 
     kind.ensure_cluster("chart-manager")
 
     assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
     start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    # Only the stopped worker must be started; control-plane is already up
-    # and starting it again would be a no-op-with-warning.
-    assert start_calls == [("docker", "start", "chart-manager-worker")]
+    assert start_calls == [("docker", "start", started)]
 
 
 def test_ensure_cluster_noop_when_already_running() -> None:

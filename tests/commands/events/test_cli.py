@@ -118,36 +118,28 @@ def test_a_non_utc_at_offset_is_normalized_to_utc(writer: RecordingWriter) -> No
     assert writer.build_calls[0]["timestamp"] == datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
 
 
-def test_a_naive_at_timestamp_is_a_usage_error(writer: RecordingWriter) -> None:
-    """A backfill from a laptop in another timezone must not shift history."""
-    result = cli(
-        "event", "emit", "build", "grafana@1.2.3",
-        "--phase", "merged", "--at", "2026-07-30T12:00:00",
-    )
-
-    assert result.exit_code == 2
-    assert writer.build_calls == []
-
-
 @pytest.mark.parametrize(
-    "token",
-    ["grafana", "@1.2.3", "a@b@c", "grafana@"],
-    ids=["no-version", "no-chart", "two-separators", "empty-version"],
+    "argv",
+    [
+        ("grafana", "--phase", "published"),
+        ("@1.2.3", "--phase", "published"),
+        ("a@b@c", "--phase", "published"),
+        ("grafana@", "--phase", "published"),
+        ("--phase", "published"),
+        # A backfill from a laptop in another timezone must not shift history.
+        ("grafana@1.2.3", "--phase", "merged", "--at", "2026-07-30T12:00:00"),
+    ],
+    ids=[
+        "no-version", "no-chart", "two-separators", "empty-version", "missing-ref", "naive-at",
+    ],
 )
-def test_a_malformed_ref_is_a_usage_error(writer: RecordingWriter, token: str) -> None:
-    """Exit 2 with usage, matching how `--at` already reports a bad value.
-
-    Crucially, nothing is written: a ref the system cannot address must not
-    produce a ledger record under a guessed correlation id.
+def test_an_invalid_emit_is_a_usage_error(
+    writer: RecordingWriter, argv: tuple[str, ...]
+) -> None:
+    """A bad ref or a timestamp with no timezone exits 2 and writes nothing,
+    so no record is stored under a guessed value.
     """
-    result = cli("event", "emit", "build", token, "--phase", "published")
-
-    assert result.exit_code == 2
-    assert writer.build_calls == []
-
-
-def test_a_missing_ref_is_a_usage_error(writer: RecordingWriter) -> None:
-    result = cli("event", "emit", "build", "--phase", "published")
+    result = cli("event", "emit", "build", *argv)
 
     assert result.exit_code == 2
     assert writer.build_calls == []
