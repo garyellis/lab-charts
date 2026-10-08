@@ -6,9 +6,8 @@ their own table beside it.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterator, Sequence
-from typing import Annotated, Any
+from collections.abc import Sequence
+from typing import Annotated
 
 import typer
 from rich.markup import escape
@@ -88,51 +87,6 @@ def _catalog_table(entries: Sequence[catalog.ChartCatalogEntry]) -> Table:
     return table
 
 
-def _document_table(document: dict[str, Any], *, title: str) -> Table:
-    """Render a wire document as a Field/Value table over dotted paths.
-
-    A flattening of the same document `-o json` emits rather than a
-    hand-written layout, because `chart show`'s subject is the authored
-    ChartLifecycle envelope and that schema grows a section at a time. A
-    bespoke renderer would need editing every time the spec does, and until
-    someone did it would silently omit whatever it had not been taught --
-    which is the one thing a command called `show` must never do.
-    """
-    table = Table("Field", "Value", title=title)
-    for field, value in _flatten(document):
-        table.add_row(escape(field), escape(value))
-    return table
-
-
-def _flatten(value: Any, prefix: str = "") -> Iterator[tuple[str, str]]:
-    """Walk a JSON-shaped document into (dotted path, rendered leaf) rows.
-
-    A list of scalars stays on one row (`values: a.yaml, b.yaml`) because
-    that is how it reads in the file it came from; a list of objects is
-    indexed, because its members have structure worth addressing.
-    """
-    if isinstance(value, dict) and value:
-        for key, item in value.items():
-            yield from _flatten(item, f"{prefix}.{key}" if prefix else key)
-    elif isinstance(value, list) and value:
-        if any(isinstance(item, dict | list) for item in value):
-            for index, item in enumerate(value):
-                yield from _flatten(item, f"{prefix}[{index}]")
-        else:
-            yield prefix, ", ".join(_leaf(item) for item in value)
-    else:
-        yield prefix, _leaf(value)
-
-
-def _leaf(value: Any) -> str:
-    """Render one leaf as JSON spells it, minus the quotes around strings.
-
-    So a reader sees `true`/`null`/`{}` -- the tokens they would type back
-    into the document -- and not Python's `True`/`None`/`{}`.
-    """
-    return value if isinstance(value, str) else json.dumps(value)
-
-
 def show_lifecycle(
     ctx: typer.Context,
     chart: str,
@@ -151,5 +105,5 @@ def show_lifecycle(
     output_mod.emit(
         document,
         mode=mode,
-        table=_document_table(document, title=f"{chart} lifecycle"),
+        table=output_mod.document_table(document, title=f"{chart} lifecycle"),
     )

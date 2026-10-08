@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
 import typer
@@ -14,7 +13,6 @@ from chart_manager.cli._container import container
 from chart_manager.cli.streams import console, narration
 from chart_manager.commands.doctor.models import DoctorReport
 from chart_manager.commands.doctor.run import run
-from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.plumbing.preflight import CheckStatus
 
 #: `doctor` produces a status table or a machine-readable document; there is
@@ -58,13 +56,7 @@ def doctor(
         workspace=invocation.workspace,
     )
 
-    if mode == output_mod.JSON:
-        typer.echo(json.dumps(report.to_dict(), indent=2))
-    else:
-        _render_table(report)
-
-    if not report.ok:
-        raise typer.Exit(code=exit_code_for(report.outcome))
+    output_mod.finish(report, mode=mode, render=_render_table)
 
 
 def _render_table(report: DoctorReport) -> None:

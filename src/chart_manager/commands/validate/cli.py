@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Annotated, cast, get_args
 
 import typer
-from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
@@ -26,13 +25,18 @@ from chart_manager.commands.validate.models import (
 )
 from chart_manager.commands.validate.output import details, to_json, to_markdown, to_table
 from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
-from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
+from chart_manager.commands.validate.render_dir import (
+    RenderDirState,
+    clean_render_dir,
+    render_dir_state,
+)
 from chart_manager.commands.validate.run import run
 from chart_manager.commands.validate.schemas import lock as schema_lock
 from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.documents import to_document
 from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.shared.charts.chart import resolve_chart_target
@@ -302,17 +306,18 @@ def clean(
     if dry_run:
         state = render_dir_state(workspace)
         mode = output_mod.resolve(output, ctx, allowed=_CLEAN_OUTPUTS, console=console)
-        table = Table("Path", "Exists", "Runs", title="render cache")
-        table.add_row(str(state.path), "yes" if state.exists else "no", str(state.runs))
-        output_mod.emit(state.to_dict(), mode=mode, table=table)
         narration.print("[yellow]dry run[/yellow]: nothing was removed")
-        return
+        output_mod.finish(state, mode=mode, render=_render_cache)
     try:
         state = clean_render_dir(workspace)
     except OSError as exc:
         narration.print(f"[red]error:[/red] cleanup failed: {exc}")
         raise typer.Exit(code=exit_code_for(Outcome.FAILED)) from exc
     narration.print(f"cleaned: {state.path}" if state.exists else "nothing to clean")
+
+
+def _render_cache(state: RenderDirState) -> None:
+    console.print(output_mod.document_table(to_document(state), title="render cache"))
 
 
 def sync(

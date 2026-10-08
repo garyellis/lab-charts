@@ -40,6 +40,11 @@ _Avoid_: client wrapper, tool, port, shared integration
 **Service**:
 Only a Kubernetes `Service` (or Istio `VirtualService`). Not a name for packages or classes.
 
+**Document**:
+The JSON or YAML form of a command's result, produced by `to_document`; its keys are the
+result's field names.
+_Avoid_: wire document, payload
+
 ### Charts and clusters
 
 **Chart**:

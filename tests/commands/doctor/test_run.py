@@ -64,7 +64,6 @@ def test_every_check_runs_in_report_order(healthy: FakeCommandRunner, tmp_path: 
         "schema-store",
         "events-backend",
     ]
-    assert report.ok
     assert report.outcome is Outcome.SUCCESS
 
 
@@ -105,7 +104,6 @@ def test_the_outcome_follows_the_documented_precedence(
 
     report = run(settings=Settings(root=tmp_path), runner=healthy, workspace=_outside)
 
-    assert not report.ok
     assert report.outcome is expected
 
 
