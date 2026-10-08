@@ -11,12 +11,12 @@ those rules.
 chart_manager/
   main.py         composition root: global options, the command tree, error exit codes
   commands/       one package per CLI subcommand; leaves and composites (ADR-0002)
-  cli/            toolkit below commands: output, streams, options, Container
+  cli/            toolkit below commands: output (`finish`), streams, options, Container
   shared/         what two or more commands use: cluster > charts | events > workspace
   settings.py     process configuration and DEFAULT_CLUSTER_NAME
   integrations/   every call to the outside world, one module per system
   api/            authored, versioned YAML contracts
-  plumbing/       errors, exit codes, YAML, paths, command runner, progress
+  plumbing/       errors, exit codes, documents, YAML, paths, command runner, progress
 ```
 
 Each row imports only from rows below it, except that `settings.py`,
@@ -36,6 +36,7 @@ The policy and algorithms over `api/` models and `Chart.yaml` live in
 | `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
 | `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
+| `shared/cluster/releases.py` | The Helm `Release` an install-plan entry or authored release installs |
 | `shared/cluster/converge.py` | The one release install and its readiness wait; `installed()` |
 | `shared/cluster/bootstrap.py` | The LocalCluster's ordered bootstrap releases, through `converge` |
 | `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |

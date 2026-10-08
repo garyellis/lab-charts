@@ -39,7 +39,7 @@ __all__ = [
 class Outcome(StrEnum):
     """How a run ended, in terms a non-CLI surface can also use.
 
-    The string values are for log lines and test failures, not a wire contract.
+    The string values are for log lines and test failures; no document holds them.
     """
 
     SUCCESS = "success"
