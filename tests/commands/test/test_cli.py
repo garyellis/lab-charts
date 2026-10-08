@@ -13,11 +13,11 @@ from chart_manager.commands.test import cli as test_cli
 from chart_manager.commands.test.models import (
     ActionKind,
     ActionOutcome,
-    ActionTarget,
     LifecycleAction,
     LifecyclePlan,
 )
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
+from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from tests.conftest import MakeChart, cli
 
 LOCAL_CLUSTER = (
@@ -30,18 +30,12 @@ LOCAL_CLUSTER = (
 )
 
 
-def _plan() -> LifecyclePlan:
+def _plan(entry: InstallPlanEntry) -> LifecyclePlan:
     return LifecyclePlan(
         chart="alloy",
         profile="minimal",
         actions=tuple(
-            LifecycleAction(
-                action_id=f"chart-test.alloy.minimal.{kind.value}",
-                kind=kind,
-                target=ActionTarget("alloy", "minimal", release="alloy", namespace="observability"),
-                chart_path=Path("charts/alloy"),
-            )
-            for kind in (ActionKind.INSTALL, ActionKind.HELM_TEST)
+            LifecycleAction(entry, kind) for kind in (ActionKind.INSTALL, ActionKind.HELM_TEST)
         ),
         warnings=("istio-base is owned by bootstrap",),
     )
@@ -62,6 +56,7 @@ class Calls:
 @pytest.fixture
 def calls(make_chart: MakeChart, root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
     make_chart("alloy")
+    (entry,) = install_plan(root / "charts", "alloy", "minimal")
     recorded = Calls()
 
     def record(entry: str, result: Any):
@@ -75,7 +70,7 @@ def calls(make_chart: MakeChart, root: Path, monkeypatch: pytest.MonkeyPatch) ->
 
         return stub
 
-    monkeypatch.setattr(test_cli, "plan", record("plan", _plan))
+    monkeypatch.setattr(test_cli, "plan", record("plan", lambda: _plan(entry)))
     monkeypatch.setattr(test_cli, "run", record("run", lambda: recorded.outcome))
     monkeypatch.setattr(test_cli, "teardown", record("teardown", lambda: recorded.teardown_outcome))
     return recorded
@@ -139,6 +134,21 @@ def test_dry_run_prints_the_plan_and_runs_nothing(chart_root: Path, calls: Calls
     assert calls.entry == ["plan"]
     payload = json.loads(result.stdout)
     assert [action["kind"] for action in payload["actions"]] == ["install", "helm-test"]
+    alloy = chart_root / "charts" / "alloy"
+    assert payload["actions"][0] == {
+        "action_id": "chart-test.alloy.minimal.install",
+        "kind": "install",
+        "target": {
+            "chart": "alloy",
+            "profile": "minimal",
+            "release": "alloy",
+            "namespace": "default",
+        },
+        "chart_path": alloy.as_posix(),
+        "values": [(alloy / "values.yaml").as_posix()],
+        "timeout": "10m",
+        "command": [],
+    }
     assert "dry run" in result.stderr
     assert "owned by bootstrap" in result.stderr
     assert "dry run" not in result.stdout

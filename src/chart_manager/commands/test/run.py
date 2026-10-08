@@ -24,9 +24,9 @@ from chart_manager.commands.test.models import (
 )
 from chart_manager.commands.test.plan import (
     CompiledPlan,
+    Requires,
     SkippedRequirement,
     compile_plan,
-    without_required_helm_tests,
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
@@ -44,15 +44,9 @@ from chart_manager.settings import Settings
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster import bootstrap
 from chart_manager.shared.cluster.bootstrap import BootstrapStep
-from chart_manager.shared.cluster.converge import (
-    DEFAULT_TIMEOUT,
-    Release,
-    ReleaseFailed,
-    converge,
-    installed,
-    wait,
-)
+from chart_manager.shared.cluster.converge import ReleaseFailed, converge, installed, wait
 from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.releases import release
 from chart_manager.shared.cluster.session import Session, attach, find, provision
 from chart_manager.shared.cluster.session import teardown as delete_cluster
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -77,7 +71,10 @@ def plan(request: ChartTestRequest, *, workspace: RepositoryWorkspace) -> Lifecy
     With `--skip-requires` the plan describes reusing an existing cluster, and warns
     about the fallback when none exists, which only a live cluster can decide.
     """
-    compiled, _ = _compile(request, workspace, load_cluster(workspace), lint_helm=None)
+    requires: Requires = "skip" if request.skip_requires else "install"
+    compiled, _ = _compile(
+        request, workspace, load_cluster(workspace), lint_helm=None, requires=requires
+    )
     if not request.skip_requires:
         return compiled.plan
     if request.ensure_cluster:
@@ -124,12 +121,14 @@ def run(
         if request.lint and not verify_only
         else None
     )
-    effective = replace(request, skip_requires=False) if fresh_cluster else request
-    compiled, bootstrap_steps = _compile(effective, workspace, cluster, lint_helm=lint_helm)
+    requires: Requires = (
+        "install-untested" if fresh_cluster else "skip" if request.skip_requires else "install"
+    )
+    compiled, bootstrap_steps = _compile(
+        request, workspace, cluster, lint_helm=lint_helm, requires=requires
+    )
     test_plan = compiled.plan
     if fresh_cluster:
-        requested = [(request.chart, request.profile)]
-        test_plan = without_required_helm_tests(test_plan, requested)
         message = (
             f"cluster {name} does not exist; --skip-requires must install bootstrap and "
             "required charts before testing the selected target; required charts will "
@@ -199,6 +198,7 @@ def teardown_plan(request: TeardownRequest, *, workspace: RepositoryWorkspace) -
         workspace,
         load_cluster(workspace),
         lint_helm=None,
+        requires="install",
     )
     cleanups = tuple(a for a in compiled.plan.actions if a.kind is ActionKind.HOOK_CLEANUP)
     return replace(compiled.plan, actions=cleanups)
@@ -260,6 +260,7 @@ def _compile(
     cluster: LocalCluster,
     *,
     lint_helm: Helm | None,
+    requires: Requires,
 ) -> tuple[CompiledPlan, tuple[BootstrapStep, ...]]:
     """Resolve bootstrap (linting it with `lint_helm`), then compile the plan without it."""
     root = workspace.root
@@ -269,6 +270,7 @@ def _compile(
         root=root,
         charts_dir=workspace.charts_root,
         bootstrap_owned=bootstrap.owned(steps),
+        requires=requires,
     )
     return compiled, steps
 
@@ -315,9 +317,9 @@ def _execute(
             diagnostics = _diagnostics(session, action, exc)
             _LOG.error(
                 "cluster action failed: chart=%s action=%s namespace=%s: %s",
-                action.target.chart,
+                action.entry.chart.name,
                 action.action_id,
-                action.target.namespace,
+                action.entry.namespace,
                 exc,
             )
             emit(progress, failure("Failed", f"{subject}: {exc}"))
@@ -331,28 +333,19 @@ def _execute(
 
 
 def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunner) -> None:
-    namespace = action.target.namespace or ""
-    release = action.target.release or action.target.chart
+    entry = action.entry
     if action.kind is ActionKind.NAMESPACE_ENSURE:
-        session.kubectl.create_namespace(namespace)
+        session.kubectl.create_namespace(entry.namespace)
     elif action.kind is ActionKind.HELM_LINT:
-        ensure_dependencies(session.helm, action.chart_path)
-        session.helm.lint(action.chart_path, list(action.values))
-    elif action.kind in (ActionKind.INSTALL, ActionKind.WORKLOAD_READY):
-        target = Release(
-            name=release,
-            chart=action.chart_path,
-            namespace=namespace,
-            values=action.values,
-            timeout=action.timeout or DEFAULT_TIMEOUT,
-        )
-        if action.kind is ActionKind.INSTALL:
-            converge(session, target)
-        else:
-            wait(session, target)
+        ensure_dependencies(session.helm, entry.chart.path)
+        session.helm.lint(entry.chart.path, list(entry.values))
+    elif action.kind is ActionKind.INSTALL:
+        converge(session, release(entry, sets={}))
+    elif action.kind is ActionKind.WORKLOAD_READY:
+        wait(session, release(entry, sets={}))
     elif action.kind is ActionKind.HELM_TEST:
         result = session.helm.test(
-            release, namespace=namespace, timeout=action.timeout or DEFAULT_TIMEOUT
+            entry.chart.name, namespace=entry.namespace, timeout=entry.spec.timeout
         )
         if result.returncode != 0:
             output = (result.stderr or result.stdout).strip()
@@ -366,16 +359,13 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
 def _diagnostics(session: Session, action: LifecycleAction, exc: ChartManagerError) -> str:
     if isinstance(exc, ReleaseFailed):
         return exc.diagnostics
-    if action.target.namespace is None:
-        return ""
     try:
-        return session.kubectl.diagnostics(action.target.namespace)
+        return session.kubectl.diagnostics(action.entry.namespace)
     except ChartManagerError as error:
         _LOG.warning("namespace diagnostics unavailable: %s", error)
         return ""
 
 
 def _subject(action: LifecycleAction) -> str:
-    profile = f":{action.target.profile}" if action.target.profile else ""
-    namespace = f" in {action.target.namespace}" if action.target.namespace else ""
-    return f"{action.target.chart}{profile}{namespace}"
+    entry = action.entry
+    return f"{entry.chart.name}:{entry.profile} in {entry.namespace}"

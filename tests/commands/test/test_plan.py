@@ -1,216 +1,221 @@
-"""`chart test` plan compilation: action order, inputs and hooks."""
+"""`chart test` plan compilation: each entry's steps, namespaces, hooks and warnings."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from chart_manager.commands.test.models import (
-    ActionKind,
-    ChartTestRequest,
-    LifecycleAction,
-    LifecyclePlan,
+from chart_manager.commands.test.models import ChartTestRequest, LifecyclePlan, PlanError
+from chart_manager.commands.test.plan import (
+    EXTERNAL_BOOTSTRAP_WARNING_PREFIX,
+    SKIPPED_REQUIRES_WARNING_PREFIX,
+    CompiledPlan,
+    Requires,
+    SkippedRequirement,
+    compile_plan,
 )
-from chart_manager.commands.test.plan import compile_plan
-from chart_manager.commands.test.wire import plan_to_dict
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 from tests.conftest import MakeChart
 
 
 def _compile(
     root: Path,
-    chart: str,
-    profile: str,
+    request: ChartTestRequest,
     *,
-    namespace: str | None = None,
-    lint: bool = False,
-    owned: frozenset[ExternallySatisfiedLifecycle] = frozenset(),
-) -> LifecyclePlan:
-    request = ChartTestRequest(chart=chart, profile=profile, namespace=namespace, lint=lint)
-    return compile_plan(request, root=root, charts_dir=root / "charts", bootstrap_owned=owned).plan
-
-
-def _by_id(plan: LifecyclePlan, action_id: str) -> LifecycleAction:
-    return next(action for action in plan.actions if action.action_id == action_id)
-
-
-def _requires(*refs: str) -> dict[str, object]:
-    parsed = []
-    for ref in refs:
-        chart, _, profile = ref.partition(":")
-        parsed.append({"chart": chart, "profile": profile or "minimal"})
-    return {"requires": parsed}
-
-
-def test_chart_test_compiles_dependency_first_actions_and_effective_inputs(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart(
-        "base",
-        profiles={
-            "minimal": {
-                "namespace": "operators",
-                "timeout": "7m",
-                "values": ["values.yaml"],
-            }
-        },
+    owned: tuple[str, ...],
+    requires: Requires,
+) -> CompiledPlan:
+    identities = frozenset(
+        ExternallySatisfiedLifecycle(
+            (root / "charts" / chart).resolve(), chart, "minimal", "default"
+        )
+        for chart in owned
     )
-    make_chart(
-        "app",
-        profiles={
-            "full": {
-                **_requires("base"),
-                "namespace": "workloads",
-                "timeout": "20m",
-                "values": ["values.yaml", "values-full.yaml"],
-            }
-        },
+    return compile_plan(
+        request,
+        root=root,
+        charts_dir=root / "charts",
+        bootstrap_owned=identities,
+        requires=requires,
     )
 
-    plan = _compile(chart_root, "app", "full")
 
-    assert [action.target.chart for action in plan.actions] == [
-        *(["base"] * 3),
-        *(["app"] * 3),
-    ]
-    app_install = next(
-        action
-        for action in plan.actions
-        if action.target.chart == "app" and action.kind is ActionKind.INSTALL
-    )
-    assert app_install.target.namespace == "workloads"
-    assert app_install.timeout == "20m"
-    assert [path.name for path in app_install.values] == [
-        "values.yaml",
-        "values-full.yaml",
-    ]
+def _steps(plan: LifecyclePlan) -> list[str]:
+    return [f"{a.entry.chart.name}@{a.entry.namespace} {a.kind}" for a in plan.actions]
 
 
-def test_chart_test_namespace_override_wins_over_authored_profile(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("app", profiles={"minimal": {"namespace": "authored"}})
-
-    plan = _compile(
-        chart_root,
-        "app",
-        "minimal",
-        namespace="requested",
-    )
-
-    assert {
-        action.target.namespace for action in plan.actions if action.target.namespace is not None
-    } == {"requested"}
+def _on(chart: str, *kinds: str, namespace: str = "default") -> list[str]:
+    return [f"{chart}@{namespace} {kind}" for kind in kinds]
 
 
-def test_chart_test_namespace_override_does_not_relocate_authored_dependency(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("base", profiles={"minimal": {"namespace": "foundation"}})
+def _script(root: Path, relative: str) -> str:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return relative
+
+
+@pytest.fixture
+def charts(chart_root: Path, make_chart: MakeChart) -> Path:
+    """base <- app <- web; app's dependent test is web, which has no helm test."""
+    hook = _script(chart_root, "scripts/hook")
+    make_chart("base", profiles={"minimal": {"hooks": {"cleanup": [hook, "base"]}}})
+    phases = ("preInstall", "postInstall", "cleanup")
     make_chart(
         "app",
         profiles={
             "minimal": {
-                "namespace": "authored-app",
                 "requires": [{"chart": "base", "profile": "minimal"}],
+                "hooks": {phase: [hook, phase] for phase in phases},
             }
         },
+        dependent_tests=[("web", "minimal")],
+    )
+    make_chart(
+        "web",
+        profiles={
+            "minimal": {"requires": [{"chart": "app", "profile": "minimal"}], "helmTest": False}
+        },
+    )
+    return chart_root
+
+
+BASE = _on("base", "namespace-ensure", "install", "helm-test")
+BASE_UNTESTED = _on("base", "namespace-ensure", "install")
+APP_BODY = ("namespace-ensure", "hook-pre-install", "install", "hook-post-install", "helm-test")
+APP = _on("app", *APP_BODY)
+WEB = _on("web", "namespace-ensure", "install")
+CLEANUPS = [*_on("app", "hook-cleanup"), *_on("base", "hook-cleanup")]
+SKIPPED_BASE = SkippedRequirement("base", "minimal", "base", "default")
+
+
+def _owned_warning(charts: str) -> str:
+    return (
+        EXTERNAL_BOOTSTRAP_WARNING_PREFIX
+        + charts
+        + "; environment-owned preparation/install actions were excluded from this executable plan"
     )
 
-    plan = _compile(
-        chart_root,
-        "app",
-        "minimal",
-        namespace="requested-app",
+
+@pytest.mark.parametrize(
+    ("request_fields", "owned", "requires", "steps", "warnings", "skipped"),
+    [
+        pytest.param({}, (), "install", [*BASE, *APP, *CLEANUPS], [], [], id="install"),
+        pytest.param(
+            {},
+            (),
+            "skip",
+            [*APP, *_on("app", "hook-cleanup")],
+            [SKIPPED_REQUIRES_WARNING_PREFIX + "base:minimal"],
+            [SKIPPED_BASE],
+            id="skip",
+        ),
+        pytest.param(
+            {}, (), "install-untested", [*BASE_UNTESTED, *APP, *CLEANUPS], [], [], id="untested"
+        ),
+        pytest.param(
+            {},
+            ("base",),
+            "install",
+            [*APP, *_on("app", "hook-cleanup")],
+            [_owned_warning("base")],
+            [],
+            id="bootstrap-owns-required",
+        ),
+        pytest.param(
+            {},
+            ("base",),
+            "skip",
+            [*APP, *_on("app", "hook-cleanup")],
+            [_owned_warning("base")],
+            [],
+            id="bootstrap-owns-required-skip",
+        ),
+        pytest.param(
+            {},
+            ("app",),
+            "install",
+            [*BASE, *_on("app", "workload-ready", "helm-test"), *_on("base", "hook-cleanup")],
+            [_owned_warning("app")],
+            [],
+            id="bootstrap-owns-selected",
+        ),
+        pytest.param(
+            {"include_dependent_tests": True},
+            (),
+            "install-untested",
+            [*BASE_UNTESTED, *APP, *WEB, *CLEANUPS],
+            [],
+            [],
+            id="dependent-tests-untested",
+        ),
+        pytest.param(
+            {"include_dependent_tests": True},
+            (),
+            "skip",
+            [*APP, *WEB, *_on("app", "hook-cleanup")],
+            [SKIPPED_REQUIRES_WARNING_PREFIX + "base:minimal"],
+            [SKIPPED_BASE],
+            id="dependent-tests-skip",
+        ),
+        pytest.param(
+            {"namespace": "custom"},
+            (),
+            "install",
+            [
+                *BASE,
+                *_on("app", *APP_BODY, namespace="custom"),
+                *_on("app", "hook-cleanup", namespace="custom"),
+                *_on("base", "hook-cleanup"),
+            ],
+            [],
+            [],
+            id="namespace-relocates-only-the-selected-chart",
+        ),
+        pytest.param(
+            {"lint": True},
+            (),
+            "install",
+            [
+                *_on("base", "namespace-ensure", "helm-lint", "install", "helm-test"),
+                *_on("app", "namespace-ensure", "helm-lint", *APP_BODY[1:]),
+                *CLEANUPS,
+            ],
+            [],
+            [],
+            id="lint",
+        ),
+    ],
+)
+def test_compile_plan_decides_each_entrys_steps(
+    charts: Path,
+    request_fields: dict[str, Any],
+    owned: tuple[str, ...],
+    requires: Requires,
+    steps: list[str],
+    warnings: list[str],
+    skipped: list[SkippedRequirement],
+) -> None:
+    request = ChartTestRequest(chart="app", profile="minimal", **request_fields)
+
+    compiled = _compile(charts, request, owned=owned, requires=requires)
+
+    assert _steps(compiled.plan) == steps
+    assert list(compiled.plan.warnings) == warnings
+    assert list(compiled.skipped) == skipped
+
+
+def test_a_chart_resolving_to_two_namespaces_is_a_plan_error(charts: Path) -> None:
+    request = ChartTestRequest(
+        chart="app", profile="minimal", namespace="custom", include_dependent_tests=True
     )
 
-    namespaces = {
-        action.target.chart: action.target.namespace
-        for action in plan.actions
-        if action.kind is ActionKind.INSTALL
-    }
-    assert namespaces == {"base": "foundation", "app": "requested-app"}
-
-
-def test_chart_test_with_dependent_tests_merges_their_plans_after_its_own(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    lifecycle = make_chart("base") / "chart-lifecycle.yaml"
-    authored = parse_yaml(lifecycle.read_text())
-    authored["spec"]["chartTest"]["dependentTests"] = [{"chart": "app", "profile": "minimal"}]
-    lifecycle.write_text(dump_yaml(authored))
-    make_chart("app", profiles={"minimal": _requires("base")})
-    request = ChartTestRequest(chart="base", profile="minimal", include_dependent_tests=True)
-
-    plan = compile_plan(
-        request, root=chart_root, charts_dir=chart_root / "charts", bootstrap_owned=frozenset()
-    ).plan
-
-    assert [action.action_id for action in plan.actions] == [
-        "chart-test.base.minimal.namespace-ensure",
-        "chart-test.base.minimal.install",
-        "chart-test.base.minimal.helm-test",
-        "chart-test.app.minimal.namespace-ensure",
-        "chart-test.app.minimal.install",
-        "chart-test.app.minimal.helm-test",
-    ]
-
-
-def test_chart_test_without_helm_test_ends_at_its_install(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("app", profiles={"minimal": {"helmTest": False}})
-
-    plan = _compile(chart_root, "app", "minimal")
-
-    assert [action.kind for action in plan.actions] == [
-        ActionKind.NAMESPACE_ENSURE,
-        ActionKind.INSTALL,
-    ]
-
-
-def test_chart_test_lint_runs_between_the_namespace_and_the_install(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("app")
-
-    plan = _compile(chart_root, "app", "minimal", lint=True)
-
-    assert [action.kind for action in plan.actions] == [
-        ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_LINT,
-        ActionKind.INSTALL,
-        ActionKind.HELM_TEST,
-    ]
-    lint = next(action for action in plan.actions if action.kind is ActionKind.HELM_LINT)
-    assert {path.name for path in lint.values} == {"values.yaml"}
-
-
-def test_plan_projection_is_deterministic_and_json_serializable(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("app")
-
-    first = plan_to_dict(_compile(chart_root, "app", "minimal"))
-    second = plan_to_dict(_compile(chart_root, "app", "minimal"))
-
-    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["chart"] == "app"
-    assert first["profile"] == "minimal"
-    assert first["actions"][0]["action_id"].startswith("chart-test.app.minimal.")
-    assert first["actions"][0]["target"]["chart"] == "app"
-    assert "edges" not in first
+    with pytest.raises(PlanError, match=r"app:minimal .*\(custom, default\)"):
+        _compile(charts, request, owned=(), requires="install")
 
 
 @pytest.mark.parametrize(
@@ -232,116 +237,21 @@ def test_bootstrap_owns_a_requirement_only_under_its_exact_lifecycle_identity(
     installs_base: bool,
 ) -> None:
     make_chart("base")
-    make_chart("app", profiles={"minimal": _requires("base")})
+    make_chart("app", profiles={"minimal": {"requires": [{"chart": "base"}]}})
     identity = ExternallySatisfiedLifecycle(
         (chart_root / chart_path).resolve(), "base", profile, namespace
     )
 
-    plan = _compile(chart_root, "app", "minimal", owned=frozenset({identity}))
+    plan = compile_plan(
+        ChartTestRequest(chart="app", profile="minimal"),
+        root=chart_root,
+        charts_dir=chart_root / "charts",
+        bootstrap_owned=frozenset({identity}),
+        requires="install",
+    ).plan
 
-    charts = {action.target.chart for action in plan.actions}
+    charts = {action.entry.chart.name for action in plan.actions}
     assert charts == ({"base", "app"} if installs_base else {"app"})
-
-
-# --- chart-test hooks ------------------------------------------------------
-
-
-def _script(root: Path, relative: str, body: str = "#!/bin/sh\n") -> str:
-    path = root / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body, encoding="utf-8")
-    path.chmod(0o755)
-    return relative
-
-
-def _hooks(root: Path, chart: str, *phases: str) -> dict[str, object]:
-    return {
-        "hooks": {phase: [_script(root, f"scripts/{chart}-{phase}"), chart] for phase in phases}
-    }
-
-
-_ALL_PHASES = ("preInstall", "postInstall", "cleanup")
-
-
-def _kinds(plan: LifecyclePlan) -> list[tuple[str, ActionKind]]:
-    return [(action.target.chart, action.kind) for action in plan.actions]
-
-
-def test_hooks_wrap_install_and_cleanups_form_a_reverse_install_order_tail(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("base", profiles={"minimal": _hooks(chart_root, "base", *_ALL_PHASES)})
-    make_chart(
-        "app",
-        profiles={"minimal": {**_requires("base"), **_hooks(chart_root, "app", *_ALL_PHASES)}},
-    )
-
-    plan = _compile(chart_root, "app", "minimal", lint=True)
-
-    body = [
-        ActionKind.NAMESPACE_ENSURE,
-        ActionKind.HELM_LINT,
-        ActionKind.HOOK_PRE_INSTALL,
-        ActionKind.INSTALL,
-        ActionKind.HOOK_POST_INSTALL,
-        ActionKind.HELM_TEST,
-    ]
-    assert _kinds(plan) == [
-        *(("base", kind) for kind in body),
-        *(("app", kind) for kind in body),
-        ("app", ActionKind.HOOK_CLEANUP),
-        ("base", ActionKind.HOOK_CLEANUP),
-    ]
-    pre = _by_id(plan, "chart-test.app.minimal.hook-pre-install")
-    assert pre.command == ("scripts/app-preInstall", "app")
-    assert pre.values == ()
-    assert pre.target.namespace == "default"
-    assert pre.timeout == "10m"  # the profile's timeout bounds its hooks too
-    assert plan_to_dict(plan)["actions"][2]["command"] == ["scripts/base-preInstall", "base"]
-
-
-def test_undeclared_hooks_compile_no_hook_actions(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart("app", profiles={"minimal": _hooks(chart_root, "app", "postInstall")})
-    make_chart("plain")
-
-    with_post = _compile(chart_root, "app", "minimal")
-    plain = _compile(chart_root, "plain", "minimal")
-
-    assert [kind for _chart, kind in _kinds(with_post)] == [
-        ActionKind.NAMESPACE_ENSURE,
-        ActionKind.INSTALL,
-        ActionKind.HOOK_POST_INSTALL,
-        ActionKind.HELM_TEST,
-    ]
-    assert all(action.command == () for action in plain.actions)
-    assert all(payload["command"] == [] for payload in plan_to_dict(plain)["actions"])
-
-
-def test_dependency_installed_under_its_own_profile_carries_its_own_hooks(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    make_chart(
-        "base",
-        profiles={
-            "minimal": {},
-            "secured": _hooks(chart_root, "base", "preInstall", "cleanup"),
-        },
-    )
-    make_chart("app", profiles={"minimal": _requires("base:secured")})
-
-    plan = _compile(chart_root, "app", "minimal")
-
-    hooks = [(action.action_id, action.command) for action in plan.actions if action.command]
-    assert hooks == [
-        ("chart-test.base.secured.hook-pre-install", ("scripts/base-preInstall", "base")),
-        ("chart-test.base.secured.hook-cleanup", ("scripts/base-cleanup", "base")),
-    ]
-    assert plan.actions[-1].kind is ActionKind.HOOK_CLEANUP
 
 
 @pytest.mark.parametrize(
@@ -361,9 +271,10 @@ def test_compile_rejects_an_unresolvable_hook_executable(
 ) -> None:
     _script(chart_root, "prepare")
     make_chart("app", profiles={"minimal": {"hooks": {"cleanup": [executable]}}})
+    request = ChartTestRequest(chart="app", profile="minimal")
 
     with pytest.raises(SpecError, match=message) as excinfo:
-        _compile(chart_root, "app", "minimal")
+        _compile(chart_root, request, owned=(), requires="install")
     assert "hooks.cleanup[0]" in str(excinfo.value)
 
 
@@ -377,10 +288,8 @@ def test_compile_accepts_a_bare_hook_executable_found_on_path(
     _script(bin_dir, "mint-token")
     monkeypatch.setenv("PATH", str(bin_dir))
     make_chart("app", profiles={"minimal": {"hooks": {"preInstall": ["mint-token", "-q"]}}})
+    request = ChartTestRequest(chart="app", profile="minimal")
 
-    plan = _compile(chart_root, "app", "minimal")
+    plan = _compile(chart_root, request, owned=(), requires="install").plan
 
-    assert _by_id(plan, "chart-test.app.minimal.hook-pre-install").command == (
-        "mint-token",
-        "-q",
-    )
+    assert [a.command for a in plan.actions if a.command] == [("mint-token", "-q")]

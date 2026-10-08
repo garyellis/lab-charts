@@ -58,12 +58,15 @@ def _chart(tmp_path: Path) -> Path:
 
 
 def test_converge_installs_without_helm_wait_then_waits_on_the_manifest_and_instance_label(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     runner = _runner(labelled={"deployment": "web made-by-operator"})
     chart = _chart(tmp_path)
+    caplog.set_level("INFO", logger="chart_manager.shared.cluster.converge")
 
     converge(_lab(runner), Release(name="web", chart=chart, namespace="apps", timeout="5m"))
+
+    assert f"installing web ({chart}) into namespace apps" in caplog.messages
 
     calls = _significant(runner)
     install = calls[0]

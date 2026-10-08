@@ -229,6 +229,8 @@ def make_chart(chart_root: Path) -> MakeChart:
 
         make_chart("alloy", profiles={"minimal": {"requires": [{"chart": "prom"}]}})
 
+    `dependent_tests` lists the (chart, profile) pairs written to `dependentTests`.
+
     Every values file any profile references is created empty, since
     `install_plan` requires them to exist. A profile that
     names no `namespace` is written with `default`, because the lifecycle
@@ -241,6 +243,7 @@ def make_chart(chart_root: Path) -> MakeChart:
         profiles: Mapping[str, Mapping[str, Any]] | None = None,
         values: Sequence[str] = ("values.yaml",),
         version: str = "0.1.0",
+        dependent_tests: Sequence[tuple[str, str]] = (),
     ) -> Path:
         chart_dir = chart_root / "charts" / name
         chart_dir.mkdir(parents=True, exist_ok=True)
@@ -270,7 +273,10 @@ def make_chart(chart_root: Path) -> MakeChart:
                         "chartTest": {
                             "enabled": True,
                             "profiles": spec_profiles,
-                            "dependentTests": [],
+                            "dependentTests": [
+                                {"chart": chart, "profile": profile}
+                                for chart, profile in dependent_tests
+                            ],
                         },
                     },
                 }

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Literal
 
 from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.settings import DEFAULT_CLUSTER_NAME
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 
 
 class ActionKind(StrEnum):
@@ -27,27 +27,18 @@ class ActionKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class ActionTarget:
-    """Coordinates identifying the subject of one action."""
-
-    chart: str
-    profile: str | None = None
-    release: str | None = None
-    namespace: str | None = None
-
-
-@dataclass(frozen=True)
 class LifecycleAction:
-    """One deterministic, immutable unit of chart-test work."""
+    """One step of a chart test: what it does for one install-plan entry."""
 
-    action_id: str
+    entry: InstallPlanEntry
     kind: ActionKind
-    target: ActionTarget
-    chart_path: Path
-    values: tuple[Path, ...] = ()
-    timeout: str | None = None
     #: A hook action's argv; empty otherwise.
     command: tuple[str, ...] = ()
+
+    @property
+    def action_id(self) -> str:
+        """E.g. `chart-test.app.minimal.install`."""
+        return f"chart-test.{self.entry.chart.name}.{self.entry.profile}.{self.kind}"
 
 
 @dataclass(frozen=True)

@@ -6,14 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartTestProfile
 from chart_manager.commands.test.hooks import ChartTestHookRunner
-from chart_manager.commands.test.models import ActionKind, ActionTarget, LifecycleAction
+from chart_manager.commands.test.models import ActionKind, LifecycleAction
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     CommandTimeout,
     ExternalCommandError,
 )
+from chart_manager.shared.charts.chart import Chart, ChartMetadata
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from tests.conftest import FakeCommandRunner
 
 
@@ -32,14 +35,10 @@ def _action(
     kind: ActionKind = ActionKind.HOOK_PRE_INSTALL,
     timeout: str = "1m",
 ) -> LifecycleAction:
-    return LifecycleAction(
-        action_id=f"chart-test.app.minimal.{kind.value}",
-        kind=kind,
-        target=ActionTarget(chart="app", profile="minimal", release="app", namespace="apps"),
-        chart_path=root / "charts" / "app",
-        timeout=timeout,
-        command=command,
-    )
+    metadata = ChartMetadata("app", "0.1.0", "application", ())
+    chart = Chart("app", root / "charts" / "app", metadata, None)
+    spec = ChartTestProfile(namespace="apps", timeout=timeout)
+    return LifecycleAction(InstallPlanEntry(chart, "minimal", spec, "apps", ()), kind, command)
 
 
 def _runner(root: Path, runner: object | None = None) -> ChartTestHookRunner:
