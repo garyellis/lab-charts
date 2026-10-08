@@ -10,8 +10,6 @@ from pathlib import Path, PurePath
 from pydantic import ValidationError
 
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace, ChartWorkspaceSpec
-from chart_manager.api.v1alpha1.local_cluster import LocalCluster
-from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
@@ -76,50 +74,8 @@ class RepositoryWorkspace:
             return None
         return parts[len(prefix)]
 
-    def matches_validation_fanout(self, path: PurePath | str) -> bool:
-        return any(_pattern_matches(pattern, path) for pattern in self.validation_patterns())
 
-    def matching_chart_test_patterns(self, path: PurePath | str) -> tuple[str, ...]:
-        return tuple(
-            pattern for pattern in self.chart_test_patterns() if _pattern_matches(pattern, path)
-        )
-
-    def validation_patterns(self) -> tuple[str, ...]:
-        implicit = (
-            _path_pattern(self.spec.policies_dir),
-            SCHEMA_LOCK_FILE.as_posix(),
-            WORKSPACE_FILE.as_posix(),
-        )
-        return tuple(sorted({*self.spec.fanout.validation, *implicit}))
-
-    def chart_test_patterns(self) -> tuple[str, ...]:
-        implicit = [self.spec.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
-        implicit.extend(
-            _path_pattern(self.repo_chart_path(name))
-            for name in self.spec.chart_test.shared_charts
-        )
-        # LocalCluster dependency discovery is intentionally lazy. A malformed
-        # cluster resource cannot break chart listing or validation.
-        if self.local_cluster_path.is_file():
-            try:
-                cluster = LocalCluster.model_validate(load_yaml_file(self.local_cluster_path))
-            except (YamlError, ValueError):
-                pass
-            else:
-                implicit.append(cluster.spec.cluster.config.as_posix())
-                implicit.extend(
-                    _path_pattern(release.chart)
-                    for release in cluster.spec.bootstrap.releases
-                    if isinstance(release, (LifecycleRelease, LocalChartRelease))
-                )
-        return tuple(sorted({*self.spec.fanout.chart_test, *implicit}))
-
-
-def _path_pattern(path: Path) -> str:
-    return path.as_posix()
-
-
-def _pattern_matches(pattern: str, path: PurePath | str) -> bool:
+def pattern_matches(pattern: str, path: PurePath | str) -> bool:
     """Case-sensitive POSIX matching with recursive ``**`` semantics."""
     path_parts = PurePath(path).as_posix().split("/")
     pattern_parts = pattern.split("/")
@@ -212,5 +168,6 @@ __all__ = [
     "RepositoryWorkspace",
     "discover_workspace_root",
     "load_repository_workspace",
+    "pattern_matches",
     "resolve_repository_root",
 ]

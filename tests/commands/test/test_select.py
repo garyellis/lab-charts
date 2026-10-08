@@ -180,6 +180,7 @@ def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart
     (chart_root / "platform/network/Chart.yaml").write_text(
         "apiVersion: v2\nname: network\nversion: 1.0.0\n"
     )
+    (chart_root / "kind-config.yaml").write_text("")
     (chart_root / ".chart-manager/local-cluster.yaml").write_text(
         dump_yaml(
             {
@@ -211,6 +212,14 @@ def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart
     assert selection.tests[0].reasons[0].detail == (
         "platform/network is part of the LocalCluster every chart test runs on"
     )
+
+
+def test_a_malformed_local_cluster_fails_selection(chart_root: Path, make_chart: MakeChart) -> None:
+    make_chart("alpha")
+    (chart_root / ".chart-manager/local-cluster.yaml").write_text("kind: [\n")
+
+    with pytest.raises(SpecError, match="invalid local resource"):
+        _select(chart_root, ["charts/alpha/values.yaml"])
 
 
 def test_a_fanout_change_and_a_chart_change_together_also_select_dependent_profiles(

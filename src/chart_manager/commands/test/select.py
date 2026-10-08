@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE, ChartTestSpec
+from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import CapabilityUnavailableError, ChartManagerError, SpecError
 from chart_manager.shared.charts.chart import chart_names, load_chart
 from chart_manager.shared.charts.lifecycle import (
@@ -16,7 +17,8 @@ from chart_manager.shared.charts.lifecycle import (
     require_chart_test,
     require_chart_test_profile,
 )
-from chart_manager.shared.workspace import RepositoryWorkspace
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.workspace import WORKSPACE_FILE, RepositoryWorkspace, pattern_matches
 
 
 class ReasonCode(StrEnum):
@@ -146,8 +148,10 @@ def _reasons_for(
         if reason not in found:
             found.append(reason)
 
-    matches = workspace.matching_chart_test_patterns
-    fanout = [(path, pattern) for path in paths for pattern in matches(path)]
+    patterns = _fanout_patterns(workspace)
+    fanout = [
+        (path, pattern) for path in paths for pattern in patterns if pattern_matches(pattern, path)
+    ]
     for name, profile in profiles.items():
         for path, pattern in fanout:
             detail = _fanout_detail(pattern, workspace)
@@ -174,6 +178,28 @@ def _reasons_for(
                 Reason(ReasonCode.DECLARED_DEPENDENT_TEST, path, detail),
             )
     return selected, errors
+
+
+def _fanout_patterns(workspace: RepositoryWorkspace) -> tuple[str, ...]:
+    """Patterns whose changes select every chart test.
+
+    These are the authored fanout, the workspace files, the shared charts, and the LocalCluster's
+    kind config and local bootstrap charts. A malformed LocalCluster fails selection.
+    """
+    implicit = [workspace.spec.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
+    implicit.extend(
+        workspace.repo_chart_path(name).as_posix()
+        for name in workspace.spec.chart_test.shared_charts
+    )
+    if workspace.local_cluster_path.is_file():
+        cluster = load_cluster(workspace)
+        implicit.append(cluster.spec.cluster.config.as_posix())
+        implicit.extend(
+            release.chart.as_posix()
+            for release in cluster.spec.bootstrap.releases
+            if isinstance(release, (LifecycleRelease, LocalChartRelease))
+        )
+    return tuple(sorted({*workspace.spec.fanout.chart_test, *implicit}))
 
 
 def _fanout_detail(pattern: str, workspace: RepositoryWorkspace) -> str:

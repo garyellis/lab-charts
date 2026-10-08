@@ -26,7 +26,12 @@ from chart_manager.shared.charts.lifecycle import (
     require_validation,
     validation_status,
 )
-from chart_manager.shared.workspace import RepositoryWorkspace
+from chart_manager.shared.workspace import (
+    SCHEMA_LOCK_FILE,
+    WORKSPACE_FILE,
+    RepositoryWorkspace,
+    pattern_matches,
+)
 
 # Merged under each chart's own `triggers`; an authored pattern with the same
 # spelling replaces the default. Rendering inputs touch every environment.
@@ -164,6 +169,13 @@ def _reasons_for(
     prefix = len(workspace.spec.charts_dir.parts)
     marker = workspace.marker.relative_to(workspace.root)
     policies = workspace.spec.policies_dir.parts
+    # Changes to these validate every configured environment.
+    fanout_patterns = (
+        *workspace.spec.fanout.validation,
+        workspace.spec.policies_dir.as_posix(),
+        SCHEMA_LOCK_FILE.as_posix(),
+        WORKSPACE_FILE.as_posix(),
+    )
 
     def select_envs(chart: str, envs: Iterable[str], raw: str, reason: Reason) -> None:
         for env in envs:
@@ -175,7 +187,7 @@ def _reasons_for(
 
     for raw in sorted({raw for raw in changes if raw}):
         path = Path(raw)
-        if workspace.matches_validation_fanout(path):
+        if any(pattern_matches(pattern, path) for pattern in fanout_patterns):
             if path == marker or path.parts[: len(policies)] == policies:
                 code, rule = ReasonCode.REPOSITORY_POLICY, "repository policy"
             else:
