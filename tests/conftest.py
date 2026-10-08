@@ -407,7 +407,7 @@ def materialize_dependency(
 def schema_cache(tmp_path: Path) -> tuple[Any, Any]:
     """A locked schema generation and an empty store under `tmp_path / "schema-cache"`."""
     from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore
-    from tests import schema_fixtures  # imports this module
+    from tests.commands.validate.schemas import schema_fixtures  # imports this module
 
     lock, _, snapshots = schema_fixtures.schema_store(tmp_path / "upstream")
     return lock, KubeconformSchemaStore(cache_root=tmp_path / "schema-cache", snapshots=snapshots)
@@ -418,7 +418,7 @@ def schema_workspace(tmp_path: Path, schema_cache: tuple[Any, Any]) -> Repositor
     """A workspace whose locked schema generation is synced into a tmp cache."""
     from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
     from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
-    from tests import schema_fixtures  # imports this module
+    from tests.commands.validate.schemas import schema_fixtures  # imports this module
 
     lock, store = schema_cache
     store.sync(lock)
