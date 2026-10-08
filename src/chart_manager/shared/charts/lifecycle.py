@@ -77,7 +77,7 @@ def validate_chart_lifecycle_identity(
 ) -> None:
     """Require lifecycle, Helm, and directory identities to agree.
 
-    ``load_helm_chart`` has already established that ``chart_name`` is both
+    ``load_chart`` has already established that ``chart_name`` is both
     the directory name and the ``Chart.yaml`` name.
     """
     directory_name = chart_directory.name

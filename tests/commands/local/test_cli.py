@@ -20,7 +20,7 @@ from chart_manager.commands.local.models import (
 from chart_manager.commands.local.targets import ResolvedStackTarget
 from chart_manager.plumbing.yaml_files import parse_yaml
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import resolve_chart_target
+from chart_manager.shared.charts.chart import Chart, resolve_chart_target
 from tests.conftest import cli
 
 pytestmark = pytest.mark.usefixtures("tmp_workspace")
@@ -134,7 +134,7 @@ def test_chart_up_delegates_profile_and_skip_installed(
 
     assert result.exit_code == 0, result.output
     target, options = recorded.requests[0]
-    assert target.kind == "chart"
+    assert isinstance(target, Chart)
     assert options["profile"] == "telemetry"
     assert options["skip_installed"] is True
 

@@ -75,7 +75,7 @@ def _resolve_local_target(root: Path, target: str) -> ResolvedLocalTarget:
 def _resolve_stack_target(root: Path, stack: str) -> ResolvedStackTarget:
     resolved = _resolve_local_target(root, stack)
     if not isinstance(resolved, ResolvedStackTarget):
-        raise ChartManagerError(f"--stack must select a LocalStack, not {resolved.kind}")
+        raise ChartManagerError("--stack must select a LocalStack, not chart")
     return resolved
 
 

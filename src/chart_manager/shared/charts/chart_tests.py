@@ -1,46 +1,31 @@
-"""Compose Helm charts with enabled live-chart test configuration."""
+"""Compose charts with enabled live-chart test configuration."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.shared.charts.chart import (
-    ChartRepository,
-    ChartUnderTest,
-)
+from chart_manager.shared.charts.chart import ChartUnderTest, chart_names, load_chart
 from chart_manager.shared.charts.lifecycle import (
-    LIFECYCLE_FILENAME,
     CapabilityStatus,
     chart_test_status,
-    load_optional_chart_lifecycle,
     require_chart_test,
     require_chart_test_profile,
-    validate_chart_lifecycle_identity,
 )
 
 
 class ChartTestCatalog:
-    """Load chart-test capabilities without coupling Helm discovery to them."""
+    """Load the charts under one directory together with their chart tests."""
 
     def __init__(self, root: Path, *, charts_dir: Path) -> None:
-        """Anchor Helm and lifecycle-intent lookup at ``root``."""
-        self.repository = ChartRepository(root, charts_dir=charts_dir)
+        """Anchor chart lookup at ``root / charts_dir``."""
+        self.charts_dir = root.resolve() / charts_dir
 
     def get(self, name: str) -> ChartUnderTest:
         """Return ``name`` composed with its required, enabled chart tests."""
-        chart = self.repository.get(name)
-        lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
-        if lifecycle is not None:
-            validate_chart_lifecycle_identity(
-                lifecycle,
-                chart_name=chart.name,
-                chart_directory=chart.path,
-            )
-        return ChartUnderTest(
-            chart=chart,
-            spec=require_chart_test(lifecycle, chart_name=chart.name),
-        )
+        chart = load_chart(self.charts_dir / name)
+        spec = require_chart_test(chart.lifecycle, chart_name=chart.name)
+        return ChartUnderTest(chart=chart, spec=spec)
 
     def enabled_names(self) -> list[str]:
         """Return charts whose chart-test capability is enabled.
@@ -48,19 +33,12 @@ class ChartTestCatalog:
         Present malformed configuration fails loudly rather than silently
         shrinking a CI matrix.
         """
-        enabled: list[str] = []
-        for name in self.repository.list_names():
-            chart = self.repository.get(name)
-            lifecycle = load_optional_chart_lifecycle(chart.path / LIFECYCLE_FILENAME)
-            if lifecycle is not None:
-                validate_chart_lifecycle_identity(
-                    lifecycle,
-                    chart_name=chart.name,
-                    chart_directory=chart.path,
-                )
-            if chart_test_status(lifecycle) is CapabilityStatus.ENABLED:
-                enabled.append(name)
-        return enabled
+        return [
+            name
+            for name in chart_names(self.charts_dir)
+            if chart_test_status(load_chart(self.charts_dir / name).lifecycle)
+            is CapabilityStatus.ENABLED
+        ]
 
     def value_paths(self, chart: ChartUnderTest, profile: str) -> list[Path]:
         """Resolve a profile's values files; every path must exist."""

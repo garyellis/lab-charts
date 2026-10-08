@@ -45,7 +45,7 @@ from chart_manager.plumbing.progress import (
     warn,
 )
 from chart_manager.settings import DEFAULT_CLUSTER_NAME, Settings
-from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.charts.lifecycle import require_chart_test_profile
@@ -210,7 +210,7 @@ def plan(
         command="reset" if destroys else "up",
         cluster_name=DEFAULT_CLUSTER_NAME,
         target=target.name,
-        target_kind=target.kind,
+        target_kind="chart" if isinstance(target, Chart) else target.kind,
         destroys=destroys,
         entries=tuple(entries),
         provisioning_hooks_enabled=run_hooks,
@@ -380,7 +380,7 @@ def _converge_one(
 def _target_releases(
     target: ResolvedLocalTarget, profile: str | None, root: Path
 ) -> tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...]:
-    if isinstance(target, ResolvedChartTarget):
+    if isinstance(target, Chart):
         return (
             LifecycleRelease(
                 type="lifecycle",
@@ -412,7 +412,7 @@ def _preflight(
         if isinstance(release, (OciChartRelease, RepoChartRelease)):
             steps.append(release)
             continue
-        catalog, install_plan = lifecycle_install_plan(root, release, source="local release")
+        catalog, install_plan = lifecycle_install_plan(root, release)
         kept: list[InstallPlanEntry] = []
         for entry in install_plan:
             chart = catalog.get(entry.chart)

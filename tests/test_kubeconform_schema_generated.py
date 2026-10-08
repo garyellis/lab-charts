@@ -13,6 +13,7 @@ from chart_manager.commands.validate.schemas.errors import (
 )
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.shared.charts.chart import load_chart
 from tests.conftest import crd_manifest
 
 from .schema_fixtures import workspace
@@ -214,13 +215,20 @@ def test_uncached_providers_render_in_one_batch(env):
     assert batches == [("first", "second")]
 
 
-def test_unrelated_nonprovider_values_and_lifecycle_errors_are_not_loaded(env):
+def test_unrelated_nonprovider_values_are_not_loaded(env):
     chart(env.root, "provider", crd_manifest())
     unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
     (unrelated / "values.yaml").write_text("[broken YAML")
-    (unrelated / "chart-lifecycle.yaml").write_text("[broken YAML")
     assert schema_at(env.prepare()).is_file()
     assert env.renderer.calls == ["provider"]
+
+
+def test_a_broken_lifecycle_in_any_chart_fails_discovery_naming_it(env):
+    chart(env.root, "provider", crd_manifest())
+    unrelated = chart(env.root, "unrelated", "apiVersion: v1\nkind: ConfigMap\n")
+    (unrelated / "chart-lifecycle.yaml").write_text("[broken YAML")
+    with pytest.raises(KubeconformSchemaConfigurationError, match="unrelated"):
+        env.prepare()
 
 
 def test_stale_dependencies_render_once_then_cache(env, monkeypatch):
@@ -294,7 +302,7 @@ def test_nested_archives_are_scanned_without_extracting(env):
     provider = chart(env.root, "provider", "apiVersion: v1\nkind: ConfigMap\n")
     (provider / "charts").mkdir()
     (provider / "charts/dep.tgz").write_bytes(outer)
-    assert generated._possible_crd_provider(provider)
+    assert generated._possible_crd_provider(load_chart(provider))
     assert not (env.root / "dep").exists()
 
 

@@ -9,7 +9,7 @@ import pytest
 
 from chart_manager.commands import validate
 from chart_manager.commands.validate import cli as validate_cli
-from chart_manager.plumbing.errors import MissingToolError
+from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from tests.conftest import cli, write_workspace
 
@@ -106,13 +106,22 @@ def test_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no
     assert cli("chart", "validate", "--all", "-o", "json").exit_code == exit_code_for(Outcome.TOOL)
 
 
-def test_a_missing_binary_reaches_main_unchanged(fake_run) -> None:  # type: ignore[no-untyped-def]
-    """`main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
+@pytest.mark.parametrize(
+    ("argv", "error"),
+    [(("--all",), MissingToolError), (("charts/broken",), SpecError)],
+    ids=["missing binary", "malformed lifecycle of the named chart"],
+)
+def test_a_domain_error_reaches_main_unchanged(fake_run, tmp_path: Path, argv, error) -> None:  # type: ignore[no-untyped-def]
+    """`main.py` maps each error to its exit code (see test_exit_codes.py)."""
+    broken = tmp_path / "charts" / "broken"
+    broken.mkdir(parents=True)
+    (broken / "Chart.yaml").write_text("apiVersion: v2\nname: broken\nversion: 0.1.0\n")
+    (broken / "chart-lifecycle.yaml").write_text("kind: Wrong\n")
     fake_run.result = MissingToolError("required tool not found on PATH: helm")
 
-    result = cli("chart", "validate", "--all", "-o", "json")
+    result = cli("chart", "validate", *argv, "-o", "json")
 
-    assert isinstance(result.exception, MissingToolError)
+    assert isinstance(result.exception, error)
 
 
 def test_json_output_lists_each_row_with_its_checks(fake_run) -> None:  # type: ignore[no-untyped-def]

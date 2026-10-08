@@ -22,7 +22,7 @@ from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.integrations.git import Git
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import chart_names, load_chart
 from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
@@ -89,9 +89,8 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     dashboard.write_text("{}", encoding="utf-8")
 
     workspace = workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR)
-    repository = ChartRepository(tmp_path, charts_dir=workspace.spec.charts_dir)
-    assert repository.list_names() == ["demo"]
-    assert repository.get("demo").path == chart
+    assert chart_names(workspace.charts_root) == ["demo"]
+    assert load_chart(workspace.chart_path("demo")).path == chart
 
     runner = (
         FakeCommandRunner()
