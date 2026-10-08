@@ -46,17 +46,12 @@ from chart_manager.plumbing.progress import (
 )
 from chart_manager.settings import DEFAULT_CLUSTER_NAME, Settings
 from chart_manager.shared.charts.chart import Chart
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.install_plan import InstallPlanEntry
-from chart_manager.shared.charts.lifecycle import require_chart_test_profile
+from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from chart_manager.shared.cluster import bootstrap
-from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
+from chart_manager.shared.cluster.bootstrap import BootstrapStep, ExternallySatisfiedLifecycle
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
 from chart_manager.shared.cluster.local_cluster import load_cluster
-from chart_manager.shared.cluster.releases import (
-    helm_release,
-    lifecycle_install_plan,
-)
+from chart_manager.shared.cluster.releases import helm_release, release
 from chart_manager.shared.cluster.session import (
     Session,
     attach,
@@ -70,20 +65,14 @@ from chart_manager.shared.workspace import RepositoryWorkspace
 _LOG = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class _LifecycleStep:
-    """A lifecycle release resolved to its install plan."""
-
-    catalog: ChartTestCatalog
-    plan: tuple[InstallPlanEntry, ...]
-
-
-type _Step = _LifecycleStep | OciChartRelease | RepoChartRelease
+# A lifecycle release is its install plan; OCI and repository releases install as authored.
+type _Step = tuple[InstallPlanEntry, ...] | OciChartRelease | RepoChartRelease
 
 
 @dataclass(frozen=True)
 class _Prepared:
     cluster: LocalCluster
+    bootstrap: tuple[BootstrapStep, ...]
     steps: tuple[_Step, ...]
 
 
@@ -182,30 +171,25 @@ def plan(
     Runs the same preflight as the real command, so a plan that cannot resolve fails
     the same way. Bootstrap entries are sorted rather than in authored order.
     """
-    cluster = load_cluster(workspace)
-    owned = bootstrap.preflight(cluster, root=workspace.root)
-    steps = _preflight(
-        _target_releases(target, profile, workspace.root),
-        owned,
-        workspace.root,
-        progress,
-    )
+    prepared = _prepare(target, profile, workspace, progress)
     entries = [
         DevClusterPlanEntry(i.chart, i.profile, i.namespace, "bootstrap")
-        for i in sorted(owned, key=lambda i: (i.chart, i.profile, i.namespace))
+        for i in sorted(
+            bootstrap.owned(prepared.bootstrap), key=lambda i: (i.chart, i.profile, i.namespace)
+        )
     ]
-    for target_step in steps:
-        if isinstance(target_step, _LifecycleStep):
-            for entry in target_step.plan:
-                chart = target_step.catalog.get(entry.chart)
-                namespace = require_chart_test_profile(chart.spec, entry.profile).namespace
-                entries.append(DevClusterPlanEntry(entry.chart, entry.profile, namespace, "target"))
+    for target_step in prepared.steps:
+        if isinstance(target_step, tuple):
+            entries.extend(
+                DevClusterPlanEntry(entry.chart.name, entry.profile, entry.namespace, "target")
+                for entry in target_step
+            )
             continue
         _release, label = helm_release(target_step, workspace.root)
         entries.append(
             DevClusterPlanEntry(target_step.name, label, target_step.namespace, "target")
         )
-    hooks = cluster.spec.cluster.hooks
+    hooks = prepared.cluster.spec.cluster.hooks
     return DevClusterPlan(
         command="reset" if destroys else "up",
         cluster_name=DEFAULT_CLUSTER_NAME,
@@ -241,9 +225,11 @@ def _prepare(
     progress: ProgressCallback | None,
 ) -> _Prepared:
     cluster = load_cluster(workspace)
-    owned = bootstrap.preflight(cluster, root=workspace.root)
+    steps = bootstrap.preflight(cluster, root=workspace.root)
     releases = _target_releases(target, profile, workspace.root)
-    return _Prepared(cluster, _preflight(releases, owned, workspace.root, progress))
+    return _Prepared(
+        cluster, steps, _preflight(releases, bootstrap.owned(steps), workspace.root, progress)
+    )
 
 
 def _converge(
@@ -258,7 +244,7 @@ def _converge(
     summary = RunSummary()
     installed_keys = _installed_keys(session, progress)
     try:
-        outcomes = bootstrap.bootstrap(session, prepared.cluster, root=root, progress=progress)
+        outcomes = bootstrap.bootstrap(session, prepared.bootstrap, root=root, progress=progress)
     except ReleaseFailed as exc:
         if exc.diagnostics.strip():
             emit(progress, info(exc.diagnostics))
@@ -268,13 +254,13 @@ def _converge(
         bucket.append(DevClusterEntryOutcome(outcome.name, outcome.profile, outcome.namespace))
         installed_keys.add((outcome.namespace, outcome.name))
     for target_step in prepared.steps:
-        if isinstance(target_step, _LifecycleStep):
-            releases = _lifecycle_releases(target_step, summary, progress)
+        if isinstance(target_step, tuple):
+            releases = [(release(entry, sets={}), entry.profile) for entry in target_step]
         else:
             releases = [helm_release(target_step, root)]
-        for release, label in releases:
+        for planned, label in releases:
             _converge_one(
-                session, release, label, installed_keys, summary, skip_installed, progress
+                session, planned, label, installed_keys, summary, skip_installed, progress
             )
     wait_apps_wildcard_ready(summary, kubectl=session.kubectl, progress=progress)
     warn_on_port_mapping_drift(
@@ -310,34 +296,6 @@ def _installed_keys(session: Session, progress: ProgressCallback | None) -> set[
         )
         return set()
     return {key for key, state in releases.items() if state in {"deployed", "failed"}}
-
-
-def _lifecycle_releases(
-    target_step: _LifecycleStep, summary: RunSummary, progress: ProgressCallback | None
-) -> list[tuple[Release, str]]:
-    """Each plan entry as a release; an entry that does not resolve is a failed row."""
-    releases = []
-    for entry in target_step.plan:
-        try:
-            chart = target_step.catalog.get(entry.chart)
-            profile = require_chart_test_profile(chart.spec, entry.profile)
-            values = target_step.catalog.value_paths(chart, entry.profile)
-        except ChartManagerError as exc:
-            _LOG.error(
-                "chart resolution failed: chart=%s profile=%s: %s", entry.chart, entry.profile, exc
-            )
-            emit(progress, failure("chart resolution failed:", f"{entry.chart}: {exc}"))
-            summary.failed.append(DevClusterEntryFailure(entry.chart, entry.profile, "?", str(exc)))
-            continue
-        release = Release(
-            name=entry.chart,
-            chart=chart.path,
-            namespace=profile.namespace,
-            values=tuple(values),
-            timeout=profile.timeout,
-        )
-        releases.append((release, entry.profile))
-    return releases
 
 
 def _converge_one(
@@ -408,41 +366,36 @@ def _preflight(
     """
     seen: dict[Path, tuple[str, str]] = {}
     steps: list[_Step] = []
-    for release in releases:
-        if isinstance(release, (OciChartRelease, RepoChartRelease)):
-            steps.append(release)
+    for authored in releases:
+        if isinstance(authored, (OciChartRelease, RepoChartRelease)):
+            steps.append(authored)
             continue
-        catalog, install_plan = lifecycle_install_plan(root, release)
         kept: list[InstallPlanEntry] = []
-        for entry in install_plan:
-            chart = catalog.get(entry.chart)
-            chart_path = chart.path.resolve()
-            entry_profile = require_chart_test_profile(chart.spec, entry.profile)
-            namespace = entry_profile.namespace
-            if (
-                ExternallySatisfiedLifecycle(chart_path, entry.chart, entry.profile, namespace)
-                in owned
-            ):
+        resolved = install_plan(root / authored.chart.parent, authored.chart.name, authored.profile)
+        for entry in resolved:
+            if ExternallySatisfiedLifecycle.of(entry) in owned:
                 continue
-            identity = (entry.profile, namespace)
+            chart_path = entry.chart.path.resolve()
+            identity = (entry.profile, entry.namespace)
             previous = seen.get(chart_path)
             if previous == identity:
                 continue
             if previous is not None:
                 raise ChartManagerError(
-                    f"conflicting local lifecycle identities for {entry.chart}: "
-                    f"first {previous[0]} in {previous[1]}, then {entry.profile} in {namespace}"
+                    f"conflicting local lifecycle identities for {entry.chart.name}: "
+                    f"first {previous[0]} in {previous[1]}, then {entry.profile} in "
+                    f"{entry.namespace}"
                 )
             seen[chart_path] = identity
-            if entry_profile.hooks is not None:
+            if entry.spec.hooks is not None:
                 message = (
                     f"local up does not run chart-test hooks declared by "
-                    f"{entry.chart}:{entry.profile}"
+                    f"{entry.chart.name}:{entry.profile}"
                 )
                 _LOG.warning("%s", message)
                 emit(progress, warn(message))
             kept.append(entry)
-        steps.append(_LifecycleStep(catalog, tuple(kept)))
+        steps.append(tuple(kept))
     return tuple(steps)
 
 

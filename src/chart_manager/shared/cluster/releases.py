@@ -7,27 +7,23 @@ from dataclasses import replace
 from pathlib import Path
 
 from chart_manager.api.v1alpha1.releases import (
-    LifecycleRelease,
     LocalChartRelease,
     OciChartRelease,
     RepoChartRelease,
 )
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
+from chart_manager.shared.charts.install_plan import InstallPlanEntry
 from chart_manager.shared.cluster.converge import Release
 
 
-def lifecycle_install_plan(
-    root: Path, release: LifecycleRelease
-) -> tuple[ChartTestCatalog, list[InstallPlanEntry]]:
-    """Resolve one lifecycle release to its catalog and ordered install plan.
-
-    The catalog is anchored at the release's own parent directory rather than
-    the repository-wide charts dir.
-    """
-    catalog = ChartTestCatalog(root, charts_dir=release.chart.parent)
-    return catalog, DependencyResolver(catalog.get).install_plan(
-        release.chart.name, release.profile
+def release(entry: InstallPlanEntry, *, sets: Mapping[str, str]) -> Release:
+    """The Helm release one install-plan entry installs, with runtime `--set` values."""
+    return Release(
+        name=entry.chart.name,
+        chart=entry.chart.path,
+        namespace=entry.namespace,
+        values=entry.values,
+        sets=sets,
+        timeout=entry.spec.timeout,
     )
 
 
@@ -77,7 +73,7 @@ def oci_chart_ref(release: OciChartRelease) -> str:
 
 
 __all__ = [
-    "lifecycle_install_plan",
     "oci_chart_ref",
     "oci_identity",
+    "release",
 ]

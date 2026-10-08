@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle, ChartTestSpec
+from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.plumbing.errors import ChartNotFoundError, SpecError, YamlError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import inside_root
@@ -114,29 +114,6 @@ def chart_names(charts_dir: Path) -> list[str]:
         if path.is_dir() and (path / "Chart.yaml").exists()
     ]
     return sorted(names)
-
-
-@dataclass(frozen=True)
-class ChartUnderTest:
-    """A chart paired with its live-chart test configuration."""
-
-    chart: Chart
-    spec: ChartTestSpec
-
-    @property
-    def name(self) -> str:
-        """Return the underlying chart name."""
-        return self.chart.name
-
-    @property
-    def path(self) -> Path:
-        """Return the underlying chart directory."""
-        return self.chart.path
-
-    @property
-    def metadata(self) -> ChartMetadata:
-        """Return the underlying Helm metadata."""
-        return self.chart.metadata
 
 
 def resolve_chart_target(workspace: RepositoryWorkspace, chart: str) -> Chart:

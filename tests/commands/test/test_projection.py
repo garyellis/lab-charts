@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from chart_manager.commands.test.models import (
     ActionKind,
     ActionTarget,
@@ -15,7 +13,6 @@ from chart_manager.commands.test.plan import (
     exclude_bootstrap_owned_charts,
     exclude_required_lifecycles,
 )
-from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 ROOT = Path.cwd()
 
@@ -57,27 +54,12 @@ def cluster_plan() -> LifecyclePlan:
     )
 
 
-def externally_satisfied(
-    chart: str,
-    *,
-    profile: str = "minimal",
-    namespace: str = "monitoring",
-    chart_path: Path | None = None,
-) -> ExternallySatisfiedLifecycle:
-    return ExternallySatisfiedLifecycle(
-        chart_path=(chart_path or Path("charts") / chart).resolve(),
-        chart=chart,
-        profile=profile,
-        namespace=namespace,
-    )
-
-
 def test_removes_bootstrap_chart_actions() -> None:
     original = cluster_plan()
 
     projected = exclude_bootstrap_owned_charts(
         original,
-        frozenset({externally_satisfied("cilium")}),
+        frozenset({("cilium", "minimal")}),
         root=ROOT,
     )
 
@@ -101,7 +83,7 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
     original_action_ids = [item.action_id for item in original.actions]
 
     projected = exclude_bootstrap_owned_charts(
-        original, frozenset({externally_satisfied("cilium")}), root=ROOT
+        original, frozenset({("cilium", "minimal")}), root=ROOT
     )
 
     assert [item.action_id for item in projected.actions] == [
@@ -112,7 +94,7 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
 def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install() -> None:
     projected = exclude_bootstrap_owned_charts(
         cluster_plan(),
-        frozenset({externally_satisfied("grafana"), externally_satisfied("cilium")}),
+        frozenset({("grafana", "minimal"), ("cilium", "minimal")}),
         root=ROOT,
     )
 
@@ -125,26 +107,6 @@ def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install(
         a for a in cluster_plan().actions if a.action_id.endswith("grafana:minimal:install")
     )
     assert ready.input_digest != install.input_digest
-
-
-@pytest.mark.parametrize(
-    "identity",
-    [
-        externally_satisfied("cilium", profile="full"),
-        externally_satisfied("cilium", namespace="kube-system"),
-        externally_satisfied("cilium", chart_path=Path("elsewhere/cilium")),
-        externally_satisfied("not-in-plan"),
-    ],
-    ids=["other-profile", "other-namespace", "other-chart-path", "absent-chart"],
-)
-def test_requires_exact_managed_lifecycle_identity(
-    identity: ExternallySatisfiedLifecycle,
-) -> None:
-    original = cluster_plan()
-
-    projected = exclude_bootstrap_owned_charts(original, frozenset({identity}), root=ROOT)
-
-    assert projected is original
 
 
 def test_skip_requires_removes_every_required_action_including_tests() -> None:

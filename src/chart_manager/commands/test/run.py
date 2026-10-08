@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import replace
 
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.commands.test.hooks import ChartTestHookRunner
 from chart_manager.commands.test.models import (
     ActionKind,
@@ -40,9 +41,9 @@ from chart_manager.plumbing.progress import (
     warn,
 )
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster import bootstrap
+from chart_manager.shared.cluster.bootstrap import BootstrapStep
 from chart_manager.shared.cluster.converge import (
     DEFAULT_TIMEOUT,
     Release,
@@ -76,7 +77,7 @@ def plan(request: ChartTestRequest, *, workspace: RepositoryWorkspace) -> Lifecy
     With `--skip-requires` the plan describes reusing an existing cluster, and warns
     about the fallback when none exists, which only a live cluster can decide.
     """
-    compiled = _compile(request, workspace, lint_helm=None)
+    compiled, _ = _compile(request, workspace, load_cluster(workspace), lint_helm=None)
     if not request.skip_requires:
         return compiled.plan
     if request.ensure_cluster:
@@ -124,7 +125,7 @@ def run(
         else None
     )
     effective = replace(request, skip_requires=False) if fresh_cluster else request
-    compiled = _compile(effective, workspace, lint_helm=lint_helm)
+    compiled, bootstrap_steps = _compile(effective, workspace, cluster, lint_helm=lint_helm)
     test_plan = compiled.plan
     if fresh_cluster:
         requested = [(request.chart, request.profile)]
@@ -160,10 +161,10 @@ def run(
 
     outcome = ChartTestOutcome(chart=request.chart, profile=request.profile, cluster_name=name)
     if verify_only:
-        bootstrap.verify(cluster, root=root, releases=installed(session))
+        bootstrap.verify(bootstrap_steps, root=root, releases=installed(session))
     else:
         try:
-            bootstrap.bootstrap(session, cluster, root=root, progress=progress)
+            bootstrap.bootstrap(session, bootstrap_steps, root=root, progress=progress)
         except ReleaseFailed as exc:
             if exc.diagnostics.strip():
                 emit(progress, info(exc.diagnostics))
@@ -187,7 +188,7 @@ def run(
 
 def teardown_plan(request: TeardownRequest, *, workspace: RepositoryWorkspace) -> LifecyclePlan:
     """The cleanup hooks `teardown` would run, in order; touches nothing."""
-    compiled = _compile(
+    compiled, _ = _compile(
         ChartTestRequest(
             chart=request.chart,
             profile=request.profile,
@@ -196,6 +197,7 @@ def teardown_plan(request: TeardownRequest, *, workspace: RepositoryWorkspace) -
             include_dependent_tests=request.include_dependent_tests,
         ),
         workspace,
+        load_cluster(workspace),
         lint_helm=None,
     )
     cleanups = tuple(a for a in compiled.plan.actions if a.kind is ActionKind.HOOK_CLEANUP)
@@ -253,13 +255,22 @@ def teardown(
 
 
 def _compile(
-    request: ChartTestRequest, workspace: RepositoryWorkspace, *, lint_helm: Helm | None
-) -> CompiledPlan:
-    """Resolve what bootstrap owns (linting it with `lint_helm`), then compile the plan."""
+    request: ChartTestRequest,
+    workspace: RepositoryWorkspace,
+    cluster: LocalCluster,
+    *,
+    lint_helm: Helm | None,
+) -> tuple[CompiledPlan, tuple[BootstrapStep, ...]]:
+    """Resolve bootstrap (linting it with `lint_helm`), then compile the plan without it."""
     root = workspace.root
-    owned = bootstrap.preflight(load_cluster(workspace), root=root, helm=lint_helm)
-    catalog = ChartTestCatalog(root, charts_dir=workspace.spec.charts_dir)
-    return compile_plan(request, root=root, catalog=catalog, bootstrap_owned=owned)
+    steps = bootstrap.preflight(cluster, root=root, helm=lint_helm)
+    compiled = compile_plan(
+        request,
+        root=root,
+        charts_dir=workspace.charts_root,
+        bootstrap_owned=bootstrap.owned(steps),
+    )
+    return compiled, steps
 
 
 def _require_skipped(

@@ -1,4 +1,4 @@
-"""DependencyResolver install ordering.
+"""`install_plan` resolution and install ordering.
 
 Asserted against synthetic chart trees, not the repo's own `charts/` -- see
 tests/conftest.py. The real tree is exercised by a structural smoke test at
@@ -6,17 +6,20 @@ the bottom that survives new charts and new dependency edges.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from chart_manager.plumbing.errors import (
     CapabilityUnavailableError,
+    ChartManagerError,
+    ChartNotFoundError,
     DependencyCycleError,
+    SpecError,
 )
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.install_plan import DependencyResolver, InstallPlanEntry
+from chart_manager.shared.charts.install_plan import install_plan
 from tests.conftest import CHARTS_DIR
 
 from .conftest import REPO_ROOT, MakeChart
@@ -31,46 +34,36 @@ def _requires(*refs: str) -> dict[str, list[dict[str, str]]]:
     return {"requires": parsed}
 
 
-def test_install_plan_orders_requirements_before_target(
+def test_install_plan_resolves_each_entry_requirements_first(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    make_chart("prometheus-operator")
-    make_chart("alloy", profiles={"minimal": _requires("prometheus-operator")})
-
-    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "alloy", "minimal"
-    )
-
-    assert [entry.chart for entry in plan] == [
-        "prometheus-operator",
-        "alloy",
-    ]
-
-
-def test_install_plan_expands_nested_profiles(chart_root: Path, make_chart: MakeChart) -> None:
-    for name in ("istio-base", "mimir-distributed", "loki", "tempo"):
-        make_chart(name)
+    make_chart("prometheus-operator", profiles={"minimal": {"namespace": "operators"}})
     make_chart(
-        "grafana",
+        "alloy",
         profiles={
-            "with-deps": _requires("istio-base", "mimir-distributed", "loki", "tempo"),
+            "minimal": {
+                **_requires("prometheus-operator"),
+                "namespace": "monitoring",
+                "values": ["values.yaml", "values-ci.yaml"],
+                "timeout": "7m",
+            }
         },
     )
 
-    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "grafana", "with-deps"
-    )
+    plan = install_plan(chart_root / CHARTS_DIR, "alloy", "minimal")
 
-    # Requirements are planned in declaration order, target last.
-    assert [entry.chart for entry in plan] == [
-        "istio-base",
-        "mimir-distributed",
-        "loki",
-        "tempo",
-        "grafana",
+    charts = chart_root / "charts"
+    assert [
+        (entry.chart.name, entry.chart.path, entry.profile, entry.namespace, entry.values,
+         entry.spec.timeout)
+        for entry in plan
+    ] == [
+        ("prometheus-operator", charts / "prometheus-operator", "minimal", "operators",
+         (charts / "prometheus-operator/values.yaml",), "10m"),
+        ("alloy", charts / "alloy", "minimal", "monitoring",
+         (charts / "alloy/values.yaml", charts / "alloy/values-ci.yaml"), "7m"),
     ]
+    assert plan[-1].spec.requires[0].chart == "prometheus-operator"
 
 
 def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
@@ -89,21 +82,18 @@ def test_alloy_ui_e2e_installs_grafana_stack_then_alloy(
         profiles={"ui-e2e": _requires("prometheus-operator", "grafana:with-deps")},
     )
 
-    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "alloy", "ui-e2e"
-    )
+    plan = install_plan(chart_root / CHARTS_DIR, "alloy", "ui-e2e")
 
-    assert [entry.chart for entry in plan] == [
-        "prometheus-operator",
-        "istio-base",
-        "mimir-distributed",
-        "loki",
-        "tempo",
-        "grafana",
-        "alloy",
+    # Requirements are planned in declaration order, nested ones first, target last.
+    assert [(entry.chart.name, entry.profile) for entry in plan] == [
+        ("prometheus-operator", "minimal"),
+        ("istio-base", "minimal"),
+        ("mimir-distributed", "minimal"),
+        ("loki", "minimal"),
+        ("tempo", "minimal"),
+        ("grafana", "with-deps"),
+        ("alloy", "ui-e2e"),
     ]
-    assert plan[-1].profile == "ui-e2e"
 
 
 def test_a_shared_dependency_is_planned_once_before_both_dependents(
@@ -115,12 +105,9 @@ def test_a_shared_dependency_is_planned_once_before_both_dependents(
     make_chart("right", profiles={"minimal": _requires("base")})
     make_chart("app", profiles={"minimal": _requires("left", "right")})
 
-    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "app", "minimal"
-    )
+    plan = install_plan(chart_root / CHARTS_DIR, "app", "minimal")
 
-    assert [entry.chart for entry in plan] == ["base", "left", "right", "app"]
+    assert [entry.chart.name for entry in plan] == ["base", "left", "right", "app"]
 
 
 def test_the_same_chart_under_two_profiles_is_not_deduped(
@@ -130,74 +117,57 @@ def test_the_same_chart_under_two_profiles_is_not_deduped(
     make_chart("base", profiles={"minimal": {}, "full": {}})
     make_chart("app", profiles={"minimal": _requires("base:minimal", "base:full")})
 
-    catalog = ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "app", "minimal"
-    )
+    plan = install_plan(chart_root / CHARTS_DIR, "app", "minimal")
 
-    assert [(entry.chart, entry.profile) for entry in plan] == [
+    assert [(entry.chart.name, entry.profile) for entry in plan] == [
         ("base", "minimal"),
         ("base", "full"),
         ("app", "minimal"),
     ]
 
 
-def test_cycle_detection(chart_root: Path, make_chart: MakeChart) -> None:
-    make_chart("a", profiles={"minimal": _requires("b")})
-    make_chart("b", profiles={"minimal": _requires("a")})
-
-    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
-
-    with pytest.raises(DependencyCycleError):
-        resolver.install_plan("a", "minimal")
-
-
-def test_install_plan_rejects_a_disabled_required_chart(
-    chart_root: Path,
-    make_chart: MakeChart,
-) -> None:
-    disabled = make_chart("base")
-    path = disabled / "chart-lifecycle.yaml"
+def _disable(chart: Path) -> None:
+    path = chart / "chart-lifecycle.yaml"
     config = parse_yaml(path.read_text())
     config["spec"]["enabled"] = False
     path.write_text(dump_yaml(config), encoding="utf-8")
-    make_chart("app", profiles={"minimal": _requires("base")})
-
-    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
-
-    with pytest.raises(
-        CapabilityUnavailableError,
-        match="ChartLifecycle is disabled for chart 'base'",
-    ):
-        resolver.install_plan("app", "minimal")
 
 
-def test_dependent_tests_rejects_a_disabled_chart_test_section(
+@pytest.mark.parametrize(
+    ("app", "prepare", "error", "match"),
+    [
+        (_requires("b"), lambda make: make("b", profiles={"minimal": _requires("app")}),
+         DependencyCycleError, "dependency cycle detected: app:minimal -> b:minimal -> app"),
+        (_requires("missing"), lambda _make: None, ChartNotFoundError, "missing"),
+        (_requires("b:nope"), lambda make: make("b"), SpecError, "unknown profile 'nope'"),
+        (_requires("b"), lambda make: _disable(make("b")), CapabilityUnavailableError,
+         "ChartLifecycle is disabled for chart 'b'"),
+        (_requires("b"), lambda make: (make("b") / "chart-lifecycle.yaml").unlink(),
+         CapabilityUnavailableError, r"no chartTest configuration in chart-lifecycle\.yaml"),
+        (_requires("b"), lambda make: (make("b") / "values.yaml").unlink(), SpecError,
+         "missing values file"),
+    ],
+    ids=["cycle", "unknown-chart", "unknown-profile", "disabled", "unmanaged", "missing-values"],
+)
+def test_install_plan_rejects_a_requirement_it_cannot_resolve(
     chart_root: Path,
     make_chart: MakeChart,
+    app: dict[str, object],
+    prepare: Callable[[MakeChart], object],
+    error: type[ChartManagerError],
+    match: str,
 ) -> None:
-    chart = make_chart("source")
-    path = chart / "chart-lifecycle.yaml"
-    config = parse_yaml(path.read_text())
-    config["spec"]["chartTest"]["enabled"] = False
-    path.write_text(dump_yaml(config), encoding="utf-8")
+    make_chart("app", profiles={"minimal": app})
+    prepare(make_chart)
 
-    resolver = DependencyResolver(ChartTestCatalog(chart_root, charts_dir=CHARTS_DIR).get)
-
-    with pytest.raises(
-        CapabilityUnavailableError,
-        match="chart tests are disabled for chart 'source'",
-    ):
-        resolver.dependent_tests("source")
+    with pytest.raises(error, match=match):
+        install_plan(chart_root / CHARTS_DIR, "app", "minimal")
 
 
 def test_the_repo_dependency_graph_resolves() -> None:
     """Smoke test over the real charts/ tree: structure, not inventory."""
-    catalog = ChartTestCatalog(REPO_ROOT, charts_dir=CHARTS_DIR)
-    plan = DependencyResolver(catalog.get).install_plan(
-        "alloy", "ui-e2e"
-    )
+    plan = install_plan(REPO_ROOT / CHARTS_DIR, "alloy", "ui-e2e")
 
-    assert plan[-1] == InstallPlanEntry("alloy", "ui-e2e")
-    keys = [(entry.chart, entry.profile) for entry in plan]
+    assert (plan[-1].chart.name, plan[-1].profile) == ("alloy", "ui-e2e")
+    keys = [(entry.chart.name, entry.profile) for entry in plan]
     assert len(keys) == len(set(keys)), "install plan must not repeat a chart:profile"

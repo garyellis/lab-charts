@@ -115,6 +115,7 @@ def test_no_changes_selects_every_enabled_chart_at_its_default_profile(
     make_chart("alpha", profiles={"smoke": {}, "full": {}})
     make_chart("beta", profiles={"minimal": {}, "full": {}})
     _disable(make_chart("off"))
+    (make_chart("unmanaged") / "chart-lifecycle.yaml").unlink()
 
     selection = _select(chart_root, None)
 

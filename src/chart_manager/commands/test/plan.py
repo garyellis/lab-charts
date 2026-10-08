@@ -24,9 +24,9 @@ from chart_manager.commands.test.models import (
 )
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.paths import validate_hook_executable
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.install_plan import DependencyResolver
-from chart_manager.shared.charts.lifecycle import require_chart_test_profile
+from chart_manager.shared.charts.chart import load_chart
+from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
+from chart_manager.shared.charts.lifecycle import require_chart_test
 from chart_manager.shared.cluster.bootstrap import ExternallySatisfiedLifecycle
 
 #: Changing this string changes every `action_id` and therefore every `input_digest`.
@@ -58,65 +58,49 @@ def compile_plan(
     request: ChartTestRequest,
     *,
     root: Path,
-    catalog: ChartTestCatalog,
-    bootstrap_owned: Iterable[ExternallySatisfiedLifecycle],
+    charts_dir: Path,
+    bootstrap_owned: frozenset[ExternallySatisfiedLifecycle],
 ) -> CompiledPlan:
-    """The plan for `request`: its chart and any dependent tests, minus what bootstrap owns."""
-    resolver = DependencyResolver(catalog.get)
+    """The plan for `request`: its chart and any dependent tests, minus what bootstrap owns.
+
+    `request.namespace` relocates each requested chart, never what it requires.
+    """
     requested = [(request.chart, request.profile)]
     if request.include_dependent_tests:
-        requested.extend(
-            (ref.chart, ref.profile) for ref in resolver.dependent_tests(request.chart)
+        chart = load_chart(charts_dir / request.chart)
+        spec = require_chart_test(chart.lifecycle, chart_name=chart.name)
+        requested.extend((ref.chart, ref.profile) for ref in spec.dependent_tests)
+    plans = []
+    for chart_name, profile in requested:
+        entries = install_plan(charts_dir, chart_name, profile)
+        if request.namespace is not None:
+            entries[-1] = replace(entries[-1], namespace=request.namespace)
+        owned = frozenset(
+            (entry.chart.name, entry.profile)
+            for entry in entries
+            if ExternallySatisfiedLifecycle.of(entry) in bootstrap_owned
         )
-    owned = frozenset(bootstrap_owned)
-    plans = [
-        exclude_bootstrap_owned_charts(
-            compile_chart_test(
-                chart,
-                profile,
-                root=root,
-                catalog=catalog,
-                resolver=resolver,
-                namespace_override=request.namespace,
-                lint=request.lint,
-            ),
-            owned,
-            root=root,
+        plans.append(
+            exclude_bootstrap_owned_charts(
+                compile_chart_test(entries, root=root, lint=request.lint), owned, root=root
+            )
         )
-        for chart, profile in requested
-    ]
     plan = merge_plans(plans)
     if not request.skip_requires:
         return CompiledPlan(plan)
     return exclude_required_lifecycles(plan, requested)
 
 
-def compile_chart_test(
-    chart: str,
-    profile: str,
-    *,
-    root: Path,
-    catalog: ChartTestCatalog,
-    resolver: DependencyResolver,
-    namespace_override: str | None = None,
-    lint: bool = False,
-) -> LifecyclePlan:
-    """Compile one chart:profile and everything it requires, dependencies first."""
+def compile_chart_test(entries: list[InstallPlanEntry], *, root: Path, lint: bool) -> LifecyclePlan:
+    """Compile one install plan, dependencies first; its last entry is the requested chart."""
     actions: list[LifecycleAction] = []
-    for entry in resolver.install_plan(chart, profile):
-        cluster_chart = catalog.get(entry.chart)
-        profile_spec = require_chart_test_profile(cluster_chart.spec, entry.profile)
-        values = tuple(path.resolve() for path in catalog.value_paths(cluster_chart, entry.profile))
-        is_requested_target = entry.chart == chart and entry.profile == profile
-        namespace = (
-            namespace_override
-            if is_requested_target and namespace_override is not None
-            else profile_spec.namespace
-        )
+    for entry in entries:
+        name = entry.chart.name
+        values = tuple(path.resolve() for path in entry.values)
         target = ActionTarget(
-            chart=entry.chart, profile=entry.profile, release=entry.chart, namespace=namespace
+            chart=name, profile=entry.profile, release=name, namespace=entry.namespace
         )
-        prefix = (_CHART_TEST_PREFIX, entry.chart, entry.profile)
+        prefix = (_CHART_TEST_PREFIX, name, entry.profile)
 
         def action(
             kind: ActionKind,
@@ -124,7 +108,7 @@ def compile_chart_test(
             action_values: tuple[Path, ...] = (),
             timeout: str | None = None,
             metadata: tuple[tuple[str, str], ...] = (),
-            path: Path = cluster_chart.path,
+            path: Path = entry.chart.path,
             prefix: tuple[str, ...] = prefix,
             target: ActionTarget = target,
         ) -> LifecycleAction:
@@ -145,7 +129,7 @@ def compile_chart_test(
                 timeout=timeout,
             )
 
-        hooks = profile_spec.hooks
+        hooks = entry.spec.hooks
         hook_actions = {
             kind: _hook_action(
                 kind,
@@ -153,9 +137,9 @@ def compile_chart_test(
                 root=root,
                 target=target,
                 prefix=prefix,
-                chart_path=cluster_chart.path,
-                timeout=profile_spec.timeout,
-                field=f"{entry.chart}: spec.chartTest.profiles.{entry.profile}.hooks.{phase}[0]",
+                chart_path=entry.chart.path,
+                timeout=entry.spec.timeout,
+                field=f"{name}: spec.chartTest.profiles.{entry.profile}.hooks.{phase}[0]",
             )
             for kind, phase, argv in (
                 (ActionKind.HOOK_PRE_INSTALL, "preInstall", hooks and hooks.pre_install),
@@ -164,29 +148,30 @@ def compile_chart_test(
             )
             if argv
         }
-        timed = (("timeout", profile_spec.timeout),)
+        timed = (("timeout", entry.spec.timeout),)
         actions.append(action(ActionKind.NAMESPACE_ENSURE))
         if lint:
             actions.append(action(ActionKind.HELM_LINT, action_values=values))
         if pre_install := hook_actions.get(ActionKind.HOOK_PRE_INSTALL):
             actions.append(pre_install)
-        actions.append(
-            action(ActionKind.INSTALL, action_values=values, timeout=profile_spec.timeout)
-        )
+        actions.append(action(ActionKind.INSTALL, action_values=values, timeout=entry.spec.timeout))
         if post_install := hook_actions.get(ActionKind.HOOK_POST_INSTALL):
             actions.append(post_install)
-        if profile_spec.helm_test:
+        if entry.spec.helm_test:
             actions.append(
                 action(
                     ActionKind.HELM_TEST,
                     action_values=values,
-                    timeout=profile_spec.timeout,
+                    timeout=entry.spec.timeout,
                     metadata=timed,
                 )
             )
         if cleanup := hook_actions.get(ActionKind.HOOK_CLEANUP):
             actions.append(cleanup)
-    return LifecyclePlan(chart=chart, profile=profile, actions=cleanup_tail(actions))
+    requested = entries[-1]
+    return LifecyclePlan(
+        chart=requested.chart.name, profile=requested.profile, actions=cleanup_tail(actions)
+    )
 
 
 def _hook_action(
@@ -223,38 +208,18 @@ def _hook_action(
 
 
 def exclude_bootstrap_owned_charts(
-    plan: LifecyclePlan, bootstrap_owned: frozenset[ExternallySatisfiedLifecycle], *, root: Path
+    plan: LifecyclePlan, owned: frozenset[tuple[str, str]], *, root: Path
 ) -> LifecyclePlan:
-    """Drop the work for charts bootstrap already installed.
+    """Drop the work for the chart:profile pairs in `owned`, which bootstrap installed.
 
     A required chart bootstrap owns is dropped entirely. When bootstrap owns the
     requested chart itself, its install becomes a readiness wait and its helm test
     stays, so the requested profile is still checked.
     """
-    if any(
-        not identity.chart.strip() or not identity.profile.strip() or not identity.namespace.strip()
-        for identity in bootstrap_owned
-    ):
-        raise PlanError("bootstrap lifecycle identity fields must not be empty")
-
-    def owned(action: LifecycleAction) -> bool:
-        target = action.target
-        if target.profile is None or target.namespace is None:
-            return False
-        return (
-            ExternallySatisfiedLifecycle(
-                chart_path=action.chart_path.resolve(),
-                chart=target.chart,
-                profile=target.profile,
-                namespace=target.namespace,
-            )
-            in bootstrap_owned
-        )
-
     kept: list[LifecycleAction] = []
     removed: set[str] = set()
     for action in plan.actions:
-        if not owned(action):
+        if (action.target.chart, action.target.profile) not in owned:
             kept.append(action)
             continue
         is_target = action.target.chart == plan.chart and action.target.profile == plan.profile
