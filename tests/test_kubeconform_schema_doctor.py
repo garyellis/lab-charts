@@ -1,6 +1,7 @@
-from chart_manager.commands.validate.schemas.doctor import KubeconformSchemaDoctor
-from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+from chart_manager.commands.validate.schemas.lock import preflight, write_schema_lock_atomic
+from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
@@ -8,11 +9,12 @@ from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 from .schema_fixtures import workspace
 
 
+def store_under(root):
+    return open_schema_store(SubprocessRunner(), root / "schema-cache")
+
+
 def checks(root):
-    doctor = KubeconformSchemaDoctor(
-        workspace(root), runner=SubprocessRunner(), schema_cache_root=root / "schema-cache"
-    )
-    return {c.name: c for c in doctor.preflight()}
+    return {c.name: c for c in preflight(workspace(root), store_under(root))}
 
 
 def test_doctor_reports_ready_snapshots_without_charts_or_writes(tmp_path, schema_cache):
@@ -62,25 +64,16 @@ def test_bad_lock_fails_before_store_inspection(tmp_path):
 
 
 def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path):
-    result = KubeconformSchemaDoctor(
-        None,
-        runner=SubprocessRunner(),
-        schema_cache_root=tmp_path / "cache",
-        skip_reason="no workspace here",
-    ).preflight()
+    result = preflight(WorkspaceNotFoundError("no workspace here"), store_under(tmp_path))
     assert [check.name for check in result] == ["schema-policy", "schema-lock", "schema-store"]
     assert all(check.status is CheckStatus.SKIPPED for check in result)
     assert all(check.detail == "no workspace here" for check in result)
-    assert not (tmp_path / "cache").exists()
+    assert not (tmp_path / "schema-cache").exists()
 
 
 def test_managed_workspace_still_requires_schema_policy(tmp_path):
     from tests.conftest import workspace_for
 
-    result = KubeconformSchemaDoctor(
-        workspace_for(tmp_path, name="managed"),
-        runner=SubprocessRunner(),
-        schema_cache_root=tmp_path / "schema-cache",
-    ).preflight()
+    result = preflight(workspace_for(tmp_path, name="managed"), store_under(tmp_path))
     assert result[0].status is CheckStatus.FAILED
     assert result[0].outcome is Outcome.SPEC
