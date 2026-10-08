@@ -71,19 +71,43 @@ def test_list_parses_mixed_v2_and_v2beta2_payload() -> None:
     ]
 
 
-def test_list_empty_release_name_falls_back_to_metadata_name() -> None:
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        pytest.param({"releaseName": ""}, "loki", id="empty-falls-back-to-metadata-name"),
+        pytest.param(
+            {
+                "releaseName": "custom",
+                "targetNamespace": "ns",
+                "chart": {"spec": {"chart": "loki", "version": "0.1.0"}},
+            },
+            "custom",
+            id="explicit-overrides-target-namespace-prefix",
+        ),
+        pytest.param(
+            {
+                "releaseName": "",
+                "targetNamespace": "ns",
+                "chart": {"spec": {"chart": "loki", "version": "0.1.0"}},
+            },
+            "ns-loki",
+            id="empty-with-target-namespace-uses-prefix",
+        ),
+    ],
+)
+def test_list_resolves_the_release_name(spec: dict[str, object], expected: str) -> None:
     payload = {
         "items": [
             {
                 "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "metadata": {"name": "loki", "namespace": "loki"},
-                "spec": {"releaseName": ""},
+                "metadata": {"name": "loki", "namespace": "obs"},
+                "spec": spec,
             }
         ]
     }
     runner = scripted([_ok(json.dumps(payload))])
     [ref] = Kubectl(runner=runner).list_helmreleases()
-    assert ref.release_name == "loki"
+    assert ref.release_name == expected
 
 
 def test_list_release_name_prefixed_with_target_namespace() -> None:
@@ -106,44 +130,6 @@ def test_list_release_name_prefixed_with_target_namespace() -> None:
     assert ref.storage_namespace == "cert-manager"
 
 
-def test_list_explicit_release_name_overrides_target_namespace_prefix() -> None:
-    payload = {
-        "items": [
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "metadata": {"name": "loki", "namespace": "obs"},
-                "spec": {
-                    "releaseName": "custom",
-                    "targetNamespace": "ns",
-                    "chart": {"spec": {"chart": "loki", "version": "0.1.0"}},
-                },
-            }
-        ]
-    }
-    runner = scripted([_ok(json.dumps(payload))])
-    [ref] = Kubectl(runner=runner).list_helmreleases()
-    assert ref.release_name == "custom"
-
-
-def test_list_empty_release_name_with_target_namespace_uses_prefix() -> None:
-    payload = {
-        "items": [
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "metadata": {"name": "loki", "namespace": "obs"},
-                "spec": {
-                    "releaseName": "",
-                    "targetNamespace": "ns",
-                    "chart": {"spec": {"chart": "loki", "version": "0.1.0"}},
-                },
-            }
-        ]
-    }
-    runner = scripted([_ok(json.dumps(payload))])
-    [ref] = Kubectl(runner=runner).list_helmreleases()
-    assert ref.release_name == "ns-loki"
-
-
 def test_list_storage_namespace_from_spec_storage_namespace() -> None:
     payload = {
         "items": [
@@ -163,34 +149,28 @@ def test_list_storage_namespace_from_spec_storage_namespace() -> None:
     assert ref.target_namespace == "loki"
 
 
-def test_list_storage_namespace_falls_back_to_target_namespace() -> None:
+@pytest.mark.parametrize(
+    ("namespace", "spec", "expected"),
+    [
+        pytest.param("flux-system", {"targetNamespace": "loki"}, "loki", id="target-namespace"),
+        pytest.param("obs", {}, "obs", id="metadata-namespace"),
+    ],
+)
+def test_list_storage_namespace_falls_back(
+    namespace: str, spec: dict[str, str], expected: str
+) -> None:
     payload = {
         "items": [
             {
                 "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "metadata": {"name": "loki", "namespace": "flux-system"},
-                "spec": {"targetNamespace": "loki"},
+                "metadata": {"name": "loki", "namespace": namespace},
+                "spec": spec,
             }
         ]
     }
     runner = scripted([_ok(json.dumps(payload))])
     [ref] = Kubectl(runner=runner).list_helmreleases()
-    assert ref.storage_namespace == "loki"
-
-
-def test_list_storage_namespace_falls_back_to_metadata_namespace() -> None:
-    payload = {
-        "items": [
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "metadata": {"name": "loki", "namespace": "loki"},
-                "spec": {},
-            }
-        ]
-    }
-    runner = scripted([_ok(json.dumps(payload))])
-    [ref] = Kubectl(runner=runner).list_helmreleases()
-    assert ref.storage_namespace == "loki"
+    assert ref.storage_namespace == expected
 
 
 def test_list_target_namespace_independent_of_storage() -> None:

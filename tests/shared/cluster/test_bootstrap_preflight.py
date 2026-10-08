@@ -117,15 +117,31 @@ spec:
     )
 
 
-def test_preflight_rejects_a_lifecycle_profile_that_declares_no_namespace(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("profile", "message"),
+    [
+        # `preflight` publishes ownership as an identity that includes the
+        # namespace and excludes by exact identity, so a bootstrap-owned chart
+        # must author its namespace and is rejected at load without one.
+        pytest.param(
+            "      minimal: {values: []}\n",
+            r"profiles\.minimal\.namespace",
+            id="no-namespace",
+        ),
+        # Bootstrap installs outside the compiled plan, so hooks would never run.
+        pytest.param(
+            "      minimal:\n"
+            "        namespace: kube-system\n"
+            "        values: []\n"
+            "        hooks: {preInstall: [./scripts/credential]}\n",
+            r"bootstrap chart network:minimal declares chart-test hooks",
+            id="declares-hooks",
+        ),
+    ],
+)
+def test_preflight_rejects_a_lifecycle_profile_bootstrap_cannot_own(
+    tmp_path: Path, profile: str, message: str
 ) -> None:
-    """A bootstrap-owned chart must author the namespace it is identified by.
-
-    `preflight` publishes ownership as an identity that includes the
-    namespace, and `_preflight_target` excludes by exact identity, so the
-    profile is rejected at load, before any identity exists to disagree about.
-    """
     chart = tmp_path / "charts/network"
     chart.mkdir(parents=True)
     (chart / "Chart.yaml").write_text(
@@ -138,13 +154,12 @@ def test_preflight_rejects_a_lifecycle_profile_that_declares_no_namespace(
         "metadata: {name: network}\n"
         "spec:\n"
         "  chartTest:\n"
-        "    profiles:\n"
-        "      minimal: {values: []}\n",
+        "    profiles:\n" + profile,
         encoding="utf-8",
     )
     cluster = _cluster([{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}])
 
-    with pytest.raises(SpecError, match=r"profiles\.minimal\.namespace"):
+    with pytest.raises(SpecError, match=message):
         bootstrap.preflight(cluster, root=tmp_path)
 
 
@@ -249,32 +264,3 @@ spec:
         bootstrap.preflight(cluster, root=tmp_path, helm=helm)  # type: ignore[arg-type]
 
     assert helm.lints == []
-
-
-def test_preflight_rejects_a_bootstrap_lifecycle_profile_that_declares_hooks(
-    tmp_path: Path,
-) -> None:
-    """Bootstrap installs outside the compiled plan, so hooks would never run."""
-    chart = tmp_path / "charts/network"
-    chart.mkdir(parents=True)
-    (chart / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: network\nversion: 1.0.0\n",
-        encoding="utf-8",
-    )
-    (chart / "chart-lifecycle.yaml").write_text(
-        "apiVersion: chartmanager.io/v1alpha1\n"
-        "kind: ChartLifecycle\n"
-        "metadata: {name: network}\n"
-        "spec:\n"
-        "  chartTest:\n"
-        "    profiles:\n"
-        "      minimal:\n"
-        "        namespace: kube-system\n"
-        "        values: []\n"
-        "        hooks: {preInstall: [./scripts/credential]}\n",
-        encoding="utf-8",
-    )
-    cluster = _cluster([{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}])
-
-    with pytest.raises(SpecError, match=r"bootstrap chart network:minimal declares chart-test hooks"):
-        bootstrap.preflight(cluster, root=tmp_path)

@@ -109,18 +109,6 @@ def test_preserves_relative_order_of_remaining_actions() -> None:
     ]
 
 
-def test_absent_bootstrap_chart_is_an_idempotent_noop() -> None:
-    original = cluster_plan()
-
-    projected = exclude_bootstrap_owned_charts(
-        original,
-        frozenset({externally_satisfied("not-in-plan")}),
-        root=ROOT,
-    )
-
-    assert projected is original
-
-
 def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install() -> None:
     projected = exclude_bootstrap_owned_charts(
         cluster_plan(),
@@ -145,7 +133,9 @@ def test_a_bootstrap_owned_target_keeps_a_readiness_wait_instead_of_its_install(
         externally_satisfied("cilium", profile="full"),
         externally_satisfied("cilium", namespace="kube-system"),
         externally_satisfied("cilium", chart_path=Path("elsewhere/cilium")),
+        externally_satisfied("not-in-plan"),
     ],
+    ids=["other-profile", "other-namespace", "other-chart-path", "absent-chart"],
 )
 def test_requires_exact_managed_lifecycle_identity(
     identity: ExternallySatisfiedLifecycle,

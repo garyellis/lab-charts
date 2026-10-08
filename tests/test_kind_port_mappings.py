@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from chart_manager.integrations.kind import Kind
 from tests.conftest import FakeCommandRunner
 
@@ -52,151 +54,89 @@ def _inspect_argv(container: str) -> tuple[str, ...]:
     return ("docker", "inspect", container)
 
 
-def test_container_host_ports_matches_expected() -> None:
-    cluster = "chart-manager"
-    control_plane = f"{cluster}-control-plane"
-    runner = _runner(
-        {
-            _ps_argv(cluster): (0, control_plane + "\n"),
-            _inspect_argv(control_plane): (
-                0,
-                _inspect_payload(
-                    {
-                        "30080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "80"}],
-                        "30443/tcp": [{"HostIp": "0.0.0.0", "HostPort": "443"}],
-                        "6443/tcp": [
-                            {"HostIp": "127.0.0.1", "HostPort": "53729"}
-                        ],
-                    }
+CP = "kind-control-plane"
+WORKER = "kind-worker"
+
+
+@pytest.mark.parametrize(
+    ("ps", "inspect", "expected"),
+    [
+        pytest.param(
+            (0, f"{CP}\n"),
+            {
+                CP: (
+                    0,
+                    _inspect_payload(
+                        {
+                            "30080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "80"}],
+                            "30443/tcp": [{"HostIp": "0.0.0.0", "HostPort": "443"}],
+                            "6443/tcp": [{"HostIp": "127.0.0.1", "HostPort": "53729"}],
+                        }
+                    ),
+                )
+            },
+            {80, 443, 53729},
+            id="single-node",
+        ),
+        # The control plane binds the apiserver port and a worker binds the
+        # ingress extraPortMappings; the union has ports from both nodes.
+        pytest.param(
+            (0, f"{CP}\n{WORKER}\n"),
+            {
+                CP: (0, _inspect_payload({"6443/tcp": [{"HostPort": "53729"}]})),
+                WORKER: (
+                    0,
+                    _inspect_payload(
+                        {"30080/tcp": [{"HostPort": "80"}], "30443/tcp": [{"HostPort": "443"}]}
+                    ),
                 ),
-            ),
-        }
-    )
-    ports = Kind(runner=runner).container_host_ports(cluster)
-    assert ports == {80, 443, 53729}
-    # Argv contract: label-based discovery, then inspect each node.
-    assert runner.calls == [_ps_argv(cluster), _inspect_argv(control_plane)]
-
-
-def test_container_host_ports_unions_across_multi_node_cluster() -> None:
-    # Control plane binds the apiserver port; a worker binds the ingress
-    # extraPortMappings. The union must surface ports from BOTH nodes.
-    cluster = "multinode"
-    cp = f"{cluster}-control-plane"
-    worker = f"{cluster}-worker"
+            },
+            {80, 443, 53729},
+            id="multi-node-union",
+        ),
+        # An absent cluster gives an empty set so the caller can warn, not crash.
+        pytest.param((0, ""), {}, set(), id="no-node-containers"),
+        pytest.param((1, ""), {}, set(), id="docker-ps-fails"),
+        # Kind sometimes lists containerd internal ports with no host bindings.
+        pytest.param(
+            (0, f"{CP}\n"),
+            {CP: (0, _inspect_payload({"30080/tcp": [{"HostPort": "80"}], "10250/tcp": None}))},
+            {80},
+            id="null-binding-skipped",
+        ),
+        pytest.param(
+            (0, f"{CP}\n"),
+            {
+                CP: (
+                    0,
+                    _inspect_payload(
+                        {
+                            "30080/tcp": [{"HostPort": "80"}],
+                            "30443/tcp": [{"HostPort": "not-a-number"}],
+                        }
+                    ),
+                )
+            },
+            {80},
+            id="non-integer-host-port-skipped",
+        ),
+        pytest.param((0, f"{CP}\n"), {CP: (0, "not json")}, set(), id="malformed-payload-empty"),
+        # One node's failed inspect still leaves the other node's ports.
+        pytest.param(
+            (0, f"{CP}\n{WORKER}\n"),
+            {CP: (1, ""), WORKER: (0, _inspect_payload({"30080/tcp": [{"HostPort": "80"}]}))},
+            {80},
+            id="failed-inspect-skips-the-node",
+        ),
+    ],
+)
+def test_container_host_ports_reads_host_ports_from_docker(
+    ps: tuple[int, str], inspect: dict[str, tuple[int, str]], expected: set[int]
+) -> None:
     runner = _runner(
-        {
-            _ps_argv(cluster): (0, f"{cp}\n{worker}\n"),
-            _inspect_argv(cp): (
-                0,
-                _inspect_payload(
-                    {"6443/tcp": [{"HostPort": "53729"}]}
-                ),
-            ),
-            _inspect_argv(worker): (
-                0,
-                _inspect_payload(
-                    {
-                        "30080/tcp": [{"HostPort": "80"}],
-                        "30443/tcp": [{"HostPort": "443"}],
-                    }
-                ),
-            ),
-        }
+        {_ps_argv("kind"): ps, **{_inspect_argv(name): reply for name, reply in inspect.items()}}
     )
-    ports = Kind(runner=runner).container_host_ports(cluster)
-    assert ports == {80, 443, 53729}
-    assert runner.calls == [
-        _ps_argv(cluster),
-        _inspect_argv(cp),
-        _inspect_argv(worker),
-    ]
 
-
-def test_container_host_ports_empty_when_no_node_containers() -> None:
-    # Cluster absent (label query returns no containers) -> empty set so
-    # the caller can warn rather than crash.
-    runner = _runner({_ps_argv("missing"): (0, "")})
-    assert Kind(runner=runner).container_host_ports("missing") == set()
-
-
-def test_container_host_ports_empty_when_docker_ps_fails() -> None:
-    # docker daemon glitch on the discovery call -> empty set.
-    runner = _runner({_ps_argv("missing"): (1, "")})
-    assert Kind(runner=runner).container_host_ports("missing") == set()
-
-
-def test_container_host_ports_handles_null_bindings() -> None:
-    # Ports key exists but a port is unmapped (kind sometimes lists
-    # containerd internal ports with no host bindings).
-    cluster = "chart-manager"
-    cp = f"{cluster}-control-plane"
-    runner = _runner(
-        {
-            _ps_argv(cluster): (0, cp + "\n"),
-            _inspect_argv(cp): (
-                0,
-                _inspect_payload(
-                    {
-                        "30080/tcp": [{"HostPort": "80"}],
-                        "10250/tcp": None,
-                    }
-                ),
-            ),
-        }
-    )
-    assert Kind(runner=runner).container_host_ports(cluster) == {80}
-
-
-def test_container_host_ports_skips_non_integer_host_port() -> None:
-    # Malformed HostPort -> skip rather than crash. The warning path
-    # tolerates partial data.
-    cluster = "chart-manager"
-    cp = f"{cluster}-control-plane"
-    runner = _runner(
-        {
-            _ps_argv(cluster): (0, cp + "\n"),
-            _inspect_argv(cp): (
-                0,
-                _inspect_payload(
-                    {
-                        "30080/tcp": [{"HostPort": "80"}],
-                        "30443/tcp": [{"HostPort": "not-a-number"}],
-                    }
-                ),
-            ),
-        }
-    )
-    assert Kind(runner=runner).container_host_ports(cluster) == {80}
-
-
-def test_container_host_ports_empty_when_payload_malformed() -> None:
-    cluster = "x"
-    cp = f"{cluster}-control-plane"
-    runner = _runner(
-        {
-            _ps_argv(cluster): (0, cp + "\n"),
-            _inspect_argv(cp): (0, "not json"),
-        }
-    )
-    assert Kind(runner=runner).container_host_ports(cluster) == set()
-
-
-def test_container_host_ports_skips_node_when_inspect_fails() -> None:
-    # If one node's inspect fails, surface what the other node knows
-    # rather than collapsing to empty -- the drift check works on a
-    # best-effort union.
-    cluster = "partial"
-    cp = f"{cluster}-control-plane"
-    worker = f"{cluster}-worker"
-    runner = _runner(
-        {
-            _ps_argv(cluster): (0, f"{cp}\n{worker}\n"),
-            _inspect_argv(cp): (1, ""),
-            _inspect_argv(worker): (
-                0,
-                _inspect_payload({"30080/tcp": [{"HostPort": "80"}]}),
-            ),
-        }
-    )
-    assert Kind(runner=runner).container_host_ports(cluster) == {80}
+    assert Kind(runner=runner).container_host_ports("kind") == expected
+    # Label-based discovery, then one inspect per listed node.
+    assert runner.calls == [_ps_argv("kind"), *(_inspect_argv(name) for name in inspect)]

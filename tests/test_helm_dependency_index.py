@@ -65,7 +65,7 @@ def test_handles_cycle_without_crashing(tmp_path: Path) -> None:
     assert index == {"beta": {"alpha"}, "alpha": {"beta"}}
 
 
-def test_skips_chart_with_invalid_dependency_entry(tmp_path: Path) -> None:
+def test_a_chart_with_an_invalid_dependency_entry_is_skipped(tmp_path: Path) -> None:
     # The shared metadata loader is strict: one structurally invalid
     # dependency makes the chart unusable. This best-effort index skips that
     # chart instead of partially interpreting different metadata rules.
@@ -87,22 +87,50 @@ def test_skips_chart_with_invalid_dependency_entry(tmp_path: Path) -> None:
     assert index == {}
 
 
-def test_unknown_dependency_name_still_indexed(tmp_path: Path) -> None:
-    # A repository-less dependency whose chart is absent locally is still
-    # indexed — the worklist treats "no dependents" as "no fanout" by
-    # lookup, so a stale name is just a no-op key.
+@pytest.mark.parametrize(
+    ("dependencies", "expected"),
+    [
+        # The worklist treats "no dependents" as "no fanout" by lookup, so a
+        # stale name is just a no-op key.
+        pytest.param(
+            "  - name: not-here\n    version: 0.1.0\n",
+            {"not-here": {"alpha"}},
+            id="absent-local-chart-still-indexed",
+        ),
+        pytest.param(
+            "  - name: common\n"
+            "    version: 0.1.0\n"
+            "    repository: https://charts.example.com\n"
+            "  - name: other\n"
+            "    version: 0.1.0\n"
+            "    repository: oci://registry.example.com/charts\n",
+            {},
+            id="remote-not-indexed",
+        ),
+        pytest.param(
+            "  - name: common\n"
+            "    version: 0.1.0\n"
+            "    repository: file://../common\n"
+            "  - name: vendored\n"
+            "    version: 0.1.0\n"
+            "  - name: blank\n"
+            "    version: 0.1.0\n"
+            '    repository: ""\n',
+            {"common": {"alpha"}, "vendored": {"alpha"}, "blank": {"alpha"}},
+            id="file-and-repository-less-indexed",
+        ),
+    ],
+)
+def test_indexes_only_the_local_dependencies(
+    tmp_path: Path, dependencies: str, expected: dict[str, set[str]]
+) -> None:
     _chart(
         tmp_path,
         "alpha",
-        chart_yaml=(
-            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
-            "dependencies:\n  - name: not-here\n    version: 0.1.0\n"
-        ),
+        chart_yaml="apiVersion: v2\nname: alpha\nversion: 0.1.0\ndependencies:\n" + dependencies,
     )
 
-    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
-
-    assert index == {"not-here": {"alpha"}}
+    assert build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR) == expected
 
 
 def test_malformed_yaml_is_silently_skipped(tmp_path: Path) -> None:
@@ -121,27 +149,6 @@ def test_malformed_yaml_is_silently_skipped(tmp_path: Path) -> None:
     index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {"common": {"alpha"}}
-
-
-def test_remote_dependencies_are_not_indexed(tmp_path: Path) -> None:
-    _chart(
-        tmp_path,
-        "alpha",
-        chart_yaml=(
-            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
-            "dependencies:\n"
-            "  - name: common\n"
-            "    version: 0.1.0\n"
-            "    repository: https://charts.example.com\n"
-            "  - name: other\n"
-            "    version: 0.1.0\n"
-            "    repository: oci://registry.example.com/charts\n"
-        ),
-    )
-
-    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
-
-    assert index == {}
 
 
 @pytest.mark.parametrize(
@@ -164,26 +171,3 @@ def test_self_named_dependency_is_not_indexed(
     index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
 
     assert index == {}
-
-
-def test_file_and_repository_less_dependencies_are_indexed(tmp_path: Path) -> None:
-    _chart(
-        tmp_path,
-        "alpha",
-        chart_yaml=(
-            "apiVersion: v2\nname: alpha\nversion: 0.1.0\n"
-            "dependencies:\n"
-            "  - name: common\n"
-            "    version: 0.1.0\n"
-            "    repository: file://../common\n"
-            "  - name: vendored\n"
-            "    version: 0.1.0\n"
-            "  - name: blank\n"
-            "    version: 0.1.0\n"
-            '    repository: ""\n'
-        ),
-    )
-
-    index = build_helm_dependency_index(tmp_path, charts_dir=CHARTS_DIR)
-
-    assert index == {"common": {"alpha"}, "vendored": {"alpha"}, "blank": {"alpha"}}
