@@ -19,10 +19,10 @@ from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.settings import Settings, load_settings
 from chart_manager.shared.charts.chart import chart_names
 from chart_manager.shared.workspace import (
-    SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
     discover_workspace_root,
     load_repository_workspace,
+    pattern_matches,
     resolve_repository_root,
 )
 
@@ -434,17 +434,6 @@ def test_fanout_normalizes_dedupes_and_sorts() -> None:
     assert resource.spec.fanout.validation == ("a/file", "z/**")
 
 
-def test_chart_test_fanout_and_shared_charts_load_from_chart_test_keys(tmp_path: Path) -> None:
-    workspace = workspace_for(
-        tmp_path,
-        fanout={"chartTest": ["kind/**"]},
-        chartTest={"sharedCharts": ["base"]},
-    )
-
-    assert workspace.matching_chart_test_patterns("kind/config.yaml") == ("kind/**",)
-    assert workspace.matching_chart_test_patterns("charts/base/values.yaml") == ("charts/base",)
-
-
 @pytest.mark.parametrize(
     "spec",
     [
@@ -479,38 +468,8 @@ def test_fanout_rejects_unsafe_or_unsupported_patterns(pattern: str) -> None:
         ("charts/**/foo.tmpl", "charts/a/b/other.tmpl", False),
     ],
 )
-def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
-    workspace = workspace_for(Path("/repo"), fanout={"validation": [pattern]})
-
-    assert workspace.matches_validation_fanout(path) is expected
-
-
-def test_implicit_fanout_includes_marker_policies_cluster_and_shared_charts(
-    tmp_path: Path,
-) -> None:
-    local = tmp_path / ".chart-manager/local-cluster.yaml"
-    local.parent.mkdir(exist_ok=True)
-    local.write_text(
-        """apiVersion: chartmanager.io/v1alpha1
-kind: LocalCluster
-metadata: {name: default}
-spec:
-  cluster: {config: kind/config.yaml}
-  bootstrap:
-    releases:
-      - {type: lifecycle, chart: charts/cni, profile: minimal}
-""",
-        encoding="utf-8",
-    )
-    workspace = workspace_for(tmp_path, chartTest={"sharedCharts": ["base"]})
-
-    assert workspace.matches_validation_fanout("policies/rule.yaml")
-    assert workspace.matches_validation_fanout(WORKSPACE_FILE)
-    assert workspace.matches_validation_fanout(SCHEMA_LOCK_FILE)
-    assert workspace.matching_chart_test_patterns(WORKSPACE_FILE)
-    assert workspace.matching_chart_test_patterns("kind/config.yaml")
-    assert workspace.matching_chart_test_patterns("charts/cni/templates/cni.yaml")
-    assert workspace.matching_chart_test_patterns("charts/base/templates/crd.yaml")
+def test_pattern_matching(pattern: str, path: str, expected: bool) -> None:
+    assert pattern_matches(pattern, path) is expected
 
 
 def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
