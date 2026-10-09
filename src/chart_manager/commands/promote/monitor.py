@@ -39,6 +39,7 @@ from chart_manager.integrations.kubectl import (
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.progress import Progress, RowUpdate
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
 
@@ -164,7 +165,7 @@ def run(
     runner: CommandRunner,
     settings: Settings,
     events: EventWriter,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    progress: Progress,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     rand: Callable[[float, float], float] = random.uniform,
@@ -242,7 +243,7 @@ class _Watcher:
     sleep: Callable[[float], None]
     clock: Callable[[], float]
     rand: Callable[[float, float], float]
-    progress: Callable[[HelmReleaseRef, Transition], None] | None
+    progress: Progress
 
     def watch(
         self,
@@ -481,11 +482,16 @@ class _Watcher:
         self._fire_progress(state.ref, transition)
 
     def _fire_progress(self, ref: HelmReleaseRef, transition: Transition) -> None:
-        """Invoke the progress callback if set; swallow+log any exception it raises."""
-        if self.progress is None:
-            return
+        """Report the phase to `progress`; swallow+log any exception it raises."""
         try:
-            self.progress(ref, transition)
+            self.progress(
+                RowUpdate(
+                    key=(ref.namespace, ref.name),
+                    column="phase",
+                    status=transition.phase,
+                    detail=transition.detail,
+                )
+            )
         except Exception:
             _LOG.exception("monitor progress callback raised")
 

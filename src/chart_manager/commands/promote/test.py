@@ -32,6 +32,7 @@ from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.progress import Progress, RowUpdate
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
@@ -190,7 +191,7 @@ def run(
     runner: CommandRunner,
     settings: Settings,
     events: EventWriter,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    progress: Progress,
     clock: Callable[[], float] = time.monotonic,
 ) -> TestResult:
     """Test every matching HelmRelease in parallel; return an aggregate TestResult.
@@ -269,7 +270,7 @@ class _Tester:
     kubectl: Kubectl
     helm: Helm
     clock: Callable[[], float]
-    progress: Callable[[HelmReleaseRef, Transition], None] | None
+    progress: Progress
 
     # --- per-HR pipeline ---------------------------------------------------
 
@@ -836,9 +837,14 @@ class _Tester:
         """Record a phase transition (ring-buffered) and fire the progress callback safely."""
         t = Transition(at=datetime.now(UTC), phase=phase, detail=detail)
         ctx.phase_log.append(t)
-        if self.progress is None:
-            return
         try:
-            self.progress(ctx.ref, t)
+            self.progress(
+                RowUpdate(
+                    key=(ctx.ref.namespace, ctx.ref.name),
+                    column="phase",
+                    status=t.phase,
+                    detail=t.detail,
+                )
+            )
         except Exception:
             _LOG.exception("test progress callback raised")

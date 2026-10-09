@@ -1,28 +1,19 @@
-"""Terminal renderers and the progress table for `promote monitor/test`.
+"""Terminal renderers for `promote monitor/test`.
 
-Module-level functions, no Renderer protocol/ABC. ProgressTable is the
-only stateful piece, used as a context manager during pretty runs to hold a
-Rich Live table; thread-safe under the monitor/test executor.
+Module-level functions, no Renderer protocol/ABC.
 
 Everything here is terminal-shaped: Rich tables, color styles and panels.
 The json form of each result is its document (`plumbing.documents.to_document`).
 """
 from __future__ import annotations
 
-import logging
-import threading
-from typing import Any
-
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from chart_manager.commands.promote.monitor import MonitorResult
-from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS, Transition
+from chart_manager.commands.promote.state import NO_MATCH_REF, PASSING_VERDICTS
 from chart_manager.commands.promote.test import TestResult
-from chart_manager.integrations.kubectl import HelmReleaseRef
-
-_LOG = logging.getLogger(__name__)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -154,60 +145,3 @@ def _verdict_style(verdict: str) -> str:
     if verdict == "no-match":
         return "yellow"
     return "red"
-
-
-class ProgressTable:
-    """Thread-safe progress table. Used as a context manager.
-
-    Holds a Rich Live table that re-renders per-HR transitions. The lock
-    guards both the per-HR state map and the Live.update call so concurrent
-    worker threads cannot interleave updates. Render exceptions are caught
-    and logged -- a render bug must never break the underlying run.
-    """
-
-    def __init__(self, console: Console) -> None:
-        """Prepare state; the Live table itself is created in __enter__."""
-        self._console = console
-        self._lock = threading.Lock()
-        self._state: dict[tuple[str, str], Transition] = {}
-        # Lazy-imported so importing this module in non-pretty paths
-        # (CI logs, tests) doesn't drag rich.live into the process.
-        from rich.live import Live
-
-        self._Live = Live
-        self._live: Any | None = None
-
-    def __enter__(self) -> ProgressTable:
-        """Start the Rich Live table."""
-        self._live = self._Live(
-            self._render(),
-            console=self._console,
-            auto_refresh=True,
-            refresh_per_second=4,
-        )
-        self._live.__enter__()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        """Stop the Live table."""
-        if self._live is not None:
-            self._live.__exit__(*exc)
-            self._live = None
-
-    def __call__(self, ref: HelmReleaseRef, transition: Transition) -> None:
-        """Progress callback: record the latest transition and refresh the table."""
-        try:
-            with self._lock:
-                self._state[(ref.namespace, ref.name)] = transition
-                if self._live is not None:
-                    self._live.update(self._render())
-        except Exception:
-            _LOG.exception("progress driver update failed")
-
-    def _render(self) -> Table:
-        """Build the current progress table, sorted by (namespace, name)."""
-        table = Table("Namespace", "Name", "Phase", "Detail")
-        for (ns, name) in sorted(self._state.keys()):
-            t = self._state[(ns, name)]
-            table.add_row(ns, name, t.phase, t.detail)
-        return table
