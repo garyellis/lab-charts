@@ -22,6 +22,7 @@ from chart_manager.integrations.kubeconform.repository_snapshot import (
 )
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.settings import Settings
 
 
 @dataclass(frozen=True)
@@ -155,8 +156,9 @@ class KubeconformSchemaStore:
         )
 
 
-def open_schema_store(runner: CommandRunner, schema_cache_root: Path) -> KubeconformSchemaStore:
-    """The schema store under `schema_cache_root`, checking out snapshots through `runner`."""
+def open_schema_store(runner: CommandRunner, settings: Settings) -> KubeconformSchemaStore:
+    """The schema store under the settings' cache root, checking out snapshots through `runner`."""
     return KubeconformSchemaStore(
-        cache_root=schema_cache_root, snapshots=RepositorySnapshot(runner)
+        cache_root=settings.schema_cache_root,
+        snapshots=RepositorySnapshot(runner, timeout=settings.command_timeout),
     )

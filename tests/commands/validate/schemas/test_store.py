@@ -102,7 +102,7 @@ def test_partial_sparse_checkout_materializes_all_selected_blobs_for_offline_use
                 args[-1] = upstream.as_uri()
             return SubprocessRunner().run(args, **kwargs)
 
-    snapshots = RepositorySnapshot(LocalTransport())
+    snapshots = RepositorySnapshot(LocalTransport(), timeout=None)
     destination = tmp_path / "snapshot"
     snapshots.checkout(
         lock.policy.kubernetes.repository,

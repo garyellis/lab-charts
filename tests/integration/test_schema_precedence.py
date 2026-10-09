@@ -10,6 +10,7 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import write_validation_chart
 from tests.integration.conftest import require
@@ -35,7 +36,7 @@ def schema_check(workspace: RepositoryWorkspace) -> validate.CheckResult:
         ),
         workspace=workspace,
         runner=SubprocessRunner(),
-        schema_cache_root=workspace.root / "schema-cache",
+        settings=Settings(schema_cache_root=workspace.root / "schema-cache"),
         progress=[].append,
     )
     return outcome.rows[0].checks["schema"]

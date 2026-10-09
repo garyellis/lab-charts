@@ -10,6 +10,7 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.integration.conftest import FIXTURES, fixture_chart, require
 
@@ -51,7 +52,7 @@ def test_fixture_charts_meet_or_break_the_repository_policies(
         validate.ValidateRequest(out=tmp_path / "out", charts=(chart,)),
         workspace=schema_workspace,
         runner=SubprocessRunner(),
-        schema_cache_root=tmp_path / "schema-cache",
+        settings=Settings(schema_cache_root=tmp_path / "schema-cache"),
         progress=[].append,
     )
 

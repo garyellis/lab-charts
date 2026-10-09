@@ -15,6 +15,7 @@ from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import (
     ONE_DEPENDENCY_LOCK,
@@ -38,10 +39,8 @@ def _run(
     request: validate.ValidateRequest, *, workspace: RepositoryWorkspace, **kw: Any
 ) -> validate.ValidateOutcome:
     """`run()` with the schema cache under the workspace root, where `schema_cache` puts it."""
-    cache = workspace.root / "schema-cache"
-    return run(
-        request, workspace=workspace, schema_cache_root=cache, **{"progress": [].append, **kw}
-    )
+    settings = Settings(schema_cache_root=workspace.root / "schema-cache")
+    return run(request, workspace=workspace, settings=settings, **{"progress": [].append, **kw})
 
 
 def renders(manifest: str):
