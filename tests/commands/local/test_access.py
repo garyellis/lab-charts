@@ -53,7 +53,7 @@ class _RecordingKubectl:
     def wait_workloads_ready(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
-    def wait_certificate_ready(self, name: str, *, namespace: str, timeout: str = "120s") -> None:
+    def wait_certificate_ready(self, name: str, *, namespace: str, timeout: float) -> None:
         self.cert_waits.append((name, namespace, timeout))
         if self._cert_raise is not None:
             raise self._cert_raise
@@ -257,7 +257,7 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
     summary = RunSummary(no_change=list(_GATEWAY_SYNCED))
     wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=[].append)  # type: ignore[arg-type]
 
-    assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
+    assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", 120.0)]
 
 
 def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(

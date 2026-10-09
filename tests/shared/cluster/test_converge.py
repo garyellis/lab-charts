@@ -76,12 +76,12 @@ def test_converge_installs_without_helm_wait_then_waits_on_the_manifest_and_inst
     assert calls[1] == ("helm", "get", "manifest", "web", "--namespace", "apps")
     waits = calls[2:]
     assert [c for c in waits if "rollout" in c or c[1] == "wait"] == [
-        ("kubectl", "-n", "apps", "rollout", "status", "deployment/web", "--timeout=5m"),
-        ("kubectl", "-n", "apps", "rollout", "status", "deployment/made-by-operator", "--timeout=5m"),
-        ("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/agent", "--timeout=5m"),
+        ("kubectl", "-n", "apps", "rollout", "status", "deployment/web", "--timeout=300s"),
+        ("kubectl", "-n", "apps", "rollout", "status", "deployment/made-by-operator", "--timeout=300s"),
+        ("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/agent", "--timeout=300s"),
         (
             "kubectl", "wait", "--for=condition=Established",
-            "customresourcedefinition/widgets.example.com", "--timeout=5m",
+            "customresourcedefinition/widgets.example.com", "--timeout=300s",
         ),
     ]
 

@@ -3,31 +3,15 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from dataclasses import dataclass
-from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
+from chart_manager.plumbing.duration import format_duration
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
-
-
-def _go_duration(seconds: float) -> str:
-    """Render seconds as a Go duration string for helm's `--timeout` flag.
-
-    Plain decimal seconds only, fractional part preserved: 300.0 -> "300s",
-    1.5 -> "1.5s", 1e-05 -> "0.00001s". Going through `Decimal(repr(...))`
-    keeps the shortest round-tripping digits and avoids both the "1e-05s"
-    exponent form (Go's `time.ParseDuration` rejects it) and a noisy
-    trailing ".0". Negative and non-finite values are programming errors:
-    request validation rejects them long before a subprocess is built.
-    """
-    if not math.isfinite(seconds) or seconds < 0:
-        raise ValueError(f"helm duration must be finite and >= 0 (got {seconds!r})")
-    return f"{Decimal(repr(float(seconds))).normalize():f}s"
 
 
 @dataclass(frozen=True)
@@ -261,7 +245,7 @@ class Helm:
             namespace,
             "--create-namespace",
             "--timeout",
-            _go_duration(timeout),
+            format_duration(timeout),
             # Subchart schemas (notably the istio gateway/istiod charts)
             # forbid `null` for map-typed keys, which prevents wrapper
             # values-<env>.yaml overlays from wiping inherited keys via
@@ -404,7 +388,7 @@ class Helm:
         the verdict. `logs=True` adds pod logs to the output;
         `subprocess_timeout` overrides the instance cap.
         """
-        args = ["test", release, "--namespace", namespace, "--timeout", _go_duration(timeout)]
+        args = ["test", release, "--namespace", namespace, "--timeout", format_duration(timeout)]
         if logs:
             args.append("--logs")
         return self._run(args, check=False, timeout=subprocess_timeout)

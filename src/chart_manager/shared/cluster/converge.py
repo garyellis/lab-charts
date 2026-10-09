@@ -133,7 +133,8 @@ def wait(session: Session, release: Release) -> None:
             kind, namespace=release.namespace, selector=selector
         ):
             workloads[(kind, release.namespace, name)] = None
+    timeout = parse_duration(release.timeout)
     for kind, namespace, name in sorted(workloads, key=lambda w: WORKLOAD_KINDS.index(w[0])):
-        session.kubectl.rollout_status(kind, name, namespace=namespace, timeout=release.timeout)
+        session.kubectl.rollout_status(kind, name, namespace=namespace, timeout=timeout)
     for crd in crds:
-        session.kubectl.wait_established(crd, timeout=release.timeout)
+        session.kubectl.wait_established(crd, timeout=timeout)

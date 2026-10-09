@@ -99,9 +99,9 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
     assert network[:4] == ("helm", "upgrade", "--install", "network")
     assert "--set" in network and "api.host=172.18.0.2" in network and "api.port=6443" in network
     assert rollout == (
-        "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=10m",
+        "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=600s",
     )
-    assert nodes == ("kubectl", "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=4m")
+    assert nodes == ("kubectl", "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=240s")
     assert metrics[:4] == ("helm", "upgrade", "--install", "metrics")
     assert "cluster.name=dev" in metrics
     assert [(o.name, o.namespace) for o in outcomes] == [

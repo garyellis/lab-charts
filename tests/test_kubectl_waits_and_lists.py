@@ -32,13 +32,13 @@ def test_every_call_is_pinned_to_the_context_and_timeout() -> None:
 
     kubectl.get_secret_value("grafana", "admin-password", namespace="obs")
     kubectl.create_namespace("obs")
-    kubectl.wait_apiserver_ready()
-    kubectl.wait_nodes_ready()
-    kubectl.wait_certificate_ready("apps-wildcard", namespace="obs")
+    kubectl.wait_apiserver_ready(timeout=60.0)
+    kubectl.wait_nodes_ready(timeout=60.0)
+    kubectl.wait_certificate_ready("apps-wildcard", namespace="obs", timeout=60.0)
     kubectl.list_virtualservices()
     kubectl.workload_names("deployment", namespace="obs")
-    kubectl.rollout_status("deployment", "web", namespace="obs", timeout="1m")
-    kubectl.wait_established("certificates.cert-manager.io", timeout="1m")
+    kubectl.rollout_status("deployment", "web", namespace="obs", timeout=60.0)
+    kubectl.wait_established("certificates.cert-manager.io", timeout=60.0)
     kubectl.list_helmreleases()
     kubectl.get_helmrelease_status(ref)
     kubectl.list_owned_workloads(ref)
@@ -50,9 +50,8 @@ def test_every_call_is_pinned_to_the_context_and_timeout() -> None:
     kubectl.delete_pod("obs", "web-0", timeout=2.0)
 
     assert {r.args[-2:] for r in runner.records} == {("--context", "kind-a")}
-    # A per-call budget overrides the instance cap.
-    assert {r.timeout for r in runner.records[:-1]} == {30.0}
-    assert runner.records[-1].timeout == 2.0
+    # Waits and per-call budgets override the instance cap.
+    assert {r.timeout for r in runner.records} == {30.0, 90.0, 2.0}
 
 
 def test_get_secret_value_decodes_the_key() -> None:
@@ -68,9 +67,18 @@ def test_wait_certificate_ready_surfaces_timeout_as_external_error() -> None:
     runner = FakeCommandRunner(returncode=1, stderr="timed out waiting for the condition")
     with pytest.raises(ExternalCommandError) as excinfo:
         _kubectl(runner).wait_certificate_ready(
-            "apps-wildcard", namespace="istio-ingress", timeout="1s"
+            "apps-wildcard", namespace="istio-ingress", timeout=1.0
         )
     assert "timed out" in str(excinfo.value)
+
+
+def test_a_wait_runs_for_its_length_plus_slack_not_the_instance_cap() -> None:
+    runner = FakeCommandRunner()
+
+    Kubectl(runner, context=None, timeout=30.0).wait_established("x.example.io", timeout=300.0)
+
+    [record] = runner.records
+    assert (record.args[-1], record.timeout) == ("--timeout=300s", 330.0)
 
 
 # ----- list_virtualservices -------------------------------------------------
@@ -156,7 +164,7 @@ def test_wait_workloads_ready_rolls_out_each_listed_workload() -> None:
         ]
     )
 
-    _kubectl(runner).wait_workloads_ready("obs", timeout="90s")
+    _kubectl(runner).wait_workloads_ready("obs", timeout=90.0)
 
     rollouts = [c for c in runner.calls if "rollout" in c]
     assert rollouts == [
@@ -170,7 +178,7 @@ def test_wait_workloads_ready_raises_when_the_listing_fails() -> None:
     runner = scripted([Reply(returncode=1, stderr="Unauthorized")])
 
     with pytest.raises(ExternalCommandError) as exc:
-        _kubectl(runner).wait_workloads_ready("obs")
+        _kubectl(runner).wait_workloads_ready("obs", timeout=90.0)
 
     assert "cannot list deployment in namespace obs" in str(exc.value)
     assert "Unauthorized" in str(exc.value)
@@ -181,7 +189,7 @@ def test_wait_workloads_ready_raises_when_the_listing_fails() -> None:
 def test_wait_workloads_ready_accepts_a_genuinely_empty_namespace() -> None:
     runner = scripted([_ok(""), _ok(""), _ok("")])
 
-    _kubectl(runner).wait_workloads_ready("empty")
+    _kubectl(runner).wait_workloads_ready("empty", timeout=90.0)
 
     assert len(runner.calls) == 3
     assert not [c for c in runner.calls if "rollout" in c]
@@ -192,6 +200,7 @@ def test_wait_workloads_ready_scopes_listings_to_selector() -> None:
 
     _kubectl(runner).wait_workloads_ready(
         "shared",
+        timeout=90.0,
         selector="app.kubernetes.io/instance=grafana",
     )
 

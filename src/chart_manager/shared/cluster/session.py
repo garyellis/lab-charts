@@ -17,6 +17,9 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.progress import Progress, step
 from chart_manager.settings import Settings
 
+# Seconds to wait for the kube-apiserver to answer after the cluster starts.
+APISERVER_READY_TIMEOUT = 60.0
+
 
 @dataclass(frozen=True)
 class Session:
@@ -67,7 +70,7 @@ def provision(
     progress(step("Ensuring cluster", name))
     session.kind.ensure_cluster(name, config=kind_config_path(root, cluster))
     progress(step("Waiting for kube-apiserver"))
-    session.kubectl.wait_apiserver_ready()
+    session.kubectl.wait_apiserver_ready(timeout=APISERVER_READY_TIMEOUT)
     if hooks is not None and hooks.post_provision is not None:
         post = {
             **env,
@@ -77,7 +80,7 @@ def provision(
         }
         _hook(hooks.post_provision, root, post, runner=runner, settings=settings)
         progress(step("Waiting for kube-apiserver after post-provision hook"))
-        session.kubectl.wait_apiserver_ready()
+        session.kubectl.wait_apiserver_ready(timeout=APISERVER_READY_TIMEOUT)
     return session
 
 
