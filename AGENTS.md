@@ -27,7 +27,7 @@ uv run --extra dev pytest -q                      # unit suite; addopts exclude 
 uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py
 uv run --extra dev lint-imports                      # import contracts
 uv run --extra dev mypy src/chart_manager            # production code only
-mise run check     # CI fast gate: lint-imports, actionlint, ruff, mypy, vulture, drift, pytest
+mise run check     # CI fast gate: lint-imports, actionlint, ruff, mypy, vulture, pytest
 mise run check:integration  # integration tests; a missing tool fails them
 mise run check:charts       # chart source contracts, dashboard lint
 ```
