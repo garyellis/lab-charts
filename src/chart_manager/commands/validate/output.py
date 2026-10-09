@@ -8,7 +8,6 @@ from typing import get_args
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.commands.validate.display import STATUS_STYLE
 from chart_manager.commands.validate.models import (
     FAILING,
     CheckName,
@@ -21,6 +20,7 @@ from chart_manager.commands.validate.models import (
 _CHECKS: tuple[CheckName, ...] = get_args(CheckName)
 _EMOJI = {"passed": "✅", "failed": "❌", "error": "⚠️", "skipped": "➖"}  # noqa: RUF001
 _NOT_RUN = "·"
+_STYLES = {"passed": "green", "failed": "red", "error": "bold red", "skipped": "dim"}
 
 
 def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
@@ -108,7 +108,7 @@ def to_table(outcome: ValidateOutcome, *, timings: bool) -> Table:
         cells: list[str | Text] = [row.chart, row.env, row.release]
         for name in _CHECKS:
             status = _status(row, name)
-            cells.append(Text(status or "-", style=STATUS_STYLE.get(status, "dim")))
+            cells.append(Text(status or "-", style=_STYLES.get(status, "dim")))
         if timings:
             cells.append(Text(_elapsed(row), style="dim"))
         table.add_row(*cells)

@@ -14,6 +14,7 @@ from chart_manager.commands.validate.models import CheckName
 from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import (
     ONE_DEPENDENCY_LOCK,
@@ -38,7 +39,9 @@ def _run(
 ) -> validate.ValidateOutcome:
     """`run()` with the schema cache under the workspace root, where `schema_cache` puts it."""
     cache = workspace.root / "schema-cache"
-    return run(request, workspace=workspace, schema_cache_root=cache, **kw)
+    return run(
+        request, workspace=workspace, schema_cache_root=cache, **{"progress": [].append, **kw}
+    )
 
 
 def renders(manifest: str):
@@ -623,40 +626,22 @@ def test_the_outcome_folds_rows_and_spec_errors_into_one_exit_reason(
     assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome is expected
 
 
-class RecordingProgress:
-    def __init__(self) -> None:
-        self.started: list[tuple[str, str]] = []
-        self.events: list[tuple[str, str, str, bool]] = []
-        self.stopped = False
-
-    def start(self, rows):  # type: ignore[no-untyped-def]
-        self.started = [(row.chart, row.env) for row in rows]
-
-    def on_event(self, row, check, status, elapsed_s=None):  # type: ignore[no-untyped-def]
-        self.events.append((row.chart, check, status, elapsed_s is not None))
-
-    def stop(self) -> None:
-        self.stopped = True
-
-
-def test_progress_hears_each_check_start_and_finish_with_its_time(tmp_path: Path) -> None:
+def test_progress_hears_each_finished_check_with_its_time(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
-    progress = RecordingProgress()
+    events: list[ProgressEvent | RowUpdate] = []
 
     outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
-        progress=progress,
+        progress=events.append,
     )
 
-    assert progress.started == [("demo", "dev")]
-    assert progress.events == [
-        ("demo", "render", "running", False),
-        ("demo", "render", "passed", True),
+    elapsed = outcome.rows[0].checks["render"].elapsed_seconds
+    assert elapsed is not None
+    assert events == [
+        RowUpdate(("demo", "dev"), "render", "passed", f"{elapsed:.1f}s"),
     ]
-    assert progress.stopped
-    assert outcome.rows[0].checks["render"].elapsed_seconds is not None
 
 
 def test_rows_checked_in_parallel_come_back_in_selection_order(tmp_path: Path) -> None:

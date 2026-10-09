@@ -29,6 +29,7 @@ def check(workspace: RepositoryWorkspace, *charts: str) -> validate.ValidateOutc
         workspace=workspace,
         runner=SubprocessRunner(),
         schema_cache_root=workspace.root / "schema-cache",
+        progress=[].append,
     )
 
 

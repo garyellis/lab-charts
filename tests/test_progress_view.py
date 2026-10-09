@@ -54,7 +54,7 @@ def test_off_a_terminal_each_event_is_one_narration_line(
 
 def test_live_keeps_one_row_per_key_and_prints_lines_above_it(narrated: Console) -> None:
     with progress_view(live=True) as progress:
-        progress(RowUpdate(("grafana", "dev"), "render", "running", ""))
+        progress(RowUpdate(("grafana", "dev"), "render", "failed", ""))
         progress(step("Applying", "grafana"))
         progress(RowUpdate(("grafana", "dev"), "render", "passed", ""))
         progress(RowUpdate(("loki", "dev"), "schema", "failed", "boom"))
@@ -62,7 +62,7 @@ def test_live_keeps_one_row_per_key_and_prints_lines_above_it(narrated: Console)
     text = narrated.export_text()
     assert text.index("Applying grafana") < text.index("render")
     assert text.count("grafana/dev") == 1
-    assert "running" not in text
+    assert text.count("failed") == 1
     assert "failed boom" in text
 
 

@@ -22,7 +22,6 @@ from chart_manager.plumbing.progress import Progress, ProgressEvent, RowUpdate
 
 _SEVERITY_STYLES = {"step": "bold", "detail": "dim", "warn": "yellow", "error": "red"}
 _STATUS_STYLES = {
-    "running": "yellow",
     "passed": "green",
     "failed": "red",
     "error": "bold red",

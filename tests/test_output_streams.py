@@ -61,7 +61,6 @@ def _argv(name: str) -> list[str]:
     return {
         "validate-json": [
             "chart", "validate", "--all", "--output", "json",
-            "--progress", "none",
         ],
         # Deliberately does NOT name `--output json`: it lets `auto` resolve
         # to json, which is what happens off a terminal and therefore what
@@ -72,7 +71,7 @@ def _argv(name: str) -> list[str]:
         # See `cli/output.resolve` for why auto-resolved json is not quiet.
         "validate-json-with-warning": [
             "chart", "validate", "--all",
-            "--progress", "none", "--github-step-summary",
+            "--github-step-summary",
         ],
         "chart-test-matrix": ["plan", "-o", "github", "--all"],
     }[name]

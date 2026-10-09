@@ -52,6 +52,7 @@ def test_fixture_charts_meet_or_break_the_repository_policies(
         workspace=schema_workspace,
         runner=SubprocessRunner(),
         schema_cache_root=tmp_path / "schema-cache",
+        progress=[].append,
     )
 
     (row,) = outcome.rows
