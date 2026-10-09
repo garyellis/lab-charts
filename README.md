@@ -49,7 +49,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager chart upgrade charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
 | `uv run chart-manager promote pr\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
 | `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; create its database and container once with `mise run events:provision`. `event emit --dry-run` previews a document without a backend. |
-| `uv run chart-manager grafana dashboard export <uid> --to <path>` | Export one dashboard from the kind Grafana as canonical JSON. `lint` checks committed dashboards. |
+| `uv run chart-manager grafana dashboard export <uid> --url http://127.0.0.1:3000 --to <path>` | Export one dashboard as canonical JSON from the Grafana at `--url` (run `kubectl -n observability port-forward svc/grafana 3000:80` first). `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
 
 ## Local clusters

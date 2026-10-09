@@ -5,9 +5,8 @@ declared in that group's module, where its help text sits next to the command
 it describes -- collecting every option in one file would put `--stack`'s
 wording as far from `local up` as it is possible to get.
 
-The bar for moving one here is that two groups must agree on it forever:
-`--cluster-name` addresses the same kind cluster from `chart test` and from
-`grafana dashboard export`. Anything else stays with its command.
+The bar for moving one here is that two groups must agree on it forever.
+Anything else stays with its command.
 """
 
 from __future__ import annotations
@@ -16,8 +15,7 @@ from typing import Annotated
 
 import typer
 
-#: The kind cluster a command addresses. Shared by `chart test` (which may
-#: create it) and `grafana dashboard export` (which port-forwards into it).
+#: The kind cluster a command addresses; `chart test` may create it.
 ClusterNameOption = Annotated[str, typer.Option("--cluster-name", help="kind cluster name.")]
 
 ProvisionHooksOption = Annotated[

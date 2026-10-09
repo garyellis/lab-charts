@@ -181,7 +181,7 @@ def test_grafana_dashboard_export(monkeypatch: pytest.MonkeyPatch) -> None:
         dashboard_export, "export", lambda _request, _kubectl: json.loads(PASSING_DASHBOARD)
     )
 
-    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
+    result = cli("grafana", "dashboard", "export", "u", "--url", "http://g", "-o", "json")
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["uid"] == "u"

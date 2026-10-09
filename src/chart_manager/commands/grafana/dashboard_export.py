@@ -1,4 +1,4 @@
-"""Export a Grafana dashboard from a kind cluster and normalize for git.
+"""Export a Grafana dashboard and normalize it for git.
 
 Replaces the older `scripts/export-grafana-dashboard.sh`. The normalization
 rules match the shell script exactly so existing committed dashboards diff
@@ -13,12 +13,10 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from chart_manager.integrations.kind import kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.errors import ChartManagerError
 
 DEFAULT_RELEASE = "grafana"
-DEFAULT_REMOTE_PORT = 80
 DEFAULT_ADMIN_USER = "admin"
 SECRET_PASSWORD_KEY = "admin-password"
 
@@ -38,18 +36,17 @@ _CHURN_KEYS = ("id", "version", "iteration")
 
 @dataclass(frozen=True)
 class ExportRequest:
-    """Inputs for one dashboard export: which dashboard, which cluster/release."""
+    """Inputs for one dashboard export: which dashboard, which Grafana, which release."""
 
     uid: str
-    cluster_name: str
+    url: str
     namespace: str
     release: str = DEFAULT_RELEASE
-    remote_port: int = DEFAULT_REMOTE_PORT
     admin_user: str = DEFAULT_ADMIN_USER
 
 
 def export(request: ExportRequest, kubectl: Kubectl) -> dict[str, Any]:
-    """Port-forward to Grafana, GET the dashboard, and return it normalized.
+    """GET the dashboard from Grafana at `request.url` and return it normalized.
 
     Reads the admin password from the release's Secret. Raises
     ChartManagerError if the API response lacks a .dashboard object.
@@ -58,19 +55,7 @@ def export(request: ExportRequest, kubectl: Kubectl) -> dict[str, Any]:
     password = kubectl.get_secret_value(
         request.release, SECRET_PASSWORD_KEY, namespace=request.namespace
     )
-    # The configured context wins, else the kind naming convention for the
-    # cluster the request names.
-    context = kubectl.context or kind_context(request.cluster_name)
-
-    with kubectl.port_forward_session(
-        context=context,
-        namespace=request.namespace,
-        service=request.release,
-        remote_port=request.remote_port,
-    ) as local_port:
-        raw = _http_get_dashboard(
-            local_port, request.uid, request.admin_user, password
-        )
+    raw = _http_get_dashboard(request.url, request.uid, request.admin_user, password)
 
     dashboard = raw.get("dashboard")
     if not isinstance(dashboard, dict):
@@ -160,11 +145,9 @@ def _rewrite_datasource_uids(node: Any) -> Any:
     return node
 
 
-def _http_get_dashboard(
-    local_port: int, uid: str, user: str, password: str
-) -> dict[str, Any]:
+def _http_get_dashboard(base_url: str, uid: str, user: str, password: str) -> dict[str, Any]:
     """GET one dashboard from Grafana's API over basic auth; raise on HTTP/URL errors."""
-    url = f"http://127.0.0.1:{local_port}/api/dashboards/uid/{uid}"
+    url = f"{base_url.rstrip('/')}/api/dashboards/uid/{uid}"
     creds = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {creds}"})
     try:
