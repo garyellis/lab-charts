@@ -345,7 +345,10 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
         wait(session, release(entry, sets={}))
     elif action.kind is ActionKind.HELM_TEST:
         result = session.helm.test(
-            entry.chart.name, namespace=entry.namespace, timeout=parse_duration(entry.spec.timeout)
+            entry.chart.name,
+            namespace=entry.namespace,
+            timeout=parse_duration(entry.spec.timeout),
+            subprocess_timeout=None,
         )
         if result.returncode != 0:
             output = (result.stderr or result.stdout).strip()

@@ -34,7 +34,7 @@ from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus, Kubectl
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout, ExternalCommandError
 from chart_manager.plumbing.progress import Progress
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.settings import Settings
@@ -422,25 +422,25 @@ class _Tester:
                 logs=True,
                 subprocess_timeout=subprocess_cap,
             )
+        except CommandTimeout:
+            reason = (
+                Reason.TOTAL_BUDGET_EXHAUSTED
+                if self.clock() >= ctx.total_deadline
+                else Reason.PER_HR_BUDGET_EXHAUSTED
+            )
+            # Which budget tripped decides whether the operator raises
+            # --per-hr-timeout or accepts the run was too big.
+            _LOG.warning(
+                "helm test timed out: ns=%s name=%s reason=%s per_hr=%gs total=%gs",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                reason,
+                ctx.request.per_hr_timeout_seconds,
+                ctx.request.total_timeout_seconds,
+            )
+            return self._finalize_timed_out(ctx, reason)
         except ExternalCommandError as exc:
             msg = str(exc)
-            if "timed out" in msg:
-                reason = (
-                    Reason.TOTAL_BUDGET_EXHAUSTED
-                    if self.clock() >= ctx.total_deadline
-                    else Reason.PER_HR_BUDGET_EXHAUSTED
-                )
-                # Which budget tripped decides whether the operator raises
-                # --per-hr-timeout or accepts the run was too big.
-                _LOG.warning(
-                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%gs total=%gs",
-                    ctx.ref.namespace,
-                    ctx.ref.name,
-                    reason,
-                    ctx.request.per_hr_timeout_seconds,
-                    ctx.request.total_timeout_seconds,
-                )
-                return self._finalize_timed_out(ctx, reason)
             _LOG.error(
                 "helm test invocation failed outside a verdict: ns=%s name=%s: %s",
                 ctx.ref.namespace,

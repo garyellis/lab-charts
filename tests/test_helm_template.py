@@ -78,7 +78,7 @@ def test_output_streams_only_when_verbose_and_answers_are_always_captured(
     helm.lint(tmp_path, [])
     helm.template("r", tmp_path, namespace="ns", output_dir=tmp_path / "out")
     helm.upgrade_install("r", tmp_path, namespace="ns", timeout=60.0)
-    helm.test("r", namespace="ns", timeout=60.0)
+    helm.test("r", namespace="ns", timeout=60.0, subprocess_timeout=None)
     helm.dependency_update(tmp_path, timeout=1.0)
 
     streamed = {r.args[1] for r in runner.records if not r.capture}

@@ -7,7 +7,7 @@ from unittest.mock import ANY
 
 import pytest
 
-from chart_manager.plumbing.errors import CommandTimeout
+from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
 from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
 from chart_manager.plumbing.text import truncate_bytes
 from tests.commands.promote.conftest import (
@@ -224,13 +224,21 @@ def test_unreadable_events_do_not_break_the_report() -> None:
     assert "<events unavailable" in (outcome.diagnostics or "")
 
 
-def test_a_helm_timeout_spends_the_per_hr_budget() -> None:
-    timeout = CommandTimeout("command timed out")
-    runner = cluster(helmrelease()).respond(argv_prefix("helm", "test"), raises=timeout)
+@pytest.mark.parametrize(
+    ("error", "verdict", "reason"),
+    [
+        (CommandTimeout("command timed out"), "timed-out", "PerHRBudgetExhausted"),
+        (ExternalCommandError("ssh tunnel timed out"), "failed", "HelmUnavailable"),
+    ],
+)
+def test_only_a_helm_timeout_spends_the_per_hr_budget(
+    error: ExternalCommandError, verdict: str, reason: str
+) -> None:
+    runner = cluster(helmrelease()).respond(argv_prefix("helm", "test"), raises=error)
 
     [outcome] = run_helm_test(runner).outcomes
 
-    assert (outcome.verdict, outcome.reason) == ("timed-out", "PerHRBudgetExhausted")
+    assert (outcome.verdict, outcome.reason) == (verdict, reason)
 
 
 def test_the_total_budget_stops_releases_before_helm_runs() -> None:
