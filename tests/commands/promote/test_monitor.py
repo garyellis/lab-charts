@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
-from chart_manager.commands.promote.monitor import MonitorRequest, MonitorResult, run
 from chart_manager.commands.promote.state import DETAIL_MAX, Reason
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.plumbing.progress import Progress, ProgressEvent, RowUpdate
-from chart_manager.settings import Settings
-from chart_manager.shared.events.writer import EventWriter
+from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
 from tests.commands.promote.conftest import (
-    CHART,
     HR,
-    VERSION,
     Clock,
     calls,
     cluster,
@@ -25,86 +19,30 @@ from tests.commands.promote.conftest import (
     failure,
     helmrelease,
     items,
+    run_monitor,
     workloads,
 )
-from tests.conftest import EventLog, FakeCommandRunner, Reply, argv_prefix
+from tests.conftest import FakeCommandRunner, Reply, argv_prefix
 
 PROGRESSING = (condition("Ready", "Unknown", "Progressing"),)
 INSTALL_FAILED = (condition("Ready", "False", "InstallFailed", "bad"),)
-
-
-def _monitor(
-    runner: FakeCommandRunner,
-    *,
-    clock: Clock | None = None,
-    sleep: Callable[[float], None] | None = None,
-    rand: Callable[[float, float], float] = lambda _lo, _hi: 0.0,
-    progress: Progress = lambda _event: None,
-    **request: Any,
-) -> MonitorResult:
-    clock = clock or Clock()
-    return run(
-        MonitorRequest(**{"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}),
-        runner=runner,
-        settings=Settings(kube_context="lab", command_timeout=30.0),
-        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
-        sleep=sleep or clock.sleep,
-        clock=clock,
-        rand=rand,
-        progress=progress,
-    )
 
 
 def _status_reads(runner: FakeCommandRunner, name: str = "loki") -> int:
     return sum(1 for argv in calls(runner, "kubectl", "-n") if argv[3:6] == ("get", HR, name))
 
 
-@pytest.mark.parametrize(
-    ("fields", "message"),
-    [
-        ({"chart_name": ""}, "chart_name"),
-        ({"concurrency": 0}, "concurrency"),
-        ({"per_hr_timeout_seconds": 1.0, "total_timeout_seconds": 2.0}, "poll interval"),
-        ({"per_hr_timeout_seconds": 600.0, "total_timeout_seconds": 60.0}, "total_timeout"),
-        ({"per_poll_timeout_seconds": float("nan")}, "per_poll_timeout_seconds"),
-        ({"per_hr_timeout_seconds": float("nan")}, "per_hr_timeout_seconds"),
-        ({"total_timeout_seconds": float("nan")}, "total_timeout_seconds"),
-        ({"per_hr_timeout_seconds": "5m"}, "per_hr_timeout_seconds must be a number"),
-    ],
-)
-def test_the_request_rejects_bad_bounds(fields: dict[str, Any], message: str) -> None:
-    with pytest.raises(ChartManagerError, match=message):
-        MonitorRequest(**{"chart_name": CHART, "version": VERSION, **fields})
-
-
-def test_a_per_hr_budget_of_one_poll_interval_is_allowed() -> None:
-    request = MonitorRequest(CHART, VERSION, per_hr_timeout_seconds=3.0, total_timeout_seconds=3.0)
-    assert request.per_hr_timeout_seconds == 3.0
-
-
 def test_a_failed_listing_raises() -> None:
     runner = FakeCommandRunner().respond(argv_prefix("kubectl", "get", HR), returncode=1)
     with pytest.raises(ExternalCommandError):
-        _monitor(runner)
-
-
-def test_nothing_matched_is_one_no_match_outcome() -> None:
-    runner = cluster(
-        helmrelease("a", "ns1", chart="other"), helmrelease("b", "ns2", version="9.9.9")
-    )
-
-    result = _monitor(runner)
-
-    [outcome] = result.outcomes
-    assert (outcome.verdict, outcome.reason) == ("no-match", "NoHelmReleasesMatched")
-    assert result.ok is False
+        run_monitor(runner)
 
 
 def test_a_converged_release_is_ready_without_another_poll() -> None:
     runner = cluster(helmrelease())
     runner.respond_each(workloads(), items(deployment()))
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
     assert outcome.verdict == "ready"
     assert outcome.diagnostics is None
@@ -134,17 +72,17 @@ def test_lagging_releases_are_polled_until_ready() -> None:
         jitter.append((lo, hi))
         return 1.25
 
-    result = _monitor(runner, clock=clock, sleep=sleep, rand=rand, progress=seen.append)
+    result = run_monitor(runner, clock=clock, sleep=sleep, rand=rand, progress=seen.append)
 
     [outcome] = result.outcomes
 
     assert outcome.verdict == "ready"
-    phases = [t.phase for t in outcome.recent_transitions]
+    phases = [t.phase for t in outcome.transitions]
     assert phases[:2] == ["GenerationLag", "HistoryLag"]
     assert phases[-1] == "Ready"
     assert seen == [
         RowUpdate(("loki", "loki"), "phase", t.phase, t.detail)
-        for t in outcome.recent_transitions
+        for t in outcome.transitions
     ]
     assert _status_reads(runner) == 4
     assert len(calls(runner, "kubectl", "get", "deployment,statefulset,daemonset")) == 2
@@ -228,19 +166,19 @@ def test_the_release_status_decides_the_verdict(
     runner = cluster(release)
     runner.respond_each(workloads(), items(*listed))
 
-    [result] = _monitor(runner, per_hr_timeout_seconds=3.0).outcomes
+    [result] = run_monitor(runner, per_hr_timeout_seconds=3.0).outcomes
 
     assert (result.verdict, result.reason) == outcome
     # A reason the model names comes back as `Reason`; an unmodelled one as a plain string.
     assert isinstance(result.reason, Reason) is (outcome[1] in {r.value for r in Reason})
-    first = result.recent_transitions[0]
+    first = result.transitions[0]
     assert (first.phase, first.detail) == (phase, detail)
 
 
 def test_a_terminal_failure_ends_the_watch_and_reports_why() -> None:
     runner = cluster([helmrelease(conditions=INSTALL_FAILED), helmrelease()])
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("failed", "InstallFailed")
     assert _status_reads(runner) == 1
@@ -257,7 +195,7 @@ def test_diagnostics_read_events_where_the_workloads_run() -> None:
         )
     )
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
     assert outcome.diagnostics is not None
     assert "### Events (namespace observability)" in outcome.diagnostics
@@ -269,7 +207,7 @@ def test_a_workload_that_never_converges_times_out_the_release() -> None:
     runner.respond_each(workloads(), items(deployment(converged=False)))
     runner.respond(argv_prefix("kubectl", "get", "events"), stdout="BackOff pulling image")
 
-    [outcome] = _monitor(runner, per_poll_timeout_seconds=7.0).outcomes
+    [outcome] = run_monitor(runner, per_poll_timeout_seconds=7.0).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("timed-out", "PerHRBudgetExhausted")
     assert outcome.diagnostics is not None
@@ -286,7 +224,7 @@ def test_the_total_budget_times_out_the_releases_still_waiting() -> None:
         helmrelease("a2", "ns", generation=2, conditions=PROGRESSING),
     )
 
-    result = _monitor(
+    result = run_monitor(
         runner, concurrency=3, per_hr_timeout_seconds=30.0, total_timeout_seconds=30.0
     )
 
@@ -301,7 +239,7 @@ def test_the_total_budget_times_out_the_releases_still_waiting() -> None:
 def test_outcomes_are_sorted_by_namespace_then_name() -> None:
     runner = cluster(helmrelease("zeta", "a"), helmrelease("alpha", "b"), helmrelease("alpha", "a"))
 
-    result = _monitor(runner, concurrency=1)
+    result = run_monitor(runner, concurrency=1)
 
     assert [(o.ref.namespace, o.ref.name) for o in result.outcomes] == [
         ("a", "alpha"),
@@ -313,7 +251,7 @@ def test_outcomes_are_sorted_by_namespace_then_name() -> None:
 def test_a_suspended_release_is_skipped_without_polling() -> None:
     runner = cluster(helmrelease(suspend=True))
 
-    result = _monitor(runner)
+    result = run_monitor(runner)
 
     assert [o.verdict for o in result.outcomes] == ["skipped-suspended"]
     assert result.ok is True
@@ -356,25 +294,25 @@ def test_a_transition_is_recorded_only_when_the_situation_changes(
     if workload_reads:
         runner.respond_each(workloads(), *workload_reads)
 
-    [outcome] = _monitor(runner, per_hr_timeout_seconds=60.0).outcomes
+    [outcome] = run_monitor(runner, per_hr_timeout_seconds=60.0).outcomes
 
     assert outcome.verdict == "timed-out"
-    assert [t.phase for t in outcome.recent_transitions] == phases
+    assert [t.phase for t in outcome.transitions] == [*phases, "TimedOut"]
 
 
 def test_only_the_last_five_transitions_are_kept() -> None:
     runner = cluster([GEN_LAG, HISTORY_LAG] * 6)
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
-    assert len(outcome.recent_transitions) == 5
+    assert len(outcome.transitions) == 5
 
 
 def test_a_release_deleted_mid_watch_fails_as_disappeared() -> None:
     not_found = 'Error from server (NotFound): helmreleases "loki" not found'
     runner = cluster([helmrelease(generation=2, conditions=PROGRESSING), failure(not_found)])
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("failed", "Disappeared")
 
@@ -382,26 +320,17 @@ def test_a_release_deleted_mid_watch_fails_as_disappeared() -> None:
 def test_a_flaky_poll_is_recorded_and_the_watch_continues() -> None:
     runner = cluster([helmrelease(generation=2, conditions=PROGRESSING), failure("flake")])
 
-    [outcome] = _monitor(runner).outcomes
+    [outcome] = run_monitor(runner).outcomes
 
     assert outcome.verdict == "timed-out"
-    assert "PollError" in [t.phase for t in outcome.recent_transitions]
-
-
-def test_a_raising_progress_callback_does_not_break_the_watch() -> None:
-    runner = cluster(helmrelease())
-
-    def explode(_event: ProgressEvent | RowUpdate) -> None:
-        raise RuntimeError("callback crash")
-
-    assert [o.verdict for o in _monitor(runner, progress=explode).outcomes] == ["ready"]
+    assert "PollError" in [t.phase for t in outcome.transitions]
 
 
 @pytest.mark.parametrize(("fail_fast", "peer"), [(True, "timed-out"), (False, "ready")])
 def test_fail_fast_cancels_the_peers_of_a_failed_release(fail_fast: bool, peer: str) -> None:
     runner = cluster(helmrelease("aaa", "ns", conditions=INSTALL_FAILED), helmrelease("zzz", "ns"))
 
-    result = _monitor(runner, concurrency=1, fail_fast=fail_fast)
+    result = run_monitor(runner, concurrency=1, fail_fast=fail_fast)
 
     by_name = {o.ref.name: o for o in result.outcomes}
     assert by_name["aaa"].verdict == "failed"
@@ -409,3 +338,23 @@ def test_fail_fast_cancels_the_peers_of_a_failed_release(fail_fast: bool, peer: 
     if fail_fast:
         assert by_name["zzz"].reason == "TotalBudgetExhausted"
     assert result.total_timed_out is fail_fast
+
+
+@pytest.mark.parametrize(
+    ("fail_fast", "phase", "reason"),
+    [(False, "TimedOut", "PerHRBudgetExhausted"), (True, "Cancelled", "TotalBudgetExhausted")],
+)
+def test_a_watch_that_runs_out_of_time_reports_a_final_phase(
+    fail_fast: bool, phase: str, reason: str
+) -> None:
+    runner = cluster(
+        helmrelease("aaa", "ns", conditions=INSTALL_FAILED),
+        helmrelease("zzz", "ns", generation=2, conditions=PROGRESSING),
+    )
+    seen: list[ProgressEvent | RowUpdate] = []
+
+    run_monitor(runner, concurrency=1, fail_fast=fail_fast, progress=seen.append)
+
+    assert [u for u in seen if isinstance(u, RowUpdate) and u.key == ("ns", "zzz")][-1] == (
+        RowUpdate(("ns", "zzz"), "phase", phase, reason)
+    )

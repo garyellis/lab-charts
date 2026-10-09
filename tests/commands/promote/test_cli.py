@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -87,7 +87,7 @@ def _ready_outcome(ref: HelmReleaseRef) -> MonitorOutcome:
         reason="Ready",
         last_status=_status(ref),
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=1.5,
     )
@@ -100,7 +100,7 @@ def _failed_outcome(ref: HelmReleaseRef) -> MonitorOutcome:
         reason="InstallFailed",
         last_status=_status(ref),
         last_workloads=(),
-        recent_transitions=(Transition(_AT, "Failed", "InstallFailed"),),
+        transitions=(Transition(_AT, "Failed", "InstallFailed"),),
         diagnostics="## loki/loki - failed: InstallFailed\nbad chart values",
         duration_seconds=3.2,
     )
@@ -116,7 +116,7 @@ def _passed_test_outcome(ref: HelmReleaseRef) -> TestOutcome:
         helm_test_stderr="",
         test_pods=(),
         last_status=_status(ref),
-        phase_log=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=2.0,
     )
@@ -201,11 +201,17 @@ def test_pretty_ok_exit_0_summary_in_stdout(monkeypatch: pytest.MonkeyPatch) -> 
     assert not res.stdout.lstrip().startswith("{")
 
 
-def test_pretty_failure_exit_1_diagnostics_in_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_monitor(monkeypatch, result=_bad_result())
+def test_a_failure_shows_its_reason_in_the_table_and_its_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timed_out = replace(_failed_outcome(_ref()), verdict="timed-out", reason="PerHRBudgetExhausted")
+    _install_fake_monitor(
+        monkeypatch, result=MonitorResult("loki", "0.2.0", (timed_out,), 1.0, total_timed_out=False)
+    )
     res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 1
-    assert "InstallFailed" in res.stdout
+    assert "PerHRBudgetExhausted" in res.stdout
+    assert "bad chart values" in res.stdout
 
 
 def test_monitor_json_is_the_result_and_silences_progress(
@@ -225,7 +231,7 @@ def test_monitor_json_is_the_result_and_silences_progress(
                     "last_status": _STATUS_DOC,
                     "last_workloads": [],
                     "reason": "InstallFailed",
-                    "recent_transitions": [
+                    "transitions": [
                         {
                             "at": "2026-01-01T00:00:00+00:00",
                             "detail": "InstallFailed",
@@ -311,7 +317,7 @@ def test_test_json_is_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
                     "helm_test_stderr": "",
                     "helm_test_stdout": "PASS",
                     "last_status": _STATUS_DOC,
-                    "phase_log": [],
+                    "transitions": [],
                     "reason": "AllTestsPassed",
                     "ref": _REF_DOC,
                     "test_pods": [],
@@ -416,7 +422,7 @@ def test_no_match_outcome_pretty_message(monkeypatch: pytest.MonkeyPatch) -> Non
         reason="NoHelmReleasesMatched",
         last_status=None,
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=0.1,
     )
