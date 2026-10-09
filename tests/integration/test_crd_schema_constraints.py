@@ -149,7 +149,7 @@ def _assert_verdicts(tmp_path, constraint, valid, invalid, *, root_constraint=Fa
                 }
             )
         )
-    report = Kubeconform(SubprocessRunner()).validate(
+    report = Kubeconform(SubprocessRunner(), timeout=None).validate(
         manifests,
         schema_locations=[str(schema_path)],
         extra_args=["-verbose"],

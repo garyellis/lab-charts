@@ -64,12 +64,10 @@ class Kubeconform:
         self,
         runner: CommandRunner,
         *,
-        binary: str | Path | None = None,
-        timeout: float | None = None,
+        timeout: float | None,
     ) -> None:
-        """Bind a CommandRunner, binary path (default `kubeconform`), and timeout."""
+        """Bind a CommandRunner and a per-subprocess timeout."""
         self.runner = runner
-        self._bin = str(binary) if binary is not None else "kubeconform"
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --tool-timeout so a hung kubeconform doesn't pin a worker.
         self.timeout = timeout
@@ -84,7 +82,7 @@ class Kubeconform:
         return (
             probe_binary(
                 self.runner,
-                self._bin,
+                "kubeconform",
                 name="kubeconform",
                 version_args=("-v",),
                 remediation=(
@@ -129,7 +127,7 @@ class Kubeconform:
             frozenset(skip_kinds or []),
         )
 
-        args: list[str] = [self._bin, "-output", "json", "-summary"]
+        args: list[str] = ["kubeconform", "-output", "json", "-summary"]
         if strict:
             args.append("-strict")
         for loc in schema_locations:

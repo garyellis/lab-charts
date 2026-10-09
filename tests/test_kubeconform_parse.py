@@ -30,6 +30,10 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kubeconform"
 LOCAL_SCHEMA_TEMPLATE = "/cache/schemas/{{.ResourceKind}}.json"
 
 
+def _kubeconform(runner: FakeCommandRunner) -> Kubeconform:
+    return Kubeconform(runner, timeout=None)
+
+
 @pytest.mark.parametrize("exceptions,expected", [
     (frozenset(), []),
     (frozenset({"apiextensions.k8s.io/v1/CustomResourceDefinition"}),
@@ -52,7 +56,7 @@ def _load(name: str) -> str:
 
 def test_args_require_local_schemas_without_implicit_crd_skip(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -82,7 +86,7 @@ def test_rejects_missing_or_remote_schema_locations(
     locations: list[str],
 ) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     with pytest.raises(ExternalCommandError, match="local"):
         kc.validate(tmp_path, schema_locations=locations)
@@ -91,7 +95,7 @@ def test_rejects_missing_or_remote_schema_locations(
 def test_missing_schema_configuration_is_actionable_spec_error(tmp_path: Path) -> None:
     runner = FakeCommandRunner()
     with pytest.raises(SpecError, match=r"workspace.yaml.*schemas sync --update.*schemaLocations"):
-        Kubeconform(runner=runner).validate(tmp_path, schema_locations=[])
+        _kubeconform(runner).validate(tmp_path, schema_locations=[])
     assert not runner.calls
 
 
@@ -104,7 +108,7 @@ def test_unknown_template_variable_cannot_silently_skip_allowed_kind(
     )
     runner = FakeCommandRunner()
     with pytest.raises(SpecError, match="unsupported schema location expression"):
-        Kubeconform(runner=runner).validate(
+        _kubeconform(runner).validate(
             tmp_path, schema_locations=[f"/schemas/{{{{.{variable}}}}}/widget.json"],
             skip_kinds=["Widget"],
         )
@@ -115,7 +119,7 @@ def test_unknown_template_variable_cannot_silently_skip_allowed_kind(
 
 def test_kube_version_and_overrides_passed_through(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
     (tmp_path / "resources.yaml").write_text(
         "apiVersion: apiextensions.k8s.io/v1\n"
         "kind: CustomResourceDefinition\nmetadata: {name: widgets.example.io}\n"
@@ -154,7 +158,7 @@ def test_allow_missing_kind_is_not_skipped_when_exact_schema_exists(tmp_path: Pa
     (schemas / "example.io/widget_v1.json").write_text("{}")
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
 
-    Kubeconform(runner=runner).validate(
+    _kubeconform(runner).validate(
         rendered,
         schema_locations=[
             str(schemas / "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json")
@@ -177,7 +181,7 @@ def test_crd_exception_is_exact_and_does_not_skip_same_kind_elsewhere(
     )
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
 
-    Kubeconform(runner=runner).validate(
+    _kubeconform(runner).validate(
         tmp_path,
         schema_locations=[LOCAL_SCHEMA_TEMPLATE],
         skip_kinds=[UNSUPPORTED_CRD_OBJECT_GVK],
@@ -199,7 +203,7 @@ def test_crd_exception_is_not_used_when_managed_schema_exists(tmp_path: Path) ->
     (schemas / "customresourcedefinition_v1.json").write_text("{}")
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
 
-    Kubeconform(runner=runner).validate(
+    _kubeconform(runner).validate(
         rendered,
         schema_locations=[
             str(
@@ -215,7 +219,7 @@ def test_crd_exception_is_not_used_when_managed_schema_exists(tmp_path: Path) ->
 
 def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=0, stdout=_load("valid.json"))
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -229,7 +233,7 @@ def test_valid_fixture_parses_to_zero_invalid(tmp_path: Path) -> None:
 
 def test_invalid_fixture_populates_invalid_with_expected_finding(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"))
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -247,7 +251,7 @@ def test_invalid_fixture_populates_invalid_with_expected_finding(tmp_path: Path)
 
 def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=2, stdout=_load("tool-error.json"), stderr="kubeconform: panic")
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     with pytest.raises(ExternalCommandError) as exc:
         kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
@@ -262,7 +266,7 @@ def test_empty_resources_list_with_rc_zero_is_pass(tmp_path: Path) -> None:
         returncode=0,
         stdout='{"resources": [], "summary": {"valid": 0, "invalid": 0, "errors": 0, "skipped": 0}}',
     )
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -275,7 +279,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
     # writes a well-formed JSON report. The integration must NOT confuse this
     # with a tool crash — only unparseable output should raise.
     runner = FakeCommandRunner(returncode=1, stdout=_load("invalid.json"), stderr="")
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -292,7 +296,7 @@ def test_unknown_status_string_maps_to_error(tmp_path: Path) -> None:
             '"summary": {"valid": 0, "invalid": 0, "errors": 1, "skipped": 0}}'
         ),
     )
-    kc = Kubeconform(runner=runner)
+    kc = _kubeconform(runner)
 
     report = kc.validate(tmp_path, schema_locations=[LOCAL_SCHEMA_TEMPLATE])
 
@@ -304,6 +308,6 @@ def test_kubeconform_owns_its_version_flag(on_path: OnPath) -> None:
     on_path("kubeconform")
     runner = FakeCommandRunner(stdout="v0.6.7\n")
 
-    Kubeconform(runner).preflight()
+    _kubeconform(runner).preflight()
 
     assert ("kubeconform", "-v") in runner.calls
