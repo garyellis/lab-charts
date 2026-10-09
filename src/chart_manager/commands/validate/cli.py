@@ -33,7 +33,6 @@ from chart_manager.commands.validate.schemas import lock as schema_lock
 from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
-from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.documents import to_document
 from chart_manager.plumbing.errors import ChartManagerError, ChartNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
@@ -147,7 +146,13 @@ def validate(
         checks=frozenset(
             cast(CheckName, name) for name in (check if check else get_args(CheckName))
         ),
-        changes=_changes(all_charts, changed_files, selected, base, workspace.root, runner),
+        changes=_changes(
+            all_charts,
+            changed_files,
+            selected,
+            base,
+            Git(workspace.root, runner, timeout=container.settings.command_timeout),
+        ),
         out=rendered,
         workers=workers,
         fail_fast=fail_fast,
@@ -190,8 +195,7 @@ def _changes(
     changed_files: Path | None,
     selected: tuple[str, ...],
     base: str,
-    root: Path,
-    runner: CommandRunner,
+    git: Git,
 ) -> tuple[str, ...] | None:
     """The changed paths that pick the rows, or None for every row of the selected charts."""
     if all_charts:
@@ -205,7 +209,7 @@ def _changes(
     if selected:
         return None
     try:
-        return tuple(Git(root, runner).changed_files(base=base))
+        return tuple(git.changed_files(base=base))
     except ChartManagerError as exc:
         narration.print(f"[yellow]warn:[/yellow] git diff failed ({exc}); falling back to --all")
         return None

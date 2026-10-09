@@ -14,6 +14,7 @@ from chart_manager.commands.promote.scanner import HelmReleaseMatch
 from chart_manager.commands.promote.state import PromoteStatus
 from chart_manager.plumbing.commands import CommandResult
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.settings import Settings
 from chart_manager.shared.events.model import PromotionPhase
 from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import calls
@@ -90,6 +91,7 @@ def _promote(
             dry_run=dry_run,
         ),
         runner=runner,
+        settings=Settings(),
         events=EventWriter(source="chart-manager", store=lambda: events or EventLog()),
         confirm_downgrade=confirm,
     )

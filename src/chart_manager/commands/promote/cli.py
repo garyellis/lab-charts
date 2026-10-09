@@ -276,6 +276,7 @@ def pr(
             dry_run=dry_run,
         ),
         runner=container.command_runner(),
+        settings=container.settings,
         events=container.event_writer(),
         confirm_downgrade=_confirm_downgrade,
     )

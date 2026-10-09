@@ -48,8 +48,8 @@ def upgrade(
         UpgradeRequest(chart=resolve_chart_target(workspace, chart), dry_run=dry_run),
         workspace=workspace,
         runner=container.command_runner(),
+        settings=container.settings,
         events=container.event_writer(),
-        renovate_token=container.settings.renovate_token,
     )
     output_mod.finish(result, mode=mode, render=_render_text)
 
@@ -81,6 +81,7 @@ def upgrade_finalize(
         FinalizeRequest(chart=chart_target(workspace.root, chart_dir), update_data=update_data),
         workspace=workspace,
         runner=container.command_runner(),
+        settings=container.settings,
     )
     output_mod.finish(result, mode=mode, render=_render_text)
 

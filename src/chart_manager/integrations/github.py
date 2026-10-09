@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import (
@@ -28,19 +28,38 @@ class PullRequest:
 
 
 class Github:
-    """Thin wrapper around the `gh` CLI for PR operations."""
+    """Run `gh` PR operations in one repository, each call capped at `timeout` seconds.
 
-    def __init__(
-        self,
-        repo_root: Path,
-        runner: CommandRunner,
-        *,
-        binary: str = "gh",
-    ) -> None:
-        """Bind the repo root, a CommandRunner, and the gh binary name."""
+    `timeout=None` leaves each call unbounded.
+    """
+
+    def __init__(self, repo_root: Path, runner: CommandRunner, *, timeout: float | None) -> None:
+        """Bind the repo root, a CommandRunner and the per-call cap."""
         self.repo_root = repo_root
         self.runner = runner
-        self.binary = binary
+        self.timeout = timeout
+
+    def _run(
+        self, args: list[str], *, check: bool = True, timeout: float | None = None
+    ) -> CommandResult:
+        """Every gh invocation: `gh <args>` in the repo root; `timeout` overrides the cap."""
+        return self.runner.run(
+            ["gh", *args],
+            cwd=self.repo_root,
+            check=check,
+            timeout=timeout if timeout is not None else self.timeout,
+        )
+
+    def _json(self, args: list[str]) -> list[object]:
+        """Run a gh listing and parse its JSON array; anything but an array answers []."""
+        raw = self._run(args).stdout.strip() or "[]"
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ExternalCommandError(
+                f"gh {' '.join(args[:2])} returned non-JSON output: {exc}\n{raw[:200]}"
+            ) from exc
+        return payload if isinstance(payload, list) else []
 
     def preflight(self) -> tuple[Check, ...]:
         """Report the gh binary and whether it holds a usable credential.
@@ -57,7 +76,7 @@ class Github:
         """
         binary = probe_binary(
             self.runner,
-            self.binary,
+            "gh",
             name="gh",
             remediation="install the GitHub CLI -- https://cli.github.com/",
         )
@@ -68,12 +87,7 @@ class Github:
     def _auth_check(self) -> Check:
         """Ask gh whether it is authenticated, without printing the token."""
         try:
-            result = self.runner.run(
-                [self.binary, "auth", "status"],
-                cwd=self.repo_root,
-                check=False,
-                timeout=PROBE_TIMEOUT,
-            )
+            result = self._run(["auth", "status"], check=False, timeout=PROBE_TIMEOUT)
         except ExternalCommandError as exc:
             return _not_authenticated(first_line(str(exc)))
         # gh has moved this report between stdout and stderr across releases,
@@ -91,7 +105,6 @@ class Github:
         # any other non-zero (auth, network) as fatal via the check=True
         # default — callers should not silently proceed if gh is broken.
         args = [
-            self.binary,
             "pr",
             "list",
             "--head",
@@ -103,17 +116,7 @@ class Github:
         ]
         if base is not None:
             args.extend(["--base", base])
-        result = self.runner.run(args, cwd=self.repo_root)
-        raw = result.stdout.strip() or "[]"
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ExternalCommandError(
-                f"gh pr list returned non-JSON output: {exc}\n{raw[:200]}"
-            ) from exc
-        if not isinstance(payload, list) or not payload:
-            return None
-        for entry in payload:
+        for entry in self._json(args):
             if not isinstance(entry, dict):
                 continue
             if base is not None and entry.get("baseRefName") != base:
@@ -137,7 +140,6 @@ class Github:
         match, so the filtering happens here.
         """
         args = [
-            self.binary,
             "pr",
             "list",
             "--state",
@@ -149,18 +151,8 @@ class Github:
         ]
         if base is not None:
             args.extend(["--base", base])
-        result = self.runner.run(args, cwd=self.repo_root)
-        raw = result.stdout.strip() or "[]"
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ExternalCommandError(
-                f"gh pr list returned non-JSON output: {exc}\n{raw[:200]}"
-            ) from exc
-        if not isinstance(payload, list):
-            return ()
         found: list[PullRequest] = []
-        for entry in payload:
+        for entry in self._json(args):
             if not isinstance(entry, dict):
                 continue
             if base is not None and entry.get("baseRefName") != base:
@@ -186,48 +178,24 @@ class Github:
         command must not switch branches or write to `.git`. `{owner}`/`{repo}`
         are placeholders `gh` fills from the repository context.
         """
-        result = self.runner.run(
+        return self._run(
             [
-                self.binary,
                 "api",
                 f"repos/{{owner}}/{{repo}}/contents/{path}?ref={ref}",
                 "-H",
                 "Accept: application/vnd.github.raw",
-            ],
-            cwd=self.repo_root,
-        )
-        return result.stdout
+            ]
+        ).stdout
 
-    def create_pr(
-        self,
-        *,
-        title: str,
-        body: str,
-        head: str,
-        base: str,
-        draft: bool = False,
-    ) -> PullRequest:
+    def create_pr(self, *, title: str, body: str, head: str, base: str) -> PullRequest:
         """Create a PR via `gh pr create`.
 
         Returns PullRequest with number=None (gh doesn't print it); callers
         needing the number should re-query via `find_open_pr_for_branch`.
         """
-        args = [
-            self.binary,
-            "pr",
-            "create",
-            "--title",
-            title,
-            "--body",
-            body,
-            "--head",
-            head,
-            "--base",
-            base,
-        ]
-        if draft:
-            args.append("--draft")
-        result = self.runner.run(args, cwd=self.repo_root)
+        result = self._run(
+            ["pr", "create", "--title", title, "--body", body, "--head", head, "--base", base]
+        )
         # `gh pr create` prints the PR URL on stdout; warnings/notices can
         # precede it on some versions. Pick the last https:// line instead of
         # blindly trusting the final line of stdout.

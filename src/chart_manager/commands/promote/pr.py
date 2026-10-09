@@ -14,6 +14,7 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.semver import parse_semver
+from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
 
 from .editor import set_version
@@ -79,6 +80,7 @@ def run(
     request: PromoteRequest,
     *,
     runner: CommandRunner,
+    settings: Settings,
     events: EventWriter,
     confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool],
 ) -> PromoteResult:
@@ -104,8 +106,11 @@ def run(
     )
     with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
         workdir = Path(tmp) / "flux"
-        Git.clone(request.flux_repo, workdir, branch=request.base_branch, runner=runner)
-        result = _promote_in_workdir(request, workdir, runner, confirm_downgrade)
+        timeout = settings.command_timeout
+        Git.clone(
+            request.flux_repo, workdir, branch=request.base_branch, runner=runner, timeout=timeout
+        )
+        result = _promote_in_workdir(request, workdir, runner, timeout, confirm_downgrade)
     # `pr_url` doubles as the promotion correlation id (see
     # `_emit_promotion`), which is what ties this line to the events store.
     _LOG.info(
@@ -153,6 +158,7 @@ def _promote_in_workdir(
     request: PromoteRequest,
     workdir: Path,
     runner: CommandRunner,
+    timeout: float | None,
     confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool],
 ) -> PromoteResult:
     """Scan for drift, optionally confirm downgrades, edit files, and open a PR.
@@ -226,8 +232,8 @@ def _promote_in_workdir(
             downgrades=downgrades,
         )
 
-    git = Git(workdir, runner)
-    github = Github(workdir, runner)
+    git = Git(workdir, runner, timeout=timeout)
+    github = Github(workdir, runner, timeout=timeout)
 
     existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
     if existing is not None:

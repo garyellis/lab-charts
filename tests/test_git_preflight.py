@@ -17,7 +17,7 @@ def test_a_root_that_is_not_a_checkout_is_reported(on_path: OnPath, tmp_path: Pa
     runner.respond(("git", "--version"), stdout="git version 2.47.0\n")
     runner.respond(("git", "rev-parse"), returncode=128, stderr="not a git repository\n")
 
-    repository = checks_by_name(Git(tmp_path, runner).preflight())["git-repository"]
+    repository = checks_by_name(Git(tmp_path, runner, timeout=None).preflight())["git-repository"]
 
     assert repository.status is CheckStatus.FAILED
     assert repository.outcome is Outcome.ENVIRONMENT

@@ -25,7 +25,7 @@ def test_unauthenticated_gh_is_an_environment_failure(on_path: OnPath, tmp_path:
     runner.respond(("gh", "--version"), stdout="gh version 2.62.0\n")
     runner.respond(("gh", "auth", "status"), returncode=1, stderr=_GH_AUTH_FAILURE)
 
-    auth = checks_by_name(Github(tmp_path, runner).preflight())["gh-auth"]
+    auth = checks_by_name(Github(tmp_path, runner, timeout=None).preflight())["gh-auth"]
 
     assert auth.status is CheckStatus.FAILED
     assert auth.outcome is Outcome.ENVIRONMENT

@@ -5,19 +5,27 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check, CheckStatus, probe_binary
 
 
 class Git:
-    """Run git subcommands rooted at one working tree."""
+    """Run git subcommands rooted at one working tree, each capped at `timeout` seconds.
 
-    def __init__(self, root: Path, runner: CommandRunner) -> None:
-        """Bind the working-tree root and a CommandRunner."""
+    `timeout=None` leaves each call unbounded.
+    """
+
+    def __init__(self, root: Path, runner: CommandRunner, *, timeout: float | None) -> None:
+        """Bind the working-tree root, a CommandRunner and the per-call cap."""
         self.root = root
         self.runner = runner
+        self.timeout = timeout
+
+    def _run(self, args: list[str], *, check: bool = True) -> CommandResult:
+        """Every git invocation in the working tree: `git <args>` within the cap."""
+        return self.runner.run(["git", *args], cwd=self.root, check=check, timeout=self.timeout)
 
     def preflight(self) -> tuple[Check, ...]:
         """Report the git binary and whether `root` is actually a work tree.
@@ -49,72 +57,57 @@ class Git:
 
     def is_repository(self) -> bool:
         """True if `root` is inside a git work tree."""
-        result = self.runner.run(
-            ["git", "rev-parse", "--show-toplevel"], cwd=self.root, check=False
-        )
-        return result.returncode == 0
+        return self._run(["rev-parse", "--show-toplevel"], check=False).returncode == 0
 
     @staticmethod
     def clone(
-        url: str,
-        target: Path,
-        *,
-        branch: str | None = None,
-        depth: int | None = 1,
-        runner: CommandRunner,
+        url: str, target: Path, *, branch: str, runner: CommandRunner, timeout: float | None
     ) -> None:
-        """Clone `url` into `target`; shallow (depth=1) by default."""
-        args = ["git", "clone"]
-        if depth is not None:
-            args.extend(["--depth", str(depth)])
-        if branch is not None:
-            args.extend(["--branch", branch])
-        args.extend([url, str(target)])
-        runner.run(args)
+        """Shallow-clone `branch` of `url` into `target` within `timeout` seconds."""
+        runner.run(
+            ["git", "clone", "--depth", "1", "--branch", branch, url, str(target)],
+            timeout=timeout,
+        )
 
     def checkout_new_branch(self, branch: str, *, base: str | None = None) -> None:
         """Create-or-reset `branch` (optionally from `base`) and switch to it."""
         # `git checkout -B` creates-or-resets: callers re-running promote with
         # an aborted/leftover branch get a clean slate instead of an opaque
         # "branch already exists" failure mid-flow.
-        args = ["git", "checkout", "-B", branch]
+        args = ["checkout", "-B", branch]
         if base is not None:
             args.append(base)
-        self.runner.run(args, cwd=self.root)
+        self._run(args)
 
     def add(self, paths: Sequence[Path | str]) -> None:
         """Stage the given paths; no-op on an empty list."""
         if not paths:
             return
-        self.runner.run(["git", "add", "--", *[str(p) for p in paths]], cwd=self.root)
+        self._run(["add", "--", *[str(p) for p in paths]])
 
     def commit(
         self, message: str, *, body: str | None = None, allow_empty: bool = False
     ) -> None:
         """Commit staged changes; `body` becomes a second -m paragraph."""
-        args = ["git", "commit", "-m", message]
+        args = ["commit", "-m", message]
         if body:
             args.extend(["-m", body])
         if allow_empty:
             args.append("--allow-empty")
-        self.runner.run(args, cwd=self.root)
+        self._run(args)
 
     def push(self, branch: str, *, remote: str = "origin", set_upstream: bool = True) -> None:
         """Push `branch` to `remote`, setting upstream by default."""
-        args = ["git", "push"]
+        args = ["push"]
         if set_upstream:
             args.append("-u")
         args.extend([remote, branch])
-        self.runner.run(args, cwd=self.root)
+        self._run(args)
 
     def status_paths(self, paths: Sequence[Path]) -> tuple[str, ...]:
         """Return the modified or untracked files under `paths` (relative to `root`)."""
-        result = self.runner.run(
-            [
-                "git", "status", "--porcelain=v1", "--untracked-files=all", "--",
-                *(str(path) for path in paths),
-            ],
-            cwd=self.root,
+        result = self._run(
+            ["status", "--porcelain=v1", "--untracked-files=all", "--", *map(str, paths)]
         )
         return tuple(
             line[3:].strip()
@@ -124,16 +117,12 @@ class Git:
 
     def remote_url(self) -> str | None:
         """Return the `origin` remote's URL, or None when there is no such remote."""
-        result = self.runner.run(
-            ["git", "remote", "get-url", "origin"], cwd=self.root, check=False
-        )
+        result = self._run(["remote", "get-url", "origin"], check=False)
         return result.stdout.strip() if result.returncode == 0 else None
 
     def show(self, revision: str, path: Path) -> str:
         """Return `path` (relative to `root`) as it was at `revision`."""
-        return self.runner.run(
-            ["git", "show", f"{revision}:{path.as_posix()}"], cwd=self.root
-        ).stdout
+        return self._run(["show", f"{revision}:{path.as_posix()}"]).stdout
 
     def changed_files(self, base: str = "origin/main") -> list[str]:
         """Return paths changed vs `base`, relative to `root`.
@@ -148,8 +137,6 @@ class Git:
             raise ExternalCommandError(
                 "not a git repository; changed file detection requires git metadata"
             )
-        result = self.runner.run(
-            ["git", "diff", "--name-only", "--relative", f"{base}...HEAD"], cwd=self.root
-        )
+        result = self._run(["diff", "--name-only", "--relative", f"{base}...HEAD"])
         files = {line for line in result.stdout.splitlines() if line.strip()}
         return sorted(files)

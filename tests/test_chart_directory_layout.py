@@ -99,7 +99,7 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
             stdout="deploy/helm/demo/values.yaml\ncharts/ignored/values.yaml\n",
         )
     )
-    changed = Git(tmp_path, runner=runner).changed_files()
+    changed = Git(tmp_path, runner, timeout=None).changed_files()
     assert {workspace.chart_name_from_repo_path(path) for path in changed} - {None} == {"demo"}
 
     assert resolve_chart_target(workspace, "demo").path == chart.resolve()

@@ -8,8 +8,6 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import SecretStr
-
 from chart_manager.commands.upgrade.finalize import (
     CHART_FILE,
     DATA_FILE_TEMPLATE,
@@ -29,6 +27,7 @@ from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -49,13 +48,14 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
+    settings: Settings,
     events: EventWriter,
-    renovate_token: SecretStr | None,
 ) -> UpgradeResult:
     """Run Renovate for one chart and report the pull request it opened or updated."""
     root = workspace.root
-    git = Git(root, runner)
-    github = Github(root, runner)
+    token = settings.renovate_token
+    git = Git(root, runner, timeout=settings.command_timeout)
+    github = Github(root, runner, timeout=settings.command_timeout)
     repository = _repository(git)
     plan = _build_upgrade_plan(root, request.chart)
     _LOG.info("Planning dependency upgrade for chart %s", plan.chart)
@@ -72,7 +72,7 @@ def run(
         additional_config_path=chart_config if chart_config.is_file() else None,
         runtime_overlay=plan.runtime_overlay,
         dry_run="full" if request.dry_run else None,
-        token=renovate_token.get_secret_value() if renovate_token is not None else None,
+        token=token.get_secret_value() if token is not None else None,
     )
     if request.dry_run:
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
