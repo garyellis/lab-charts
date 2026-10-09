@@ -345,9 +345,14 @@ class _Checker:
 def _helm(
     runner: CommandRunner, spec: ManifestValidationSpec, *, verbose: bool, timeout: float | None
 ) -> Helm:
-    return Helm(
-        runner, version=spec.helm_version, binary=spec.helm_binary, verbose=verbose, timeout=timeout
-    )
+    """The helm the spec pins: its helmBinary, its helmVersion from mise, else PATH's."""
+    binary = "helm"
+    if spec.helm_binary is not None:
+        binary = spec.helm_binary
+    elif spec.helm_version is not None:
+        where = runner.run(["mise", "where", f"helm@{spec.helm_version}"], timeout=timeout)
+        binary = f"{where.stdout.strip()}/bin/helm"
+    return Helm(runner, binary=binary, verbose=verbose, timeout=timeout, context=None)
 
 
 def _skip_reason(

@@ -72,7 +72,7 @@ def test_converge_installs_without_helm_wait_then_waits_on_the_manifest_and_inst
     install = calls[0]
     assert install[:4] == ("helm", "upgrade", "--install", "web")
     assert "--wait" not in install
-    assert install[install.index("--timeout") + 1] == "5m"
+    assert install[install.index("--timeout") + 1] == "300s"
     assert calls[1] == ("helm", "get", "manifest", "web", "--namespace", "apps")
     waits = calls[2:]
     assert [c for c in waits if "rollout" in c or c[1] == "wait"] == [

@@ -30,6 +30,7 @@ from chart_manager.commands.test.plan import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
 from chart_manager.plumbing.progress import (
     Progress,
@@ -344,7 +345,7 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
         wait(session, release(entry, sets={}))
     elif action.kind is ActionKind.HELM_TEST:
         result = session.helm.test(
-            entry.chart.name, namespace=entry.namespace, timeout=entry.spec.timeout
+            entry.chart.name, namespace=entry.namespace, timeout=parse_duration(entry.spec.timeout)
         )
         if result.returncode != 0:
             output = (result.stderr or result.stdout).strip()

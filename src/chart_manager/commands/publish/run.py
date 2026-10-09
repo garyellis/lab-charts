@@ -85,7 +85,11 @@ def run(
         request.operation_id or "(none)",
     )
     helm = Helm(
-        runner, verbose=False, context=settings.kube_context, timeout=settings.command_timeout
+        runner,
+        binary="helm",
+        verbose=False,
+        context=settings.kube_context,
+        timeout=settings.command_timeout,
     )
     with tempfile.TemporaryDirectory(prefix="chart-manager-publish-") as work:
         prepared = [

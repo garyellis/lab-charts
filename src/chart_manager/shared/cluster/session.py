@@ -88,7 +88,8 @@ def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
         name=name,
         context=context,
         kind=Kind(runner, docker_host=settings.docker_host, timeout=settings.command_timeout),
-        helm=Helm(runner, context=context),
+        # No command timeout: installs keep helm's own --timeout, which a cap would cut short.
+        helm=Helm(runner, binary="helm", context=context, timeout=None),
         kubectl=Kubectl(runner, context=context, timeout=settings.command_timeout),
     )
 

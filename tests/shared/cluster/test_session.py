@@ -198,13 +198,14 @@ def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
         dev = session.attach("lab", runner=runner, settings=settings)
         dev.kind.clusters()
         dev.kubectl.wait_apiserver_ready()
-    dev.helm.upgrade_install("app", tmp_path, namespace="app")
+    dev.helm.upgrade_install("app", tmp_path, namespace="app", timeout=60.0)
 
     kind, kubectl, helm = (
         [r for r in runner.records if r.args[0] == tool] for tool in ("kind", "kubectl", "helm")
     )
     assert kind and all(r.env == {"DOCKER_HOST": "tcp://remote:2375"} for r in kind)
     assert [r.args[-2:] for r in kubectl] == [("--context", "kind-lab")]
+    assert {r.args[-2:] for r in helm} == {("--kube-context", "kind-lab")}
     assert {r.timeout for r in kind + kubectl} == {30.0}
     # Installs keep helm's own --timeout; the command timeout would kill a slow --wait.
-    assert helm and {r.timeout for r in helm} == {None}
+    assert {r.timeout for r in helm} == {None}

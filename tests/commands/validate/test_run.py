@@ -591,6 +591,31 @@ def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) 
     assert outcome.rows[0].checks["render"].status == "error"
 
 
+@pytest.mark.parametrize(
+    ("pin", "binary"),
+    [
+        ({}, "helm"),
+        ({"helmBinary": "/opt/helm"}, "/opt/helm"),
+        ({"helmVersion": "3.20.0"}, "/mise/helm/3.20.0/bin/helm"),
+    ],
+)
+def test_the_chart_renders_with_the_helm_it_pins(
+    tmp_path: Path, pin: dict[str, str], binary: str
+) -> None:
+    write_validation_chart(tmp_path, "demo", **pin)
+    runner = FakeCommandRunner().respond(
+        ("mise", "where", "helm@3.20.0"), stdout="/mise/helm/3.20.0\n"
+    )
+
+    _run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert [call[0] for call in runner.calls if call[1:2] == ("template",)] == [binary]
+
+
 def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
 

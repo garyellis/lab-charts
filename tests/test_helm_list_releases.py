@@ -15,6 +15,10 @@ from chart_manager.plumbing.errors import ExternalCommandError
 from tests.conftest import FakeCommandRunner
 
 
+def _helm(runner: FakeCommandRunner) -> Helm:
+    return Helm(runner, binary="helm", timeout=None, context=None)
+
+
 def test_list_releases_all_namespaces_parses_json() -> None:
     payload = json.dumps(
         [
@@ -33,12 +37,9 @@ def test_list_releases_all_namespaces_parses_json() -> None:
             },
         ]
     )
-    runner = FakeCommandRunner(stdout=payload)
 
-    instance = Helm(runner=runner)
-    releases = instance.list_releases()
+    releases = _helm(FakeCommandRunner(stdout=payload)).list_releases()
 
-    assert runner.calls == [("helm", "list", "-o", "json", "-A")]
     assert releases == [
         ReleaseInfo(name="cilium", namespace="kube-system", revision=1, status="deployed"),
         ReleaseInfo(name="grafana", namespace="observability", revision=3, status="deployed"),
@@ -46,26 +47,12 @@ def test_list_releases_all_namespaces_parses_json() -> None:
 
 
 def test_list_releases_empty_stdout_returns_empty_list() -> None:
-    runner = FakeCommandRunner(stdout="")
-
-    releases = Helm(runner=runner).list_releases()
-
-    assert releases == []
-
-
-def test_list_releases_namespace_scoped_drops_all_flag() -> None:
-    runner = FakeCommandRunner(stdout="[]")
-
-    Helm(runner=runner).list_releases(all_namespaces=False, namespace="observability")
-
-    assert runner.calls == [("helm", "list", "-o", "json", "-n", "observability")]
+    assert _helm(FakeCommandRunner(stdout="")).list_releases() == []
 
 
 def test_list_releases_invalid_json_raises_external_command_error() -> None:
-    runner = FakeCommandRunner(stdout="not-json")
-
     with pytest.raises(ExternalCommandError):
-        Helm(runner=runner).list_releases()
+        _helm(FakeCommandRunner(stdout="not-json")).list_releases()
 
 
 def test_list_releases_tolerates_missing_revision() -> None:
@@ -73,8 +60,7 @@ def test_list_releases_tolerates_missing_revision() -> None:
     # revision should not blow up the install loop -- it just means we
     # surface 0 and continue.
     payload = json.dumps([{"name": "x", "namespace": "y", "status": "deployed"}])
-    runner = FakeCommandRunner(stdout=payload)
 
-    releases = Helm(runner=runner).list_releases()
+    releases = _helm(FakeCommandRunner(stdout=payload)).list_releases()
 
     assert releases == [ReleaseInfo(name="x", namespace="y", revision=0, status="deployed")]

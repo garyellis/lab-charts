@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
@@ -83,7 +84,7 @@ def converge(session: Session, release: Release) -> Literal["applied", "no-chang
             namespace=release.namespace,
             values=list(release.values),
             sets=dict(release.sets),
-            timeout=release.timeout,
+            timeout=parse_duration(release.timeout),
             wait=False,
             version=release.version,
             repo=release.repo,
