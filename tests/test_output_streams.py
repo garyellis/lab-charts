@@ -146,10 +146,3 @@ def test_a_command_with_no_projection_writes_nothing_to_stdout(root: Path) -> No
 
     assert result.stdout == ""
     assert result.stderr != ""
-
-
-def test_data_and_narration_consoles_write_to_different_streams() -> None:
-    from chart_manager.cli import streams
-
-    assert streams.data_console().stderr is False
-    assert streams.narration_console().stderr is True

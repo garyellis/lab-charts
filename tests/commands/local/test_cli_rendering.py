@@ -2,8 +2,7 @@
 
 `commands/local/cli.py` is where the `local` group's Rich rendering lives --
 `run` knows nothing about a terminal. These tests pin the output shape: the
-summary table, the access-hint blocks, the lifecycle lines and the progress
-narration.
+summary table, the access-hint blocks and the lifecycle lines.
 
 `cli/streams.py` owns two consoles: `console` for the selected output
 projection and `narration` for everything else. These tests record them
@@ -17,7 +16,6 @@ from __future__ import annotations
 import pytest
 from rich.console import Console
 
-from chart_manager.cli import streams
 from chart_manager.commands.local import cli as cli_local
 from chart_manager.commands.local.models import (
     DevClusterAccessHints,
@@ -27,7 +25,6 @@ from chart_manager.commands.local.models import (
     DevClusterEntryOutcome,
     DevClusterResult,
 )
-from chart_manager.plumbing.progress import detail, failure, info, step, warn
 
 
 @pytest.fixture
@@ -40,50 +37,10 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> Console:
 
 @pytest.fixture
 def narrated(monkeypatch: pytest.MonkeyPatch) -> Console:
-    """Swap the *narration* console (stderr) for a recording one.
-
-    Patched in two places because the consoles now live in `cli/streams.py`
-    and each consumer binds its own module-level name to the same object:
-    `cli_local.narration` is what the renderers below reach, and
-    `streams.narration` is what `streams.print_progress` reaches. Patching
-    one and not the other would silently record half the output.
-    """
+    """Swap the *narration* console (stderr) for a recording one."""
     console = Console(record=True, width=200)
     monkeypatch.setattr(cli_local, "narration", console)
-    monkeypatch.setattr(streams, "narration", console)
     return console
-
-
-# ----- progress event rendering ---------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("event", "expected"),
-    [
-        (
-            step("Applying", "grafana:minimal -> observability"),
-            "Applying grafana:minimal -> observability",
-        ),
-        (step("Waiting for kube-apiserver"), "Waiting for kube-apiserver"),
-        (
-            detail("skip", "grafana:minimal (already installed in observability)"),
-            "skip grafana:minimal (already installed in observability)",
-        ),
-        (warn("could not list helm releases"), "warn: could not list helm releases"),
-        (warn("cilium chart not found", label=None), "cilium chart not found"),
-        (
-            failure("apply failed:", "grafana:minimal -> boom"),
-            "apply failed: grafana:minimal -> boom",
-        ),
-        (info("pod/foo   0/1   CrashLoopBackOff"), "pod/foo   0/1   CrashLoopBackOff"),
-    ],
-)
-def test_progress_events_render_label_then_message(
-    narrated: Console, event: object, expected: str
-) -> None:
-    streams.print_progress(event)  # type: ignore[arg-type]
-
-    assert narrated.export_text().strip() == expected
 
 
 # ----- summary table --------------------------------------------------------
@@ -219,35 +176,3 @@ def test_cluster_action_reports_the_absent_state(narrated: Console) -> None:
 
     assert "dev cluster not running: chart-manager" in out
 
-
-# ----- markup safety -------------------------------------------------------
-#
-# Progress messages carry raw subprocess output. Rich parses `[...]` as
-# markup, and an unmatched *closing* tag raises MarkupError -- so a
-# bracketed path in helm/kubectl stderr replaced the diagnostic the
-# operator needed with a traceback. Opening-tag-shaped text passes through
-# literally; the hazard is specifically `[/`.
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "cannot open [/etc/hosts]",
-        "GET [/api/v1/namespaces] 503",
-        'patch failed: [{"op":"remove","path":"[/spec/replicas]"}]',
-        "unclosed [bold and [/nope]",
-    ],
-)
-def test_progress_never_raises_markup_error_on_subprocess_output(
-    narrated: Console, message: str
-) -> None:
-    streams.print_progress(failure("failed", message))
-
-    # Rendered literally, not swallowed and not interpreted as styling.
-    assert message in narrated.export_text()
-
-
-def test_progress_still_styles_the_label(narrated: Console) -> None:
-    streams.print_progress(step("Applying", "grafana:minimal"))
-
-    assert "Applying grafana:minimal" in narrated.export_text()

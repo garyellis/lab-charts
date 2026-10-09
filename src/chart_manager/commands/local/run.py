@@ -36,9 +36,8 @@ from chart_manager.commands.local.targets import ResolvedLocalTarget
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.progress import (
-    ProgressCallback,
+    Progress,
     detail,
-    emit,
     failure,
     info,
     step,
@@ -85,7 +84,7 @@ def up(
     profile: str | None = None,
     skip_installed: bool = False,
     run_hooks: bool = True,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> DevClusterResult:
     """Create or start the cluster, bootstrap it, then converge the chart or stack.
 
@@ -114,7 +113,7 @@ def reset(
     settings: Settings,
     profile: str | None = None,
     run_hooks: bool = True,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> DevClusterResult:
     """Delete the cluster and converge the chart or stack onto a new one.
 
@@ -135,10 +134,10 @@ def reset(
 
 
 def down(
-    *, runner: CommandRunner, settings: Settings, progress: ProgressCallback | None = None
+    *, runner: CommandRunner, settings: Settings, progress: Progress
 ) -> DevClusterActionResult:
     """Stop the cluster's nodes, keeping etcd, Helm releases, PVCs and the image cache."""
-    emit(progress, step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
+    progress(step("Stopping dev cluster", DEFAULT_CLUSTER_NAME))
     stopped = stop(attach(DEFAULT_CLUSTER_NAME, runner=runner, settings=settings))
     _LOG.info("dev cluster stopped: cluster=%s changed=%s", DEFAULT_CLUSTER_NAME, stopped)
     return DevClusterActionResult(changed=stopped)
@@ -164,7 +163,7 @@ def plan(
     profile: str | None,
     destroys: bool = False,
     run_hooks: bool = True,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> DevClusterPlan:
     """What `up` (or `reset`, with `destroys`) would install; asks no cluster anything.
 
@@ -220,7 +219,7 @@ def _prepare(
     target: ResolvedLocalTarget,
     profile: str | None,
     workspace: RepositoryWorkspace,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> _Prepared:
     cluster = load_cluster(workspace)
     steps = bootstrap.preflight(cluster, root=workspace.root)
@@ -236,7 +235,7 @@ def _converge(
     root: Path,
     *,
     skip_installed: bool,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> DevClusterResult:
     started = time.monotonic()
     summary = RunSummary()
@@ -245,7 +244,7 @@ def _converge(
         outcomes = bootstrap.bootstrap(session, prepared.bootstrap, root=root, progress=progress)
     except ReleaseFailed as exc:
         if exc.diagnostics.strip():
-            emit(progress, info(exc.diagnostics))
+            progress(info(exc.diagnostics))
         raise
     for outcome in outcomes:
         bucket = summary.applied if outcome.status == "applied" else summary.no_change
@@ -279,7 +278,7 @@ def _converge(
     return summary.freeze(access_hints(summary, kubectl=session.kubectl))
 
 
-def _installed_keys(session: Session, progress: ProgressCallback | None) -> set[tuple[str, str]]:
+def _installed_keys(session: Session, progress: Progress) -> set[tuple[str, str]]:
     """Releases `--skip-installed` skips: deployed or failed, as `helm list` shows them.
 
     A failed listing falls back to "nothing installed" rather than aborting.
@@ -288,8 +287,7 @@ def _installed_keys(session: Session, progress: ProgressCallback | None) -> set[
         releases = installed(session)
     except ChartManagerError as exc:
         _LOG.warning("helm release listing failed; treating every release as uninstalled: %s", exc)
-        emit(
-            progress,
+        progress(
             warn(f"could not list helm releases ({exc}); proceeding as if no releases exist"),
         )
         return set()
@@ -303,19 +301,19 @@ def _converge_one(
     installed_keys: set[tuple[str, str]],
     summary: RunSummary,
     skip_installed: bool,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> None:
     key = (release.namespace, release.name)
     if skip_installed and key in installed_keys:
-        emit(progress, detail("skip", f"{release.name} (already installed in {release.namespace})"))
+        progress(detail("skip", f"{release.name} (already installed in {release.namespace})"))
         summary.no_change.append(DevClusterEntryOutcome(release.name, label, release.namespace))
         return
-    emit(progress, step("Applying", f"{release.name}:{label} -> {release.namespace}"))
+    progress(step("Applying", f"{release.name}:{label} -> {release.namespace}"))
     try:
         state = converge(session, release)
     except ChartManagerError as exc:
         if isinstance(exc, ReleaseFailed) and exc.diagnostics.strip():
-            emit(progress, info(exc.diagnostics))
+            progress(info(exc.diagnostics))
         _LOG.error(
             "release failed; converge continues: release=%s profile=%s namespace=%s: %s",
             release.name,
@@ -323,7 +321,7 @@ def _converge_one(
             release.namespace,
             exc,
         )
-        emit(progress, failure("apply failed:", f"{release.name}:{label} -> {exc}"))
+        progress(failure("apply failed:", f"{release.name}:{label} -> {exc}"))
         summary.failed.append(
             DevClusterEntryFailure(release.name, label, release.namespace, str(exc))
         )
@@ -355,7 +353,7 @@ def _preflight(
     releases: tuple[LifecycleRelease | OciChartRelease | RepoChartRelease, ...],
     owned: frozenset[ExternallySatisfiedLifecycle],
     root: Path,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> tuple[_Step, ...]:
     """Resolve every release before anything is installed, in authored order.
 
@@ -391,7 +389,7 @@ def _preflight(
                     f"{entry.chart.name}:{entry.profile}"
                 )
                 _LOG.warning("%s", message)
-                emit(progress, warn(message))
+                progress(warn(message))
             kept.append(entry)
         steps.append(tuple(kept))
     return tuple(steps)

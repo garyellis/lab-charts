@@ -92,7 +92,7 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
     root = _repo(tmp_path)
     steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root)
 
-    outcomes = bootstrap.bootstrap(dev, steps, root=root)
+    outcomes = bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
 
     steps = _steps(runner)
     network, rollout, nodes, metrics = steps
@@ -118,7 +118,7 @@ def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
     steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root)
 
     with pytest.raises(ReleaseFailed, match="network"):
-        bootstrap.bootstrap(dev, steps, root=root)
+        bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
 
     assert not any(plain_argv(argv)[:4] == ("helm", "upgrade", "--install", "metrics") for argv in runner.calls)
 

@@ -62,6 +62,7 @@ def _run(repo: Path, runner: FakeCommandRunner, **request: object) -> test.Chart
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
 
@@ -232,6 +233,7 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
     assert outcome.ok and outcome.cluster_deleted
@@ -324,6 +326,7 @@ def _teardown(repo: Path, runner: FakeCommandRunner, **request: object) -> test.
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
 
