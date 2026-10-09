@@ -80,7 +80,7 @@ class _Kind:
     def __init__(self, *, host_ports: set[int] | None = None) -> None:
         self._host_ports = host_ports if host_ports is not None else set()
 
-    def ensure_cluster(self, _name: str, *, config: Path | None = None) -> None:
+    def ensure_cluster(self, _name: str, *, config: Path | None) -> None:
         pass
 
     def control_plane_ip(self, _name: str) -> str:

@@ -9,6 +9,7 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
+from chart_manager.cli.streams import console
 from chart_manager.commands.upgrade import finalize
 from chart_manager.commands.upgrade.finalize import load_update_data, reject_symlinks
 from chart_manager.commands.upgrade.models import (
@@ -41,7 +42,7 @@ def upgrade(
     output: OutputOption = None,
 ) -> None:
     """Discover dependency updates and open an idempotent wrapper-chart PR."""
-    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS)
+    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS, console=console)
     container = _container()
     workspace = container.workspace()
     result = run(
@@ -68,7 +69,7 @@ def upgrade_finalize(
     output: OutputOption = None,
 ) -> None:
     """Finalize the Renovate callback (internal; invoked by trusted configuration)."""
-    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS)
+    mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS, console=console)
     if data_file is None:
         raise ChartManagerError(f"--data-file is required (or set {_CALLBACK_DATA_ENV})")
     container = _container()

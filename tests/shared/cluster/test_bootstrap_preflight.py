@@ -69,7 +69,7 @@ def test_raw_local_and_oci_releases_never_claim_managed_lifecycle_identity(
         ]
     )
 
-    assert bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path)) == frozenset()
+    assert bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path, helm=None)) == frozenset()
 
 
 def test_preflight_resolves_bootstrap_lifecycle_identities(tmp_path: Path) -> None:
@@ -103,7 +103,7 @@ spec:
         ]
     )
 
-    identities = bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path))
+    identities = bootstrap.owned(bootstrap.preflight(cluster, root=tmp_path, helm=None))
 
     assert identities == frozenset(
         {
@@ -160,7 +160,7 @@ def test_preflight_rejects_a_lifecycle_profile_bootstrap_cannot_own(
     cluster = _cluster([{"type": "lifecycle", "chart": "charts/network", "profile": "minimal"}])
 
     with pytest.raises(SpecError, match=message):
-        bootstrap.preflight(cluster, root=tmp_path)
+        bootstrap.preflight(cluster, root=tmp_path, helm=None)
 
 
 def test_bootstrap_lint_failure_prevents_any_install(tmp_path: Path) -> None:

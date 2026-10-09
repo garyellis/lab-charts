@@ -65,7 +65,7 @@ class GitHubKubeconformSchemaSource:
     def __init__(
         self,
         *,
-        timeout: float = 15.0,
+        timeout: float,
         opener: OpenUrl | None = None,
         github_token: SecretStr | None,
     ) -> None:

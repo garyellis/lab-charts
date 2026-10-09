@@ -112,11 +112,11 @@ def discover_workspace_root(start: Path) -> Path | None:
     return None
 
 
-def resolve_repository_root(*, configured: Path | None, start: Path | None = None) -> Path:
+def resolve_repository_root(*, configured: Path | None, start: Path) -> Path:
     """Return the operator override, else the nearest ancestor holding the marker."""
     if configured is not None:
         return configured.resolve()
-    origin = (start or Path.cwd()).resolve()
+    origin = start.resolve()
     discovered = discover_workspace_root(origin)
     if discovered is None:
         raise WorkspaceNotFoundError(

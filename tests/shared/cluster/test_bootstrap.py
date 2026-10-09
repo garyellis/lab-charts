@@ -90,7 +90,7 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
     dev = session.attach("dev", runner=runner, settings=Settings())
 
     root = _repo(tmp_path)
-    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
 
     outcomes = bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
 
@@ -115,7 +115,7 @@ def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
     dev = session.attach("dev", runner=runner, settings=Settings())
 
     root = _repo(tmp_path)
-    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
 
     with pytest.raises(ReleaseFailed, match="network"):
         bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
@@ -125,7 +125,7 @@ def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
 
 def test_verify_accepts_a_release_in_any_state_and_names_a_missing_one(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
 
     bootstrap.verify(
         steps,
