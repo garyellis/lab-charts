@@ -59,25 +59,22 @@ class Git:
         """True if `root` is inside a git work tree."""
         return self._run(["rev-parse", "--show-toplevel"], check=False).returncode == 0
 
-    @staticmethod
+    @classmethod
     def clone(
-        url: str, target: Path, *, branch: str, runner: CommandRunner, timeout: float | None
-    ) -> None:
-        """Shallow-clone `branch` of `url` into `target` within `timeout` seconds."""
-        runner.run(
-            ["git", "clone", "--depth", "1", "--branch", branch, url, str(target)],
-            timeout=timeout,
-        )
+        cls, url: str, root: Path, *, branch: str, runner: CommandRunner, timeout: float | None
+    ) -> Git:
+        """Shallow-clone `branch` of `url` into `root` and return the `Git` bound to it."""
+        root.mkdir(parents=True, exist_ok=True)
+        git = cls(root, runner, timeout=timeout)
+        git._run(["clone", "--depth", "1", "--branch", branch, url, "."])
+        return git
 
-    def checkout_new_branch(self, branch: str, *, base: str | None = None) -> None:
-        """Create-or-reset `branch` (optionally from `base`) and switch to it."""
+    def checkout_new_branch(self, branch: str, *, base: str) -> None:
+        """Create-or-reset `branch` from `base` and switch to it."""
         # `git checkout -B` creates-or-resets: callers re-running promote with
         # an aborted/leftover branch get a clean slate instead of an opaque
         # "branch already exists" failure mid-flow.
-        args = ["checkout", "-B", branch]
-        if base is not None:
-            args.append(base)
-        self._run(args)
+        self._run(["checkout", "-B", branch, base])
 
     def add(self, paths: Sequence[Path | str]) -> None:
         """Stage the given paths; no-op on an empty list."""
@@ -85,16 +82,9 @@ class Git:
             return
         self._run(["add", "--", *[str(p) for p in paths]])
 
-    def commit(
-        self, message: str, *, body: str | None = None, allow_empty: bool = False
-    ) -> None:
+    def commit(self, message: str, *, body: str) -> None:
         """Commit staged changes; `body` becomes a second -m paragraph."""
-        args = ["commit", "-m", message]
-        if body:
-            args.extend(["-m", body])
-        if allow_empty:
-            args.append("--allow-empty")
-        self._run(args)
+        self._run(["commit", "-m", message, "-m", body])
 
     def push(self, branch: str, *, remote: str = "origin", set_upstream: bool = True) -> None:
         """Push `branch` to `remote`, setting upstream by default."""

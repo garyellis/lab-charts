@@ -30,7 +30,8 @@ def _local(runner: FakeCommandRunner, root: Path) -> Git:
 
 def test_every_call_runs_in_the_root_within_the_timeout(tmp_path: Path) -> None:
     runner = FakeCommandRunner()
-    git = Git(tmp_path, runner, timeout=30.0)
+    root = tmp_path / "clone"
+    git = Git.clone("url", root, branch="main", runner=runner, timeout=30.0)
 
     git.is_repository()
     git.checkout_new_branch("b", base="main")
@@ -41,10 +42,9 @@ def test_every_call_runs_in_the_root_within_the_timeout(tmp_path: Path) -> None:
     git.remote_url()
     git.show("HEAD", Path("a"))
     git.changed_files()
-    Git.clone("url", tmp_path / "clone", branch="main", runner=runner, timeout=30.0)
 
-    assert {(r.cwd, r.timeout) for r in runner.records[:-1]} == {(tmp_path, 30.0)}
-    assert runner.records[-1].timeout == 30.0
+    assert root.is_dir()
+    assert {(r.cwd, r.timeout) for r in runner.records} == {(root, 30.0)}
 
 
 def test_changed_files_returns_sorted_unique_paths(tmp_path: Path) -> None:

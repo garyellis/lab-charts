@@ -97,10 +97,8 @@ class Github:
             return _not_authenticated(_status_line(report, _FAILED_MARKER) or "not logged in")
         return Check.ok("gh-auth", _status_line(report, _OK_MARKER) or "authenticated")
 
-    def find_open_pr_for_branch(
-        self, branch: str, *, base: str | None = None
-    ) -> PullRequest | None:
-        """Return the first open PR from `branch` (optionally into `base`), or None."""
+    def find_open_pr_for_branch(self, branch: str, *, base: str) -> PullRequest | None:
+        """Return the first open PR from `branch` into `base`, or None."""
         # `gh pr list` exits 0 with an empty array when no PRs match; treat
         # any other non-zero (auth, network) as fatal via the check=True
         # default — callers should not silently proceed if gh is broken.
@@ -112,14 +110,12 @@ class Github:
             "--state",
             "open",
             "--json",
-            "url,number,baseRefName",
+            "url,number",
+            "--base",
+            base,
         ]
-        if base is not None:
-            args.extend(["--base", base])
         for entry in self._json(args):
             if not isinstance(entry, dict):
-                continue
-            if base is not None and entry.get("baseRefName") != base:
                 continue
             url = str(entry.get("url", ""))
             number = entry.get("number")
@@ -129,7 +125,7 @@ class Github:
         return None
 
     def find_open_prs_for_branch_prefix(
-        self, prefix: str, *, base: str | None = None, limit: int = 200
+        self, prefix: str, *, limit: int = 200
     ) -> tuple[PullRequest, ...]:
         """Return open PRs whose head branch starts with `prefix`, lowest number first.
 
@@ -147,15 +143,11 @@ class Github:
             "--limit",
             str(limit),
             "--json",
-            "url,number,baseRefName,headRefName",
+            "url,number,headRefName",
         ]
-        if base is not None:
-            args.extend(["--base", base])
         found: list[PullRequest] = []
         for entry in self._json(args):
             if not isinstance(entry, dict):
-                continue
-            if base is not None and entry.get("baseRefName") != base:
                 continue
             branch = str(entry.get("headRefName", ""))
             if not branch.startswith(prefix):

@@ -107,10 +107,11 @@ def run(
     with tempfile.TemporaryDirectory(prefix="chart-manager-promote-") as tmp:
         workdir = Path(tmp) / "flux"
         timeout = settings.command_timeout
-        Git.clone(
+        git = Git.clone(
             request.flux_repo, workdir, branch=request.base_branch, runner=runner, timeout=timeout
         )
-        result = _promote_in_workdir(request, workdir, runner, timeout, confirm_downgrade)
+        github = Github(workdir, runner, timeout=timeout)
+        result = _promote_in_workdir(request, workdir, git, github, confirm_downgrade)
     # `pr_url` doubles as the promotion correlation id (see
     # `_emit_promotion`), which is what ties this line to the events store.
     _LOG.info(
@@ -157,8 +158,8 @@ def _emit_promotion(request: PromoteRequest, result: PromoteResult, events: Even
 def _promote_in_workdir(
     request: PromoteRequest,
     workdir: Path,
-    runner: CommandRunner,
-    timeout: float | None,
+    git: Git,
+    github: Github,
     confirm_downgrade: Callable[[list[HelmReleaseMatch], str], bool],
 ) -> PromoteResult:
     """Scan for drift, optionally confirm downgrades, edit files, and open a PR.
@@ -231,9 +232,6 @@ def _promote_in_workdir(
             branch=branch,
             downgrades=downgrades,
         )
-
-    git = Git(workdir, runner, timeout=timeout)
-    github = Github(workdir, runner, timeout=timeout)
 
     existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
     if existing is not None:

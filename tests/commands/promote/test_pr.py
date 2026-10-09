@@ -45,14 +45,14 @@ class _FluxRemote(FakeCommandRunner):
     def __init__(self, repo: Path, *, open_pr: str | None = None) -> None:
         super().__init__()
         self.repo = repo
-        listed = [{"url": open_pr, "number": 7, "baseRefName": "main"}] if open_pr else []
+        listed = [{"url": open_pr, "number": 7}] if open_pr else []
         self.respond(argv_prefix("gh", "pr", "list"), stdout=json.dumps(listed))
         self.respond(argv_prefix("gh", "pr", "create"), stdout=f"{PR_URL}\n")
 
     def run(self, args: Sequence[str], **kwargs: object) -> CommandResult:
         result = super().run(args, **kwargs)  # type: ignore[arg-type]
         if tuple(args[:2]) == ("git", "clone"):
-            shutil.copytree(self.repo, args[-1])
+            shutil.copytree(self.repo, self.records[-1].cwd, dirs_exist_ok=True)
         return result
 
 
@@ -115,10 +115,8 @@ def test_drift_opens_one_promotion_pr(tmp_path: Path) -> None:
 
     result = _promote(runner)
 
-    clone = runner.calls[0]
-    assert clone[:6] == ("git", "clone", "--depth", "1", "--branch", "main")
-    assert clone[6] == URL
-    workdir = Path(clone[7]).resolve()
+    assert runner.calls[0] == ("git", "clone", "--depth", "1", "--branch", "main", URL, ".")
+    workdir = runner.records[0].cwd.resolve()
     files = [workdir / "prod/a/loki.yaml", workdir / "prod/b/loki.yaml"]
     title = "chore(prod): promote loki to 0.1.2"
     assert result.status is PromoteStatus.PR_OPENED
@@ -127,7 +125,7 @@ def test_drift_opens_one_promotion_pr(tmp_path: Path) -> None:
     assert result.pull_request is not None and result.pull_request.url == PR_URL
     assert runner.calls[1] == (
         "gh", "pr", "list", "--head", BRANCH, "--state", "open",
-        "--json", "url,number,baseRefName", "--base", "main",
+        "--json", "url,number", "--base", "main",
     )  # fmt: skip
     # A file holding two drifted HelmReleases is staged once.
     assert sorted(runner.calls[3][3:]) == [str(f) for f in files]
