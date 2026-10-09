@@ -359,11 +359,7 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
 def _diagnostics(session: Session, action: LifecycleAction, exc: ChartManagerError) -> str:
     if isinstance(exc, ReleaseFailed):
         return exc.diagnostics
-    try:
-        return session.kubectl.diagnostics(action.entry.namespace)
-    except ChartManagerError as error:
-        _LOG.warning("namespace diagnostics unavailable: %s", error)
-        return ""
+    return session.kubectl.diagnostics(action.entry.namespace)
 
 
 def _subject(action: LifecycleAction) -> str:

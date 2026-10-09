@@ -32,6 +32,9 @@ _FLUX_GROUP_PREFIX = "helm.toolkit.fluxcd.io/"
 # reports its own timeout before the cap kills it.
 _WAIT_SLACK_SECONDS = 30.0
 
+# Each kubectl call `diagnostics` makes gets this long.
+_DIAGNOSTICS_TIMEOUT_SECONDS = 30.0
+
 
 @dataclass(frozen=True)
 class VirtualService:
@@ -593,44 +596,43 @@ class Kubectl:
             returncode=result.returncode,
         )
 
-    def namespace_events(self, namespace: str, *, timeout: float | None = None) -> str:
-        """Namespace events sorted by time. Best effort: a kubectl failure is returned as text."""
-        result = self._run(
-            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp"],
-            check=False,
-            timeout=timeout,
-        )
+    def _best_effort(self, what: str, args: list[str], *, timeout: float) -> str:
+        """Output of `kubectl <args>`; any failure, timeout or missing kubectl, as text."""
+        try:
+            result = self._run(args, check=False, timeout=timeout)
+        except ExternalCommandError as exc:
+            return f"<{what} unavailable: {exc}>"
         return result.stdout + result.stderr
 
-    def workload_events(
-        self,
-        kind: str,
-        namespace: str,
-        name: str,
-        *,
-        timeout: float | None = None,
-    ) -> str:
-        """One workload's events. Best effort: a kubectl failure is returned as text."""
-        result = self._run(
+    def namespace_events(self, namespace: str, *, timeout: float) -> str:
+        """Namespace events sorted by time. Never raises: a failure is returned as text."""
+        return self._best_effort(
+            "events",
+            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp"],
+            timeout=timeout,
+        )
+
+    def workload_events(self, kind: str, namespace: str, name: str, *, timeout: float) -> str:
+        """One workload's events. Never raises: a failure is returned as text."""
+        return self._best_effort(
+            "events",
             [
                 "get", "events", "-n", namespace,
                 "--field-selector", f"involvedObject.name={name},involvedObject.kind={kind}",
                 "--sort-by=.lastTimestamp",
             ],
-            check=False,
             timeout=timeout,
         )
-        return result.stdout + result.stderr
 
     def diagnostics(self, namespace: str) -> str:
-        """Pods and events for a namespace. Best effort: a kubectl failure is returned as text."""
-        pods = self._run(["get", "pods", "-n", namespace, "-o", "wide"], check=False)
-        return "\n\n".join(
-            [
-                f"## pods\n{pods.stdout}{pods.stderr}",
-                f"## events\n{self.namespace_events(namespace)}",
-            ]
+        """Pods and events for a namespace. Never raises: a failure is returned as text."""
+        pods = self._best_effort(
+            "pods",
+            ["get", "pods", "-n", namespace, "-o", "wide"],
+            timeout=_DIAGNOSTICS_TIMEOUT_SECONDS,
         )
+        events = self.namespace_events(namespace, timeout=_DIAGNOSTICS_TIMEOUT_SECONDS)
+        return f"## pods\n{pods}\n\n## events\n{events}"
 
 
 _MAX_RECENT_STDERRS = 4

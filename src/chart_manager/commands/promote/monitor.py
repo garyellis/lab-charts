@@ -13,7 +13,6 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 
 import chart_manager.commands.promote.report as report
 from chart_manager.commands.promote.classify import Terminal, Waiting, classify
@@ -570,12 +569,8 @@ class _Watcher:
         if events_namespace:
             parts.append(f"\n### Events (namespace {events_namespace})")
             parts.append(
-                report.safe_events(
-                    partial(
-                        self.kubectl.namespace_events,
-                        events_namespace,
-                        timeout=per_poll,
-                    )
+                report.capped_events(
+                    self.kubectl.namespace_events(events_namespace, timeout=per_poll)
                 )
             )
 
@@ -586,17 +581,8 @@ class _Watcher:
                 kind, ns, name = w.workload.kind, w.workload.namespace, w.workload.name
                 parts.append(f"\n#### {kind}/{ns}/{name}")
                 parts.append(
-                    report.safe_events(
-                        # `partial`, not a closure: binding the loop's values
-                        # now means the callable cannot depend on when
-                        # `safe_events` gets around to invoking it.
-                        partial(
-                            self.kubectl.workload_events,
-                            kind,
-                            ns,
-                            name,
-                            timeout=per_poll,
-                        )
+                    report.capped_events(
+                        self.kubectl.workload_events(kind, ns, name, timeout=per_poll)
                     )
                 )
 

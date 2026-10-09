@@ -44,8 +44,8 @@ def test_every_call_is_pinned_to_the_context_and_timeout() -> None:
     kubectl.list_owned_workloads(ref)
     kubectl.list_test_pods(ref)
     kubectl.pod_logs("obs", "web-0")
-    kubectl.namespace_events("obs")
-    kubectl.workload_events("Deployment", "obs", "web")
+    kubectl.namespace_events("obs", timeout=2.0)
+    kubectl.workload_events("Deployment", "obs", "web", timeout=2.0)
     kubectl.diagnostics("obs")
     kubectl.delete_pod("obs", "web-0", timeout=2.0)
 
@@ -251,15 +251,9 @@ def test_pod_logs_other_failure_raises_with_structured_fields() -> None:
 
 def test_workload_events_selects_the_one_workload() -> None:
     runner = FakeCommandRunner(stdout="evt1\n")
-    _kubectl(runner).workload_events("Deployment", "loki", "loki-app")
+    _kubectl(runner).workload_events("Deployment", "loki", "loki-app", timeout=2.0)
 
     assert "involvedObject.name=loki-app,involvedObject.kind=Deployment" in runner.calls[0]
-
-
-def test_namespace_events_returns_stdout_and_stderr_without_raising() -> None:
-    runner = FakeCommandRunner(returncode=1, stdout="evt\n", stderr="warn\n")
-
-    assert _kubectl(runner).namespace_events("loki") == "evt\nwarn\n"
 
 
 def test_diagnostics_reports_pods_and_events_without_raising() -> None:
