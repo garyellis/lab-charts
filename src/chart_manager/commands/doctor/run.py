@@ -35,16 +35,12 @@ def run(
     `workspace` loads the repository; outside one the schema checks are skipped
     and git/gh probe `settings.root`.
     """
+    loaded: RepositoryWorkspace | WorkspaceNotFoundError
     try:
-        repository: RepositoryWorkspace | None = workspace()
-        schemas = validate.KubeconformSchemaDoctor(
-            repository, runner=runner, schema_cache_root=settings.schema_cache_root
-        )
+        loaded = workspace()
     except WorkspaceNotFoundError as exc:
-        repository, schemas = None, validate.KubeconformSchemaDoctor(
-            None, runner=runner, schema_cache_root=settings.schema_cache_root, skip_reason=str(exc)
-        )
-    root = repository.root if repository else settings.root.resolve()
+        loaded = exc
+    root = settings.root.resolve() if isinstance(loaded, WorkspaceNotFoundError) else loaded.root
     timeout = settings.command_timeout
     context = settings.kube_context
     checks: dict[str, Callable[[], Sequence[Check]]] = {
@@ -58,7 +54,11 @@ def run(
         "renovate": partial(
             Renovate(runner).preflight, token_configured=settings.renovate_token is not None
         ),
-        "schemas": schemas.preflight,
+        "schemas": partial(
+            validate.schema_preflight,
+            loaded,
+            validate.open_schema_store(runner, settings.schema_cache_root),
+        ),
         "events": partial(preflight_event_store, settings),
     }
     results = (result for name, check in checks.items() for result in _run_check(name, check))

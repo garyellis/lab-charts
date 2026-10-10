@@ -1,4 +1,4 @@
-"""The committed schema lock: load, write, sync the store to it, and serve its locations."""
+"""The committed schema lock: load, write, sync the store to it, serve and preflight it."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -25,7 +26,9 @@ from chart_manager.commands.validate.schemas.models import (
     build_lock,
 )
 from chart_manager.commands.validate.schemas.store import KubeconformSchemaStore, StoreStatus
-from chart_manager.plumbing.errors import YamlError
+from chart_manager.plumbing.errors import WorkspaceNotFoundError, YamlError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.preflight import Check, CheckStatus
 from chart_manager.plumbing.yaml_files import dump_yaml, load_yaml_file
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE, RepositoryWorkspace
 
@@ -39,6 +42,8 @@ UNSUPPORTED_CRD_OBJECT_GVK = "apiextensions.k8s.io/v1/CustomResourceDefinition"
 
 _UPDATE = "run `chart-manager schemas sync --update`"
 _SYNC = "run `chart-manager schemas sync`"
+_UPDATE_REMEDIATION = "run chart-manager schemas sync --update"
+_SYNC_REMEDIATION = "run chart-manager schemas sync"
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,60 @@ def update(
     published = store.sync(lock)
     write_schema_lock_atomic(workspace.root / SCHEMA_LOCK_FILE, lock)
     return SyncResult(lock, store.generation_path(), published)
+
+
+def preflight(
+    workspace: RepositoryWorkspace | WorkspaceNotFoundError, store: KubeconformSchemaStore
+) -> tuple[Check, ...]:
+    """Report policy, lock and store readiness from disk only, without raising.
+
+    Outside a workspace every check is skipped with the error's text.
+    """
+    if isinstance(workspace, WorkspaceNotFoundError):
+        return tuple(
+            Check.skipped(name, str(workspace))
+            for name in ("schema-policy", "schema-lock", "schema-store")
+        )
+    try:
+        policy = _policy(workspace)
+    except KubeconformSchemaConfigurationError as error:
+        unavailable = "workspace schema policy is unavailable"
+        return (
+            _failed(
+                "schema-policy",
+                error,
+                "configure spec.validation.kubernetesVersion and "
+                f"spec.validation.schemas, then {_UPDATE_REMEDIATION}",
+                {"configured": False},
+            ),
+            Check.skipped("schema-lock", unavailable),
+            Check.skipped("schema-store", unavailable),
+        )
+    policy_check = _policy_check(workspace.name, policy)
+    lock_check, lock = _lock_check(workspace, policy)
+    if lock is None:
+        return (
+            policy_check,
+            lock_check,
+            Check.skipped(
+                "schema-store",
+                "schema lock is unavailable; store generation cannot be selected",
+                data={"ready": False},
+            ),
+        )
+    try:
+        status = store.inspect(lock)
+    except OSError as exc:
+        store_check = Check.failed(
+            "schema-store",
+            f"schema store cannot be inspected: {exc}",
+            remediation=_SYNC_REMEDIATION,
+            outcome=Outcome.ENVIRONMENT,
+            data={"ready": False},
+        )
+    else:
+        store_check = _store_check(lock, status, policy_matches=lock_check.status is CheckStatus.OK)
+    return policy_check, lock_check, store_check
 
 
 def _policy(workspace: RepositoryWorkspace) -> WorkspaceValidation:
@@ -173,6 +232,84 @@ def _store_error(lock: SchemaLock, status: StoreStatus) -> KubeconformSchemaErro
     return None
 
 
+def _policy_check(workspace: str, policy: WorkspaceValidation) -> Check:
+    catalog = policy.schemas.catalog
+    detail = (
+        f"workspace={workspace}; kubernetes={policy.kubernetes_version}; "
+        f"generateFromCRDs={str(policy.schemas.generate_from_crds).lower()}; "
+        f"catalog={catalog.repository}@{catalog.track}"
+    )
+    data = {
+        "configured": True,
+        "workspace": workspace,
+        "kubernetesVersion": policy.kubernetes_version,
+        "generateFromCRDs": policy.schemas.generate_from_crds,
+        "kubernetes": {"repository": KUBERNETES_REPOSITORY, "track": KUBERNETES_TRACK},
+        "catalog": {"repository": catalog.repository, "track": catalog.track},
+    }
+    return Check.ok("schema-policy", detail, data=data)
+
+
+def _lock_check(
+    workspace: RepositoryWorkspace, policy: WorkspaceValidation
+) -> tuple[Check, SchemaLock | None]:
+    """The lock check, and the lock when one loads, even if it mismatches the policy."""
+    path = workspace.root / SCHEMA_LOCK_FILE
+    try:
+        lock = _load(workspace)
+    except KubeconformSchemaLockError as error:
+        unusable = {"path": str(path), "present": path.is_file(), "matchesPolicy": False}
+        return _failed("schema-lock", error, _UPDATE_REMEDIATION, unusable), None
+    mismatches = _mismatches(workspace.name, policy, lock)
+    data: dict[str, Any] = {
+        "path": str(path),
+        "present": True,
+        "workspace": lock.workspace,
+        "generation": lock.generation,
+        "matchesPolicy": not mismatches,
+        "mismatches": list(mismatches),
+        "repositories": 2,
+    }
+    if mismatches:
+        return _failed("schema-lock", _mismatch_error(mismatches), _UPDATE_REMEDIATION, data), lock
+    detail = f"{path}; generation={lock.generation}; policy matches; repositories=2"
+    return Check.ok("schema-lock", detail, data=data), lock
+
+
+def _store_check(lock: SchemaLock, status: StoreStatus, *, policy_matches: bool) -> Check:
+    ready = status.ready and policy_matches
+    data: dict[str, Any] = {
+        "path": str(status.generation_path),
+        "generation": lock.generation,
+        "expected": status.expected,
+        "present": status.present,
+        "missing": len(status.missing),
+        "corrupt": len(status.corrupt),
+        "ready": ready,
+        "generatedSchemas": "automatically prepared during validate",
+    }
+    error = _store_error(lock, status)
+    if error is None:
+        detail = (
+            f"{status.generation_path}; generation={lock.generation}; "
+            f"expected={status.expected} present={status.present} missing=0 corrupt=0; "
+            f"ready={str(ready).lower()}; "
+            "generated CRD schemas are prepared automatically during validate"
+        )
+        return Check.ok("schema-store", detail, data=data)
+    remediation = _SYNC_REMEDIATION
+    if status.corrupt:
+        snapshots = "; ".join(problem.path for problem in status.corrupt)
+        remediation = f"remove affected snapshot(s): {snapshots}, then {_SYNC_REMEDIATION}"
+    return _failed("schema-store", error, remediation, data)
+
+
+def _failed(
+    name: str, error: KubeconformSchemaError, remediation: str, data: dict[str, Any]
+) -> Check:
+    return Check.failed(name, str(error), remediation=remediation, outcome=error.outcome, data=data)
+
+
 def load_schema_lock(path: Path) -> SchemaLock:
     """Load one strict lock document and verify its content-derived generation id."""
     try:
@@ -238,6 +375,7 @@ __all__ = [
     "UpstreamSchemas",
     "load_schema_lock",
     "locations",
+    "preflight",
     "serialize_schema_lock",
     "sync",
     "update",
