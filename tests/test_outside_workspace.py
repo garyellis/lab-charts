@@ -17,7 +17,6 @@ from typing import Any
 
 import pytest
 
-from chart_manager import main
 from chart_manager.cli._container import Container
 from chart_manager.commands.events import cli as events_cli
 from chart_manager.commands.grafana import dashboard_export
@@ -51,7 +50,7 @@ def test_an_explicit_root_without_a_workspace_exits_5(
     result = cli("chart", "list")
 
     assert isinstance(result.exception, WorkspaceNotFoundError)
-    assert exit_code_for(main._outcome_for(result.exception)) == 5
+    assert exit_code_for(result.exception.outcome) == 5
 
 
 def test_version() -> None:
@@ -147,7 +146,7 @@ def test_doctor_fails_on_an_invalid_workspace(
     result = cli("doctor", "-o", "json")
 
     assert isinstance(result.exception, SpecError)
-    assert exit_code_for(main._outcome_for(result.exception)) == 3
+    assert exit_code_for(result.exception.outcome) == 3
 
 
 def test_event_list(monkeypatch: pytest.MonkeyPatch) -> None:

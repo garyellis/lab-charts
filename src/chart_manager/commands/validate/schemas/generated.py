@@ -29,7 +29,6 @@ from chart_manager.commands.validate.schemas.models import (
     content_digest,
 )
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.charts.chart import Chart, chart_names, load_chart
 from chart_manager.shared.charts.dependencies import deps_are_fresh
 from chart_manager.shared.charts.lifecycle import (
@@ -339,8 +338,7 @@ def _prepare(
             failures = render(uncached, output)
             if failures:
                 raise KubeconformSchemaRenderError(
-                    "CRD provider render failed:\n" + "\n".join(failures),
-                    outcome=Outcome.FAILED,
+                    "CRD provider render failed:\n" + "\n".join(failures)
                 )
             for target in uncached:
                 crds = [

@@ -30,8 +30,8 @@ Ask these of every diff first.
    value or path and the fix, e.g. `SpecError(f"{path}: charts_dir {value!r} does not exist")`.
    Skip helpers that rewrite library messages, guess which source a value came from, or re-read
    config just to word an error. Pydantic `extra="forbid"` errors can pass through as they are.
-5. **Catch at the boundary.** `main.py::_outcome_for` maps exceptions to `Outcome`, and
-   `plumbing/exit_codes.py` maps `Outcome` to a number. Commands raise; `main.py` and each
+5. **Catch at the boundary.** Each error class declares its `outcome`; `main.py` exits with it,
+   and `plumbing/exit_codes.py` maps `Outcome` to a number. Commands raise; `main.py` and each
    command's `cli.py` exit. Log with the module's `_LOG` at I/O boundaries, using %-style args.
 6. **Proportionality.** Enforce a rule once, with a type, a ruff rule or one plain test. Small,
    obviously proportionate checks are fine. Don't add AST-scanning machinery, tests of tests,
@@ -63,8 +63,9 @@ Every call to the outside world is an adapter in `integrations/`, one module per
   calling package.
 - **Imports** only `plumbing/`.
 - **Protocols only for two or more real adapters.** Tests fake external tools at the command
-  runner (`FakeCommandRunner`), not with a Protocol per tool. Today only the event store has a
-  Protocol.
+  runner (`FakeCommandRunner`), not with a Protocol per tool. Today's Protocols are
+  `EventStore`, `CommandRunner`, `KubeconformSchemaSource`, validate's `Progress` and promote's
+  `HasRef`.
 
 ## Tests
 

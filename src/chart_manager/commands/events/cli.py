@@ -29,15 +29,13 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
-from chart_manager.cli.streams import console, errors, narration
+from chart_manager.cli.streams import console, narration
 from chart_manager.commands.events.wire import events_to_dict
-from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
 from chart_manager.shared.events.query import (
     DEFAULT_LIMIT,
     EventQuery,
-    EventReadError,
 )
 from chart_manager.shared.events.ref import (
     ChartRef,
@@ -301,11 +299,7 @@ def list_events(
         # A usage error, exactly as `_parse_ref` narrows it for emit.
         raise typer.BadParameter(str(exc)) from exc
     request = EventQuery.from_selector(parsed, limit=limit)
-    try:
-        events = _query_events(request)
-    except EventReadError as exc:
-        errors.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(code=exit_code_for(exc.outcome)) from exc
+    events = _query_events(request)
     if not events:
         # Narration, not data: an empty table (or a count:0 document) is the
         # projection; this line says the emptiness is real, not a bug.

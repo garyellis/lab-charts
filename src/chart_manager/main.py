@@ -32,21 +32,7 @@ from chart_manager.commands.publish import cli as publish_cli
 from chart_manager.commands.test import cli as test_cli
 from chart_manager.commands.upgrade import cli as upgrade_cli
 from chart_manager.commands.validate import cli as validate_cli
-from chart_manager.commands.validate.schemas.errors import (
-    KubeconformSchemaConfigurationError,
-    KubeconformSchemaError,
-    KubeconformSchemaLockError,
-    KubeconformSchemaRenderError,
-    KubeconformSchemaSourceEnvironmentError,
-    KubeconformSchemaSourceError,
-)
-from chart_manager.plumbing.errors import (
-    ChartManagerError,
-    ExternalCommandError,
-    MissingToolError,
-    SpecError,
-    WorkspaceNotFoundError,
-)
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
 from chart_manager.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
@@ -219,34 +205,6 @@ app.add_typer(schemas_app, name="schemas")
 
 # --- errors become exit codes ----------------------------------------------
 
-#: Which raised error means which outcome. Ordered most specific first, since
-#: `_outcome_for` returns on the first `isinstance` match (`MissingToolError`
-#: must come before `ExternalCommandError`, its parent class); the
-#: `ChartManagerError` catch-all closes the table. A `CapabilityUnavailableError`
-#: falls through to `FAILED`: it is not a spec error.
-_ERROR_OUTCOMES: tuple[tuple[type[ChartManagerError], Outcome], ...] = (
-    (MissingToolError, Outcome.MISSING_BINARY),
-    (ExternalCommandError, Outcome.TOOL),
-    (KubeconformSchemaSourceEnvironmentError, Outcome.ENVIRONMENT),
-    (KubeconformSchemaSourceError, Outcome.TOOL),
-    (KubeconformSchemaConfigurationError, Outcome.SPEC),
-    (KubeconformSchemaLockError, Outcome.SPEC),
-    (KubeconformSchemaError, Outcome.TOOL),
-    (SpecError, Outcome.SPEC),
-    (WorkspaceNotFoundError, Outcome.ENVIRONMENT),
-    (ChartManagerError, Outcome.FAILED),
-)
-
-
-def _outcome_for(exc: ChartManagerError) -> Outcome:
-    """Classify a domain error against `_ERROR_OUTCOMES`."""
-    if isinstance(exc, KubeconformSchemaRenderError):
-        return exc.outcome
-    for error_type, outcome in _ERROR_OUTCOMES:
-        if isinstance(exc, error_type):
-            return outcome
-    return Outcome.FAILED  # unreachable: the last row matches every subclass
-
 
 def _os_error_text(exc: OSError) -> str:
     """A one-line reason for an OSError without the errno, naming the file if any."""
@@ -267,7 +225,7 @@ def main() -> None:
         app()
     except ChartManagerError as exc:
         errors.print(f"[red]error:[/red] {escape(str(exc))}")
-        sys.exit(exit_code_for(_outcome_for(exc)))
+        sys.exit(exit_code_for(exc.outcome))
     except FileNotFoundError as exc:
         errors.print(f"[red]error:[/red] file not found: {escape(str(exc.filename or exc))}")
         sys.exit(exit_code_for(Outcome.FAILED))

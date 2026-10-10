@@ -9,7 +9,7 @@ those rules.
 
 ```text
 chart_manager/
-  main.py         composition root: global options, the command tree, _outcome_for
+  main.py         composition root: global options, the command tree, error exit codes
   commands/       one package per CLI subcommand; leaves and composites (ADR-0002)
   cli/            toolkit below commands: output, streams, options, Container
   shared/         what two or more commands use: cluster > charts | events > workspace
