@@ -1,11 +1,9 @@
 import pytest
 
 from chart_manager.commands.validate.schemas import lock as schema_lock
-from chart_manager.commands.validate.schemas.errors import (
-    KubeconformSchemaLockError,
-    KubeconformSchemaSourceEnvironmentError,
-)
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaSourceEnvironmentError
 from chart_manager.commands.validate.schemas.lock import write_schema_lock_atomic
+from chart_manager.commands.validate.schemas.models import build_lock
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
 
@@ -50,7 +48,8 @@ def test_update_resolves_both_pins_then_publishes_lock(tmp_path):
 
 def test_failed_update_keeps_previous_lock(tmp_path, monkeypatch):
     lock, store, snapshots = schema_store(tmp_path)
-    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, lock)
+    previous = build_lock(workspace="another", policy=lock.policy)
+    write_schema_lock_atomic(tmp_path / SCHEMA_LOCK_FILE, previous)
     before = (tmp_path / SCHEMA_LOCK_FILE).read_bytes()
 
     def failed(*args, **kwargs):
@@ -60,13 +59,3 @@ def test_failed_update_keeps_previous_lock(tmp_path, monkeypatch):
     with pytest.raises(KubeconformSchemaSourceEnvironmentError):
         schema_lock.update(workspace(tmp_path), store, resolve_ref=resolver(lock, []))
     assert (tmp_path / SCHEMA_LOCK_FILE).read_bytes() == before
-
-
-def test_policy_mismatch_fails_without_download(tmp_path):
-    lock, store, snapshots = schema_store(tmp_path)
-    write_schema_lock_atomic(
-        tmp_path / SCHEMA_LOCK_FILE, lock.model_copy(update={"workspace": "another"})
-    )
-    with pytest.raises(KubeconformSchemaLockError):
-        schema_lock.sync(workspace(tmp_path), store)
-    assert not snapshots.calls

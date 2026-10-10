@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.commands.validate.schemas.runtime import UNSUPPORTED_CRD_OBJECT_GVK
+from chart_manager.commands.validate.schemas.lock import UNSUPPORTED_CRD_OBJECT_GVK
 from chart_manager.integrations.kubeconform import Kubeconform
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError
 from tests.conftest import FakeCommandRunner, OnPath

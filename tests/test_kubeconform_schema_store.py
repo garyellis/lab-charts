@@ -19,12 +19,12 @@ def test_sync_caches_complete_selected_version_and_catalog_once(tmp_path):
     kubernetes = store.repository_path(lock.policy.kubernetes, "v1.35.3-standalone-strict")
     assert not (kubernetes / "v1.34.0-standalone-strict").exists()
     # A kind never inventoried by any chart is already available.
-    location = store.locations(lock).fallback_schema_locations[0]
+    location = store.locations(lock)[0]
     path = expand_schema_location(
         location, group="policy", version="v1", kind="PodDisruptionBudget"
     )
     assert Path(path).is_file()
-    catalog = store.locations(lock).fallback_schema_locations[1]
+    catalog = store.locations(lock)[1]
     assert Path(
         expand_schema_location(catalog, group="example.io", version="v1", kind="Widget")
     ).is_file()

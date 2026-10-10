@@ -43,12 +43,6 @@ class StoreStatus:
         return not self.missing and not self.corrupt
 
 
-@dataclass(frozen=True)
-class KubeconformSchemaLocations:
-    generated_schema_locations: tuple[str, ...]
-    fallback_schema_locations: tuple[str, ...]
-
-
 class KubeconformSchemaStore:
     """Share immutable repository checkouts across charts and workspaces."""
 
@@ -146,20 +140,17 @@ class KubeconformSchemaStore:
                 f"cannot write schema cache {self.root}: {exc}"
             ) from exc
 
-    def locations(self, lock: SchemaLock) -> KubeconformSchemaLocations:
+    def locations(self, lock: SchemaLock) -> tuple[str, ...]:
         kubernetes, catalog = self.repositories(lock)
-        return KubeconformSchemaLocations(
-            (),
-            (
-                str(
-                    self.repository_path(*kubernetes)
-                    / str(kubernetes[1])
-                    / "{{.ResourceKind}}{{.KindSuffix}}.json"
-                ),
-                str(
-                    self.repository_path(*catalog)
-                    / "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-                ),
+        return (
+            str(
+                self.repository_path(*kubernetes)
+                / str(kubernetes[1])
+                / "{{.ResourceKind}}{{.KindSuffix}}.json"
+            ),
+            str(
+                self.repository_path(*catalog)
+                / "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
             ),
         )
 
