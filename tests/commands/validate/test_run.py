@@ -572,7 +572,7 @@ def test_a_failed_dependency_update_is_a_tool_error_not_a_chart_failure(tmp_path
     )
 
     assert outcome.rows[0].checks["render"].status == "error"
-    assert outcome.outcome() is Outcome.TOOL
+    assert outcome.outcome is Outcome.TOOL
 
 
 def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
@@ -620,7 +620,7 @@ def test_the_outcome_folds_rows_and_spec_errors_into_one_exit_reason(
     }
     row = validate.Row("demo", "dev", "demo", "lab-dev", checks)
 
-    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome() is expected
+    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome is expected
 
 
 class RecordingProgress:
