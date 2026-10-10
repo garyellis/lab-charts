@@ -40,6 +40,7 @@ def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_pat
         run_hooks=False,
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
     assert runner.calls == [
@@ -59,7 +60,13 @@ def test_provision_runs_hooks_around_the_cluster_and_rewaits_after_the_post_hook
     )
 
     session.provision(
-        cluster, root=tmp_path, name="lab", run_hooks=True, runner=runner, settings=Settings()
+        cluster,
+        root=tmp_path,
+        name="lab",
+        run_hooks=True,
+        runner=runner,
+        settings=Settings(),
+        progress=[].append,
     )
 
     assert [call for call in runner.calls if call[0] != "docker"] == [
@@ -90,7 +97,13 @@ def test_provision_skips_authored_hooks_when_hooks_are_off(tmp_path: Path) -> No
     cluster = _cluster(tmp_path, {"preProvision": ["pre"], "postProvision": ["post"]})
 
     session.provision(
-        cluster, root=tmp_path, name="lab", run_hooks=False, runner=runner, settings=Settings()
+        cluster,
+        root=tmp_path,
+        name="lab",
+        run_hooks=False,
+        runner=runner,
+        settings=Settings(),
+        progress=[].append,
     )
 
     assert ("pre",) not in runner.calls
@@ -113,6 +126,7 @@ def test_provision_with_replace_deletes_the_cluster_after_the_pre_hook(tmp_path:
         runner=runner,
         settings=Settings(),
         replace=True,
+        progress=[].append,
     )
 
     assert runner.calls == [
@@ -155,6 +169,7 @@ def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: 
             runner=runner,
             settings=Settings(),
             replace=True,
+            progress=[].append,
         )
 
     assert not any(call[:2] == ("kind", "delete") for call in runner.calls)
@@ -177,6 +192,7 @@ def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
             run_hooks=False,
             runner=runner,
             settings=settings,
+            progress=[].append,
         )
     else:
         dev = session.attach("lab", runner=runner, settings=settings)

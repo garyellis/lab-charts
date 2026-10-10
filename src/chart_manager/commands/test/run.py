@@ -32,9 +32,8 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
 from chart_manager.plumbing.progress import (
-    ProgressCallback,
+    Progress,
     detail,
-    emit,
     failure,
     info,
     step,
@@ -98,7 +97,7 @@ def run(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     settings: Settings,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> ChartTestOutcome:
     """Provision, bootstrap, install the chart's requirements and the chart, then test it.
 
@@ -135,7 +134,7 @@ def run(
             "not be Helm-tested"
         )
         _LOG.warning("%s", message)
-        emit(progress, warn(message))
+        progress(warn(message))
     _LOG.info(
         "chart test started: chart=%s profile=%s cluster=%s actions=%d skip_requires=%s",
         request.chart,
@@ -166,7 +165,7 @@ def run(
             bootstrap.bootstrap(session, bootstrap_steps, root=root, progress=progress)
         except ReleaseFailed as exc:
             if exc.diagnostics.strip():
-                emit(progress, info(exc.diagnostics))
+                progress(info(exc.diagnostics))
             raise
     _require_skipped(request, compiled.skipped, session)
 
@@ -210,7 +209,7 @@ def teardown(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     settings: Settings,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> TeardownOutcome:
     """Run every cleanup hook, continuing past failures, then delete the cluster unless kept."""
     cleanups = teardown_plan(request, workspace=workspace)
@@ -219,7 +218,7 @@ def teardown(
     if session is None:
         message = f"cluster {name} does not exist; running cleanup hooks without a kube context"
         _LOG.warning("%s", message)
-        emit(progress, warn(message))
+        progress(warn(message))
     hooks = ChartTestHookRunner(
         workspace.root,
         runner=runner,
@@ -229,18 +228,18 @@ def teardown(
     outcomes = []
     for action in cleanups.actions:
         subject = _subject(action)
-        emit(progress, step(_LABELS[action.kind], subject))
+        progress(step(_LABELS[action.kind], subject))
         try:
             hooks.run(action)
         except ChartManagerError as exc:
-            emit(progress, failure("Failed", f"{subject}: {exc}"))
+            progress(failure("Failed", f"{subject}: {exc}"))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "FAIL", str(exc)))
         else:
-            emit(progress, detail("Completed", subject))
+            progress(detail("Completed", subject))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "PASS"))
     deleted, delete_error = False, None
     if session is not None and not request.keep_cluster:
-        emit(progress, step("Deleting test cluster", name))
+        progress(step("Deleting test cluster", name))
         try:
             deleted = delete_cluster(session)
         except ChartManagerError as exc:
@@ -294,7 +293,7 @@ def _execute(
     session: Session,
     test_plan: LifecyclePlan,
     hooks: ChartTestHookRunner,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> tuple[tuple[ActionOutcome, ...], str]:
     """Run each action once, skipping the rest after a failure; cleanups wait for teardown."""
     outcomes: list[ActionOutcome] = []
@@ -304,10 +303,10 @@ def _execute(
         subject = _subject(action)
         if action.kind is ActionKind.HOOK_CLEANUP or failed:
             reason = "cleanup hooks run at teardown" if not failed else "an earlier action failed"
-            emit(progress, detail("Skipped", subject))
+            progress(detail("Skipped", subject))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "SKIP", reason))
             continue
-        emit(progress, step(_LABELS[action.kind], subject))
+        progress(step(_LABELS[action.kind], subject))
         try:
             _perform(session, action, hooks)
         except (MissingToolError, SpecError):
@@ -322,12 +321,12 @@ def _execute(
                 action.entry.namespace,
                 exc,
             )
-            emit(progress, failure("Failed", f"{subject}: {exc}"))
+            progress(failure("Failed", f"{subject}: {exc}"))
             if diagnostics.strip():
-                emit(progress, info(diagnostics))
+                progress(info(diagnostics))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "FAIL", str(exc)))
             continue
-        emit(progress, detail("Completed", subject))
+        progress(detail("Completed", subject))
         outcomes.append(ActionOutcome(action.action_id, action.kind.value, "PASS"))
     return tuple(outcomes), diagnostics
 

@@ -1,8 +1,9 @@
-"""Progress narration: one frozen event, one callback, no return value.
+"""Progress: frozen events handed to one callback, no return value.
 
 Long-running flows say what they are doing through these events and never decide how
-they are shown. `severity` is the only rendering hint; `label` carries
-its emphasis and `message` is left alone.
+they are shown. A `ProgressEvent` is a line: `severity` is its only rendering hint,
+`label` carries its emphasis and `message` is left alone. A `RowUpdate` is the latest
+status of one cell, keyed by what the row is about.
 """
 
 from __future__ import annotations
@@ -23,7 +24,17 @@ class ProgressEvent:
     label: str | None = None
 
 
-ProgressCallback = Callable[[ProgressEvent], None]
+@dataclass(frozen=True)
+class RowUpdate:
+    """The latest `status` of one `column` (a check, a phase) for the row `key` names."""
+
+    key: tuple[str, ...]
+    column: str
+    status: str
+    detail: str
+
+
+Progress = Callable[[ProgressEvent | RowUpdate], None]
 
 
 def step(label: str, message: str = "") -> ProgressEvent:
@@ -51,21 +62,12 @@ def info(message: str) -> ProgressEvent:
     return ProgressEvent("info", message)
 
 
-def emit(progress: ProgressCallback | None, event: ProgressEvent) -> None:
-    """Deliver `event` if a callback is wired; no-op otherwise.
-
-    A free function keeps optional progress reporting uniform across callers.
-    """
-    if progress is not None:
-        progress(event)
-
-
 __all__ = [
-    "ProgressCallback",
+    "Progress",
     "ProgressEvent",
+    "RowUpdate",
     "Severity",
     "detail",
-    "emit",
     "failure",
     "info",
     "step",

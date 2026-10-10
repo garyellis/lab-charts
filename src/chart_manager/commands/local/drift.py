@@ -9,7 +9,7 @@ from pathlib import Path
 from chart_manager.commands.local.models import PortMappingDrift
 from chart_manager.integrations.kind import Kind
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
-from chart_manager.plumbing.progress import ProgressCallback, emit, warn
+from chart_manager.plumbing.progress import Progress, warn
 from chart_manager.plumbing.yaml_files import load_yaml_file
 
 _LOG = logging.getLogger(__name__)
@@ -109,14 +109,13 @@ def warn_on_port_mapping_drift(
     *,
     kind: Kind,
     root: Path,
-    progress: ProgressCallback | None,
+    progress: Progress,
     config: Path | None = None,
 ) -> None:
     """Narrate `port_mapping_drift` so the dev knows a `local reset` is required."""
     drift = port_mapping_drift(cluster_name, kind=kind, root=root, config=config)
     if drift.error is not None:
-        emit(
-            progress,
+        progress(
             warn(
                 f"could not inspect container port mappings ({drift.error}); skipping drift check"
             ),
@@ -124,8 +123,7 @@ def warn_on_port_mapping_drift(
         return
     if not drift.drifted:
         return
-    emit(
-        progress,
+    progress(
         warn(
             f"kind cluster port mappings do not match kind-config.yaml "
             f"(missing host ports: {list(drift.missing)}); run "

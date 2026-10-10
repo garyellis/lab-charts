@@ -15,7 +15,7 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.integrations.kubectl import Kubectl, VirtualService
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.progress import ProgressCallback, emit, step, warn
+from chart_manager.plumbing.progress import Progress, step, warn
 
 # A VirtualService opts in to a credential hint under its URLs with these
 # annotations. The Secret is read from the VirtualService's own namespace;
@@ -62,7 +62,7 @@ def wait_apps_wildcard_ready(
     summary: RunSummary,
     *,
     kubectl: Kubectl,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> None:
     """Block until `Certificate/apps-wildcard` reports Ready=True.
 
@@ -75,8 +75,7 @@ def wait_apps_wildcard_ready(
     """
     if not lab_ca_present(summary):
         return
-    emit(
-        progress,
+    progress(
         step(
             "Waiting for",
             f"Certificate/{APPS_WILDCARD_CERT_NAME} -n {APPS_WILDCARD_CERT_NAMESPACE}",
@@ -89,8 +88,7 @@ def wait_apps_wildcard_ready(
             timeout=APPS_WILDCARD_CERT_TIMEOUT,
         )
     except ChartManagerError as exc:
-        emit(
-            progress,
+        progress(
             warn(
                 f"apps-wildcard cert not Ready "
                 f"({exc}); URLs below may serve a TLS error until cert-manager catches up"

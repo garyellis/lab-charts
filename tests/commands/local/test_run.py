@@ -66,7 +66,7 @@ def _up(repo: Path, runner: FakeCommandRunner, **options: object) -> local.DevCl
         workspace=load_repository_workspace(repo),
         runner=runner,
         settings=Settings(),
-        **options,  # type: ignore[arg-type]
+        **{"progress": [].append, **options},  # type: ignore[arg-type]
     )
 
 
@@ -125,6 +125,7 @@ def test_reset_runs_the_pre_hook_once_then_deletes_and_recreates_the_cluster(rep
         runner=runner,
         settings=Settings(),
         run_hooks=True,
+        progress=[].append,
     )
 
     calls = [plain_argv(a) for a in runner.calls]
@@ -140,7 +141,7 @@ def test_down_stops_the_running_nodes(repo: Path) -> None:
         lambda argv: argv[:2] == ("docker", "ps"), stdout="chart-manager-control-plane\n"
     )
 
-    result = local_run.down(runner=runner, settings=Settings())
+    result = local_run.down(runner=runner, settings=Settings(), progress=[].append)
 
     assert result.changed
     assert ("docker", "stop", "chart-manager-control-plane") in runner.calls
@@ -176,7 +177,7 @@ def test_status_lists_releases_sorted_by_namespace_and_name(repo: Path) -> None:
 
 
 def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path) -> None:
-    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None, progress=[].append)
 
     assert [(e.chart, e.source) for e in plan.entries] == [
         ("db", "target"),
@@ -187,7 +188,7 @@ def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path
 
 def test_plan_fails_on_an_unresolvable_profile_like_the_real_run(repo: Path) -> None:
     with pytest.raises(ChartManagerError):
-        local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing")
+        local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing", progress=[].append)
 
 
 def test_plan_warns_that_local_up_does_not_run_chart_test_hooks(
@@ -221,7 +222,7 @@ def test_plan_leaves_out_a_requirement_bootstrap_installs(repo: Path) -> None:
         )
     )
 
-    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None, progress=[].append)
 
     assert [(e.chart, e.source) for e in plan.entries] == [("db", "bootstrap"), ("app", "target")]
 

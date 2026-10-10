@@ -16,8 +16,8 @@ from chart_manager.cli._options import (
     ProvisionHooksOption,
     provision_hooks_enabled,
 )
+from chart_manager.cli.progress import print_progress
 from chart_manager.cli.streams import console, narration
-from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands import test
 from chart_manager.commands.test.models import LifecyclePlan
 from chart_manager.commands.test.run import plan, run, teardown, teardown_plan
@@ -155,7 +155,7 @@ def chart_test(
         workspace=workspace,
         runner=container.command_runner(),
         settings=container.settings,
-        progress=_print_progress,
+        progress=print_progress,
     )
     if outcome.failed is not None:
         raise ChartManagerError(
@@ -207,7 +207,7 @@ def chart_teardown(
         workspace=workspace,
         runner=container.command_runner(),
         settings=container.settings,
-        progress=_print_progress,
+        progress=print_progress,
     )
     if not result.ok:
         raise ChartManagerError(_teardown_failure(result))

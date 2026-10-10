@@ -14,7 +14,7 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.progress import ProgressCallback, emit, step
+from chart_manager.plumbing.progress import Progress, step
 from chart_manager.settings import Settings
 
 
@@ -38,7 +38,7 @@ def provision(
     runner: CommandRunner,
     settings: Settings,
     replace: bool = False,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> Session:
     """Create or start the cluster, then wait until its apiserver answers.
 
@@ -62,11 +62,11 @@ def provision(
             settings=settings,
         )
     if replace:
-        emit(progress, step("Deleting cluster", name))
+        progress(step("Deleting cluster", name))
         teardown(session)
-    emit(progress, step("Ensuring cluster", name))
+    progress(step("Ensuring cluster", name))
     session.kind.ensure_cluster(name, config=kind_config_path(root, cluster))
-    emit(progress, step("Waiting for kube-apiserver"))
+    progress(step("Waiting for kube-apiserver"))
     session.kubectl.wait_apiserver_ready()
     if hooks is not None and hooks.post_provision is not None:
         post = {
@@ -76,7 +76,7 @@ def provision(
             "CHART_MANAGER_PROVIDER_TYPE": "kind",
         }
         _hook(hooks.post_provision, root, post, runner=runner, settings=settings)
-        emit(progress, step("Waiting for kube-apiserver after post-provision hook"))
+        progress(step("Waiting for kube-apiserver after post-provision hook"))
         session.kubectl.wait_apiserver_ready()
     return session
 

@@ -21,8 +21,8 @@ from chart_manager.cli._options import (
     ProvisionHooksOption,
     provision_hooks_enabled,
 )
+from chart_manager.cli.progress import print_progress
 from chart_manager.cli.streams import console, narration
-from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands.local import run as local_run
 from chart_manager.commands.local.access import LAB_CA_SECRET_NAME, LAB_CA_SECRET_NAMESPACE
 from chart_manager.commands.local.models import (
@@ -155,7 +155,7 @@ def local_up(
             workspace=workspace,
             profile=profile,
             run_hooks=hooks_enabled,
-            progress=_print_progress,
+            progress=print_progress,
         )
         _finish_plan(plan, output, command="up")
     result = local_run.up(
@@ -166,7 +166,7 @@ def local_up(
         profile=profile,
         skip_installed=skip_installed,
         run_hooks=hooks_enabled,
-        progress=_print_progress,
+        progress=print_progress,
     )
     _finish_converge(result, output)
 
@@ -187,7 +187,7 @@ def local_down(
         _finish_plan(local_run.plan_down(), output, command="down")
     container = _container()
     result = local_run.down(
-        runner=container.command_runner(), settings=container.settings, progress=_print_progress
+        runner=container.command_runner(), settings=container.settings, progress=print_progress
     )
     output_mod.finish(result, mode=output, render=_print_cluster_action)
 
@@ -234,7 +234,7 @@ def local_reset(
             profile=profile,
             destroys=True,
             run_hooks=hooks_enabled,
-            progress=_print_progress,
+            progress=print_progress,
         )
         _finish_plan(plan, output, command="reset")
     result = local_run.reset(
@@ -244,7 +244,7 @@ def local_reset(
         settings=container.settings,
         profile=profile,
         run_hooks=hooks_enabled,
-        progress=_print_progress,
+        progress=print_progress,
     )
     _finish_converge(result, output)
 

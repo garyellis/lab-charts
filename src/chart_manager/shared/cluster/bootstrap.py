@@ -17,7 +17,7 @@ from chart_manager.api.v1alpha1.releases import (
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.plumbing.progress import ProgressCallback, emit, step
+from chart_manager.plumbing.progress import Progress, step
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
@@ -63,7 +63,7 @@ def bootstrap(
     steps: tuple[BootstrapStep, ...],
     *,
     root: Path,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> tuple[BootstrapOutcome, ...]:
     """Converge every bootstrap release in order; stop at the first that fails."""
     root = root.resolve()
@@ -71,7 +71,7 @@ def bootstrap(
     for bootstrap_step in steps:
         sets = _runtime_values(session, bootstrap_step.authored)
         for planned, label in _releases(bootstrap_step, root, sets):
-            emit(progress, step("Bootstrapping", f"{planned.name} -> {planned.namespace}"))
+            progress(step("Bootstrapping", f"{planned.name} -> {planned.namespace}"))
             status = converge(session, planned)
             outcomes.append(BootstrapOutcome(planned.name, label, planned.namespace, status))
         _wait_ready(session, bootstrap_step.authored, progress)
@@ -162,17 +162,15 @@ def _runtime_values(session: Session, release: BootstrapRelease) -> dict[str, st
     return {key: facts[value] for key, value in release.runtime_values.items()}
 
 
-def _wait_ready(
-    session: Session, release: BootstrapRelease, progress: ProgressCallback | None
-) -> None:
+def _wait_ready(session: Session, release: BootstrapRelease, progress: Progress) -> None:
     readiness = release.readiness
     if readiness is None:
         return
     gate = readiness.workloads_ready
     timeout = gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
     if readiness.nodes_ready:
-        emit(progress, step("Waiting for cluster nodes"))
+        progress(step("Waiting for cluster nodes"))
         session.kubectl.wait_nodes_ready(timeout=timeout)
     if gate is not None:
-        emit(progress, step("Waiting for bootstrap workloads", gate.namespace))
+        progress(step("Waiting for bootstrap workloads", gate.namespace))
         session.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)
