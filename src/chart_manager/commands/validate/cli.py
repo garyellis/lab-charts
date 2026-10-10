@@ -40,6 +40,8 @@ from chart_manager.shared.charts.chart import resolve_chart_target
 
 _OUTPUTS = (output_mod.TABLE, output_mod.MD, output_mod.JSON, output_mod.ALL)
 _CLEAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
+# Seconds one GitHub API request may wait for a response: a network timeout, not a command limit.
+_GITHUB_REQUEST_TIMEOUT = 15.0
 
 
 def validate(
@@ -321,9 +323,8 @@ def sync(
     workspace = container.workspace()
     store = open_schema_store(container.command_runner(), container.settings)
     if update:
-        timeout = container.settings.command_timeout
         source = GitHubKubeconformSchemaSource(
-            timeout=timeout if timeout is not None and timeout > 0 else 15.0,
+            timeout=_GITHUB_REQUEST_TIMEOUT,
             github_token=container.settings.github_token,
         )
         result = schema_lock.update(workspace, store, resolve_ref=source.resolve_ref)

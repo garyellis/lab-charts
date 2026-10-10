@@ -55,7 +55,7 @@ def port_mapping_drift(
     *,
     kind: Kind,
     root: Path,
-    config: Path | None = None,
+    config: Path | None,
 ) -> PortMappingDrift:
     """Diff the kind-config host ports against the live container.
 
@@ -110,7 +110,7 @@ def warn_on_port_mapping_drift(
     kind: Kind,
     root: Path,
     progress: Progress,
-    config: Path | None = None,
+    config: Path | None,
 ) -> None:
     """Narrate `port_mapping_drift` so the dev knows a `local reset` is required."""
     drift = port_mapping_drift(cluster_name, kind=kind, root=root, config=config)

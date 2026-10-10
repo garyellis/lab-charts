@@ -27,7 +27,7 @@ def cluster_status(
     name: str,
     kind: Kind,
     root: Path,
-    config: Path | None = None,
+    config: Path | None,
 ) -> DevClusterStatus:
     """Collect the current state of the cluster, or report that it does not exist.
 

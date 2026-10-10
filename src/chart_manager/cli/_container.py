@@ -53,7 +53,9 @@ class Container:
             configured = root
             if configured is None and "root" in self._settings.model_fields_set:
                 configured = self._settings.root
-            compiled = load_repository_workspace(resolve_repository_root(configured=configured))
+            compiled = load_repository_workspace(
+                resolve_repository_root(configured=configured, start=Path.cwd())
+            )
             self._workspaces[key] = compiled
             self._workspaces[compiled.root] = compiled
         return self._workspaces[key]

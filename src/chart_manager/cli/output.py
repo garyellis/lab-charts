@@ -159,15 +159,14 @@ def resolve(
     ctx: typer.Context,
     *,
     allowed: Sequence[str],
-    console: Console | None = None,
+    console: Console,
 ) -> str:
     """Resolve the output mode for one command invocation.
 
     Precedence is `command -o` > global `-o` > `auto`.
 
     `console` is the stream the projection will land on; `auto` probes it for
-    `is_terminal`. Callers that already hold their stdout console pass it so
-    the decision and the writing cannot disagree.
+    `is_terminal`, so the decision and the writing cannot disagree.
 
     Narration is silenced when json is *requested*, not when `auto` resolves
     to it, so CI logs (where stdout is never a terminal) keep their narration.
@@ -276,12 +275,11 @@ def _leaf(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def _auto(console: Console | None) -> str:
+def _auto(console: Console) -> str:
     """`table` for a human at a terminal, `json` for everything else."""
     if container().settings.ci:
         return JSON
-    probe = console if console is not None else streams.data_console()
-    return TABLE if probe.is_terminal else JSON
+    return TABLE if console.is_terminal else JSON
 
 
 __all__ = [

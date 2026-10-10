@@ -222,7 +222,7 @@ def _prepare(
     progress: Progress,
 ) -> _Prepared:
     cluster = load_cluster(workspace)
-    steps = bootstrap.preflight(cluster, root=workspace.root)
+    steps = bootstrap.preflight(cluster, root=workspace.root, helm=None)
     releases = _target_releases(target, profile, workspace.root)
     return _Prepared(
         cluster, steps, _preflight(releases, bootstrap.owned(steps), workspace.root, progress)

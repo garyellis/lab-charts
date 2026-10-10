@@ -118,7 +118,7 @@ class Kind:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-    def ensure_cluster(self, name: str, *, config: Path | None = None) -> None:
+    def ensure_cluster(self, name: str, *, config: Path | None) -> None:
         """Converge to a running cluster: create if absent, start stopped nodes, else no-op."""
         # `kind get clusters` lists clusters whose node containers exist on
         # the host docker daemon, regardless of whether those containers are

@@ -124,7 +124,7 @@ def test_ensure_cluster_starts_only_the_stopped_nodes(
     runner.respond(_is_docker_ps(running_only=False), stdout=every)
     kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
     start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
@@ -146,7 +146,7 @@ def test_ensure_cluster_noop_when_already_running() -> None:
     )
     kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
     assert not any(c[:2] == ("docker", "start") for c in runner.calls)
@@ -157,7 +157,7 @@ def test_ensure_cluster_creates_when_absent() -> None:
     runner.respond(_is_kind_get_clusters, stdout="")  # no clusters
     kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     create_calls = [c for c in runner.calls if c[:3] == ("kind", "create", "cluster")]
     assert len(create_calls) == 1

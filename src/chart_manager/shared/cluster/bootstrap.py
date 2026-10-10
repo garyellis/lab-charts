@@ -93,7 +93,7 @@ def verify(
 
 
 def preflight(
-    cluster: LocalCluster, *, root: Path, helm: Helm | None = None
+    cluster: LocalCluster, *, root: Path, helm: Helm | None
 ) -> tuple[BootstrapStep, ...]:
     """Resolve every bootstrap release before the cluster is touched.
 
