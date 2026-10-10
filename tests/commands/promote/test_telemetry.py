@@ -43,6 +43,7 @@ def _monitor(runner: FakeCommandRunner, events: EventLog, **request: Any) -> mon
         runner=runner,
         settings=Settings(),
         events=EventWriter(source="chart-manager", store=lambda: events),
+        progress=[].append,
         sleep=lambda _s: None,
         clock=lambda: 0.0,
         rand=lambda _lo, _hi: 0.0,
@@ -56,6 +57,7 @@ def _test(runner: FakeCommandRunner, events: EventLog, **request: Any) -> test.T
         runner=runner,
         settings=Settings(),
         events=EventWriter(source="chart-manager", store=lambda: events),
+        progress=[].append,
         clock=lambda: 0.0,
     )
 

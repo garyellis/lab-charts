@@ -13,16 +13,13 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
+from chart_manager.cli.progress import progress_view
 from chart_manager.cli.streams import console, narration
 from chart_manager.commands.promote.monitor import MonitorRequest
 from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult
 from chart_manager.commands.promote.pr import run as run_pr
-from chart_manager.commands.promote.render import (
-    ProgressTable,
-    render_monitor_pretty,
-    render_test_pretty,
-)
+from chart_manager.commands.promote.render import render_monitor_pretty, render_test_pretty
 from chart_manager.commands.promote.scanner import HelmReleaseMatch
 from chart_manager.commands.promote.state import PromoteStatus
 from chart_manager.commands.promote.test import TestRequest
@@ -131,19 +128,9 @@ def monitor(
     container = _container()
     runner = container.command_runner()
     events = container.event_writer()
-    # Progress renders onto the narration console: it is never the projection.
-    if mode == output_mod.TABLE:
-        with ProgressTable(narration) as table:
-            result = run_monitor(
-                request,
-                runner=runner,
-                settings=container.settings,
-                events=events,
-                progress=table,
-            )
-    else:
+    with progress_view(live=narration.is_terminal) as progress:
         result = run_monitor(
-            request, runner=runner, settings=container.settings, events=events, progress=None
+            request, runner=runner, settings=container.settings, events=events, progress=progress
         )
 
     output_mod.finish(result, mode=mode, render=lambda r: render_monitor_pretty(r, console))
@@ -191,19 +178,9 @@ def test(
     container = _container()
     runner = container.command_runner()
     events = container.event_writer()
-    # Progress renders onto the narration console: it is never the projection.
-    if mode == output_mod.TABLE:
-        with ProgressTable(narration) as table:
-            result = run_test(
-                request,
-                runner=runner,
-                settings=container.settings,
-                events=events,
-                progress=table,
-            )
-    else:
+    with progress_view(live=narration.is_terminal) as progress:
         result = run_test(
-            request, runner=runner, settings=container.settings, events=events, progress=None
+            request, runner=runner, settings=container.settings, events=events, progress=progress
         )
 
     output_mod.finish(result, mode=mode, render=lambda r: render_test_pretty(r, console))

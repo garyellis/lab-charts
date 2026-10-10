@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import ANY
 
 import pytest
 
-from chart_manager.commands.promote.state import Transition
 from chart_manager.commands.promote.test import TestRequest, TestResult, run
-from chart_manager.integrations.kubectl import HelmReleaseRef
 from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout
+from chart_manager.plumbing.progress import Progress, ProgressEvent, RowUpdate
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
@@ -38,7 +38,7 @@ def _test(
     runner: FakeCommandRunner,
     *,
     clock: Callable[[], float] | None = None,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    progress: Progress = lambda _event: None,
     **request: Any,
 ) -> TestResult:
     fields = {"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}
@@ -347,15 +347,15 @@ def test_progress_hears_each_phase(
 ) -> None:
     runner = _helm(cluster(release), helm)
     runner.respond_each(hook_pods, pods)
-    seen: list[str] = []
+    seen: list[ProgressEvent | RowUpdate] = []
 
-    _test(runner, progress=lambda _ref, t: seen.append(t.phase))
+    _test(runner, progress=seen.append)
 
-    assert seen == phases
+    assert seen == [RowUpdate(("loki", "loki"), "phase", phase, ANY) for phase in phases]
 
 
 def test_a_raising_progress_callback_does_not_break_the_run() -> None:
-    def explode(_ref: HelmReleaseRef, _t: Transition) -> None:
+    def explode(_event: ProgressEvent | RowUpdate) -> None:
         raise RuntimeError("callback boom")
 
     assert [o.verdict for o in _test(cluster(helmrelease()), progress=explode).outcomes] == [

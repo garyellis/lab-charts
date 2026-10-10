@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from chart_manager.commands.promote.monitor import MonitorRequest, MonitorResult, run
-from chart_manager.commands.promote.state import DETAIL_MAX, Reason, Transition
-from chart_manager.integrations.kubectl import HelmReleaseRef
+from chart_manager.commands.promote.state import DETAIL_MAX, Reason
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.progress import Progress, ProgressEvent, RowUpdate
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import (
@@ -39,7 +39,7 @@ def _monitor(
     clock: Clock | None = None,
     sleep: Callable[[float], None] | None = None,
     rand: Callable[[float, float], float] = lambda _lo, _hi: 0.0,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    progress: Progress = lambda _event: None,
     **request: Any,
 ) -> MonitorResult:
     clock = clock or Clock()
@@ -124,7 +124,7 @@ def test_lagging_releases_are_polled_until_ready() -> None:
     clock = Clock()
     slept: list[float] = []
     jitter: list[tuple[float, float]] = []
-    seen: list[str] = []
+    seen: list[ProgressEvent | RowUpdate] = []
 
     def sleep(seconds: float) -> None:
         slept.append(seconds)
@@ -134,9 +134,7 @@ def test_lagging_releases_are_polled_until_ready() -> None:
         jitter.append((lo, hi))
         return 1.25
 
-    result = _monitor(
-        runner, clock=clock, sleep=sleep, rand=rand, progress=lambda _r, t: seen.append(t.phase)
-    )
+    result = _monitor(runner, clock=clock, sleep=sleep, rand=rand, progress=seen.append)
 
     [outcome] = result.outcomes
 
@@ -144,7 +142,10 @@ def test_lagging_releases_are_polled_until_ready() -> None:
     phases = [t.phase for t in outcome.recent_transitions]
     assert phases[:2] == ["GenerationLag", "HistoryLag"]
     assert phases[-1] == "Ready"
-    assert seen == phases
+    assert seen == [
+        RowUpdate(("loki", "loki"), "phase", t.phase, t.detail)
+        for t in outcome.recent_transitions
+    ]
     assert _status_reads(runner) == 4
     assert len(calls(runner, "kubectl", "get", "deployment,statefulset,daemonset")) == 2
     # One jittered start inside the poll interval, then the fixed 3s interval.
@@ -390,7 +391,7 @@ def test_a_flaky_poll_is_recorded_and_the_watch_continues() -> None:
 def test_a_raising_progress_callback_does_not_break_the_watch() -> None:
     runner = cluster(helmrelease())
 
-    def explode(_ref: HelmReleaseRef, _t: Transition) -> None:
+    def explode(_event: ProgressEvent | RowUpdate) -> None:
         raise RuntimeError("callback crash")
 
     assert [o.verdict for o in _monitor(runner, progress=explode).outcomes] == ["ready"]

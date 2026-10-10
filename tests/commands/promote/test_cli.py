@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +24,7 @@ from chart_manager.commands.promote.state import (
 from chart_manager.commands.promote.test import TestOutcome, TestResult
 from chart_manager.integrations.github import PullRequest
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.plumbing.progress import Progress, RowUpdate
 from tests.conftest import cli
 
 # ----- helpers ------------------------------------------------------------
@@ -124,16 +124,15 @@ def _passed_test_outcome(ref: HelmReleaseRef) -> TestOutcome:
 
 @dataclass
 class _FakeStage:
-    """Stands in for a stage's `run()`: records each request and progress callback."""
+    """Stands in for a stage's `run()`: records each request and reports one phase."""
 
     result: Any
     raise_exc: BaseException | None = None
     captured_requests: list[Any] = field(default_factory=list)
-    captured_progress: list[Any] = field(default_factory=list)
 
-    def __call__(self, request: Any, *, progress: Any, **_adapters: Any) -> Any:
+    def __call__(self, request: Any, *, progress: Progress, **_adapters: Any) -> Any:
         self.captured_requests.append(request)
-        self.captured_progress.append(progress)
+        progress(RowUpdate(("loki", "loki"), "phase", "Polling", "waiting"))
         if self.raise_exc is not None:
             raise self.raise_exc
         return self.result
@@ -209,12 +208,12 @@ def test_pretty_failure_exit_1_diagnostics_in_stdout(monkeypatch: pytest.MonkeyP
     assert "InstallFailed" in res.stdout
 
 
-def test_monitor_json_is_the_result_and_runs_without_progress(
+def test_monitor_json_is_the_result_and_silences_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _install_fake_monitor(monkeypatch, result=_bad_result())
+    _install_fake_monitor(monkeypatch, result=_bad_result())
     res = cli(*_BASE, "--output", "json")
-    assert fake.captured_progress == [None]
+    assert res.stderr == ""
     assert (res.exit_code, json.loads(res.stdout)) == (
         1,
         {
@@ -247,24 +246,13 @@ def test_monitor_json_is_the_result_and_runs_without_progress(
 # ----- progress wiring -----------------------------------------------------
 
 
-def test_table_mode_renders_progress_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
-    def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
-        # Watchers report from their own threads, 20 transitions each.
-        def watch(i: int) -> None:
-            for j in range(20):
-                progress(_ref(f"hr{i}", "ns"), Transition(datetime.now(UTC), "Polling", f"d{j}"))
-
-        threads = [threading.Thread(target=watch, args=(i,)) for i in range(5)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        return _ok_result()
-
-    monkeypatch.setattr(promote_cli, "run_monitor", run)
+def test_table_mode_off_a_terminal_prints_progress_lines_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_monitor(monkeypatch, result=_ok_result())
     res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 0
-    assert all(f"hr{i}" in res.stderr for i in range(5))
+    assert res.stderr == "loki/loki phase: Polling waiting\n"
     assert "Polling" not in res.stdout
 
 
