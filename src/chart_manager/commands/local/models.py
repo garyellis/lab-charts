@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from chart_manager.plumbing.exit_codes import Outcome
+
 
 @dataclass(frozen=True)
 class DevClusterEntryOutcome:
@@ -72,12 +74,15 @@ class DevClusterResult:
     applied: tuple[DevClusterEntryOutcome, ...] = ()
     no_change: tuple[DevClusterEntryOutcome, ...] = ()
     failed: tuple[DevClusterEntryFailure, ...] = ()
-    hints: DevClusterAccessHints = field(default_factory=DevClusterAccessHints)
+    #: Left out of the document: a hint can carry a login.
+    hints: DevClusterAccessHints = field(
+        default_factory=DevClusterAccessHints, metadata={"wire": False}
+    )
 
     @property
-    def ok(self) -> bool:
-        """True when no plan entry failed. Continue-on-error means partial runs are common."""
-        return not self.failed
+    def outcome(self) -> Outcome:
+        """FAILED when any plan entry failed. Continue-on-error means partial runs are common."""
+        return Outcome.FAILED if self.failed else Outcome.SUCCESS
 
 
 @dataclass(frozen=True)
@@ -128,7 +133,6 @@ class DevClusterStatus:
     part of the report, not a failure of the command.
     """
 
-    cluster_name: str
     exists: bool
     context: str | None = None
     provider: str | None = None
@@ -137,6 +141,11 @@ class DevClusterStatus:
     urls: tuple[str, ...] = ()
     urls_error: str | None = None
     drift: PortMappingDrift = field(default_factory=PortMappingDrift)
+
+    @property
+    def outcome(self) -> Outcome:
+        """Always SUCCESS: `status` reports state, it does not grade it."""
+        return Outcome.SUCCESS
 
 
 @dataclass(frozen=True)
@@ -163,8 +172,6 @@ class DevClusterPlan:
     empty plan.
     """
 
-    command: str
-    cluster_name: str
     target: str | None = None
     target_kind: str | None = None
     destroys: bool = False
@@ -172,22 +179,26 @@ class DevClusterPlan:
     provisioning_hooks_enabled: bool = True
     provisioning_hooks: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
+    @property
+    def outcome(self) -> Outcome:
+        """Always SUCCESS: a plan that cannot be resolved raises instead."""
+        return Outcome.SUCCESS
+
 
 @dataclass(frozen=True)
 class DevClusterActionResult:
     """Outcome of a stop or destroy operation.
 
     `changed` is False when the cluster was already stopped / already absent
-    -- both are success, so `ok` is unconditionally True (real failures raise).
+    -- both are success (real failures raise).
     """
 
-    cluster_name: str
     changed: bool
 
     @property
-    def ok(self) -> bool:
-        """True whenever a result exists -- failures raise instead of returning."""
-        return True
+    def outcome(self) -> Outcome:
+        """Always SUCCESS: a failed stop raises instead."""
+        return Outcome.SUCCESS
 
 
 @dataclass

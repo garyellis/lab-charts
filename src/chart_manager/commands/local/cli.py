@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.markup import escape
@@ -16,7 +16,6 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._container import exit_if_failed as _exit_if_failed
 from chart_manager.cli._container import repository_root
 from chart_manager.cli._options import (
     ProvisionHooksOption,
@@ -37,12 +36,6 @@ from chart_manager.commands.local.targets import (
     LocalTargetResolver,
     ResolvedLocalTarget,
     ResolvedStackTarget,
-)
-from chart_manager.commands.local.wire import (
-    action_to_dict,
-    converge_to_dict,
-    plan_to_dict,
-    status_to_dict,
 )
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.settings import DEFAULT_CLUSTER_NAME
@@ -157,17 +150,14 @@ def local_up(
     hooks_enabled = provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci)
     workspace = container.workspace(root)
     if dry_run:
-        _render_plan(
-            local_run.plan(
-                resolved,
-                workspace=workspace,
-                profile=profile,
-                run_hooks=hooks_enabled,
-                progress=_print_progress,
-            ),
-            output,
+        plan = local_run.plan(
+            resolved,
+            workspace=workspace,
+            profile=profile,
+            run_hooks=hooks_enabled,
+            progress=_print_progress,
         )
-        return
+        _finish_plan(plan, output, command="up")
     result = local_run.up(
         resolved,
         workspace=workspace,
@@ -178,8 +168,7 @@ def local_up(
         run_hooks=hooks_enabled,
         progress=_print_progress,
     )
-    _render_dev_cluster_result(result, output, command="up")
-    _exit_if_failed(result.ok)
+    _finish_converge(result, output)
 
 
 def local_down(
@@ -195,18 +184,12 @@ def local_down(
     """
     output = output_mod.resolve(output, ctx, allowed=_LOCAL_OUTPUTS, console=console)
     if dry_run:
-        _render_plan(local_run.plan_down(), output)
-        return
+        _finish_plan(local_run.plan_down(), output, command="down")
     container = _container()
-    _render_cluster_action(
-        local_run.down(
-            runner=container.command_runner(), settings=container.settings, progress=_print_progress
-        ),
-        output,
-        command="down",
-        verb="stopped",
-        absent="not running",
+    result = local_run.down(
+        runner=container.command_runner(), settings=container.settings, progress=_print_progress
     )
+    output_mod.finish(result, mode=output, render=_print_cluster_action)
 
 
 def local_reset(
@@ -245,18 +228,15 @@ def local_reset(
     hooks_enabled = provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci)
     workspace = container.workspace(root)
     if dry_run:
-        _render_plan(
-            local_run.plan(
-                resolved,
-                workspace=workspace,
-                profile=profile,
-                destroys=True,
-                run_hooks=hooks_enabled,
-                progress=_print_progress,
-            ),
-            output,
+        plan = local_run.plan(
+            resolved,
+            workspace=workspace,
+            profile=profile,
+            destroys=True,
+            run_hooks=hooks_enabled,
+            progress=_print_progress,
         )
-        return
+        _finish_plan(plan, output, command="reset")
     result = local_run.reset(
         resolved,
         workspace=workspace,
@@ -266,8 +246,7 @@ def local_reset(
         run_hooks=hooks_enabled,
         progress=_print_progress,
     )
-    _render_dev_cluster_result(result, output, command="reset")
-    _exit_if_failed(result.ok)
+    _finish_converge(result, output)
 
 
 def local_status(
@@ -291,13 +270,10 @@ def local_status(
     status = local_run.status(
         workspace=container.workspace(), runner=container.command_runner(), settings=container.settings
     )
-    if output != output_mod.TABLE:
-        output_mod.emit(status_to_dict(status), mode=output)
-        return
-    _render_status_table(status)
+    output_mod.finish(status, mode=output, render=_print_status)
 
 
-def _render_status_table(status: DevClusterStatus) -> None:
+def _print_status(status: DevClusterStatus) -> None:
     """Print the human projection of a cluster snapshot.
 
     All of it lands on stdout, unlike the converge commands' access hints:
@@ -305,7 +281,7 @@ def _render_status_table(status: DevClusterStatus) -> None:
     still get the whole report.
     """
     state = "[green]running[/green]" if status.exists else "[yellow]absent[/yellow]"
-    console.print(f"cluster [bold]{escape(status.cluster_name)}[/bold]: {state}")
+    console.print(f"cluster [bold]{DEFAULT_CLUSTER_NAME}[/bold]: {state}")
     if not status.exists:
         return
     console.print(f"  context: {escape(status.context or '')} ({escape(status.provider or '')})")
@@ -342,20 +318,17 @@ def _render_status_table(status: DevClusterStatus) -> None:
         )
 
 
-def _render_plan(plan: DevClusterPlan, output: str) -> None:
-    """Print a resolved `--dry-run` plan and change nothing.
+def _finish_plan(plan: DevClusterPlan, output: str, *, command: str) -> NoReturn:
+    """Write a resolved `--dry-run` plan for `local <command>` and exit."""
+    output_mod.finish(plan, mode=output, render=lambda plan: _print_plan(plan, command=command))
 
-    The plan is the projection, so it lands on stdout in every mode; the
-    "nothing was changed" reassurance is narration, because a caller piping
-    the plan into a file wants the plan and not the disclaimer.
-    """
-    if output != output_mod.TABLE:
-        output_mod.emit(plan_to_dict(plan), mode=output)
-        return
-    title = f"Dry run: local {plan.command}"
+
+def _print_plan(plan: DevClusterPlan, *, command: str) -> None:
+    """Print a plan's human form on stdout, then say nothing was changed."""
+    title = f"Dry run: local {command}"
     if plan.target is not None:
         title += f" -> {plan.target} ({plan.target_kind})"
-    console.print(f"[bold]{escape(title)}[/bold]  cluster={escape(plan.cluster_name)}")
+    console.print(f"[bold]{escape(title)}[/bold]  cluster={DEFAULT_CLUSTER_NAME}")
     if plan.destroys:
         console.print("  [yellow]would destroy and recreate the cluster first[/yellow]")
     state = "enabled" if plan.provisioning_hooks_enabled else "disabled"
@@ -370,51 +343,37 @@ def _render_plan(plan: DevClusterPlan, output: str) -> None:
     narration.print("[dim]dry run: nothing was changed[/dim]")
 
 
-def _render_dev_cluster_result(
-    result: DevClusterResult,
-    output: str,
-    *,
-    command: str,
-) -> None:
-    """Print the converge summary, then the access hints.
+def _finish_converge(result: DevClusterResult, output: str) -> NoReturn:
+    """Narrate the failure tally and access hints in every mode, then write `result`.
 
-    Order is operational and load-bearing: what happened, then how to reach
-    it. Everything here is pure formatting -- every decision (which bucket,
-    whether the CA hint applies, which URLs exist) was already made by
-    commands/local/run.py and arrives on the result.
-
-    The access hints print in every mode, because they are narration on
-    stderr in every mode. They are advice for an operator, not part of the
-    document -- see `commands/local/wire.py` for why the
-    payload does not carry them.
+    Every decision (which bucket, whether the CA hint applies, which URLs
+    exist) was already made by commands/local/run.py and arrives on the
+    result. The hints narrate on stderr: they are advice for an operator,
+    and can carry credentials.
     """
-    if output == output_mod.TABLE:
-        table = Table("Status", "Chart", "Profile", "Namespace", title="Dev cluster install summary")
-        for entry in result.applied:
-            table.add_row("[green]applied[/green]", entry.chart, entry.profile, entry.namespace)
-        for entry in result.no_change:
-            table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
-        for failed in result.failed:
-            table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
-        # The summary table is the result projection; the rest narrates.
-        console.print(table)
-    else:
-        output_mod.emit(
-            converge_to_dict(result, command=command, cluster_name=DEFAULT_CLUSTER_NAME),
-            mode=output,
-        )
-    if not result.ok:
+    if result.failed:
         narration.print(f"[red]{len(result.failed)} chart(s) failed[/red]; see diagnostics above")
     _render_access_hints(result.hints)
+    output_mod.finish(result, mode=output, render=_print_converge)
+
+
+def _print_converge(result: DevClusterResult) -> None:
+    """Print the converge summary table on stdout."""
+    table = Table("Status", "Chart", "Profile", "Namespace", title="Dev cluster install summary")
+    for entry in result.applied:
+        table.add_row("[green]applied[/green]", entry.chart, entry.profile, entry.namespace)
+    for entry in result.no_change:
+        table.add_row("[dim]no-change[/dim]", entry.chart, entry.profile, entry.namespace)
+    for failed in result.failed:
+        table.add_row("[red]failed[/red]", failed.chart, failed.profile, failed.namespace)
+    console.print(table)
 
 
 def _render_access_hints(hints: DevClusterAccessHints) -> None:
     """Print the CA-trust block and the URL block for a finished converge.
 
     All of this is narration: it is advice for the operator about how to
-    reach what was just installed, not the result of the command. It goes
-    to stderr so `local up` can grow an `--output json` projection later
-    without these blocks landing in the payload.
+    reach what was just installed, not the result of the command.
     """
     if hints.ca_trust_hint:
         _print_ca_import_hint()
@@ -479,24 +438,12 @@ def _print_ca_import_hint() -> None:
     )
 
 
-def _render_cluster_action(
-    result: DevClusterActionResult,
-    output: str,
-    *,
-    command: str,
-    verb: str,
-    absent: str,
-) -> None:
-    """Print the outcome of ``down``.
+def _print_cluster_action(result: DevClusterActionResult) -> None:
+    """Narrate the outcome of `down` on stderr; its human form is a status line.
 
-    The human form is a mutation status line rather than a document, so it
-    narrates onto stderr as it always did. `-o json`/`-o yaml` do produce a
-    document -- `changed` is the one bit a script cannot recover afterwards,
-    since a cluster that was already stopped and one this call stopped look
-    identical a moment later.
+    The document carries `changed`, the one bit a script cannot recover
+    afterwards: a cluster that was already stopped and one this call stopped
+    look identical a moment later.
     """
-    if output != output_mod.TABLE:
-        output_mod.emit(action_to_dict(result, command=command), mode=output)
-        return
-    state = verb if result.changed else absent
-    narration.print(f"dev cluster {state}: {result.cluster_name}")
+    state = "stopped" if result.changed else "not running"
+    narration.print(f"dev cluster {state}: {DEFAULT_CLUSTER_NAME}")
