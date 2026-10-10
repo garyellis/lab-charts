@@ -1,12 +1,7 @@
-"""`chart list` and `chart show`: pure reads of the chart catalog.
-
-Both hand a wire document from `commands/catalog/wire.py` to `output.emit` and build
-their own table beside it.
-"""
+"""`chart list` and `chart show`: pure reads of the chart catalog."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Annotated
 
 import typer
@@ -17,8 +12,7 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli.streams import console
 from chart_manager.commands.catalog import run as catalog
-from chart_manager.commands.catalog.wire import catalog_to_dict, lifecycle_to_dict
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
+from chart_manager.plumbing.documents import to_document
 
 #: `chart list` and `chart show` speak the core projections minus `md`:
 #: neither has a markdown form, and advertising one the resolver cannot
@@ -44,20 +38,15 @@ def list_charts(
     second surface answers this question with the same bytes.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    entries = catalog.list_charts(_container().workspace())
-    output_mod.emit(catalog_to_dict(entries), mode=mode, table=_catalog_table(entries))
-    # A chart whose lifecycle document does not load is reported *in* the
-    # projection (as `error`, in every format) and again as the exit code, so
-    # neither a reader nor a pipeline has to learn the other's channel. What
-    # failed is the *authoring* of a `Chart.yaml` or `chart-lifecycle.yaml`,
-    # which is a spec error -- exit 3, not the generic 1 this used to
-    # return.
-    if any(entry.error is not None for entry in entries):
-        raise typer.Exit(code=exit_code_for(Outcome.SPEC))
+    # A chart that fails to load is reported both as its `error` and as the
+    # exit code, so neither a reader nor a pipeline needs the other's channel.
+    output_mod.finish(
+        catalog.list_charts(_container().workspace()), mode=mode, render=_print_catalog
+    )
 
 
-def _catalog_table(entries: Sequence[catalog.ChartCatalogEntry]) -> Table:
-    """Render the chart catalog as the terminal projection."""
+def _print_catalog(chart_catalog: catalog.ChartCatalog) -> None:
+    """Print the chart catalog as a table."""
     table = Table(
         "Chart",
         "Type",
@@ -68,7 +57,7 @@ def _catalog_table(entries: Sequence[catalog.ChartCatalogEntry]) -> Table:
         "Chart tests",
         "Profiles",
     )
-    for entry in entries:
+    for entry in chart_catalog.charts:
         lifecycle_status = (
             f"[red]invalid: {escape(entry.error or '')}[/red]"
             if entry.error is not None
@@ -84,7 +73,7 @@ def _catalog_table(entries: Sequence[catalog.ChartCatalogEntry]) -> Table:
             entry.chart_test.value,
             ", ".join(entry.profiles),
         )
-    return table
+    console.print(table)
 
 
 def show_lifecycle(
@@ -101,7 +90,7 @@ def show_lifecycle(
     selects there.
     """
     mode = output_mod.resolve(output, ctx, allowed=_CHART_CATALOG_OUTPUTS, console=console)
-    document = lifecycle_to_dict(catalog.show_chart(_container().workspace(), chart))
+    document = to_document(catalog.show_chart(_container().workspace(), chart))
     output_mod.emit(
         document,
         mode=mode,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from chart_manager.api.v1alpha1.chart_lifecycle import ChartLifecycle
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.charts.chart import ChartDependency, chart_names, load_chart
 from chart_manager.shared.charts.lifecycle import (
     LIFECYCLE_FILENAME,
@@ -32,9 +33,24 @@ class ChartCatalogEntry:
     error: str | None = None
 
 
-def list_charts(workspace: RepositoryWorkspace) -> list[ChartCatalogEntry]:
+@dataclass(frozen=True)
+class ChartCatalog:
+    """Every chart in the workspace; `chart list`'s result."""
+
+    charts: tuple[ChartCatalogEntry, ...]
+
+    @property
+    def outcome(self) -> Outcome:
+        """SPEC when any chart's `Chart.yaml` or lifecycle document fails to load."""
+        if any(entry.error is not None for entry in self.charts):
+            return Outcome.SPEC
+        return Outcome.SUCCESS
+
+
+def list_charts(workspace: RepositoryWorkspace) -> ChartCatalog:
     """Return every chart, retaining malformed metadata/intent diagnostics."""
-    return [_entry(workspace.chart_path(name)) for name in chart_names(workspace.charts_root)]
+    names = chart_names(workspace.charts_root)
+    return ChartCatalog(tuple(_entry(workspace.chart_path(name)) for name in names))
 
 
 def show_chart(workspace: RepositoryWorkspace, name: str) -> ChartLifecycle:

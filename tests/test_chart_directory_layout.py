@@ -144,7 +144,7 @@ def test_every_command_reads_charts_dir_from_one_workspace(tmp_path: Path) -> No
     write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())
 
-    charts = catalog.list_charts(container.workspace(tmp_path))
+    charts = catalog.list_charts(container.workspace(tmp_path)).charts
     assert [entry.name for entry in charts] == ["demo"]
 
     resolved = _local_targets(container, tmp_path).resolve("deploy/helm/demo")
