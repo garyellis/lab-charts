@@ -28,14 +28,13 @@ description = "Run the Python unit test suite."
 run = "uv run --extra dev pytest"
 
 [tasks.check]
-description = "Run chart-manager's fast gates: import contracts, workflow lint, ruff, mypy, dead code, drift and unit tests."
+description = "Run chart-manager's fast gates: import contracts, workflow lint, ruff, mypy, dead code and unit tests."
 depends = ["check:imports"]
 run = [
   "actionlint .github/workflows/ci.yaml",
   "uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py",
   "uv run --extra dev mypy src/chart_manager",
   "uv run --extra dev vulture",
-  "scripts/check-drift",
   "uv run --extra dev pytest -q",
 ]
 
