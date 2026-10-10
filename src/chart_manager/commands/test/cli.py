@@ -54,12 +54,7 @@ def _target(chart: str) -> tuple[str, RepositoryWorkspace]:
 
 
 def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | None) -> None:
-    """Print the compiled chart-test plan; say on stderr what did not happen.
-
-    The plan is what the caller asked for, so it is the projection and goes
-    to stdout. That it was *only* a plan is narration, and stays off the
-    stream a `-o json | jq` consumer reads.
-    """
+    """Print the plan on stdout; say on stderr that nothing ran."""
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
     output_mod.emit(plan_to_dict(plan), mode=mode, table=_plan_table(plan))
     for warning in plan.warnings:
