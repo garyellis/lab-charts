@@ -15,7 +15,7 @@ from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
 
 
-def format_helm_duration(seconds: float) -> str:
+def _go_duration(seconds: float) -> str:
     """Render seconds as a Go duration string for helm's `--timeout` flag.
 
     Plain decimal seconds only, fractional part preserved: 300.0 -> "300s",
@@ -89,38 +89,61 @@ class PushResult:
 
 
 class Helm:
-    """Run helm subcommands through a CommandRunner, with per-instance context/timeout."""
+    """Run helm subcommands through a CommandRunner, pinned to one binary, cluster and cap.
+
+    `context=None` addresses the ambient kubeconfig context; `timeout=None`
+    leaves each call unbounded. `verbose` streams helm's output to the
+    terminal; parallel callers pass False so concurrent runs don't interleave.
+    """
 
     def __init__(
         self,
         runner: CommandRunner,
         *,
-        version: str | None = None,
-        binary: str | Path | None = None,
+        binary: str,
         verbose: bool = True,
-        timeout: float | None = None,
-        context: str | None = None,
+        timeout: float | None,
+        context: str | None,
     ) -> None:
-        """Resolve the helm binary (explicit path > mise version > PATH) and set defaults."""
+        """Bind a runner and pin every invocation to a binary, context and timeout."""
         self.runner = runner
-        self._helm_bin = _resolve(self.runner, version, binary)
+        self._helm_bin = binary
         self._context = context
-        # verbose=True preserves the pre-existing stream-to-terminal contract
-        # for kind test / local up callers. validate run constructs with
-        # verbose=False so concurrent helm invocations don't interleave
-        # stdout/stderr into an unreadable mess.
         self.verbose = verbose
-        # Per-subprocess wall-clock cap for every helm invocation on this
-        # instance. None = unbounded.
         self.timeout = timeout
+
+    def _run(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+        capture: bool = False,
+        timeout: float | None = None,
+        pinned: bool = True,
+    ) -> CommandResult:
+        """Every helm invocation: `<helm> <args>`, pinned to the kube-context and cap.
+
+        Output streams when verbose unless `capture` asks for it. `timeout`
+        overrides the instance cap. `pinned=False` drops `--kube-context` for
+        package and push, which touch no cluster.
+        """
+        argv = [self._helm_bin, *args]
+        if pinned and self._context is not None:
+            argv += ["--kube-context", self._context]
+        return self.runner.run(
+            argv,
+            check=check,
+            capture=capture or not self.verbose,
+            timeout=timeout if timeout is not None else self.timeout,
+        )
 
     def preflight(self) -> tuple[Check, ...]:
         """Report whether the helm this instance resolved is usable.
 
-        Probes `self._helm_bin`, not the literal string "helm": `_resolve`
-        may have picked a mise-managed binary out of a shim directory, and a
-        preflight that checked a different helm than the one every other
-        method runs would be worse than no preflight.
+        Probes `self._helm_bin`, not the literal string "helm": the caller
+        may have pinned a mise-managed binary, and a preflight that checked a
+        different helm than the one every other method runs would be worse
+        than no preflight.
         """
         return (
             probe_binary(
@@ -134,11 +157,7 @@ class Helm:
 
     def dependency_update(self, chart_path: Path, *, timeout: float) -> None:
         """Run `helm dependency update` for a local chart, killed after `timeout` seconds."""
-        self.runner.run(
-            self._with_context([self._helm_bin, "dependency", "update", str(chart_path)]),
-            capture=not self.verbose,
-            timeout=timeout,
-        )
+        self._run(["dependency", "update", str(chart_path)], timeout=timeout)
 
     def package(
         self,
@@ -149,20 +168,10 @@ class Helm:
     ) -> PackageResult:
         """Package a chart without editing its source metadata."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        args = [
-            self._helm_bin,
-            "package",
-            str(chart_path),
-            "--destination",
-            str(output_dir),
-        ]
+        args = ["package", str(chart_path), "--destination", str(output_dir)]
         if version is not None:
             args.extend(["--version", version])
-        result = self.runner.run(
-            args,
-            capture=True,
-            timeout=self.timeout,
-        )
+        result = self._run(args, capture=True, pinned=False)
         marker = "Successfully packaged chart and saved it to:"
         archive_line = next(
             (line for line in result.stdout.splitlines() if marker in line),
@@ -196,19 +205,10 @@ class Helm:
         """
         if not repository.startswith("oci://"):
             raise ValueError("OCI repository must start with oci://")
-        args = [
-            self._helm_bin,
-            "push",
-            str(package_path),
-            repository.rstrip("/"),
-        ]
+        args = ["push", str(package_path), repository.rstrip("/")]
         if ca_file is not None:
             args.extend(["--ca-file", str(ca_file)])
-        result = self.runner.run(
-            args,
-            capture=True,
-            timeout=self.timeout,
-        )
+        result = self._run(args, capture=True, pinned=False)
         output = "\n".join(part for part in (result.stdout, result.stderr) if part)
         pushed = _helm_output_value(output, "Pushed")
         digest = _helm_output_value(output, "Digest")
@@ -227,9 +227,7 @@ class Helm:
         # See note in upgrade_install on --skip-schema-validation; we use
         # null overrides in values-ci.yaml to wipe inherited map keys past
         # strict subchart schemas.
-        args = [self._helm_bin, "lint", str(chart_path), "--skip-schema-validation"]
-        args.extend(_values_args(values))
-        self.runner.run(self._with_context(args), capture=not self.verbose, timeout=self.timeout)
+        self._run(["lint", str(chart_path), "--skip-schema-validation", *_values_args(values)])
 
     def upgrade_install(
         self,
@@ -239,12 +237,12 @@ class Helm:
         namespace: str,
         values: list[Path] | None = None,
         sets: dict[str, str] | None = None,
-        timeout: str = "10m",
+        timeout: float,
         wait: bool = True,
         version: str | None = None,
         repo: str | None = None,
     ) -> UpgradeResult:
-        """Run `helm upgrade --install`; classify outcome as applied vs no-change.
+        """Run `helm upgrade --install` within `timeout` seconds; classify the outcome.
 
         Returns an `UpgradeResult`. The revision-compare classification lets
         converge callers skip rollout waits when helm decided the chart was
@@ -255,7 +253,6 @@ class Helm:
         """
         revision_before = self._release_revision(release, namespace)
         args = [
-            self._helm_bin,
             "upgrade",
             "--install",
             release,
@@ -264,7 +261,7 @@ class Helm:
             namespace,
             "--create-namespace",
             "--timeout",
-            timeout,
+            _go_duration(timeout),
             # Subchart schemas (notably the istio gateway/istiod charts)
             # forbid `null` for map-typed keys, which prevents wrapper
             # values-<env>.yaml overlays from wiping inherited keys via
@@ -286,15 +283,8 @@ class Helm:
             args.extend(["--repo", repo])
         args.extend(_values_args(values or []))
         args.extend(_set_args(sets or {}))
-        # Always capture stdout so we can surface it on the result object
-        # without breaking the existing verbose=True streaming contract for
-        # interactive runs: when verbose, we still don't capture so the user
-        # sees helm's output live, and the result `output` field is empty.
-        result = self.runner.run(
-            self._with_context(args),
-            capture=not self.verbose,
-            timeout=self.timeout,
-        )
+        # When verbose, helm's output streams live and `output` is empty.
+        result = self._run(args)
         revision_after = self._release_revision(release, namespace)
         status: Literal["applied", "no-change"]
         if (
@@ -357,7 +347,6 @@ class Helm:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         base_args = [
-            self._helm_bin,
             "template",
             release,
             str(chart_ref),
@@ -381,15 +370,7 @@ class Helm:
         # we want subchart schema errors to surface as render failures rather
         # than be silently masked. lint/upgrade_install skip them for
         # documented istio/values-overlay reasons that don't apply here.
-        # verbose=True streams to terminal for interactive debugging; the
-        # parallel runner sets verbose=False so 8 concurrent helms don't
-        # produce interleaved garbage.
-        result = self.runner.run(
-            self._with_context(base_args),
-            check=False,
-            capture=not self.verbose,
-            timeout=self.timeout,
-        )
+        result = self._run(base_args, check=False)
         if result.returncode == 0:
             return output_dir
 
@@ -399,9 +380,7 @@ class Helm:
         # Bounded by the same timeout as the first attempt: this rerun happens
         # when helm is already misbehaving, which is the last moment to enter
         # an unbounded wait.
-        debug_result = self.runner.run(
-            self._with_context(debug_args), check=False, capture=True, timeout=self.timeout
-        )
+        debug_result = self._run(debug_args, check=False, capture=True)
         stderr = (debug_result.stderr or result.stderr or "").strip()
         raise ExternalCommandError(
             f"helm template failed for {release} ({chart_ref}); "
@@ -415,27 +394,20 @@ class Helm:
         release: str,
         *,
         namespace: str,
-        timeout: str = "10m",
+        timeout: float,
         logs: bool = False,
         subprocess_timeout: float | None = None,
     ) -> CommandResult:
-        """Run `helm test <release>`. Returns the CommandResult unconditionally.
+        """Run `helm test <release>`, waiting up to `timeout` seconds for its hooks.
 
-        `check=False` so a failed test (rc != 0) returns a result rather than
-        raising; the promotion test classifies the verdict from
-        stdout/stderr/rc. `logs=True` plumbs `--logs` so helm streams pod
-        logs into the result; `subprocess_timeout` is the wall-clock cap
-        (falls back to the instance default).
+        Returns the CommandResult whatever the exit code: the callers judge
+        the verdict. `logs=True` adds pod logs to the output;
+        `subprocess_timeout` overrides the instance cap.
         """
-        args = [self._helm_bin, "test", release, "--namespace", namespace, "--timeout", timeout]
+        args = ["test", release, "--namespace", namespace, "--timeout", _go_duration(timeout)]
         if logs:
             args.append("--logs")
-        return self.runner.run(
-            self._with_context(args),
-            capture=not self.verbose,
-            check=False,
-            timeout=subprocess_timeout if subprocess_timeout is not None else self.timeout,
-        )
+        return self._run(args, check=False, timeout=subprocess_timeout)
 
     def list_releases(
         self,
@@ -452,15 +424,14 @@ class Helm:
         with `namespace=` to scope to a single namespace. Helm lists only deployed and
         failed releases unless `any_status` adds `--all`.
         """
-        args = [self._helm_bin, "list", "-o", "json"]
+        args = ["list", "-o", "json"]
         if all_namespaces:
             args.append("-A")
         elif namespace is not None:
             args.extend(["-n", namespace])
         if any_status:
             args.append("--all")
-        result = self.runner.run(self._with_context(args), capture=True, timeout=self.timeout)
-        raw = result.stdout.strip()
+        raw = self._run(args, capture=True).stdout.strip()
         if not raw:
             return []
         try:
@@ -489,28 +460,8 @@ class Helm:
 
     def manifest(self, release: str, *, namespace: str) -> str:
         """Return the rendered manifest of an installed release (`helm get manifest`)."""
-        args = [self._helm_bin, "get", "manifest", release, "--namespace", namespace]
-        return self.runner.run(self._with_context(args), timeout=self.timeout).stdout
-
-    def _with_context(self, args: list[str]) -> list[str]:
-        """Append --kube-context when this instance is pinned to one."""
-        if self._context is None:
-            return args
-        return [*args, "--kube-context", self._context]
-
-
-def _resolve(
-    runner: CommandRunner,
-    version: str | None,
-    binary: str | Path | None,
-) -> str:
-    """Pick the helm binary: explicit path > mise-managed version > bare `helm`."""
-    if binary is not None:
-        return str(binary)
-    if version is None:
-        return "helm"
-    result = runner.run(["mise", "where", f"helm@{version}"], check=True)
-    return f"{result.stdout.strip()}/bin/helm"
+        args = ["get", "manifest", release, "--namespace", namespace]
+        return self._run(args, capture=True).stdout
 
 
 def _helm_output_value(output: str, label: str) -> str | None:

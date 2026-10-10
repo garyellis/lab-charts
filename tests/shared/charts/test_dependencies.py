@@ -36,7 +36,7 @@ def _write_chart(path: Path, dependencies: str | None = None) -> None:
 def _ran_update(chart: Path) -> bool:
     """Whether `ensure_dependencies` ran `helm dependency update` for `chart`."""
     runner = FakeCommandRunner()
-    ensure_dependencies(Helm(runner), chart)
+    ensure_dependencies(Helm(runner, binary="helm", timeout=None, context=None), chart)
     assert runner.calls in ([], [("helm", "dependency", "update", str(chart))])
     return bool(runner.calls)
 
@@ -121,7 +121,7 @@ def test_a_missing_lock_runs_the_update_within_the_configured_timeout_or_ten_min
     _write_chart(chart)
     runner = FakeCommandRunner()
 
-    ensure_dependencies(Helm(runner, timeout=configured), chart)
+    ensure_dependencies(Helm(runner, binary="helm", timeout=configured, context=None), chart)
 
     assert [(r.args, r.timeout) for r in runner.records] == [
         (("helm", "dependency", "update", str(chart)), bound)

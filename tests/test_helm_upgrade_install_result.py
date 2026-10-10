@@ -17,6 +17,10 @@ from chart_manager.integrations.helm import Helm, UpgradeResult
 from tests.conftest import FakeCommandRunner, Reply
 
 
+def _helm(runner: FakeCommandRunner) -> Helm:
+    return Helm(runner, binary="helm", timeout=None, context=None)
+
+
 def _scripted(*, list_responses: list[str], upgrade_response: str = "") -> FakeCommandRunner:
     """Answer `helm list` from an ordered script; anything else is the upgrade.
 
@@ -58,13 +62,13 @@ def test_upgrade_install_classifies_by_the_revision_before_and_after(
     revision_before: int | None,
     revision_after: int,
 ) -> None:
-    helm = Helm(runner=_scripted(list_responses=list_responses))
+    helm = _helm(_scripted(list_responses=list_responses))
 
     result = helm.upgrade_install(
         "demo",
         tmp_path / "demo",
         namespace="demo-ns",
-        timeout="1m",
+        timeout=60.0,
         wait=False,
     )
 
@@ -74,34 +78,20 @@ def test_upgrade_install_classifies_by_the_revision_before_and_after(
     assert result.revision_after == revision_after
 
 
-def test_upgrade_install_passes_an_exact_oci_version() -> None:
+def test_upgrade_install_renders_its_wait_and_uses_a_repository_url_without_repo_state() -> None:
     runner = _scripted(list_responses=["[]", _release(1)])
-    helm = Helm(runner=runner)
 
-    helm.upgrade_install(
-        "demo",
-        "oci://example.test/charts/demo",
-        namespace="demo-ns",
-        version="1.2.3",
-    )
-
-    upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
-    assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
-
-
-def test_upgrade_install_uses_a_repository_url_without_managing_repo_state() -> None:
-    runner = _scripted(list_responses=["[]", _release(1)])
-    helm = Helm(runner=runner)
-
-    helm.upgrade_install(
+    _helm(runner).upgrade_install(
         "demo",
         "demo",
         namespace="demo-ns",
+        timeout=90.0,
         version="1.2.3",
         repo="https://example.test/helm",
     )
 
     upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
+    assert upgrade[upgrade.index("--timeout") + 1] == "90s"
     assert upgrade[upgrade.index("--repo") + 1] == "https://example.test/helm"
     assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
     assert not any("repo" in argv and "add" in argv for argv in runner.calls)

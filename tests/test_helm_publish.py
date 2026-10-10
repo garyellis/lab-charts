@@ -20,7 +20,7 @@ def test_package_uses_override_without_editing_chart_yaml(tmp_path: Path) -> Non
         stdout=f"Successfully packaged chart and saved it to: {output}/demo-2.0.0.tgz\n"
     )
 
-    result = Helm(runner=runner, binary="helm", context="ignored").package(
+    result = Helm(runner, binary="helm", timeout=None, context="kind-a").package(
         chart, output, version="2.0.0"
     )
 
@@ -47,7 +47,7 @@ def test_push_captures_full_reference_and_digest(tmp_path: Path) -> None:
     )
 
     ca_file = tmp_path / "lab-ca.crt"
-    result = Helm(runner=runner, binary="helm", context="ignored").push(
+    result = Helm(runner, binary="helm", timeout=None, context="kind-a").push(
         package,
         "oci://registry.local/library/",
         ca_file=ca_file,
@@ -73,7 +73,7 @@ def test_push_reads_decorated_machine_output_from_stderr(tmp_path: Path) -> None
         )
     )
 
-    result = Helm(runner=runner, binary="helm").push(
+    result = Helm(runner, binary="helm", timeout=None, context=None).push(
         tmp_path / "demo-1.2.3.tgz",
         "oci://registry.local/library",
     )
@@ -87,7 +87,9 @@ def test_push_uses_expected_reference_when_success_output_has_no_marker(
     tmp_path: Path,
 ) -> None:
     expected = "oci://registry.local/library/cert-manager:1.18.2"
-    helm = Helm(runner=FakeCommandRunner(stdout="upload complete\n"), binary="helm")
+    helm = Helm(
+        FakeCommandRunner(stdout="upload complete\n"), binary="helm", timeout=None, context=None
+    )
 
     result = helm.push(
         tmp_path / "cert-manager-1.18.2.tgz",
@@ -100,7 +102,7 @@ def test_push_uses_expected_reference_when_success_output_has_no_marker(
 
 
 def test_package_and_push_reject_missing_machine_output(tmp_path: Path) -> None:
-    helm = Helm(runner=FakeCommandRunner(stdout="done\n"), binary="helm")
+    helm = Helm(FakeCommandRunner(stdout="done\n"), binary="helm", timeout=None, context=None)
     with pytest.raises(ExternalCommandError, match="archive path"):
         helm.package(tmp_path, tmp_path / "out")
 

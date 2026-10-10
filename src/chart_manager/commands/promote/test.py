@@ -27,7 +27,7 @@ from chart_manager.commands.promote.state import (
     Verdict,
 )
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
-from chart_manager.integrations.helm import Helm, format_helm_duration
+from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus, Kubectl
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
 from chart_manager.plumbing.duration import require_positive_seconds
@@ -204,7 +204,13 @@ def run(
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
     # verbose=False: concurrent `helm test` streams would interleave; the
     # output is captured onto each outcome instead.
-    helm = Helm(runner, verbose=False, context=settings.kube_context)
+    helm = Helm(
+        runner,
+        binary="helm",
+        verbose=False,
+        context=settings.kube_context,
+        timeout=None,  # each `helm test` passes its own cap
+    )
     tester = _Tester(kubectl, helm, clock, progress)
     start = clock()
     matched = filter_matched_statuses(
@@ -420,7 +426,7 @@ class _Tester:
                 namespace=ctx.ref.storage_namespace,
                 # helm's per-hook `--timeout` stays the uncapped per-HR budget;
                 # `subprocess_cap` above is the hard wall-clock stop.
-                timeout=format_helm_duration(ctx.request.per_hr_timeout_seconds),
+                timeout=ctx.request.per_hr_timeout_seconds,
                 logs=True,
                 subprocess_timeout=subprocess_cap,
             )

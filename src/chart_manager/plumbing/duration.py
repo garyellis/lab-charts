@@ -8,20 +8,26 @@ finite number of seconds. `parse_duration` applies it to operator strings,
 from __future__ import annotations
 
 import math
+import re
 
 from chart_manager.plumbing.errors import ChartManagerError
 
-_DURATION_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0}
+_DURATION_UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
+_NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)"
+# "ms" comes first so "500ms" is not read as "500m" followed by "s".
+_PART = re.compile(rf"({_NUMBER})(ms|s|m|h)")
+_DURATION = re.compile(rf"(?:{_NUMBER}(?:ms|s|m|h))+")
 
 
 def parse_duration(value: str) -> float:
-    """Parse a kube-style duration ("60s", "5m", "1h") into seconds.
+    """Parse a Go-style duration ("60s", "5m", "1h30m", "500ms") into seconds.
 
-    Intentionally narrow: we only accept the units kubectl itself uses for
-    --timeout. Bare numbers are treated as seconds. The result must also be
-    positive and finite: `float()` happily accepts "nan", "inf" and "-5",
-    none of which is a usable timeout (NaN defeats every deadline
-    comparison, inf never expires, zero or negative expires at once).
+    Accepts one or more `<number><unit>` pairs with units ms, s, m and h,
+    as helm and kubectl do for --timeout. Bare numbers are treated as
+    seconds. The result must also be positive and finite: `float()` happily
+    accepts "nan", "inf" and "-5", none of which is a usable timeout (NaN
+    defeats every deadline comparison, inf never expires, zero or negative
+    expires at once).
     Invalid input raises ChartManagerError so the CLI's top-level handler
     surfaces it cleanly (a raw ValueError would tracebacks-out instead).
     """
@@ -29,13 +35,13 @@ def parse_duration(value: str) -> float:
     value = value.strip()
     if not value:
         raise ChartManagerError(f"invalid duration: {raw!r} (empty)")
-    try:
-        if value[-1] in _DURATION_UNITS:
-            seconds = float(value[:-1]) * _DURATION_UNITS[value[-1]]
-        else:
+    if _DURATION.fullmatch(value):
+        seconds = sum(float(n) * _DURATION_UNITS[u] for n, u in _PART.findall(value))
+    else:
+        try:
             seconds = float(value)
-    except ValueError as exc:
-        raise ChartManagerError(f"invalid duration: {raw!r} ({exc})") from exc
+        except ValueError as exc:
+            raise ChartManagerError(f"invalid duration: {raw!r} ({exc})") from exc
     try:
         require_positive_seconds("duration", seconds)
     except ChartManagerError as exc:
