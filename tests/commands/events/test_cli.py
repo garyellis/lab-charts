@@ -399,16 +399,6 @@ def test_the_table_shows_the_pr_url(reader) -> None:
     assert "pull/38" in result.stdout.replace("\n", "")
 
 
-def test_the_json_projection_is_the_wire_document(reader) -> None:
-    result = cli("event", "list", "grafana@1.2.3", "-o", "json")
-
-    payload = json.loads(result.stdout)
-    assert payload["chart"] == "grafana"
-    assert payload["correlation_id"] == "grafana@1.2.3"
-    assert payload["count"] == 1
-    assert payload["events"] == [_EVENT_DOC]
-
-
 def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
     """conftest clears EVENTS_BACKEND; `none` is the shipped default."""
     result = cli("event", "list")
@@ -419,13 +409,12 @@ def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
     assert result.stdout == ""
 
 
-def test_list_renders_newest_first_across_mixed_timezone_stamps(
+def test_list_json_is_the_events_newest_first_across_mixed_timezone_stamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End to end through the real dispatch: a +02:00 stamp that is *older*
-    in real time must not lead the listing just because it string-sorts
-    newer. The fake container returns the backend's string order."""
-
+    """A +02:00 stamp that is older in real time must not lead the listing
+    just because it string-sorts newer. The fake container returns the
+    backend's string order."""
     offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
     utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
     container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
@@ -435,5 +424,4 @@ def test_list_renders_newest_first_across_mixed_timezone_stamps(
 
     result = cli("event", "list", "-o", "json")
 
-    charts = [event["chart_name"] for event in json.loads(result.stdout)["events"]]
-    assert charts == ["newer", "older"]
+    assert (result.exit_code, json.loads(result.stdout)) == (0, {"events": [utc, offset]})
