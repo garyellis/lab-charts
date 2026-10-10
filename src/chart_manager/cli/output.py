@@ -17,15 +17,18 @@ see it.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from typing import Annotated, Any
+from collections.abc import Callable, Iterator, Sequence
+from typing import Annotated, Any, NoReturn, Protocol
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from chart_manager.cli import streams
 from chart_manager.cli._container import container
+from chart_manager.plumbing.documents import to_document
+from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.yaml_files import dump_yaml
 
 #: Resolved from the environment rather than named by the caller.
@@ -190,6 +193,11 @@ def require_dry_run(value: str | None, *, dry_run: bool) -> None:
         )
 
 
+def to_json(document: Any) -> str:
+    """The one json form of a document: indented, keys sorted."""
+    return json.dumps(document, indent=2, sort_keys=True)
+
+
 def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
     """Write one wire document in the resolved `--output` form.
 
@@ -198,13 +206,71 @@ def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
     `typer.echo` because Rich would wrap and highlight them.
     """
     if mode == JSON:
-        typer.echo(json.dumps(data, indent=2, sort_keys=True))
+        typer.echo(to_json(data))
     elif mode == YAML:
         typer.echo(dump_yaml(data), nl=False)
     elif table is None:
         raise ValueError(f"no table projection was supplied for --output {mode}")
     else:
         streams.console.print(table)
+
+
+class HasOutcome(Protocol):
+    """A command result that knows how its run ended."""
+
+    @property
+    def outcome(self) -> Outcome: ...
+
+
+def finish[R: HasOutcome](result: R, *, mode: str, render: Callable[[R], None]) -> NoReturn:
+    """Write `result` in `mode`, then exit with the code for `result.outcome`.
+
+    json and yaml write the result's document; any other mode calls `render`,
+    which prints the human form and any narration that follows it.
+    """
+    if mode == JSON:
+        typer.echo(to_json(to_document(result)))
+    elif mode == YAML:
+        typer.echo(dump_yaml(to_document(result)), nl=False)
+    else:
+        render(result)
+    raise typer.Exit(code=exit_code_for(result.outcome))
+
+
+def document_table(document: Any, *, title: str) -> Table:
+    """Render a document as a Field/Value table over dotted paths.
+
+    Flattening the document, rather than a hand-written layout, means a field
+    added to the document shows up in the table without editing a renderer.
+    """
+    table = Table("Field", "Value", title=title)
+    for field, value in _flatten(document, ""):
+        table.add_row(escape(field), escape(value))
+    return table
+
+
+def _flatten(value: Any, prefix: str) -> Iterator[tuple[str, str]]:
+    """Walk a document into (dotted path, rendered leaf) rows.
+
+    A list of scalars stays on one row (`values: a.yaml, b.yaml`); a list of
+    objects is indexed, because its members have structure worth addressing.
+    """
+    if isinstance(value, dict) and value:
+        for key, item in value.items():
+            yield from _flatten(item, f"{prefix}.{key}" if prefix else key)
+    elif isinstance(value, list) and value:
+        if any(isinstance(item, dict | list) for item in value):
+            for index, item in enumerate(value):
+                yield from _flatten(item, f"{prefix}[{index}]")
+        else:
+            yield prefix, ", ".join(_leaf(item) for item in value)
+    else:
+        yield prefix, _leaf(value)
+
+
+def _leaf(value: Any) -> str:
+    """One leaf as JSON spells it (`true`, `null`), minus the quotes around strings."""
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def _auto(console: Console | None) -> str:
@@ -226,10 +292,14 @@ __all__ = [
     "TABLE",
     "YAML",
     "GlobalOutputOption",
+    "HasOutcome",
     "choice",
+    "document_table",
     "emit",
+    "finish",
     "global_output",
     "output_option",
     "require_dry_run",
     "resolve",
+    "to_json",
 ]

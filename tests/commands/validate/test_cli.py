@@ -11,7 +11,7 @@ from chart_manager.commands import validate
 from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from tests.conftest import cli, write_workspace
+from tests.conftest import RENDER_DIR, cli, write_workspace
 
 PASSED = validate.CheckResult("passed")
 
@@ -223,3 +223,17 @@ def test_markdown_explains_an_empty_run_and_lists_the_diagnostics(fake_run) -> N
     assert "- Requested charts: demo" in markdown
     assert "  - `charts/demo/notes.txt`" in markdown
     assert "- Charts without manifest-validation configuration: 2" in markdown
+
+
+def test_cache_clean_dry_run_reports_the_render_dir_and_removes_nothing(root: Path) -> None:
+    write_workspace(root)
+    rendered = root.resolve() / RENDER_DIR
+    (rendered / "run-1").mkdir(parents=True)
+
+    result = cli("chart", "cache", "clean", "--dry-run", "-o", "json")
+
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {"path": rendered.as_posix(), "exists": True, "runs": 1},
+    )
+    assert rendered.is_dir()

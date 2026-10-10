@@ -91,22 +91,6 @@ class Check:
             data=data,
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        """The wire shape: name, status, detail, remediation.
-
-        `data` is added only when present. `outcome` is absent: the report
-        states it once, as `DoctorReport.outcome`.
-        """
-        result: dict[str, Any] = {
-            "name": self.name,
-            "status": str(self.status),
-            "detail": self.detail,
-            "remediation": self.remediation,
-        }
-        if self.data is not None:
-            result["data"] = dict(self.data)
-        return result
-
 
 def first_line(text: str) -> str:
     """The first non-empty line of `text`, stripped; "" when there is none.

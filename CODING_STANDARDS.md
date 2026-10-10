@@ -64,7 +64,8 @@ Every call to the outside world is an adapter in `integrations/`, one module per
 - **Imports** only `plumbing/`.
 - **Protocols only for two or more real adapters.** Tests fake external tools at the command
   runner (`FakeCommandRunner`), not with a Protocol per tool. Today's Protocols are
-  `EventStore`, `CommandRunner`, validate's `Progress` and promote's `HasRef`.
+  `EventStore`, `CommandRunner`, validate's `Progress`, promote's `HasRef` and
+  `cli/output`'s `HasOutcome`.
 
 ## Tests
 

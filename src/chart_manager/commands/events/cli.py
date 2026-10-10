@@ -124,16 +124,7 @@ def _emit_dry_run(document: dict[str, Any], *, ctx: typer.Context, output: str |
     """
     stored: dict[str, Any] = json.loads(json.dumps(document, default=str))
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
-    output_mod.emit(stored, mode=mode, table=_document_table(stored))
-
-
-def _document_table(document: dict[str, Any]) -> Table:
-    """One event document as Field/Value rows, leaves spelled as JSON."""
-    table = Table("Field", "Value")
-    for field, value in document.items():
-        rendered = value if isinstance(value, str) else json.dumps(value)
-        table.add_row(escape(field), escape(rendered))
-    return table
+    output_mod.emit(stored, mode=mode, table=output_mod.document_table(stored, title="event"))
 
 
 def _emit(
