@@ -380,13 +380,13 @@ class Helm:
         namespace: str,
         timeout: float,
         logs: bool = False,
-        subprocess_timeout: float | None = None,
+        subprocess_timeout: float | None,
     ) -> CommandResult:
         """Run `helm test <release>`, waiting up to `timeout` seconds for its hooks.
 
         Returns the CommandResult whatever the exit code: the callers judge
         the verdict. `logs=True` adds pod logs to the output;
-        `subprocess_timeout` overrides the instance cap.
+        `subprocess_timeout` caps the subprocess (None uses the instance cap).
         """
         args = ["test", release, "--namespace", namespace, "--timeout", format_duration(timeout)]
         if logs:

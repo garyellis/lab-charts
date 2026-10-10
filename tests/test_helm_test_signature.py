@@ -25,7 +25,7 @@ def test_every_cluster_call_is_pinned_to_the_context_and_timeout(tmp_path: Path)
     helm.template("r", tmp_path, namespace="ns", output_dir=tmp_path / "out")
     helm.upgrade_install("r", tmp_path, namespace="ns", timeout=60.0)
     helm.manifest("r", namespace="ns")
-    helm.test("r", namespace="ns", timeout=60.0)
+    helm.test("r", namespace="ns", timeout=60.0, subprocess_timeout=None)
     helm.test("r", namespace="ns", timeout=60.0, subprocess_timeout=2.0)
     helm.dependency_update(tmp_path, timeout=2.0)
 
@@ -38,7 +38,7 @@ def test_every_cluster_call_is_pinned_to_the_context_and_timeout(tmp_path: Path)
 def test_test_returns_a_failed_result_without_raising() -> None:
     runner = FakeCommandRunner(returncode=1, stderr="Error: test failed")
 
-    result = _helm(runner).test("loki", namespace="loki", timeout=60.0)
+    result = _helm(runner).test("loki", namespace="loki", timeout=60.0, subprocess_timeout=None)
 
     assert (result.returncode, result.stderr) == (1, "Error: test failed")
 
@@ -59,7 +59,9 @@ def test_test_renders_its_wait_as_plain_go_seconds(seconds: float, expected: str
     # Go's time.ParseDuration rejects the "1e-05s" exponent form.
     runner = FakeCommandRunner()
 
-    _helm(runner).test("loki", namespace="loki", timeout=seconds, logs=True)
+    _helm(runner).test(
+        "loki", namespace="loki", timeout=seconds, logs=True, subprocess_timeout=None
+    )
 
     assert runner.calls == [
         ("helm", "test", "loki", "--namespace", "loki", "--timeout", expected, "--logs")
@@ -69,4 +71,6 @@ def test_test_renders_its_wait_as_plain_go_seconds(seconds: float, expected: str
 @pytest.mark.parametrize("seconds", [float("nan"), float("inf"), -1.0])
 def test_test_rejects_a_wait_that_is_not_a_duration(seconds: float) -> None:
     with pytest.raises(ValueError):
-        _helm(FakeCommandRunner()).test("loki", namespace="loki", timeout=seconds)
+        _helm(FakeCommandRunner()).test(
+            "loki", namespace="loki", timeout=seconds, subprocess_timeout=None
+        )
