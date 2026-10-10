@@ -9,8 +9,6 @@ from typer.testing import Result
 
 from chart_manager.commands.grafana import dashboard_export
 from chart_manager.commands.grafana.dashboard_export import ExportRequest, canonical_json
-from chart_manager.commands.grafana.dashboard_lint import lint_paths
-from chart_manager.commands.grafana.wire import lint_result_to_dict
 from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import PASSING_DASHBOARD, cli, write_workspace
 
@@ -173,7 +171,7 @@ def test_lint_dashboards_exit_zero_still_means_a_clean_lint(
     assert "1 dashboards passed" in result.stderr
 
 
-# --- the projections that carry the wire document ---------------------------
+# --- the projections -------------------------------------------------------
 
 
 def test_table_projection_is_one_greppable_line_per_finding(tmp_path: Path) -> None:
@@ -191,19 +189,33 @@ def test_table_projection_is_one_greppable_line_per_finding(tmp_path: Path) -> N
     assert any("[R002-uid]" in line for line in lines)
 
 
-def test_json_and_yaml_projections_are_the_same_wire_document(
-    tmp_path: Path,
-) -> None:
+def test_lint_json_is_the_findings_and_the_files_scanned(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text('{"panels": [], "templating": {"list": []}}')
-    expected = lint_result_to_dict(lint_paths([bad]))
+    path = bad.as_posix()
 
-    as_json = _lint("--path", str(bad), "-o", "json")
-    as_yaml = _lint("--path", str(bad), "-o", "yaml")
+    result = _lint("--path", str(bad), "-o", "json")
 
-    assert as_json.exit_code == 1
-    assert json.loads(as_json.stdout) == expected
-    assert parse_yaml(as_yaml.stdout) == expected
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        1,
+        {
+            "files_scanned": 1,
+            "findings": [
+                {"path": path, "rule": "R001-title", "message": "missing or empty .title"},
+                {"path": path, "rule": "R002-uid", "message": "missing or empty .uid"},
+                {
+                    "path": path,
+                    "rule": "R003-schema-version",
+                    "message": ".schemaVersion must be >= 38, got None",
+                },
+                {
+                    "path": path,
+                    "rule": "R007-templated-ds",
+                    "message": "no templating variable of type 'datasource' (dashboard is not portable)",
+                },
+            ],
+        },
+    )
 
 
 def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:
