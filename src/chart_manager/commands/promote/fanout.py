@@ -19,32 +19,101 @@ close, and the aggregate result. `run_matched` owns that whole sequence and
 parameter, not a code path: the synthetic no-match outcome is a `no_match`
 factory, the lifecycle stage and the verdict that counts as success are
 arguments, and the log lines are built from `log_label`. The stages keep
-only what really is theirs -- parsing their request, matching, and the
-"run started" line whose fields differ.
+only what really is theirs -- matching and the "run started" line whose
+fields differ. Both validate their request with `check_request` and record
+transitions with `record`.
 """
 from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from chart_manager.commands.promote.state import (
     PASSING_VERDICTS,
     Stage,
+    Transition,
     Verdict,
     run_verdict,
 )
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.plumbing.duration import require_positive_seconds
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.progress import Progress, RowUpdate
 
-__all__ = ["RunResult", "run_fanout", "run_matched", "sorted_by_ref"]
+__all__ = [
+    "TRANSITIONS_MAX",
+    "RunResult",
+    "check_request",
+    "record",
+    "run_fanout",
+    "run_matched",
+    "sorted_by_ref",
+]
 
 _LOG = logging.getLogger(__name__)
+
+#: Transitions kept per HelmRelease on each outcome's `transitions`.
+TRANSITIONS_MAX = 5
+
+
+def check_request(
+    *,
+    chart_name: str,
+    version: str,
+    concurrency: int,
+    per_poll_timeout_seconds: float,
+    per_hr_timeout_seconds: float,
+    total_timeout_seconds: float,
+    min_per_hr_seconds: float,
+) -> None:
+    """Reject empty identifiers and inconsistent budgets; raise ChartManagerError."""
+    if not chart_name:
+        raise ChartManagerError("chart_name must be non-empty")
+    if not version:
+        raise ChartManagerError("version must be non-empty")
+    if concurrency < 1:
+        raise ChartManagerError(f"concurrency must be >= 1 (got {concurrency})")
+    require_positive_seconds("per_poll_timeout_seconds", per_poll_timeout_seconds)
+    require_positive_seconds("per_hr_timeout_seconds", per_hr_timeout_seconds)
+    require_positive_seconds("total_timeout_seconds", total_timeout_seconds)
+    if per_hr_timeout_seconds < min_per_hr_seconds:
+        raise ChartManagerError(
+            f"per_hr_timeout_seconds ({per_hr_timeout_seconds:g}s) must be >= "
+            f"{min_per_hr_seconds:g}s"
+        )
+    if total_timeout_seconds < per_hr_timeout_seconds:
+        raise ChartManagerError(
+            f"total_timeout_seconds ({total_timeout_seconds:g}s) must be >= "
+            f"per_hr_timeout_seconds ({per_hr_timeout_seconds:g}s)"
+        )
+
+
+def record(
+    transitions: deque[Transition],
+    ref: HelmReleaseRef,
+    progress: Progress,
+    phase: str,
+    detail: str,
+) -> None:
+    """Append a transition for `ref` and report it to `progress`.
+
+    A raising `progress` is logged and swallowed: display must not end a watch.
+    """
+    transitions.append(Transition(at=datetime.now(UTC), phase=phase, detail=detail))
+    try:
+        progress(
+            RowUpdate(key=(ref.namespace, ref.name), column="phase", status=phase, detail=detail)
+        )
+    except Exception:
+        _LOG.exception("progress callback raised: ns=%s name=%s", ref.namespace, ref.name)
 
 
 class HasRef(Protocol):

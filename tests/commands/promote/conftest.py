@@ -7,10 +7,14 @@ test does not script reads as an empty list.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
-from tests.conftest import FakeCommandRunner, Predicate, Reply, argv_prefix, plain_argv
+from chart_manager.commands.promote import monitor, test
+from chart_manager.plumbing.progress import Progress
+from chart_manager.settings import Settings
+from chart_manager.shared.events.writer import EventWriter
+from tests.conftest import EventLog, FakeCommandRunner, Predicate, Reply, argv_prefix, plain_argv
 
 CHART = "loki"
 VERSION = "0.2.0"
@@ -131,7 +135,51 @@ def hook_pods(argv: tuple[str, ...]) -> bool:
     return "pods" in argv and any(arg.endswith("helm.sh/hook=test") for arg in argv)
 
 
-
 def calls(runner: FakeCommandRunner, *prefix: str) -> list[tuple[str, ...]]:
     """Recorded argv (context dropped) that start with `prefix`."""
     return [argv for argv in map(plain_argv, runner.calls) if argv[: len(prefix)] == prefix]
+
+
+def run_monitor(
+    runner: FakeCommandRunner,
+    *,
+    clock: Clock | None = None,
+    sleep: Callable[[float], None] | None = None,
+    rand: Callable[[float, float], float] = lambda _lo, _hi: 0.0,
+    progress: Progress = lambda _event: None,
+    **request: Any,
+) -> monitor.MonitorResult:
+    """`monitor.run` against `runner` with a fake clock and no jitter."""
+    clock = clock or Clock()
+    fields = {"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}
+    return monitor.run(
+        monitor.MonitorRequest(**fields),
+        runner=runner,
+        settings=Settings(kube_context="lab", command_timeout=30.0),
+        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
+        sleep=sleep or clock.sleep,
+        clock=clock,
+        rand=rand,
+        progress=progress,
+    )
+
+
+def run_helm_test(
+    runner: FakeCommandRunner,
+    *,
+    clock: Callable[[], float] | None = None,
+    progress: Progress = lambda _event: None,
+    **request: Any,
+) -> test.TestResult:
+    """`test.run` against `runner` with a fake clock and a 60s/300s budget."""
+    fields = {"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}
+    fields.setdefault("per_hr_timeout_seconds", 60.0)
+    fields.setdefault("total_timeout_seconds", 300.0)
+    return test.run(
+        test.TestRequest(**fields),
+        runner=runner,
+        settings=Settings(kube_context="lab"),
+        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
+        clock=clock or Clock(),
+        progress=progress,
+    )

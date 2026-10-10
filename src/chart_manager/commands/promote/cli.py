@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import typer
 
@@ -15,17 +15,21 @@ from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
 from chart_manager.cli.progress import progress_view
 from chart_manager.cli.streams import console, narration
-from chart_manager.commands.promote.monitor import MonitorRequest
+from chart_manager.commands.promote.monitor import MonitorRequest, MonitorResult
 from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult
 from chart_manager.commands.promote.pr import run as run_pr
-from chart_manager.commands.promote.render import render_monitor_pretty, render_test_pretty
+from chart_manager.commands.promote.render import render_pretty
 from chart_manager.commands.promote.scanner import HelmReleaseMatch
 from chart_manager.commands.promote.state import PromoteStatus
-from chart_manager.commands.promote.test import TestRequest
+from chart_manager.commands.promote.test import TestRequest, TestResult
 from chart_manager.commands.promote.test import run as run_test
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.progress import Progress
+from chart_manager.settings import Settings
+from chart_manager.shared.events.writer import EventWriter
 
 # --- helpers --------------------------------------------------------------
 
@@ -83,6 +87,52 @@ def _pr_url(result: PromoteResult) -> str:
     return result.pull_request.url if result.pull_request is not None else ""
 
 
+NamespaceOption = Annotated[
+    str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
+]
+EnvOption = Annotated[
+    str | None,
+    typer.Option(
+        "--env",
+        help=(
+            "promotion target this run belongs to; enables lifecycle "
+            "events (omit for an ad-hoc run, which emits nothing)"
+        ),
+    ),
+]
+
+
+class _StageRun[RequestT](Protocol):
+    """A stage's `run`: `monitor.run` or `test.run`."""
+
+    def __call__(
+        self,
+        request: RequestT,
+        /,
+        *,
+        runner: CommandRunner,
+        settings: Settings,
+        events: EventWriter,
+        progress: Progress,
+    ) -> MonitorResult | TestResult: ...
+
+
+def _run_stage[RequestT](
+    mode: str, request: RequestT, run: _StageRun[RequestT], *, noun: str
+) -> None:
+    """Run the stage's request under a progress view and finish with its result."""
+    container = _container()
+    with progress_view(live=narration.is_terminal) as progress:
+        result = run(
+            request,
+            runner=container.command_runner(),
+            settings=container.settings,
+            events=container.event_writer(),
+            progress=progress,
+        )
+    output_mod.finish(result, mode=mode, render=lambda r: render_pretty(r, console, noun=noun))
+
+
 # --- command handlers -----------------------------------------------------
 
 
@@ -90,29 +140,17 @@ def monitor(
     ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
-    namespace: Annotated[
-        str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
-    ] = None,
+    namespace: NamespaceOption = None,
     concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=8)] = 4,
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
     fail_fast: Annotated[bool, typer.Option("--fail-fast")] = False,
-    environment: Annotated[
-        str | None,
-        typer.Option(
-            "--env",
-            help=(
-                "promotion target this run belongs to; enables lifecycle "
-                "events (omit for an ad-hoc run, which emits nothing)"
-            ),
-        ),
-    ] = None,
+    environment: EnvOption = None,
 ) -> None:
     """Wait for matched HelmReleases to converge on chart@version."""
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-
     request = MonitorRequest(
         chart_name=chart,
         version=version,
@@ -124,45 +162,24 @@ def monitor(
         fail_fast=fail_fast,
         environment=environment,
     )
-
-    container = _container()
-    runner = container.command_runner()
-    events = container.event_writer()
-    with progress_view(live=narration.is_terminal) as progress:
-        result = run_monitor(
-            request, runner=runner, settings=container.settings, events=events, progress=progress
-        )
-
-    output_mod.finish(result, mode=mode, render=lambda r: render_monitor_pretty(r, console))
+    _run_stage(mode, request, run_monitor, noun="ready")
 
 
 def test(
     ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
-    namespace: Annotated[
-        str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
-    ] = None,
+    namespace: NamespaceOption = None,
     concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=8)] = 4,
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
     pod_log_tail: Annotated[int, typer.Option("--pod-log-tail", min=1)] = 200,
-    environment: Annotated[
-        str | None,
-        typer.Option(
-            "--env",
-            help=(
-                "promotion target this run belongs to; enables lifecycle "
-                "events (omit for an ad-hoc run, which emits nothing)"
-            ),
-        ),
-    ] = None,
+    environment: EnvOption = None,
 ) -> None:
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-
     request = TestRequest(
         chart_name=chart,
         version=version,
@@ -174,16 +191,7 @@ def test(
         pod_log_tail=pod_log_tail,
         environment=environment,
     )
-
-    container = _container()
-    runner = container.command_runner()
-    events = container.event_writer()
-    with progress_view(live=narration.is_terminal) as progress:
-        result = run_test(
-            request, runner=runner, settings=container.settings, events=events, progress=progress
-        )
-
-    output_mod.finish(result, mode=mode, render=lambda r: render_test_pretty(r, console))
+    _run_stage(mode, request, run_test, noun="passed")
 
 
 def pr(

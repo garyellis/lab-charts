@@ -1,23 +1,94 @@
 """`run_fanout` and `run_matched`: concurrency, crashes, Ctrl-C and timing.
 
-Sorting, telemetry and the timed-out flag are covered through `monitor.run` and
-`test.run` (test_monitor.py, test_telemetry.py).
+Also what `monitor` and `test` share: request checks, no-match and progress. Sorting,
+telemetry and the timed-out flag are covered through `monitor.run` and `test.run`
+(test_monitor.py, test_telemetry.py).
 """
 from __future__ import annotations
 
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
 from chart_manager.commands.promote.fanout import run_fanout, run_matched
+from chart_manager.commands.promote.monitor import MonitorRequest
 from chart_manager.commands.promote.state import NO_MATCH_REF, Stage, Verdict
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
+from chart_manager.commands.promote.test import TestRequest
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
 from chart_manager.shared.events.writer import EventWriter
+from tests.commands.promote.conftest import (
+    CHART,
+    VERSION,
+    cluster,
+    helmrelease,
+    run_helm_test,
+    run_monitor,
+)
 from tests.conftest import EventLog
+
+_BAD_BOUNDS = [
+    ({"chart_name": ""}, "chart_name"),
+    ({"version": ""}, "version"),
+    ({"concurrency": 0}, "concurrency"),
+    ({"per_hr_timeout_seconds": 600.0, "total_timeout_seconds": 60.0}, "total_timeout"),
+    ({"per_poll_timeout_seconds": float("nan")}, "per_poll_timeout_seconds"),
+    ({"per_hr_timeout_seconds": float("nan")}, "per_hr_timeout_seconds"),
+    ({"total_timeout_seconds": float("nan")}, "total_timeout_seconds"),
+    ({"per_hr_timeout_seconds": "5m"}, "per_hr_timeout_seconds must be a number"),
+]
+
+
+@pytest.mark.parametrize(
+    ("request_type", "fields", "message"),
+    [
+        *[(t, f, m) for t in (MonitorRequest, TestRequest) for f, m in _BAD_BOUNDS],
+        (TestRequest, {"pod_log_tail": 0}, "pod_log_tail"),
+    ],
+)
+def test_the_request_rejects_bad_bounds(
+    request_type: type[MonitorRequest | TestRequest], fields: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ChartManagerError, match=message):
+        request_type(**{"chart_name": CHART, "version": VERSION, **fields})
+
+
+@pytest.mark.parametrize(("request_type", "floor"), [(MonitorRequest, 3.0), (TestRequest, 30.0)])
+def test_the_per_hr_budget_has_a_floor(
+    request_type: type[MonitorRequest | TestRequest], floor: float
+) -> None:
+    request_type(CHART, VERSION, per_hr_timeout_seconds=floor, total_timeout_seconds=floor)
+    with pytest.raises(ChartManagerError, match=f"must be >= {floor:g}s"):
+        request_type(CHART, VERSION, per_hr_timeout_seconds=floor - 0.5)
+
+
+STAGES = pytest.mark.parametrize("stage", [run_monitor, run_helm_test])
+
+
+@STAGES
+def test_nothing_matched_is_one_no_match_outcome(stage: Callable[..., Any]) -> None:
+    runner = cluster(
+        helmrelease("a", "ns1", chart="other"), helmrelease("b", "ns2", version="9.9.9")
+    )
+
+    result = stage(runner)
+
+    [outcome] = result.outcomes
+    assert (outcome.verdict, outcome.reason) == ("no-match", "NoHelmReleasesMatched")
+    assert result.ok is False
+
+
+@STAGES
+def test_a_raising_progress_callback_does_not_break_the_run(stage: Callable[..., Any]) -> None:
+    def explode(_event: ProgressEvent | RowUpdate) -> None:
+        raise RuntimeError("callback crash")
+
+    assert stage(cluster(helmrelease()), progress=explode).ok is True
 
 
 def _ref(name: str, namespace: str = "loki") -> HelmReleaseRef:

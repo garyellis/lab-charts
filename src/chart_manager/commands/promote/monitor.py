@@ -13,12 +13,17 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from functools import partial
 
 import chart_manager.commands.promote.report as report
 from chart_manager.commands.promote.classify import Terminal, Waiting, classify
-from chart_manager.commands.promote.fanout import RunResult, run_matched
+from chart_manager.commands.promote.fanout import (
+    TRANSITIONS_MAX,
+    RunResult,
+    check_request,
+    record,
+    run_matched,
+)
 from chart_manager.commands.promote.matching import filter_matched_statuses
 from chart_manager.commands.promote.state import (
     DETAIL_MAX,
@@ -37,9 +42,8 @@ from chart_manager.integrations.kubectl import (
     WorkloadRollout,
 )
 from chart_manager.plumbing.commands import CommandRunner
-from chart_manager.plumbing.duration import require_positive_seconds
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.plumbing.progress import Progress, RowUpdate
+from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.plumbing.progress import Progress
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
 
@@ -49,8 +53,8 @@ _DIAGNOSTICS_WORKLOAD_CAP = 5
 #: Seconds between status polls of one HelmRelease; also the upper bound of
 #: each watcher's initial jitter sleep.
 _POLL_INTERVAL_SEC = 3.0
-#: Transitions retained per HelmRelease on `MonitorOutcome.recent_transitions`.
-_RECENT_TRANSITIONS_MAX = 5
+#: Smallest per-HR budget: a shorter one would expire before the first re-poll.
+_MIN_PER_HR_SEC = _POLL_INTERVAL_SEC
 
 
 @dataclass(frozen=True)
@@ -75,26 +79,16 @@ class MonitorRequest:
     environment: str | None = None
 
     def __post_init__(self) -> None:
-        """Reject empty identifiers and inconsistent timeout/interval bounds."""
-        if not self.chart_name:
-            raise ChartManagerError("chart_name must be non-empty")
-        if not self.version:
-            raise ChartManagerError("version must be non-empty")
-        if self.concurrency < 1:
-            raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
-        require_positive_seconds("per_poll_timeout_seconds", self.per_poll_timeout_seconds)
-        require_positive_seconds("per_hr_timeout_seconds", self.per_hr_timeout_seconds)
-        require_positive_seconds("total_timeout_seconds", self.total_timeout_seconds)
-        if self.per_hr_timeout_seconds < _POLL_INTERVAL_SEC:
-            raise ChartManagerError(
-                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s) must be >= the "
-                f"{_POLL_INTERVAL_SEC:g}s poll interval"
-            )
-        if self.total_timeout_seconds < self.per_hr_timeout_seconds:
-            raise ChartManagerError(
-                f"total_timeout_seconds ({self.total_timeout_seconds:g}s) must be >= "
-                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s)"
-            )
+        """Reject empty identifiers and inconsistent budgets."""
+        check_request(
+            chart_name=self.chart_name,
+            version=self.version,
+            concurrency=self.concurrency,
+            per_poll_timeout_seconds=self.per_poll_timeout_seconds,
+            per_hr_timeout_seconds=self.per_hr_timeout_seconds,
+            total_timeout_seconds=self.total_timeout_seconds,
+            min_per_hr_seconds=_MIN_PER_HR_SEC,
+        )
 
 
 @dataclass(frozen=True)
@@ -108,7 +102,7 @@ class MonitorOutcome:
     reason: ReasonLike
     last_status: HelmReleaseStatus | None
     last_workloads: tuple[WorkloadRollout, ...]
-    recent_transitions: tuple[Transition, ...]
+    transitions: tuple[Transition, ...]
     diagnostics: str | None
     duration_seconds: float
 
@@ -126,7 +120,7 @@ def _no_match_outcome(elapsed: float) -> MonitorOutcome:
         reason=Reason.NO_HELMRELEASES_MATCHED,
         last_status=None,
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=elapsed,
     )
@@ -141,7 +135,7 @@ class _WatchState:
     """
 
     ref: HelmReleaseRef
-    ring: deque[Transition]
+    transitions: deque[Transition]
     last_status: HelmReleaseStatus | None
     last_workloads: tuple[WorkloadRollout, ...] = ()
     #: Dedupe key of the last recorded waiting/transport transition.
@@ -257,7 +251,7 @@ class _Watcher:
         started_mono = self.clock()
         state = _WatchState(
             ref=initial_status.ref,
-            ring=deque(maxlen=_RECENT_TRANSITIONS_MAX),
+            transitions=deque(maxlen=TRANSITIONS_MAX),
             last_status=initial_status,
         )
         verdict, reason = self._poll_until_terminal(
@@ -302,7 +296,7 @@ class _Watcher:
             initial_status, requested_version=request.version, workloads=None
         )
         if isinstance(first, Terminal) and first.verdict is Verdict.SKIPPED_SUSPENDED:
-            self._record(state, first.phase, first.detail)
+            record(state.transitions, state.ref, self.progress, first.phase, first.detail)
             return first.verdict, first.reason
 
         # Jittered start desynchronizes the pollers so N watchers don't hit
@@ -344,6 +338,7 @@ class _Watcher:
                     request.per_hr_timeout_seconds,
                     request.total_timeout_seconds,
                 )
+                record(state.transitions, state.ref, self.progress, "TimedOut", reason)
                 return Verdict.TIMED_OUT, reason
 
             self.sleep(_POLL_INTERVAL_SEC)
@@ -355,8 +350,7 @@ class _Watcher:
                 return polled.verdict, polled.reason
             status = polled
 
-    @staticmethod
-    def _cancelled(state: _WatchState) -> tuple[Verdict, ReasonLike]:
+    def _cancelled(self, state: _WatchState) -> tuple[Verdict, ReasonLike]:
         """Abandon this watch because a peer (or the total budget) cancelled the run.
 
         DEBUG, not WARNING: under `--fail-fast` every remaining watcher takes
@@ -369,7 +363,9 @@ class _Watcher:
             state.ref.namespace,
             state.ref.name,
         )
-        return Verdict.TIMED_OUT, Reason.TOTAL_BUDGET_EXHAUSTED
+        reason = Reason.TOTAL_BUDGET_EXHAUSTED
+        record(state.transitions, state.ref, self.progress, "Cancelled", reason)
+        return Verdict.TIMED_OUT, reason
 
     def _evaluate(
         self,
@@ -397,11 +393,11 @@ class _Watcher:
                 )
 
         if isinstance(decision, Terminal):
-            self._record(state, decision.phase, decision.detail)
+            record(state.transitions, state.ref, self.progress, decision.phase, decision.detail)
             return decision.verdict, decision.reason
 
         if decision.signature != state.prev_signature:
-            self._record(state, decision.phase, decision.detail)
+            record(state.transitions, state.ref, self.progress, decision.phase, decision.detail)
             state.prev_signature = decision.signature
         return None
 
@@ -426,7 +422,7 @@ class _Watcher:
                     state.ref.name,
                     detail,
                 )
-                self._record(state, "Disappeared", detail)
+                record(state.transitions, state.ref, self.progress, "Disappeared", detail)
                 return Terminal(
                     verdict=Verdict.FAILED,
                     reason=Reason.DISAPPEARED,
@@ -472,28 +468,8 @@ class _Watcher:
                 phase,
                 stderr[:DETAIL_MAX],
             )
-            self._record(state, phase, stderr[:DETAIL_MAX])
+            record(state.transitions, state.ref, self.progress, phase, stderr[:DETAIL_MAX])
             state.prev_signature = signature
-
-    def _record(self, state: _WatchState, phase: str, detail: str) -> None:
-        """Append a transition to the ring buffer and fire the progress callback."""
-        transition = Transition(at=datetime.now(UTC), phase=phase, detail=detail)
-        state.ring.append(transition)
-        self._fire_progress(state.ref, transition)
-
-    def _fire_progress(self, ref: HelmReleaseRef, transition: Transition) -> None:
-        """Report the phase to `progress`; swallow+log any exception it raises."""
-        try:
-            self.progress(
-                RowUpdate(
-                    key=(ref.namespace, ref.name),
-                    column="phase",
-                    status=transition.phase,
-                    detail=transition.detail,
-                )
-            )
-        except Exception:
-            _LOG.exception("monitor progress callback raised")
 
     def _finalize(
         self,
@@ -538,7 +514,7 @@ class _Watcher:
             reason=reason,
             last_status=state.last_status,
             last_workloads=state.last_workloads,
-            recent_transitions=tuple(state.ring),
+            transitions=tuple(state.transitions),
             diagnostics=diagnostics,
             duration_seconds=duration_seconds,
         )
@@ -583,9 +559,9 @@ class _Watcher:
                     f"available={w.workload.available}/{w.workload.desired})"
                 )
 
-        if state.ring:
+        if state.transitions:
             parts.append("\n### Recent transitions")
-            for t in state.ring:
+            for t in state.transitions:
                 parts.append(f"- {t.at.isoformat()} {t.phase} - {t.detail}")
 
         # Events come from where the workloads run, not where the HelmRelease
