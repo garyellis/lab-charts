@@ -5,17 +5,15 @@ Flags, the downgrade guard, output mode and rendering; each handler calls its st
 """
 from __future__ import annotations
 
-import logging
 import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.console import Console
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli.streams import data_console, narration_console
+from chart_manager.cli.streams import console, narration
 from chart_manager.commands.promote.monitor import MonitorRequest
 from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult
@@ -44,12 +42,6 @@ OutputOption = Annotated[
 _PROMOTE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
-def _setup_logging_for_mode(mode: str) -> None:
-    """In json mode, route log records to stderr so stdout stays machine-parseable."""
-    if mode == "json":
-        logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
-
-
 def _is_interactive() -> bool:
     """True when it is legitimate to block the run on a prompt.
 
@@ -75,27 +67,6 @@ def _coerce_namespace(ns: str | None) -> str | None:
     if ns is None or ns == "":
         return None
     return ns
-
-
-def _make_console(no_color: bool) -> Console:
-    """Console for the selected `--output` projection (stdout), honoring --no-color.
-
-    Also the console `_resolve_output_mode` probes for `is_terminal`: the
-    `auto` decision is "is the *data* going to a terminal", so it must ask
-    about stdout, not about wherever narration happens to go.
-    """
-    return data_console(no_color=no_color)
-
-
-def _make_narration_console(no_color: bool) -> Console:
-    """Console for progress and status (stderr), honoring --no-color.
-
-    Progress tables and promote's status lines are not the projection, so
-    they belong on stderr regardless of `--output`. Previously they shared
-    the stdout console and were safe only because json mode bypassed them;
-    this makes the separation structural instead of mode-dependent.
-    """
-    return narration_console(no_color=no_color)
 
 
 def _duration_option(value: str, *, flag: str) -> float:
@@ -130,7 +101,6 @@ def monitor(
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
     fail_fast: Annotated[bool, typer.Option("--fail-fast")] = False,
     environment: Annotated[
         str | None,
@@ -144,10 +114,7 @@ def monitor(
     ] = None,
 ) -> None:
     """Wait for matched HelmReleases to converge on chart@version."""
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
 
     request = MonitorRequest(
         chart_name=chart,
@@ -194,7 +161,6 @@ def test(
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
     pod_log_tail: Annotated[int, typer.Option("--pod-log-tail", min=1)] = 200,
     environment: Annotated[
         str | None,
@@ -208,10 +174,7 @@ def test(
     ] = None,
 ) -> None:
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
 
     request = TestRequest(
         chart_name=chart,
@@ -290,17 +253,13 @@ def pr(
         ),
     ] = False,
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
     # Every status line below is narration and goes to stderr, in `pretty`
     # mode too: promote's human output is a running commentary on a mutation,
     # not a document, so `promote >/dev/null` must still show what happened.
     # The one thing on stdout is the json document, written at the end.
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
         """Prompt to proceed on a detected downgrade; auto-yes when --allow-downgrade is set."""

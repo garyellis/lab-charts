@@ -25,7 +25,7 @@ from rich.markup import escape
 from chart_manager.plumbing.progress import ProgressEvent
 
 #: Every narration console handed out, so `set_narration_quiet` can reach them.
-#: Weak, because `commands/promote/cli.py` builds one per call.
+#: Weak, so a console built per call does not outlive its caller.
 _QUIETABLE: weakref.WeakSet[Console] = weakref.WeakSet()
 
 #: Applied to consoles built *after* a `set_narration_quiet` call.

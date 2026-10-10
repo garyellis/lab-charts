@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -276,6 +277,19 @@ def test_auto_mode_under_ci_env_picks_json(monkeypatch: pytest.MonkeyPatch) -> N
     res = cli(*_BASE, "--output", "auto")
     assert res.exit_code == 0
     assert json.loads(res.stdout)["chart"] == "loki"
+
+
+# ----- global options reach promote --------------------------------------
+
+def test_verbose_debug_logs_reach_stderr_under_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
+        logging.getLogger("chart_manager.commands.promote").debug("polling loki/loki")
+        return _ok_result()
+
+    monkeypatch.setattr(promote_cli, "run_monitor", run)
+    res = cli("-v", *_BASE, "--output", "json")
+    assert (res.exit_code, json.loads(res.stdout)["chart"]) == (0, "loki")
+    assert "polling loki/loki" in res.stderr
 
 
 # ----- namespace coercion --------------------------------------------------

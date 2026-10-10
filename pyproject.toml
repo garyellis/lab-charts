@@ -105,7 +105,7 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG", 
 "src/chart_manager/shared/events/store.py" = ["ARG002"]
 "src/chart_manager/settings.py" = ["ARG003"]
 # The modules that construct a Console (naming its stream) or annotate with one.
-"src/chart_manager/{cli/streams,cli/output,commands/validate/display,commands/promote/render,commands/promote/cli,plumbing/logger}.py" = ["TID251"]
+"src/chart_manager/{cli/streams,cli/output,commands/validate/display,commands/promote/render,plumbing/logger}.py" = ["TID251"]
 
 [tool.ruff.format]
 # Defaults: double-quote, 4-space indent, LF endings.
