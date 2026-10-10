@@ -5,14 +5,14 @@ reports differ (workload rollouts and events versus test pods and logs).
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 
 from chart_manager.commands.promote.state import DETAIL_MAX, ReasonLike, Verdict
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.text import truncate_lines
 
-__all__ = ["EVENTS_LINE_CAP", "conditions", "failure_detail", "header", "safe_events"]
+__all__ = ["EVENTS_LINE_CAP", "capped_events", "conditions", "failure_detail", "header"]
 
 #: `kubectl get events` output is unbounded and mostly repetition; the tail is
 #: what explains a failure, but the head is what fits in a report.
@@ -53,13 +53,6 @@ def failure_detail(exc: ExternalCommandError) -> str:
     return stderr[:DETAIL_MAX]
 
 
-def safe_events(fetch: Callable[[], str]) -> str:
-    """Run `fetch`, returning a placeholder line instead of raising.
-
-    An unreachable cluster must not replace a report whose verdict we already have.
-    """
-    try:
-        blob = fetch()
-    except ExternalCommandError as exc:
-        return f"<events unavailable: {failure_detail(exc)}>"
-    return truncate_lines(blob, EVENTS_LINE_CAP)
+def capped_events(events: str) -> str:
+    """`events` cut to the first EVENTS_LINE_CAP lines."""
+    return truncate_lines(events, EVENTS_LINE_CAP)

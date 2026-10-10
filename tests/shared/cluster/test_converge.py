@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.errors import MissingToolError
+from chart_manager.plumbing.errors import CommandTimeout, MissingToolError
 from chart_manager.settings import Settings
 from chart_manager.shared.cluster import session
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
@@ -106,13 +106,18 @@ def test_a_failed_rollout_raises_release_failed_with_the_namespace_diagnostics(
 def test_a_failed_install_is_reported_with_diagnostics_and_nothing_is_awaited(
     tmp_path: Path,
 ) -> None:
-    runner = _runner().respond(argv_prefix("helm", "upgrade"), returncode=1, stderr="conflict")
+    runner = (
+        _runner()
+        .respond(argv_prefix("helm", "upgrade"), returncode=1, stderr="conflict")
+        .respond(argv_prefix("kubectl", "get", "events"), raises=CommandTimeout("timed out"))
+    )
 
     with pytest.raises(ReleaseFailed) as failed:
         converge(_lab(runner), Release(name="web", chart=_chart(tmp_path), namespace="apps"))
 
     assert failed.value.step == "install"
-    assert "## pods" in failed.value.diagnostics
+    assert "conflict" in str(failed.value)
+    assert "## events\n<events unavailable: timed out>" in failed.value.diagnostics
     assert not any(plain_argv(argv)[:3] == ("helm", "get", "manifest") for argv in runner.calls)
 
 

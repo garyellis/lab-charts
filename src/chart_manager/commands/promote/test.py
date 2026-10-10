@@ -12,7 +12,6 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import partial
 
 import chart_manager.commands.promote.report as report
 from chart_manager.commands.promote.fanout import (
@@ -706,11 +705,9 @@ class _Tester:
         if ctx.ref.target_namespace:
             parts.append(f"\n### Events (namespace {ctx.ref.target_namespace})")
             parts.append(
-                report.safe_events(
-                    partial(
-                        self.kubectl.namespace_events,
-                        ctx.ref.target_namespace,
-                        timeout=ctx.request.per_poll_timeout_seconds,
+                report.capped_events(
+                    self.kubectl.namespace_events(
+                        ctx.ref.target_namespace, timeout=ctx.request.per_poll_timeout_seconds
                     )
                 )
             )
