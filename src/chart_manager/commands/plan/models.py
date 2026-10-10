@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from chart_manager.commands import test, validate
+from chart_manager.plumbing.exit_codes import Outcome
 
 
 @dataclass(frozen=True)
@@ -22,15 +23,28 @@ class PlanRequest:
 
 
 @dataclass(frozen=True)
+class PlannedRow:
+    """One chart in one environment to validate, and why changes selected it."""
+
+    chart: str
+    env: str
+    release: str
+    namespace: str
+    reasons: tuple[validate.Reason, ...]
+
+
+@dataclass(frozen=True)
 class PlanOutcome:
-    """The changed files, and the validation rows, chart tests and charts to publish they select."""
+    """The changed files, the work they select, and the chart errors and warnings found."""
 
     changed_files: tuple[str, ...]
-    validation: validate.Selection
-    chart_tests: test.Selection
+    validation: tuple[PlannedRow, ...]
+    chart_tests: tuple[test.SelectedTest, ...]
     publish: tuple[str, ...]
+    spec_errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     @property
-    def spec_errors(self) -> tuple[str, ...]:
-        """The chart configuration errors both selections found."""
-        return (*self.validation.spec_errors, *self.chart_tests.spec_errors)
+    def outcome(self) -> Outcome:
+        """SPEC when either selection found chart configuration errors."""
+        return Outcome.SPEC if self.spec_errors else Outcome.SUCCESS
