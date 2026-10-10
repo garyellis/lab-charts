@@ -59,6 +59,8 @@ def run(
 
     - An unknown chart or environment in the request raises before any work.
     - A missing run-wide prerequisite (tool binary, schema lock or cache) raises.
+    - A CRD provider's failed render fails only that environment's row; other run-wide
+      errors still raise.
     - A chart's configuration error goes to `spec_errors`, and its row is left out.
     - A failed check is recorded on its row, and the row's later checks are skipped.
 
@@ -194,7 +196,7 @@ class _Checker:
         self.progress = progress
         self.kubeconform = Kubeconform(runner, timeout=request.tool_timeout)
         self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
-        self.schemas: tuple[tuple[str, ...], UpstreamSchemas] | None = None
+        self.schemas: tuple[tuple[str, ...], UpstreamSchemas] | ChartManagerError | None = None
         self.schemas_lock = threading.Lock()
         # Rows run in parallel: one chart's rows share one dependency update.
         self.dependency_locks: dict[Path, threading.Lock] = {}
@@ -255,21 +257,29 @@ class _Checker:
         return CheckResult("skipped", reason)
 
     def _schemas(self) -> tuple[tuple[str, ...], UpstreamSchemas]:
-        """Schemas generated from CRDs and the locked upstream schemas, loaded on first use."""
+        """Schemas generated from CRDs and the locked upstream schemas, loaded on first use.
+
+        The first load error is remembered and raised for every row.
+        """
         with self.schemas_lock:
             if self.schemas is None:
-                store = open_schema_store(self.runner, self.settings)
-                upstream = schema_lock.locations(self.workspace, store)
-                self._update_dependencies(generated.providers(self.workspace))
-                crds = generated.prepare(
-                    self.workspace, render=self._render_crds, cache_root=store.cache_root
-                )
-                self.schemas = (crds, upstream)
+                try:
+                    store = open_schema_store(self.runner, self.settings)
+                    upstream = schema_lock.locations(self.workspace, store)
+                    self._update_dependencies(generated.providers(self.workspace))
+                    crds = generated.prepare(
+                        self.workspace, render=self._render_crds, cache_root=store.cache_root
+                    )
+                    self.schemas = (crds, upstream)
+                except ChartManagerError as exc:
+                    self.schemas = exc
+            if isinstance(self.schemas, ChartManagerError):
+                raise self.schemas
             return self.schemas
 
-    def _render_crds(self, charts: Sequence[Chart], out: Path) -> list[str]:
-        """Render each chart in every environment with its CRDs; one line per failure."""
-        failures = []
+    def _render_crds(self, charts: Sequence[Chart], out: Path) -> dict[tuple[str, str], str]:
+        """Render each chart in every environment with its CRDs; each failure by (chart, env)."""
+        failures = {}
         for chart in charts:
             spec = require_validation(chart.lifecycle, chart_name=chart.name)
             helm = _helm(self.runner, spec, verbose=False, timeout=self.request.tool_timeout)
@@ -282,7 +292,7 @@ class _Checker:
                 except SpecError as exc:
                     result = CheckResult("failed", str(exc))
                 if result.status != "passed":
-                    failures.append(f"{chart.name}/{env}: {result.detail}")
+                    failures[(chart.name, env)] = result.detail
         return failures
 
     def _update_dependencies(self, charts: Sequence[Chart]) -> None:

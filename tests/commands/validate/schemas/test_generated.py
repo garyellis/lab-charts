@@ -9,17 +9,16 @@ import pytest
 from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
-    KubeconformSchemaRenderError,
 )
-from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.yaml_files import dump_yaml
 from chart_manager.shared.charts.chart import load_chart
+from chart_manager.shared.charts.lifecycle import require_validation
 from tests.conftest import crd_manifest
 
 from .schema_fixtures import workspace
 
 
-def chart(root, name, payload):
+def chart(root, name, payload, environments=("dev",)):
     directory = root / "charts" / name
     (directory / "templates").mkdir(parents=True)
     (directory / "Chart.yaml").write_text(
@@ -39,7 +38,8 @@ def chart(root, name, payload):
                         "enabled": True,
                         "releaseName": name,
                         "environments": {
-                            "dev": {"namespace": "default", "values": ["values.yaml"]}
+                            env: {"namespace": "default", "values": ["values.yaml"]}
+                            for env in environments
                         },
                     },
                 },
@@ -50,25 +50,32 @@ def chart(root, name, payload):
 
 
 class Renderer:
-    """Render each chart's templates verbatim into <out>/<chart>/dev, as `run()` would."""
+    """Render each chart's templates verbatim into <out>/<chart>/<env>, as `run()` would.
+
+    Envs in `fail` report a failure; with `partial` they keep their output, as helm can.
+    """
 
     def __init__(self):
         self.calls = []
-        self.fail = False
+        self.fail = set()
+        self.partial = True
         self.hydrate = None
 
     def __call__(self, charts, out):
-        failures = []
+        failures = {}
         for chart in charts:
             self.calls.append(chart.name)
             if self.hydrate:
                 self.hydrate(chart.path)
-            output = out / chart.name / "dev"
-            output.mkdir(parents=True)
-            for path in (chart.path / "templates").glob("*.yaml"):
-                (output / path.name).write_bytes(path.read_bytes())
-            if self.fail:
-                failures.append(f"{chart.name}/dev: specific failure")
+            for env in require_validation(chart.lifecycle, chart_name=chart.name).environments:
+                if env in self.fail:
+                    failures[(chart.name, env)] = "specific failure"
+                    if not self.partial:
+                        continue
+                output = out / chart.name / env
+                output.mkdir(parents=True)
+                for path in (chart.path / "templates").glob("*.yaml"):
+                    (output / path.name).write_bytes(path.read_bytes())
         return failures
 
 
@@ -152,15 +159,22 @@ def test_helm_binary_change_invalidates_derived_cache(env):
     assert len(env.renderer.calls) == 2
 
 
-def test_a_failed_provider_render_raises_and_caches_nothing(env):
-    chart(env.root, "provider", crd_manifest())
-    env.renderer.fail = True
-    with pytest.raises(
-        KubeconformSchemaRenderError, match="provider/dev: specific failure"
-    ) as caught:
-        env.prepare()
-    assert caught.value.outcome is Outcome.FAILED
+@pytest.mark.parametrize(
+    ("environments", "partial", "schemas"),
+    [(("dev", "uat"), True, True), (("uat",), True, False), (("uat",), False, False)],
+    ids=["one-env-failed", "every-env-failed", "every-env-failed-without-output"],
+)
+def test_a_failed_env_contributes_no_schemas_and_its_provider_is_not_cached(
+    env, environments, partial, schemas
+):
+    chart(env.root, "provider", crd_manifest(), environments=environments)
+    env.renderer.fail = {"uat"}
+    env.renderer.partial = partial
+    locations = env.prepare()
+    assert schema_at(locations).is_file() if schemas else locations == ()
     assert not list((env.root / "cache").rglob("charts/*.json"))
+    env.prepare()
+    assert env.renderer.calls == ["provider", "provider"]
 
 
 def test_extra_schema_in_derived_output_is_removed(env):
