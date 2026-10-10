@@ -171,7 +171,7 @@ def validate(
                 request,
                 workspace=workspace,
                 runner=runner,
-                schema_cache_root=container.settings.schema_cache_root,
+                settings=container.settings,
                 progress=progress,
             )
     except RequestError as exc:
@@ -319,7 +319,7 @@ def sync(
     """Cache complete upstream schema repositories at the committed pins."""
     container = _container()
     workspace = container.workspace()
-    store = open_schema_store(container.command_runner(), container.settings.schema_cache_root)
+    store = open_schema_store(container.command_runner(), container.settings)
     if update:
         timeout = container.settings.command_timeout
         source = GitHubKubeconformSchemaSource(

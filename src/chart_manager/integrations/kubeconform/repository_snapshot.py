@@ -17,7 +17,7 @@ class RepositorySnapshotDirectoryNotFoundError(ExternalCommandError):
 class RepositorySnapshot:
     """Fetch once; inspect locally with lazy fetching and hooks disabled."""
 
-    def __init__(self, runner: CommandRunner, *, timeout: float = 300) -> None:
+    def __init__(self, runner: CommandRunner, *, timeout: float | None) -> None:
         self.runner = runner
         self.timeout = timeout
 

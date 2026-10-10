@@ -4,17 +4,20 @@ from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import CheckStatus
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import SCHEMA_LOCK_FILE
+from tests.conftest import FakeCommandRunner
 
 from .schema_fixtures import workspace
 
 
-def store_under(root):
-    return open_schema_store(SubprocessRunner(), root / "schema-cache")
+def store_under(root, runner):
+    settings = Settings(schema_cache_root=root / "schema-cache", command_timeout=60)
+    return open_schema_store(runner, settings)
 
 
 def checks(root):
-    return {c.name: c for c in preflight(workspace(root), store_under(root))}
+    return {c.name: c for c in preflight(workspace(root), store_under(root, SubprocessRunner()))}
 
 
 def test_doctor_reports_ready_snapshots_without_charts_or_writes(tmp_path, schema_cache):
@@ -23,7 +26,9 @@ def test_doctor_reports_ready_snapshots_without_charts_or_writes(tmp_path, schem
     write_schema_lock_atomic(path, lock)
     store.sync(lock)
     before = path.read_bytes()
-    result = checks(tmp_path)
+    runner = FakeCommandRunner().forward(lambda argv: True, SubprocessRunner())
+    result = {c.name: c for c in preflight(workspace(tmp_path), store_under(tmp_path, runner))}
+    assert {call.timeout for call in runner.records} == {60}
     assert all(c.status is CheckStatus.OK for c in result.values())
     assert result["schema-store"].data["present"] == 2
     assert result["schema-store"].data["ready"]
@@ -64,7 +69,8 @@ def test_bad_lock_fails_before_store_inspection(tmp_path):
 
 
 def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path):
-    result = preflight(WorkspaceNotFoundError("no workspace here"), store_under(tmp_path))
+    store = store_under(tmp_path, SubprocessRunner())
+    result = preflight(WorkspaceNotFoundError("no workspace here"), store)
     assert [check.name for check in result] == ["schema-policy", "schema-lock", "schema-store"]
     assert all(check.status is CheckStatus.SKIPPED for check in result)
     assert all(check.detail == "no workspace here" for check in result)
@@ -74,6 +80,7 @@ def test_no_workspace_skips_managed_schema_checks_with_the_reason(tmp_path):
 def test_managed_workspace_still_requires_schema_policy(tmp_path):
     from tests.conftest import workspace_for
 
-    result = preflight(workspace_for(tmp_path, name="managed"), store_under(tmp_path))
+    store = store_under(tmp_path, SubprocessRunner())
+    result = preflight(workspace_for(tmp_path, name="managed"), store)
     assert result[0].status is CheckStatus.FAILED
     assert result[0].outcome is Outcome.SPEC

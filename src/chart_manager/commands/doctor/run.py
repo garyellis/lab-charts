@@ -57,7 +57,7 @@ def run(
         "schemas": partial(
             validate.schema_preflight,
             loaded,
-            validate.open_schema_store(runner, settings.schema_cache_root),
+            validate.open_schema_store(runner, settings),
         ),
         "events": partial(preflight_event_store, settings),
     }

@@ -40,6 +40,7 @@ from chart_manager.plumbing.errors import (
     SpecError,
 )
 from chart_manager.plumbing.progress import Progress, RowUpdate
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_validation
@@ -51,7 +52,7 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
-    schema_cache_root: Path,
+    settings: Settings,
     progress: Progress,
 ) -> ValidateOutcome:
     """Render each requested chart in each environment, then run its validation checks.
@@ -80,7 +81,7 @@ def run(
         )
     out = request.out
     rows = [row for row in selection.rows if not request.envs or row.env in request.envs]
-    checker = _Checker(request, workspace, runner, schema_cache_root, progress)
+    checker = _Checker(request, workspace, runner, settings, progress)
 
     def check(row: Row) -> Row | str:
         try:
@@ -183,13 +184,13 @@ class _Checker:
         request: ValidateRequest,
         workspace: RepositoryWorkspace,
         runner: CommandRunner,
-        schema_cache_root: Path,
+        settings: Settings,
         progress: Progress,
     ) -> None:
         self.request = request
         self.workspace = workspace
         self.runner = runner
-        self.schema_cache_root = schema_cache_root
+        self.settings = settings
         self.progress = progress
         self.kubeconform = Kubeconform(runner, timeout=request.tool_timeout)
         self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
@@ -257,7 +258,7 @@ class _Checker:
         """Schemas generated from CRDs and the locked upstream schemas, loaded on first use."""
         with self.schemas_lock:
             if self.schemas is None:
-                store = open_schema_store(self.runner, self.schema_cache_root)
+                store = open_schema_store(self.runner, self.settings)
                 upstream = schema_lock.locations(self.workspace, store)
                 self._update_dependencies(generated.providers(self.workspace))
                 crds = generated.prepare(

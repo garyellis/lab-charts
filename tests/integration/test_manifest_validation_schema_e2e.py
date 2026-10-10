@@ -13,6 +13,7 @@ from chart_manager.commands.validate.run import run
 from chart_manager.plumbing.commands import SubprocessRunner
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.yaml_files import dump_yaml
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import crd_manifest, write_validation_chart
 from tests.integration.conftest import FIXTURES, fixture_chart, require
@@ -28,7 +29,7 @@ def check(workspace: RepositoryWorkspace, *charts: str) -> validate.ValidateOutc
         validate.ValidateRequest(out=workspace.root / "out", charts=charts, checks=SCHEMA_ONLY),
         workspace=workspace,
         runner=SubprocessRunner(),
-        schema_cache_root=workspace.root / "schema-cache",
+        settings=Settings(schema_cache_root=workspace.root / "schema-cache"),
         progress=[].append,
     )
 
