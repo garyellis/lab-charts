@@ -23,7 +23,6 @@ from chart_manager.commands.validate.models import (
     ValidateOutcome,
     ValidateRequest,
 )
-from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas import lock as schema_lock
 from chart_manager.commands.validate.schemas.lock import UpstreamSchemas
@@ -40,6 +39,7 @@ from chart_manager.plumbing.errors import (
     MissingToolError,
     SpecError,
 )
+from chart_manager.plumbing.progress import Progress, RowUpdate
 from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_validation
@@ -52,7 +52,7 @@ def run(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     schema_cache_root: Path,
-    progress: Progress = NULL_PROGRESS,
+    progress: Progress,
 ) -> ValidateOutcome:
     """Render each requested chart in each environment, then run its validation checks.
 
@@ -91,16 +91,12 @@ def run(
             return f"{row.chart}: {exc}"
         return replace(row, checks=checks)
 
-    progress.start(rows)
-    try:
-        if request.verbose or request.fail_fast:
-            results = _one_at_a_time(rows, check, checker, fail_fast=request.fail_fast)
-        else:
-            workers = request.workers if request.workers > 0 else _auto_workers()
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                results = list(pool.map(check, rows))
-    finally:
-        progress.stop()
+    if request.verbose or request.fail_fast:
+        results = _one_at_a_time(rows, check, checker, fail_fast=request.fail_fast)
+    else:
+        workers = request.workers if request.workers > 0 else _auto_workers()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(check, rows))
     return ValidateOutcome(
         rows=tuple(result for result in results if isinstance(result, Row)),
         spec_errors=(
@@ -247,14 +243,14 @@ class _Checker:
         return replace(row, checks={name: self._skipped(row, name, reason) for name in names})
 
     def _timed(self, row: Row, name: CheckName, check: Callable[[], CheckResult]) -> CheckResult:
-        self.progress.on_event(row, name, "running")
         started = time.monotonic()
-        result = replace(check(), elapsed_seconds=time.monotonic() - started)
-        self.progress.on_event(row, name, result.status, result.elapsed_seconds)
-        return result
+        result = check()
+        elapsed = time.monotonic() - started
+        self.progress(RowUpdate((row.chart, row.env), name, result.status, f"{elapsed:.1f}s"))
+        return replace(result, elapsed_seconds=elapsed)
 
     def _skipped(self, row: Row, name: CheckName, reason: str) -> CheckResult:
-        self.progress.on_event(row, name, "skipped")
+        self.progress(RowUpdate((row.chart, row.env), name, "skipped", ""))
         return CheckResult("skipped", reason)
 
     def _schemas(self) -> tuple[tuple[str, ...], UpstreamSchemas]:

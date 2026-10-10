@@ -14,8 +14,8 @@ import typer
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
+from chart_manager.cli.progress import progress_view
 from chart_manager.cli.streams import console, narration
-from chart_manager.commands.validate.display import LiveTable, PlainNarration
 from chart_manager.commands.validate.models import (
     CheckName,
     RequestError,
@@ -23,7 +23,6 @@ from chart_manager.commands.validate.models import (
     ValidateRequest,
 )
 from chart_manager.commands.validate.output import details, to_markdown, to_table
-from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.render_dir import (
     RenderDirState,
     clean_render_dir,
@@ -42,7 +41,6 @@ from chart_manager.shared.charts.chart import resolve_chart_target
 
 _OUTPUTS = (output_mod.TABLE, output_mod.MD, output_mod.JSON, output_mod.ALL)
 _CLEAN_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
-_PROGRESS = ("auto", "live", "plain", "none")
 
 
 def validate(
@@ -86,10 +84,6 @@ def validate(
     workers: Annotated[
         int, typer.Option("--workers", help="Rows checked at once. 0 = min(cpu, 8); 1 = serial.")
     ] = 0,
-    progress: Annotated[
-        str,
-        typer.Option("--progress", help="auto (live table on a terminal), live, plain or none."),
-    ] = "auto",
     timings: Annotated[
         bool, typer.Option("--timings/--no-timings", help="Show per-row elapsed time.")
     ] = False,
@@ -131,8 +125,6 @@ def validate(
     environment), else `git diff` against --base. A named chart narrows the first two.
     """
     mode = output_mod.resolve(output, ctx, allowed=_OUTPUTS, console=console)
-    if progress not in _PROGRESS:
-        raise typer.BadParameter(f"allowed: {', '.join(_PROGRESS)}", param_hint="--progress")
     unknown = sorted(set(check) - set(get_args(CheckName)))
     if unknown:
         raise typer.BadParameter(f"unknown check(s): {', '.join(unknown)}", param_hint="--check")
@@ -168,13 +160,15 @@ def validate(
             "streamed subprocess output readable"
         )
     try:
-        outcome = run(
-            request,
-            workspace=workspace,
-            runner=runner,
-            schema_cache_root=container.settings.schema_cache_root,
-            progress=_display(progress, mode, verbose),
-        )
+        # --verbose streams subprocess output, which a live table would draw over.
+        with progress_view(live=narration.is_terminal and not verbose) as progress:
+            outcome = run(
+                request,
+                workspace=workspace,
+                runner=runner,
+                schema_cache_root=container.settings.schema_cache_root,
+                progress=progress,
+            )
     except RequestError as exc:
         raise typer.BadParameter(str(exc), param_hint=exc.flag) from exc
     try:
@@ -215,22 +209,6 @@ def _changes(
     except ChartManagerError as exc:
         narration.print(f"[yellow]warn:[/yellow] git diff failed ({exc}); falling back to --all")
         return None
-
-
-def _display(progress: str, mode: str, verbose: bool) -> Progress:
-    """The progress sink for this --progress and output mode; machine output gets none.
-
-    --verbose streams subprocess output, which a live table would overwrite, so it narrates.
-    """
-    if progress == "none" or mode in (output_mod.JSON, output_mod.MD):
-        return NULL_PROGRESS
-    if progress == "plain" or verbose:
-        return PlainNarration()
-    if not sys.stderr.isatty():
-        if progress == "live":
-            narration.print("[yellow]warn:[/yellow] stderr is not a terminal; using plain progress")
-        return PlainNarration()
-    return LiveTable() if progress == "live" or mode == output_mod.TABLE else PlainNarration()
 
 
 def _render(outcome: ValidateOutcome, *, markdown: str, mode: str, timings: bool) -> None:

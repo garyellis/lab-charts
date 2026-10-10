@@ -67,8 +67,6 @@ def test_flags_become_the_request(fake_run, tmp_path: Path) -> None:  # type: ig
         "--tool-timeout",
         "5",
         "--verbose",
-        "--progress",
-        "none",
         "-o",
         "json",
     )
@@ -149,8 +147,6 @@ def test_output_all_writes_the_summaries_and_the_step_summary(
         "all",
         "--keep",
         "--github-step-summary",
-        "--progress",
-        "none",
     )
 
     out = fake_run.requests[0].out
@@ -197,9 +193,28 @@ def test_an_unknown_chart_or_environment_is_a_usage_error_naming_the_flag(
 def test_a_table_run_ends_with_a_summary_of_spec_errors(fake_run) -> None:  # type: ignore[no-untyped-def]
     fake_run.result = outcome_with("passed", spec_errors=("broken: bad",))
 
-    result = cli("chart", "validate", "--all", "-o", "table", "--progress", "none")
+    result = cli("chart", "validate", "--all", "-o", "table")
 
     assert "summary: 1 spec error(s)" in result.output
+
+
+def test_markdown_output_is_the_summary_alone_on_stdout(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("failed")
+
+    result = cli("chart", "validate", "--all", "-o", "md")
+
+    assert (result.exit_code, result.stdout) == (
+        1,
+        "## validate\n\n"
+        "| Chart | Env | Release | Render | Schema | Policy |\n"
+        "|---|---|---|---|---|---|\n"
+        "| demo | dev | demo | \u2705 | \u274c | \u00b7 |\n\n"
+        "**1 rows \u00b7 0 passing \u00b7 1 failing \u00b7 0 skipped**\n\n"
+        "### Failures\n\n"
+        "<details><summary>demo/dev \u2014 schema</summary>\n\n"
+        "```\nWidget/demo: bad\n```\n\n"
+        "</details>\n",
+    )
 
 
 def test_markdown_explains_an_empty_run_and_lists_the_diagnostics(fake_run) -> None:  # type: ignore[no-untyped-def]
