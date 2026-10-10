@@ -42,6 +42,18 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> list[ExportRequest]:
     return requests
 
 
+def _export(*argv: str) -> Result:
+    return cli("grafana", "dashboard", "export", "u", "--url", "http://127.0.0.1:3000", *argv)
+
+
+def test_url_is_required(exporter: list[ExportRequest]) -> None:
+    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
+
+    assert result.exit_code == 2
+    assert "--url" in result.stderr
+    assert exporter == []
+
+
 def test_a_path_handed_to_output_is_a_usage_error_naming_to(
     exporter: list[ExportRequest],
 ) -> None:
@@ -51,10 +63,7 @@ def test_a_path_handed_to_output_is_a_usage_error_naming_to(
     "unknown output: charts/x.json" alone leaves the caller with a rejected
     flag and no idea where the path was supposed to go.
     """
-    result = cli(
-        "grafana", "dashboard", "export", "u",
-        "-o", "charts/grafana-dashboards/dashboards/x.json",
-    )
+    result = _export("-o", "charts/grafana-dashboards/dashboards/x.json")
 
     assert result.exit_code == 2
     assert "--to" in result.stderr
@@ -66,7 +75,7 @@ def test_the_output_flag_still_rejects_a_plain_typo(
     exporter: list[ExportRequest],
 ) -> None:
     """Guard the guard: the path hint must not be the only rejection path."""
-    result = cli("grafana", "dashboard", "export", "u", "-o", "jsonn")
+    result = _export("-o", "jsonn")
 
     assert result.exit_code == 2
     assert "unknown output" in result.stderr
@@ -76,16 +85,16 @@ def test_the_output_flag_still_rejects_a_plain_typo(
 def test_json_projection_is_the_canonical_document_on_stdout(
     exporter: list[ExportRequest],
 ) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
+    result = _export("-o", "json")
 
     assert result.exit_code == 0
     assert result.stdout == canonical_json(_DASHBOARD)
     assert json.loads(result.stdout)["uid"] == "u"
-    assert exporter[0].uid == "u"
+    assert (exporter[0].uid, exporter[0].url) == ("u", "http://127.0.0.1:3000")
 
 
 def test_yaml_projection_is_the_same_object(exporter: list[ExportRequest]) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "yaml")
+    result = _export("-o", "yaml")
 
     assert result.exit_code == 0
     assert parse_yaml(result.stdout) == _DASHBOARD
@@ -97,9 +106,7 @@ def test_to_writes_canonical_json_and_stdout_carries_the_summary(
     """`-o table` is the only mode where the file and stdout coexist."""
     destination = tmp_path / "nested" / "board.json"
 
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "table"
-    )
+    result = _export("--to", str(destination), "-o", "table")
 
     assert result.exit_code == 0
     # Missing parents are created, and the file is the git artifact.
@@ -115,9 +122,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
     """The document goes to exactly one place; `--to` is that place."""
     destination = tmp_path / "board.json"
 
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "json"
-    )
+    result = _export("--to", str(destination), "-o", "json")
 
     assert result.exit_code == 0
     assert destination.read_text() == canonical_json(_DASHBOARD)

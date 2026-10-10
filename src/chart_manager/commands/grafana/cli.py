@@ -22,11 +22,9 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._options import ClusterNameOption
 from chart_manager.cli.streams import console, narration
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.settings import DEFAULT_CLUSTER_NAME
 
 if TYPE_CHECKING:
     from chart_manager.commands.grafana.dashboard_lint import LintResult
@@ -54,12 +52,18 @@ DashboardOutputOption = Annotated[
 def grafana_dashboard_export(
     ctx: typer.Context,
     uid: Annotated[str, typer.Argument(help="Dashboard UID to export.")],
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Base URL of Grafana, e.g. http://127.0.0.1:3000 from `kubectl port-forward svc/grafana 3000:80`.",
+        ),
+    ],
     namespace: NamespaceOption = GRAFANA_NAMESPACE,
     release: Annotated[
         str,
         typer.Option(
-            "--release", help="Grafana Helm release name (drives secret and service name)."
+            "--release", help="Grafana Helm release name (names the admin-password Secret)."
         ),
     ] = "grafana",
     to: Annotated[
@@ -71,11 +75,10 @@ def grafana_dashboard_export(
     ] = None,
     output: DashboardOutputOption = None,
 ) -> None:
-    """Export a dashboard from a kind-deployed Grafana and normalize for git.
+    """Export a dashboard from Grafana and normalize for git.
 
-    Auth + connectivity are resolved from the cluster: the admin password is
-    read from secret/<release>, then an ephemeral port-forward to svc/<release>
-    carries the HTTP GET. No pre-existing port-forward required.
+    `--url` is where Grafana answers, typically a `kubectl port-forward` you
+    run yourself. The admin password is read from secret/<release>.
 
     `--to` is *where* the document goes; `-o` is what shape it takes. Until
     this command was renamed `-o` named the destination file, which is the one
@@ -103,7 +106,7 @@ def grafana_dashboard_export(
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
     request = ExportRequest(
-        uid=uid, cluster_name=cluster_name, namespace=namespace, release=release
+        uid=uid, url=url, namespace=namespace, release=release
     )
     invocation = _container()
     kubectl = Kubectl(
