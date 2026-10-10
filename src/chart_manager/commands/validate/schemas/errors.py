@@ -18,12 +18,6 @@ class KubeconformSchemaConfigurationError(KubeconformSchemaError):
     outcome = Outcome.SPEC
 
 
-class KubeconformSchemaRenderError(KubeconformSchemaError):
-    """CRD provider rendering failed."""
-
-    outcome = Outcome.FAILED
-
-
 class KubeconformSchemaIntegrityError(KubeconformSchemaError):
     """Locked or materialized schema content failed an integrity check."""
 
@@ -49,7 +43,6 @@ __all__ = [
     "KubeconformSchemaError",
     "KubeconformSchemaIntegrityError",
     "KubeconformSchemaLockError",
-    "KubeconformSchemaRenderError",
     "KubeconformSchemaSourceEnvironmentError",
     "KubeconformSchemaStoreError",
 ]

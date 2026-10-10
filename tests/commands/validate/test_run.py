@@ -12,6 +12,7 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate.models import CheckName
 from chart_manager.commands.validate.run import run
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaStoreError
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
@@ -613,6 +614,73 @@ def test_the_chart_renders_with_the_helm_it_pins(
     )
 
     assert [call[0] for call in runner.calls if call[1:2] == ("template",)] == [binary]
+
+
+def test_a_failed_crd_render_fails_only_its_row_and_the_run_reports_every_row(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    envs = ("dev", "qa", "prod")
+    provider = write_validation_chart(
+        tmp_path,
+        "provider",
+        environments={env: {"values": [f"values-{env}.yaml"]} for env in envs},
+    )
+    for env in envs:
+        (provider / f"values-{env}.yaml").write_text("{}\n")
+    (provider / "templates").mkdir()
+    (provider / "templates" / "crd.yaml").write_text(crd_manifest())
+    runner = (
+        git_runner()
+        .respond(
+            lambda argv: any(arg.endswith("values-qa.yaml") for arg in argv),
+            returncode=1,
+            stderr="bad values",
+        )
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+    )
+
+    outcome = _run(
+        validate.ValidateRequest(
+            out=tmp_path / "out",
+            charts=("provider",),
+            checks=frozenset({"render", "schema"}),
+            workers=3,
+        ),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert {
+        row.env: {name: result.status for name, result in row.checks.items()}
+        for row in outcome.rows
+    } == {
+        "dev": {"render": "passed", "schema": "passed"},
+        "qa": {"render": "failed", "schema": "skipped"},
+        "prod": {"render": "passed", "schema": "passed"},
+    }
+    assert outcome.outcome is Outcome.FAILED
+
+
+def test_a_run_wide_schema_error_raises_after_loading_the_store_once(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace, schema_cache: tuple[Any, Any]
+) -> None:
+    lock, store = schema_cache
+    (store.repository_path(lock.policy.catalog) / "example.io/widget_v1.json").write_text("{}")
+    envs = ("dev", "qa", "prod")
+    write_validation_chart(
+        tmp_path, "demo", environments={env: {"values": ["values.yaml"]} for env in envs}
+    )
+    runner = git_runner().respond(renders(CONFIG_MAP))
+
+    with pytest.raises(KubeconformSchemaStoreError, match="is corrupt"):
+        _run(
+            validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), workers=3),
+            workspace=schema_workspace,
+            runner=runner,
+        )
+    inspections = [call for call in runner.calls if "rev-parse" in call]
+    assert len(inspections) == len(list(store.repositories(lock)))
 
 
 def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
