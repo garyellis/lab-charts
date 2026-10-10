@@ -16,6 +16,7 @@ from chart_manager.api.v1alpha1.releases import (
     BootstrapRelease,
 )
 from chart_manager.integrations.helm import Helm
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
 from chart_manager.plumbing.progress import Progress, step
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
@@ -167,10 +168,12 @@ def _wait_ready(session: Session, release: BootstrapRelease, progress: Progress)
     if readiness is None:
         return
     gate = readiness.workloads_ready
-    timeout = gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
+    timeout = parse_duration(
+        gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
+    )
     if readiness.nodes_ready:
         progress(step("Waiting for cluster nodes"))
         session.kubectl.wait_nodes_ready(timeout=timeout)
     if gate is not None:
         progress(step("Waiting for bootstrap workloads", gate.namespace))
-        session.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)
+        session.kubectl.wait_workloads_ready(gate.namespace, timeout=timeout)

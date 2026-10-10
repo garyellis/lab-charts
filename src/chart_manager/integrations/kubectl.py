@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
-from chart_manager.plumbing.duration import parse_duration as _parse_duration
+from chart_manager.plumbing.duration import format_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import (
@@ -27,6 +27,10 @@ from chart_manager.plumbing.preflight import (
 _LOG = logging.getLogger(__name__)
 
 _FLUX_GROUP_PREFIX = "helm.toolkit.fluxcd.io/"
+
+# A waiting command's subprocess cap is its wait length plus this, so kubectl
+# reports its own timeout before the cap kills it.
+_WAIT_SLACK_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,14 @@ class Kubectl:
             timeout=timeout if timeout is not None else self.timeout,
         )
 
+    def _wait(self, args: list[str], timeout: float, *, capture: bool = False) -> None:
+        """Run a kubectl command that waits up to `timeout` seconds, capped just past it."""
+        self._run(
+            [*args, f"--timeout={format_duration(timeout)}"],
+            capture=capture,
+            timeout=timeout + _WAIT_SLACK_SECONDS,
+        )
+
     def _json(self, args: list[str], *, timeout: float | None = None) -> dict[str, Any]:
         """Run `kubectl <args>` and parse stdout as a JSON object.
 
@@ -294,8 +306,8 @@ class Kubectl:
 
     def wait_apiserver_ready(
         self,
-        timeout: str = "60s",
         *,
+        timeout: float,
         poll_interval: float = 2.0,
     ) -> None:
         """Block until the apiserver's /readyz endpoint returns 200.
@@ -307,16 +319,14 @@ class Kubectl:
         internally, and it's cheap because it's a single GET against the
         apiserver's own health endpoint -- no etcd traversal.
 
-        `timeout` accepts kube-style duration suffixes (s, m, h) for
-        symmetry with the rollout-status callers; parsed locally so this
-        method has no kubectl-version dependency.
+        Polls in Python for `timeout` seconds; each poll keeps the instance cap.
 
         Raises ExternalCommandError on timeout. Distinct from
         ChartManagerError so the CLI exit-code mapping treats this as a
         tool-level failure, matching how subprocess failures bubble up
         elsewhere.
         """
-        deadline = time.monotonic() + _parse_duration(timeout)
+        deadline = time.monotonic() + timeout
         # Keep up to _MAX_RECENT_STDERRS *distinct* stderrs in arrival order
         # so a flapping endpoint (DNS then 503 then connection refused) is
         # legible in the final timeout message instead of being collapsed to
@@ -334,36 +344,32 @@ class Kubectl:
             time.sleep(poll_interval)
         detail = "; ".join(recent_stderrs) if recent_stderrs else "<empty>"
         raise ExternalCommandError(
-            f"kube-apiserver did not become ready within {timeout} "
+            f"kube-apiserver did not become ready within {format_duration(timeout)} "
             f"(recent responses: {detail})"
         )
 
-    def wait_nodes_ready(self, *, timeout: str = "10m") -> None:
+    def wait_nodes_ready(self, *, timeout: float) -> None:
         """Wait until every cluster node reports Ready.
 
         Local bootstrap uses this CNI-neutral gate after installing whichever
         networking chart the repository selected.
         """
-        self._run(["wait", "--for=condition=Ready", "nodes", "--all", f"--timeout={timeout}"])
+        self._wait(["wait", "--for=condition=Ready", "nodes", "--all"], timeout, capture=True)
 
     def wait_certificate_ready(
-        self, name: str, *, namespace: str, timeout: str = "120s"
+        self, name: str, *, namespace: str, timeout: float
     ) -> None:
         """Block until cert-manager marks `Certificate/<name>` Ready.
 
-        Thin wrapper around `kubectl wait --for=condition=Ready`, with a
-        kube-style timeout. The cert-manager Certificate's `Ready` condition
-        flips True only after the controller has issued a x509 cert and the
-        backing Secret has been populated; this is the right gate for the
-        `apps-wildcard` lab cert before we start advertising URLs whose TLS
-        depends on it. Propagates ExternalCommandError on timeout / failure.
+        Thin wrapper around `kubectl wait --for=condition=Ready`. The
+        cert-manager Certificate's `Ready` condition flips True only after the
+        controller has issued a x509 cert and the backing Secret has been
+        populated; this is the right gate for the `apps-wildcard` lab cert
+        before we start advertising URLs whose TLS depends on it. Propagates
+        ExternalCommandError on timeout / failure.
         """
-        self._run(
-            [
-                "-n", namespace, "wait", "--for=condition=Ready",
-                f"certificate/{name}", f"--timeout={timeout}",
-            ],
-            capture=False,
+        self._wait(
+            ["-n", namespace, "wait", "--for=condition=Ready", f"certificate/{name}"], timeout
         )
 
     def list_virtualservices(self) -> list[VirtualService]:
@@ -426,28 +432,21 @@ class Kubectl:
             )
         return listing.stdout.split()
 
-    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: str) -> None:
+    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: float) -> None:
         """Block until one Deployment, StatefulSet or DaemonSet has rolled out."""
-        self._run(
-            ["-n", namespace, "rollout", "status", f"{kind}/{name}", f"--timeout={timeout}"],
-            capture=False,
-        )
+        self._wait(["-n", namespace, "rollout", "status", f"{kind}/{name}"], timeout)
 
-    def wait_established(self, crd: str, *, timeout: str) -> None:
+    def wait_established(self, crd: str, *, timeout: float) -> None:
         """Block until a CustomResourceDefinition is `Established`."""
-        self._run(
-            [
-                "wait", "--for=condition=Established",
-                f"customresourcedefinition/{crd}", f"--timeout={timeout}",
-            ],
-            capture=False,
+        self._wait(
+            ["wait", "--for=condition=Established", f"customresourcedefinition/{crd}"], timeout
         )
 
     def wait_workloads_ready(
         self,
         namespace: str,
-        timeout: str = "10m",
         *,
+        timeout: float,
         selector: str | None = None,
     ) -> None:
         """Run rollout status for every matching workload in a namespace, serially."""

@@ -30,7 +30,7 @@ CREDENTIALS_PASSWORD_KEY_ANNOTATION = "chartmanager.io/credentials-password-key"
 # Ready so the first browser hit isn't a TLS error.
 APPS_WILDCARD_CERT_NAME = "apps-wildcard"
 APPS_WILDCARD_CERT_NAMESPACE = "istio-ingress"
-APPS_WILDCARD_CERT_TIMEOUT = "120s"
+APPS_WILDCARD_CERT_TIMEOUT = 120.0
 
 # In-cluster CA secret produced by the lab cert-manager bootstrap. The
 # one-line keychain-import hint printed at the end of `up` references this

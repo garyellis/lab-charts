@@ -197,7 +197,7 @@ def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
     else:
         dev = session.attach("lab", runner=runner, settings=settings)
         dev.kind.clusters()
-        dev.kubectl.wait_apiserver_ready()
+        dev.kubectl.wait_apiserver_ready(timeout=60.0)
     dev.helm.upgrade_install("app", tmp_path, namespace="app", timeout=60.0)
 
     kind, kubectl, helm = (

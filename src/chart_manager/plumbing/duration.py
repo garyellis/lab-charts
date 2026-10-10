@@ -1,14 +1,16 @@
-"""Parse kube-style duration strings into seconds, and validate seconds.
+"""Parse kube-style duration strings into seconds, validate seconds, and render them.
 
 One rule for every timeout this package handles: a duration is a positive,
 finite number of seconds. `parse_duration` applies it to operator strings,
 `require_positive_seconds` to values that are already numeric.
+`format_duration` renders seconds for a `--timeout` flag.
 """
 
 from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal
 
 from chart_manager.plumbing.errors import ChartManagerError
 
@@ -64,3 +66,18 @@ def require_positive_seconds(name: str, value: float) -> None:
         raise ChartManagerError(f"{name} must be a number of seconds (got {value!r})")
     if not math.isfinite(value) or value <= 0:
         raise ChartManagerError(f"{name} must be positive and finite (got {value!r})")
+
+
+def format_duration(seconds: float) -> str:
+    """Render seconds as a Go duration string for helm's and kubectl's `--timeout` flag.
+
+    Plain decimal seconds only, fractional part preserved: 300.0 -> "300s",
+    1.5 -> "1.5s", 1e-05 -> "0.00001s". Going through `Decimal(repr(...))`
+    keeps the shortest round-tripping digits and avoids both the "1e-05s"
+    exponent form (Go's `time.ParseDuration` rejects it) and a noisy
+    trailing ".0". Negative and non-finite values are programming errors:
+    request validation rejects them long before a subprocess is built.
+    """
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(f"duration must be finite and >= 0 (got {seconds!r})")
+    return f"{Decimal(repr(float(seconds))).normalize():f}s"
