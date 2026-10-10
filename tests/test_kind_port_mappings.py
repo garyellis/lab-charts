@@ -137,6 +137,6 @@ def test_container_host_ports_reads_host_ports_from_docker(
         {_ps_argv("kind"): ps, **{_inspect_argv(name): reply for name, reply in inspect.items()}}
     )
 
-    assert Kind(runner=runner).container_host_ports("kind") == expected
+    assert Kind(runner, docker_host=None, timeout=None).container_host_ports("kind") == expected
     # Label-based discovery, then one inspect per listed node.
     assert runner.calls == [_ps_argv("kind"), *(_inspect_argv(name) for name in inspect)]

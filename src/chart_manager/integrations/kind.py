@@ -44,24 +44,23 @@ class Kind:
     identity is already a per-call argument here and a second, instance-level
     way to say it would be a false symmetry with two sources of truth.
 
-    What *was* ambient is the docker daemon the node containers live on.
+    What is ambient is the docker daemon the node containers live on.
     `docker_host` scopes that to this adapter via `DOCKER_HOST` on each
     invocation, so one process can manage kind clusters on two daemons
-    without touching its own environment. None = the ambient daemon, which
-    is exactly today's behavior.
+    without touching its own environment. None = the ambient daemon.
     """
 
     def __init__(
         self,
         runner: CommandRunner,
         *,
-        docker_host: str | None = None,
-        timeout: float | None = None,
+        docker_host: str | None,
+        timeout: float | None,
     ) -> None:
         """Bind a runner and pin every invocation to a daemon and timeout."""
         self.runner = runner
         self._env = {"DOCKER_HOST": docker_host} if docker_host is not None else None
-        # Per-subprocess wall-clock cap. None = unbounded (today's behavior);
+        # Per-subprocess wall-clock cap. None = unbounded;
         # nothing else bounds `docker ps` or a `kind create cluster`.
         self.timeout = timeout
 
