@@ -104,7 +104,7 @@ def installed(session: Session) -> dict[tuple[str, str], str]:
     """Every Helm release in the cluster, in any state: (namespace, name) -> status."""
     return {
         (info.namespace, info.name): info.status
-        for info in session.helm.list_releases(all_namespaces=True, any_status=True)
+        for info in session.helm.list_releases(all_namespaces=True)
     }
 
 

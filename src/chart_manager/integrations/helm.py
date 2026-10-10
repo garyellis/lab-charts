@@ -398,23 +398,19 @@ class Helm:
         *,
         all_namespaces: bool = True,
         namespace: str | None = None,
-        any_status: bool = False,
     ) -> list[ReleaseInfo]:
         """Return the set of helm releases known to the cluster.
 
         `all_namespaces=True` (the default) runs `helm list -A`, which is
         what the lab installer needs to dedupe across observability +
         kube-system + cert-manager etc. Pass `all_namespaces=False` together
-        with `namespace=` to scope to a single namespace. Helm lists only deployed and
-        failed releases unless `any_status` adds `--all`.
+        with `namespace=` to scope to a single namespace.
         """
         args = ["list", "-o", "json"]
         if all_namespaces:
             args.append("-A")
         elif namespace is not None:
             args.extend(["-n", namespace])
-        if any_status:
-            args.append("--all")
         raw = self._run(args, capture=True).stdout.strip()
         if not raw:
             return []

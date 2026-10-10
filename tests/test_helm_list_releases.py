@@ -64,3 +64,12 @@ def test_list_releases_tolerates_missing_revision() -> None:
     releases = _helm(FakeCommandRunner(stdout=payload)).list_releases()
 
     assert releases == [ReleaseInfo(name="x", namespace="y", revision=0, status="deployed")]
+
+
+def test_list_releases_lists_every_status_without_the_all_flag() -> None:
+    # Helm 4 lists releases in every status by default and rejects `--all`.
+    runner = FakeCommandRunner(stdout="[]")
+
+    _helm(runner).list_releases()
+
+    assert runner.calls == [("helm", "list", "-o", "json", "-A")]

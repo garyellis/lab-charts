@@ -162,4 +162,4 @@ def test_installed_maps_every_release_in_any_state_from_one_helm_list() -> None:
     releases = installed(_lab(runner))
 
     assert releases == {("apps", "web"): "deployed", ("data", "db"): "pending-install"}
-    assert [plain_argv(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A", "--all")]
+    assert [plain_argv(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A")]
