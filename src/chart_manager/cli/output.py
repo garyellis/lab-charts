@@ -10,6 +10,9 @@ usage error.
 An explicit `json` also silences narration (see `resolve`). `--output` names a
 format; commands that write a file take `--to`.
 
+`finish()` writes a result's document and exits with its outcome's code;
+`emit()` writes a document with no outcome, such as a dry-run plan.
+
 The global `-o` travels on `ctx.obj`, so only commands that call `resolve()`
 see it.
 """
@@ -199,7 +202,7 @@ def to_json(document: Any) -> str:
 
 
 def emit(data: Any, *, mode: str, table: Table | None = None) -> None:
-    """Write one wire document in the resolved `--output` form.
+    """Write a document that has no outcome in the resolved `--output` form.
 
     The caller builds the table; `table=None` is for callers that render their
     own terminal form and reach here only for json/yaml. Machine forms use

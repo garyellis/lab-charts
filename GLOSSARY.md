@@ -42,7 +42,7 @@ Only a Kubernetes `Service` (or Istio `VirtualService`). Not a name for packages
 
 **Document**:
 The JSON or YAML form of a command's result, produced by `to_document`; its keys are the
-result's field names.
+result's field names. Properties are not in it, and a field marked `wire: False` is left out.
 _Avoid_: wire document, payload
 
 ### Charts and clusters
