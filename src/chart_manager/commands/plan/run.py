@@ -8,11 +8,16 @@ from chart_manager.commands import publish, test, validate
 from chart_manager.commands.plan.models import PlannedRow, PlanOutcome, PlanRequest
 from chart_manager.integrations.git import Git
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
 def run(
-    request: PlanRequest, *, workspace: RepositoryWorkspace, runner: CommandRunner
+    request: PlanRequest,
+    *,
+    workspace: RepositoryWorkspace,
+    runner: CommandRunner,
+    settings: Settings,
 ) -> PlanOutcome:
     """The validation rows, chart tests and charts to publish that the changed files select.
 
@@ -30,7 +35,8 @@ def run(
         )
     changes = request.changes
     if changes is None:
-        changes = tuple(Git(workspace.root, runner).changed_files(request.base))
+        git = Git(workspace.root, runner, timeout=settings.command_timeout)
+        changes = tuple(git.changed_files(request.base))
     paths = tuple(sorted({Path(raw).as_posix() for raw in changes if raw}))
     validation = validate.select(paths, workspace=workspace)
     tests = test.select(paths, workspace=workspace)

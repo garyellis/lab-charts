@@ -49,8 +49,8 @@ def run(
         "kyverno": Kyverno(runner, timeout=timeout).preflight,
         "kubectl": Kubectl(runner, context=context, timeout=timeout).preflight,
         "kind": Kind(runner, docker_host=settings.docker_host, timeout=timeout).preflight,
-        "git": Git(root, runner).preflight,
-        "github": Github(root, runner).preflight,
+        "git": Git(root, runner, timeout=timeout).preflight,
+        "github": Github(root, runner, timeout=timeout).preflight,
         "renovate": partial(
             Renovate(runner).preflight, token_configured=settings.renovate_token is not None
         ),

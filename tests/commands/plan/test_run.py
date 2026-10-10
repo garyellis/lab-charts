@@ -10,6 +10,7 @@ from chart_manager.commands import plan
 from chart_manager.commands.plan.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv, workspace_for
 
@@ -22,7 +23,12 @@ def _workspace(root: Path) -> RepositoryWorkspace:
 
 
 def _run(root: Path, request: plan.PlanRequest, runner: FakeCommandRunner | None = None):  # type: ignore[no-untyped-def]
-    return run(request, workspace=_workspace(root), runner=runner or FakeCommandRunner())
+    return run(
+        request,
+        workspace=_workspace(root),
+        runner=runner or FakeCommandRunner(),
+        settings=Settings(),
+    )
 
 
 def _with_validation(chart: Path, *envs: str) -> None:

@@ -105,7 +105,12 @@ def plan(
             all_charts=all_charts,
             charts=tuple(charts or ()),
         )
-        outcome = run(request, workspace=workspace, runner=container.command_runner())
+        outcome = run(
+            request,
+            workspace=workspace,
+            runner=container.command_runner(),
+            settings=container.settings,
+        )
         # Spec errors fail only the git-diff matrix.
         if request.changes is None and outcome.spec_errors:
             detail = "\n".join(f"- {error}" for error in outcome.spec_errors)
@@ -115,7 +120,9 @@ def plan(
         return
 
     request = PlanRequest(changes=_changed_paths(changed_files, changed_file))
-    outcome = run(request, workspace=workspace, runner=container.command_runner())
+    outcome = run(
+        request, workspace=workspace, runner=container.command_runner(), settings=container.settings
+    )
     output_mod.finish(outcome, mode=mode, render=lambda outcome: _print_table(outcome, for_))
 
 

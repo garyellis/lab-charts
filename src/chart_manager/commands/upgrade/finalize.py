@@ -26,6 +26,7 @@ from chart_manager.plumbing.yaml_files import (
     load_yaml_file,
     parse_yaml_mapping,
 )
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Inside Renovate's checkout, stderr is the only record of a finalize run.
@@ -125,6 +126,7 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
+    settings: Settings,
 ) -> FinalizeResult:
     """Finalize Renovate's edits without trusting an upstream wrapper version."""
     root = workspace.root
@@ -138,7 +140,8 @@ def run(
     )
     baseline_file = chart_rel / CHART_FILE
     try:
-        baseline_text = Git(root, runner).show(_BASELINE_REF, baseline_file)
+        git = Git(root, runner, timeout=settings.command_timeout)
+        baseline_text = git.show(_BASELINE_REF, baseline_file)
     except MissingToolError:
         raise
     except ExternalCommandError as exc:

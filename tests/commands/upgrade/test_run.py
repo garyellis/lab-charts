@@ -14,6 +14,7 @@ from chart_manager.commands.upgrade import (
 )
 from chart_manager.commands.upgrade.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import load_chart
 from chart_manager.shared.events.model import BuildPhase
 from chart_manager.shared.events.writer import EventWriter
@@ -80,8 +81,8 @@ def _upgrade(
         UpgradeRequest(chart=load_chart(chart), dry_run=dry_run),
         workspace=workspace_for(tmp_path),
         runner=runner,
+        settings=Settings(RENOVATE_TOKEN=SecretStr("renovate-token")),
         events=EventWriter(source="chart-manager", store=lambda: events),
-        renovate_token=SecretStr("renovate-token"),
     )
 
 

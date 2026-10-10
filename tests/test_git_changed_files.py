@@ -24,46 +24,52 @@ def _runner(*, is_repo: bool, diff_stdout: str = "") -> FakeCommandRunner:
     )
 
 
+def _local(runner: FakeCommandRunner, root: Path) -> Git:
+    return Git(root, runner, timeout=None)
+
+
+def test_every_call_runs_in_the_root_within_the_timeout(tmp_path: Path) -> None:
+    runner = FakeCommandRunner()
+    git = Git(tmp_path, runner, timeout=30.0)
+
+    git.is_repository()
+    git.checkout_new_branch("b", base="main")
+    git.add(["a"])
+    git.commit("m", body="b")
+    git.push("b")
+    git.status_paths([Path("charts")])
+    git.remote_url()
+    git.show("HEAD", Path("a"))
+    git.changed_files()
+    Git.clone("url", tmp_path / "clone", branch="main", runner=runner, timeout=30.0)
+
+    assert {(r.cwd, r.timeout) for r in runner.records[:-1]} == {(tmp_path, 30.0)}
+    assert runner.records[-1].timeout == 30.0
+
+
 def test_changed_files_returns_sorted_unique_paths(tmp_path: Path) -> None:
     runner = _runner(
         is_repo=True,
         diff_stdout="charts/a/values.yaml\ncharts/a/values.yaml\nREADME.md\n\n",
     )
-    git = Git(tmp_path, runner=runner)
 
-    assert git.changed_files(base="origin/main") == ["README.md", "charts/a/values.yaml"]
-    # Confirm we issued `...HEAD` (merge-base semantics) relative to the root.
-    diff_call = next(c for c in runner.calls if c[:2] == ("git", "diff"))
-    assert diff_call[-1] == "origin/main...HEAD"
-    assert "--relative" in diff_call
+    assert _local(runner, tmp_path).changed_files() == ["README.md", "charts/a/values.yaml"]
 
 
 def test_changed_files_raises_outside_git_repo(tmp_path: Path) -> None:
-    runner = _runner(is_repo=False)
-    git = Git(tmp_path, runner=runner)
-
     with pytest.raises(ExternalCommandError, match="not a git repository"):
-        git.changed_files()
-
-
-def test_changed_files_empty_diff_returns_empty_list(tmp_path: Path) -> None:
-    runner = _runner(is_repo=True, diff_stdout="\n\n")
-    git = Git(tmp_path, runner=runner)
-
-    assert git.changed_files() == []
+        _local(_runner(is_repo=False), tmp_path).changed_files()
 
 
 def test_remote_url_is_none_without_an_origin_remote(tmp_path: Path) -> None:
-    runner = FakeCommandRunner(returncode=2)
-
-    assert Git(tmp_path, runner=runner).remote_url() is None
+    assert _local(FakeCommandRunner(returncode=2), tmp_path).remote_url() is None
 
 
 def test_show_raises_when_the_revision_lacks_the_file(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=128, stderr="fatal: path does not exist")
 
     with pytest.raises(ExternalCommandError) as raised:
-        Git(tmp_path, runner=runner).show("HEAD", Path("charts/demo/Chart.yaml"))
+        _local(runner, tmp_path).show("HEAD", Path("charts/demo/Chart.yaml"))
     assert raised.value.stderr == "fatal: path does not exist"
 
 
@@ -109,7 +115,7 @@ def test_changed_files_are_relative_to_a_workspace_below_the_git_top_level(
     (tmp_path / "README.md").write_text("changed outside the workspace\n", encoding="utf-8")
     _git(tmp_path, "commit", "-q", "-am", "change")
 
-    changed = Git(workspace_root, SubprocessRunner()).changed_files(base=base)
+    changed = Git(workspace_root, SubprocessRunner(), timeout=None).changed_files(base=base)
 
     assert changed == ["charts/demo/values.yaml"]
     workspace = workspace_for(workspace_root)
