@@ -20,7 +20,7 @@ def test_every_call_runs_in_the_repo_within_the_timeout(tmp_path: Path) -> None:
     runner = FakeCommandRunner(stdout="[]")
     github = Github(tmp_path, runner, timeout=30.0)
 
-    github.find_open_pr_for_branch("b")
+    github.find_open_pr_for_branch("b", base="main")
     github.find_open_prs_for_branch_prefix("renovate/")
     github.read_file_at_ref("Chart.yaml", "main")
     github.create_pr(title="t", body="b", head="h", base="main")
@@ -42,15 +42,15 @@ def test_create_pr_answers_the_last_url_gh_prints(tmp_path: Path) -> None:
         pytest.param([], None, id="none-open"),
         pytest.param(
             [
-                {"url": "https://x/8", "number": 8, "baseRefName": "release"},
-                {"url": "https://x/9", "number": 9, "baseRefName": "main"},
+                {"url": "https://x/8", "number": 8},
+                {"url": "https://x/9", "number": 9},
             ],
-            PullRequest(url="https://x/9", number=9),
-            id="first-into-base",
+            PullRequest(url="https://x/8", number=8),
+            id="first-listed",
         ),
     ],
 )
-def test_find_open_pr_answers_the_first_pr_into_the_base(
+def test_find_open_pr_answers_the_first_listed_pr(
     tmp_path: Path, listed: list[dict[str, object]], expected: PullRequest | None
 ) -> None:
     runner = FakeCommandRunner(stdout=json.dumps(listed))
@@ -62,7 +62,7 @@ def test_a_pr_listing_that_is_not_json_raises(tmp_path: Path) -> None:
     github = _github(FakeCommandRunner(stdout="not json"), tmp_path)
 
     with pytest.raises(ExternalCommandError, match="non-JSON"):
-        github.find_open_pr_for_branch("b")
+        github.find_open_pr_for_branch("b", base="main")
     with pytest.raises(ExternalCommandError, match="non-JSON"):
         github.find_open_prs_for_branch_prefix("renovate/")
 

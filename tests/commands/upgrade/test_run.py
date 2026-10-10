@@ -30,7 +30,6 @@ def _prs(*branches: str, numbered: bool = True) -> Reply:
             [
                 {
                     "url": f"https://example.test/pull/{7 + 2 * index}",
-                    "baseRefName": "main",
                     "headRefName": branch,
                     **({"number": 7 + 2 * index} if numbered else {}),
                 }
