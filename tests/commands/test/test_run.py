@@ -157,7 +157,7 @@ def test_skip_requires_on_an_existing_cluster_verifies_instead_of_installing(
         ' {"name": "db", "namespace": "data", "revision": "1", "status": "failed"}]'
     )
     runner = kind_runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     outcome = _run(repo, runner, skip_requires=True)
@@ -172,7 +172,7 @@ def test_skip_requires_names_a_missing_requirement_before_installing_anything(
 ) -> None:
     listing = '[{"name": "cni", "namespace": "kube-system", "revision": "1", "status": "deployed"}]'
     runner = kind_runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     with pytest.raises(ChartManagerError, match="app requires db:minimal, not installed in data"):

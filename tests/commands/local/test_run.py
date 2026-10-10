@@ -107,7 +107,7 @@ def test_skip_installed_skips_deployed_and_failed_releases(repo: Path) -> None:
         ' {"name": "app", "namespace": "apps", "revision": "1", "status": "pending-install"}]'
     )
     runner = kind_runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     result = _up(repo, runner, skip_installed=True)
