@@ -13,7 +13,7 @@ table below is the part a reviewer actually needs to check against Flux's
 documented condition semantics, and it is now directly unit-testable.
 
 Deliberately *not* in `state.py`: that module is the vocabulary shared by
-monitor, test, promote, wire and the CLI renderer. These rules are the
+monitor, test, promote and the CLI renderer. These rules are the
 rollout watcher's alone, and they drag in `integrations.kubectl` status types
 that the vocabulary does not otherwise need.
 """

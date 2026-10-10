@@ -5,18 +5,20 @@ import logging
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.semver import parse_semver
 from chart_manager.shared.events.writer import EventWriter
 
 from .editor import set_version
 from .scanner import HelmReleaseMatch, scan
-from .state import PROMOTE_PHASE, PromoteStatus
+from .state import PROMOTE_OUTCOME, PROMOTE_PHASE, PromoteStatus
 from .telemetry import emit_promotion
 
 _LOG = logging.getLogger(__name__)
@@ -41,12 +43,20 @@ class PromoteResult:
     `status` is the whole state machine.
     """
 
+    chart: str
+    version: str
+    environment: str
     status: PromoteStatus
     matches: list[HelmReleaseMatch]
     changed_files: list[Path] = field(default_factory=list)
     branch: str | None = None
     pull_request: PullRequest | None = None
     downgrades: list[HelmReleaseMatch] = field(default_factory=list)
+
+    @property
+    def outcome(self) -> Outcome:
+        """How the promotion ended, for its exit code."""
+        return PROMOTE_OUTCOME[self.status]
 
 
 def _loggable_repo(url: str) -> str:
@@ -157,6 +167,13 @@ def _promote_in_workdir(
     if not scan_root.is_relative_to(workdir_resolved):
         raise ChartManagerError(f"--path escapes the cloned flux repo: {request.path}")
 
+    # Every result names the chart, version and environment it promoted.
+    result = partial(
+        PromoteResult,
+        chart=request.chart_name,
+        version=request.version,
+        environment=request.environment,
+    )
     matches = scan(scan_root, chart_name=request.chart_name)
     if not matches:
         raise ChartManagerError(
@@ -166,7 +183,10 @@ def _promote_in_workdir(
     if not drift:
         # NO_CHANGES wins over DRY_RUN even when --dry-run was passed:
         # a dry run that found nothing to plan did not plan anything.
-        return PromoteResult(status=PromoteStatus.NO_CHANGES, matches=matches)
+        return result(
+            status=PromoteStatus.NO_CHANGES,
+            matches=matches,
+        )
 
     downgrades = [m for m in drift if _is_downgrade(m.current_version, request.version)]
 
@@ -182,7 +202,7 @@ def _promote_in_workdir(
     body = _pr_body(request, drift, workdir_resolved)
 
     if request.dry_run:
-        return PromoteResult(
+        return result(
             status=PromoteStatus.DRY_RUN,
             matches=matches,
             changed_files=changed_files,
@@ -199,7 +219,7 @@ def _promote_in_workdir(
             request.environment,
             len(downgrades),
         )
-        return PromoteResult(
+        return result(
             status=PromoteStatus.ABORTED,
             matches=matches,
             branch=branch,
@@ -211,7 +231,7 @@ def _promote_in_workdir(
 
     existing = github.find_open_pr_for_branch(branch, base=request.base_branch)
     if existing is not None:
-        return PromoteResult(
+        return result(
             status=PromoteStatus.ALREADY_OPEN,
             matches=matches,
             branch=branch,
@@ -257,7 +277,7 @@ def _promote_in_workdir(
             f"push succeeded but `gh pr create` failed for branch {branch}: {exc}"
         ) from exc
     # PUSHED vs PR_OPENED is decided here, once.
-    return PromoteResult(
+    return result(
         status=PromoteStatus.PR_OPENED if pr.url else PromoteStatus.PUSHED,
         matches=matches,
         changed_files=changed_files,

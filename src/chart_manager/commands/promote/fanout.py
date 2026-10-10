@@ -40,6 +40,7 @@ from chart_manager.commands.promote.state import (
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
 
 __all__ = ["RunResult", "run_fanout", "run_matched", "sorted_by_ref"]
 
@@ -50,9 +51,8 @@ class HasRef(Protocol):
     """Any per-HelmRelease outcome; all this module needs is its identity.
 
     Structural rather than a shared base class: `MonitorOutcome` and
-    `TestOutcome` are unrelated frozen dataclasses, and inheriting from a
-    common parent for the one or two attributes this module reads would put
-    a coupling in the wire contract that nothing else needs.
+    `TestOutcome` are unrelated frozen dataclasses, and this module reads
+    only their `ref`.
     """
 
     @property
@@ -82,6 +82,8 @@ class RunResult[OutcomeT: HasVerdict]:
     `TypeAliasType` is not callable.
     """
 
+    chart: str
+    version: str
     outcomes: tuple[OutcomeT, ...]
     total_duration_seconds: float
     total_timed_out: bool
@@ -92,6 +94,11 @@ class RunResult[OutcomeT: HasVerdict]:
         return bool(self.outcomes) and all(
             o.verdict in PASSING_VERDICTS for o in self.outcomes
         )
+
+    @property
+    def outcome(self) -> Outcome:
+        """How the run ended, for its exit code."""
+        return Outcome.SUCCESS if self.ok else Outcome.FAILED
 
     @property
     def failures(self) -> tuple[OutcomeT, ...]:
@@ -213,6 +220,8 @@ def run_matched[OutcomeT: HasVerdict](
         )
         elapsed = clock() - start
         return RunResult(
+            chart=chart_name,
+            version=version,
             outcomes=(no_match(elapsed),),
             total_duration_seconds=elapsed,
             total_timed_out=False,
@@ -265,6 +274,8 @@ def run_matched[OutcomeT: HasVerdict](
 
     elapsed = clock() - start
     result = RunResult(
+        chart=chart_name,
+        version=version,
         outcomes=sorted_by_ref(outcomes),
         total_duration_seconds=elapsed,
         total_timed_out=cancel_event.is_set(),
