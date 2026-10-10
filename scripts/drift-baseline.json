@@ -1,6 +1,6 @@
 {
   "init_params_defaulting_to_none": 15,
   "or_default_fallbacks": 6,
-  "protocols_with_fewer_than_2_impls": 1,
+  "protocols_with_fewer_than_2_impls": 0,
   "nested_ruff_toml": 0
 }

@@ -6,18 +6,23 @@ from chart_manager.commands.validate import cli as validate_cli
 from .conftest import FakeCommandRunner, cli
 
 
-def test_sync_forwards_only_explicit_pin_update(monkeypatch):
+def test_sync_updates_pins_only_when_asked(monkeypatch):
     calls = []
 
-    def sync(workspace, **kwargs):
-        calls.append(kwargs["update"])
-        return SimpleNamespace(
-            generation_published=True,
-            lock=SimpleNamespace(generation="sha256:" + "a" * 64),
-            generation_path=Path("/cache/repos"),
-        )
+    def verb(name):
+        def run(workspace, store, **kwargs):
+            calls.append(name)
+            return SimpleNamespace(
+                published=True,
+                lock=SimpleNamespace(generation="sha256:" + "a" * 64),
+                generation_path=Path("/cache/repos"),
+            )
 
-    monkeypatch.setattr(validate_cli, "sync_schemas", sync)
+        return run
+
+    monkeypatch.setattr(
+        validate_cli, "schema_lock", SimpleNamespace(sync=verb("sync"), update=verb("update"))
+    )
     monkeypatch.setattr(validate_cli, "_container", lambda: SimpleNamespace(
         workspace=lambda: None,
         settings=SimpleNamespace(
@@ -28,7 +33,7 @@ def test_sync_forwards_only_explicit_pin_update(monkeypatch):
     assert cli("schemas", "sync").exit_code == 0
     result = cli("schemas", "sync", "--update")
     assert result.exit_code == 0
-    assert calls == [False, True]
+    assert calls == ["sync", "update"]
     assert "schema generation" in result.stdout
 
 

@@ -28,7 +28,7 @@ from chart_manager.commands.validate.output import details, to_json, to_markdown
 from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.commands.validate.run import run
-from chart_manager.commands.validate.schemas.app import sync as sync_schemas
+from chart_manager.commands.validate.schemas import lock as schema_lock
 from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.kubeconform import GitHubKubeconformSchemaSource
@@ -326,19 +326,18 @@ def sync(
 ) -> None:
     """Cache complete upstream schema repositories at the committed pins."""
     container = _container()
-    timeout = container.settings.command_timeout
-    result = sync_schemas(
-        container.workspace(),
-        store=open_schema_store(
-            container.command_runner(), container.settings.schema_cache_root
-        ),
-        source=GitHubKubeconformSchemaSource(
+    workspace = container.workspace()
+    store = open_schema_store(container.command_runner(), container.settings.schema_cache_root)
+    if update:
+        timeout = container.settings.command_timeout
+        source = GitHubKubeconformSchemaSource(
             timeout=timeout if timeout is not None and timeout > 0 else 15.0,
             github_token=container.settings.github_token,
-        ),
-        update=update,
-    )
-    action = "published" if result.generation_published else "ready"
+        )
+        result = schema_lock.update(workspace, store, resolve_ref=source.resolve_ref)
+    else:
+        result = schema_lock.sync(workspace, store)
+    action = "published" if result.published else "ready"
     console.print(
         f"schema generation {result.lock.generation} {action} at {result.generation_path}"
     )
