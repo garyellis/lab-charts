@@ -29,6 +29,10 @@ from tests.conftest import FakeCommandRunner
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kyverno"
 
 
+def _kyverno(runner: FakeCommandRunner) -> Kyverno:
+    return Kyverno(runner, timeout=None)
+
+
 
 def _load(name: str) -> str:
     return (FIXTURE_DIR / name).read_text()
@@ -44,7 +48,7 @@ def _seed_manifest(dir_: Path, name: str = "deploy.yaml") -> Path:
 def test_apply_args_include_policy_report_json_and_per_file_resources(tmp_path: Path) -> None:
     manifest = _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/policies/a"), Path("/policies/b.yaml")])
 
@@ -71,7 +75,7 @@ def test_apply_recurses_into_subdirectories(tmp_path: Path) -> None:
     a = _seed_manifest(nested, "deployment.yaml")
     b = _seed_manifest(nested, "service.yml")
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -84,7 +88,7 @@ def test_apply_empty_manifests_dir_short_circuits_without_invoking_kyverno(tmp_p
     # An empty rendered tree must not shell out — kyverno without
     # --resource args would otherwise hang or error confusingly.
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -95,7 +99,7 @@ def test_apply_empty_manifests_dir_short_circuits_without_invoking_kyverno(tmp_p
 
 def test_apply_empty_policy_paths_raises_chart_manager_error(tmp_path: Path) -> None:
     """Inside the hierarchy, so the CLI prints a message instead of a traceback."""
-    ky = Kyverno(runner=FakeCommandRunner(returncode=0, stdout=""))
+    ky = _kyverno(FakeCommandRunner(returncode=0, stdout=""))
     with pytest.raises(ChartManagerError):
         ky.apply(tmp_path, policy_paths=[])
 
@@ -103,7 +107,7 @@ def test_apply_empty_policy_paths_raises_chart_manager_error(tmp_path: Path) -> 
 def test_pass_fixture_parses_to_zero_failures(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -121,7 +125,7 @@ def test_pass_fixture_parses_to_zero_failures(tmp_path: Path) -> None:
 def test_fail_fixture_populates_failures_with_expected_policy(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=1, stdout=_load("fail.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -142,7 +146,7 @@ def test_tool_error_fixture_raises_external_command_error(tmp_path: Path) -> Non
     runner = FakeCommandRunner(
         returncode=2, stdout=_load("tool-error.json"), stderr="kyverno: panic"
     )
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     with pytest.raises(ExternalCommandError) as exc:
         ky.apply(tmp_path, policy_paths=[Path("/p")])
@@ -159,7 +163,7 @@ def test_empty_stdout_returns_empty_report_without_raising(tmp_path: Path) -> No
     # treat this as a parse failure.
     _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=0, stdout="")
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -174,7 +178,7 @@ def test_nonzero_rc_with_parseable_json_returns_report_without_raising(tmp_path:
     # with a tool crash — only unparseable output should raise.
     _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=1, stdout=_load("fail.json"), stderr="")
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -193,7 +197,7 @@ def test_unknown_result_string_maps_to_error(tmp_path: Path) -> None:
             '"summary": {"pass": 0, "fail": 0, "warn": 0, "error": 1, "skip": 0}}'
         ),
     )
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     report = ky.apply(tmp_path, policy_paths=[Path("/p")])
 
@@ -213,7 +217,7 @@ def test_argv_length_guard_raises_chart_manager_error(tmp_path: Path) -> None:
     for i in range(3500):
         (nested / f"{long_stem}-{i}.yaml").write_text("kind: Pod\n")
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     # Operator-actionable (a legitimately large chart hits this), so it must
     # reach the CLI as a message, not a traceback.
@@ -227,7 +231,7 @@ def test_argv_length_guard_raises_chart_manager_error(tmp_path: Path) -> None:
 def test_extra_args_passed_through(tmp_path: Path) -> None:
     _seed_manifest(tmp_path)
     runner = FakeCommandRunner(returncode=0, stdout=_load("pass.json"))
-    ky = Kyverno(runner=runner)
+    ky = _kyverno(runner)
 
     ky.apply(tmp_path, policy_paths=[Path("/p")], extra_args=["--cluster-wide-resources"])
 

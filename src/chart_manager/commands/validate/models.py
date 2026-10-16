@@ -84,6 +84,7 @@ class ValidateOutcome:
     warnings: tuple[str, ...] = ()
     diagnostics: Diagnostics = Diagnostics()
 
+    @property
     def outcome(self) -> Outcome:
         """The run's exit reason: a spec error, then a tool error, then a failed check."""
         statuses = {result.status for row in self.rows for result in row.checks.values()}

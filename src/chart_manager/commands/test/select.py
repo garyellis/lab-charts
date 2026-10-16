@@ -7,11 +7,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE
+from chart_manager.api.v1alpha1.chart_lifecycle import DEFAULT_PROFILE, ChartTestSpec
+from chart_manager.api.v1alpha1.releases import LifecycleRelease, LocalChartRelease
 from chart_manager.plumbing.errors import CapabilityUnavailableError, ChartManagerError, SpecError
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.lifecycle import require_chart_test_profile
-from chart_manager.shared.workspace import RepositoryWorkspace
+from chart_manager.shared.charts.chart import chart_names, load_chart
+from chart_manager.shared.charts.lifecycle import (
+    CapabilityStatus,
+    chart_test_status,
+    require_chart_test,
+    require_chart_test_profile,
+)
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.workspace import WORKSPACE_FILE, RepositoryWorkspace, pattern_matches
 
 
 class ReasonCode(StrEnum):
@@ -62,14 +69,14 @@ def select(
 
     Raises `SpecError` when `charts` names an unknown chart or one without enabled chart tests.
     """
-    catalog = ChartTestCatalog(workspace.root, charts_dir=workspace.spec.charts_dir)
+    charts_dir = workspace.charts_root
     if charts:
-        return Selection(_explicit(charts, catalog))
-    enabled = catalog.enabled_names()
-    profiles = {chart: _default_profile(chart, catalog) for chart in enabled}
+        return Selection(_explicit(charts, charts_dir))
+    enabled = _enabled_names(charts_dir)
+    profiles = {chart: _default_profile(chart, charts_dir) for chart in enabled}
     if changes is None:
         return Selection(tuple(SelectedTest(chart, profiles[chart]) for chart in enabled))
-    reasons, errors = _reasons_for(changes, profiles, catalog, workspace)
+    reasons, errors = _reasons_for(changes, profiles, charts_dir, workspace)
     tests = tuple(
         SelectedTest(chart, profile, tuple(found))
         for (chart, profile), found in sorted(reasons.items())
@@ -77,9 +84,23 @@ def select(
     return Selection(tests, tuple(errors))
 
 
-def _default_profile(chart: str, catalog: ChartTestCatalog) -> str:
+def _chart_test(charts_dir: Path, chart: str) -> ChartTestSpec:
+    """The chart's enabled chart-test section; raises when it has none."""
+    return require_chart_test(load_chart(charts_dir / chart).lifecycle, chart_name=chart)
+
+
+def _enabled_names(charts_dir: Path) -> list[str]:
+    """Charts whose chart tests are enabled; a malformed chart fails rather than shrinking CI."""
+    return [
+        name
+        for name in chart_names(charts_dir)
+        if chart_test_status(load_chart(charts_dir / name).lifecycle) is CapabilityStatus.ENABLED
+    ]
+
+
+def _default_profile(chart: str, charts_dir: Path) -> str:
     """`DEFAULT_PROFILE` when the chart has it, else its first profile in sorted order."""
-    profiles = catalog.get(chart).spec.profiles
+    profiles = _chart_test(charts_dir, chart).profiles
     if not profiles:
         raise SpecError(f"chart '{chart}' has enabled chart tests but declares no profiles")
     if DEFAULT_PROFILE in profiles:
@@ -87,10 +108,10 @@ def _default_profile(chart: str, catalog: ChartTestCatalog) -> str:
     return sorted(profiles)[0]
 
 
-def _explicit(charts: Sequence[str], catalog: ChartTestCatalog) -> tuple[SelectedTest, ...]:
+def _explicit(charts: Sequence[str], charts_dir: Path) -> tuple[SelectedTest, ...]:
     """The named charts at their default profiles, or every bad name in one error."""
     requested = sorted(set(charts))
-    known = set(catalog.repository.list_names())
+    known = set(chart_names(charts_dir))
     unknown = [chart for chart in requested if chart not in known]
     unavailable: list[str] = []
     selected: list[SelectedTest] = []
@@ -98,7 +119,7 @@ def _explicit(charts: Sequence[str], catalog: ChartTestCatalog) -> tuple[Selecte
         if chart in unknown:
             continue
         try:
-            selected.append(SelectedTest(chart, _default_profile(chart, catalog)))
+            selected.append(SelectedTest(chart, _default_profile(chart, charts_dir)))
         except CapabilityUnavailableError:
             unavailable.append(chart)
     if unknown or unavailable:
@@ -114,7 +135,7 @@ def _explicit(charts: Sequence[str], catalog: ChartTestCatalog) -> tuple[Selecte
 def _reasons_for(
     changes: Sequence[str],
     profiles: dict[str, str],
-    catalog: ChartTestCatalog,
+    charts_dir: Path,
     workspace: RepositoryWorkspace,
 ) -> tuple[dict[tuple[str, str], list[Reason]], list[str]]:
     """Why `changes` select each (chart, profile); errors from `dependentTests` entries."""
@@ -127,8 +148,10 @@ def _reasons_for(
         if reason not in found:
             found.append(reason)
 
-    matches = workspace.matching_chart_test_patterns
-    fanout = [(path, pattern) for path in paths for pattern in matches(path)]
+    patterns = _fanout_patterns(workspace)
+    fanout = [
+        (path, pattern) for path in paths for pattern in patterns if pattern_matches(pattern, path)
+    ]
     for name, profile in profiles.items():
         for path, pattern in fanout:
             detail = _fanout_detail(pattern, workspace)
@@ -140,10 +163,12 @@ def _reasons_for(
             continue
         detail = f"changed file belongs to {chart}, which has chart tests enabled"
         add((chart, profiles[chart]), Reason(ReasonCode.CHART_CHANGE, path, detail))
-        for reference in catalog.get(chart).spec.dependent_tests:
+        for reference in _chart_test(charts_dir, chart).dependent_tests:
             target = f"{reference.chart}:{reference.profile}"
             try:
-                require_chart_test_profile(catalog.get(reference.chart).spec, reference.profile)
+                require_chart_test_profile(
+                    _chart_test(charts_dir, reference.chart), reference.profile
+                )
             except ChartManagerError as exc:
                 errors.append(f"{chart} dependentTests {target}: {exc}")
                 continue
@@ -153,6 +178,28 @@ def _reasons_for(
                 Reason(ReasonCode.DECLARED_DEPENDENT_TEST, path, detail),
             )
     return selected, errors
+
+
+def _fanout_patterns(workspace: RepositoryWorkspace) -> tuple[str, ...]:
+    """Patterns whose changes select every chart test.
+
+    These are the authored fanout, the workspace files, the shared charts, and the LocalCluster's
+    kind config and local bootstrap charts. A malformed LocalCluster fails selection.
+    """
+    implicit = [workspace.spec.local_cluster.as_posix(), WORKSPACE_FILE.as_posix()]
+    implicit.extend(
+        workspace.repo_chart_path(name).as_posix()
+        for name in workspace.spec.chart_test.shared_charts
+    )
+    if workspace.local_cluster_path.is_file():
+        cluster = load_cluster(workspace)
+        implicit.append(cluster.spec.cluster.config.as_posix())
+        implicit.extend(
+            release.chart.as_posix()
+            for release in cluster.spec.bootstrap.releases
+            if isinstance(release, (LifecycleRelease, LocalChartRelease))
+        )
+    return tuple(sorted({*workspace.spec.fanout.chart_test, *implicit}))
 
 
 def _fanout_detail(pattern: str, workspace: RepositoryWorkspace) -> str:

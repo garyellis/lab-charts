@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
@@ -18,8 +19,10 @@ class RenderDirState:
     exists: bool
     runs: int
 
-    def to_dict(self) -> dict[str, object]:
-        return {"path": str(self.path), "exists": self.exists, "runs": self.runs}
+    @property
+    def outcome(self) -> Outcome:
+        """Reading the render directory always succeeds."""
+        return Outcome.SUCCESS
 
 
 def render_dir_state(workspace: RepositoryWorkspace) -> RenderDirState:

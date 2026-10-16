@@ -9,11 +9,8 @@ from typer.testing import Result
 
 from chart_manager.commands.grafana import dashboard_export
 from chart_manager.commands.grafana.dashboard_export import ExportRequest, canonical_json
-from chart_manager.commands.grafana.dashboard_lint import lint_paths
-from chart_manager.commands.grafana.wire import lint_result_to_dict
 from chart_manager.plumbing.yaml_files import parse_yaml
-from tests.commands.grafana.conftest import PASSING_DASHBOARD as _PASSING_DASHBOARD
-from tests.conftest import cli, write_workspace
+from tests.conftest import PASSING_DASHBOARD, cli, write_workspace
 
 # --- surface: --to is the file, -o is the format ---------------------------
 #
@@ -45,6 +42,18 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> list[ExportRequest]:
     return requests
 
 
+def _export(*argv: str) -> Result:
+    return cli("grafana", "dashboard", "export", "u", "--url", "http://127.0.0.1:3000", *argv)
+
+
+def test_url_is_required(exporter: list[ExportRequest]) -> None:
+    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
+
+    assert result.exit_code == 2
+    assert "--url" in result.stderr
+    assert exporter == []
+
+
 def test_a_path_handed_to_output_is_a_usage_error_naming_to(
     exporter: list[ExportRequest],
 ) -> None:
@@ -54,10 +63,7 @@ def test_a_path_handed_to_output_is_a_usage_error_naming_to(
     "unknown output: charts/x.json" alone leaves the caller with a rejected
     flag and no idea where the path was supposed to go.
     """
-    result = cli(
-        "grafana", "dashboard", "export", "u",
-        "-o", "charts/grafana-dashboards/dashboards/x.json",
-    )
+    result = _export("-o", "charts/grafana-dashboards/dashboards/x.json")
 
     assert result.exit_code == 2
     assert "--to" in result.stderr
@@ -69,7 +75,7 @@ def test_the_output_flag_still_rejects_a_plain_typo(
     exporter: list[ExportRequest],
 ) -> None:
     """Guard the guard: the path hint must not be the only rejection path."""
-    result = cli("grafana", "dashboard", "export", "u", "-o", "jsonn")
+    result = _export("-o", "jsonn")
 
     assert result.exit_code == 2
     assert "unknown output" in result.stderr
@@ -79,16 +85,16 @@ def test_the_output_flag_still_rejects_a_plain_typo(
 def test_json_projection_is_the_canonical_document_on_stdout(
     exporter: list[ExportRequest],
 ) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "json")
+    result = _export("-o", "json")
 
     assert result.exit_code == 0
     assert result.stdout == canonical_json(_DASHBOARD)
     assert json.loads(result.stdout)["uid"] == "u"
-    assert exporter[0].uid == "u"
+    assert (exporter[0].uid, exporter[0].url) == ("u", "http://127.0.0.1:3000")
 
 
 def test_yaml_projection_is_the_same_object(exporter: list[ExportRequest]) -> None:
-    result = cli("grafana", "dashboard", "export", "u", "-o", "yaml")
+    result = _export("-o", "yaml")
 
     assert result.exit_code == 0
     assert parse_yaml(result.stdout) == _DASHBOARD
@@ -100,9 +106,7 @@ def test_to_writes_canonical_json_and_stdout_carries_the_summary(
     """`-o table` is the only mode where the file and stdout coexist."""
     destination = tmp_path / "nested" / "board.json"
 
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "table"
-    )
+    result = _export("--to", str(destination), "-o", "table")
 
     assert result.exit_code == 0
     # Missing parents are created, and the file is the git artifact.
@@ -118,9 +122,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
     """The document goes to exactly one place; `--to` is that place."""
     destination = tmp_path / "board.json"
 
-    result = cli(
-        "grafana", "dashboard", "export", "u", "--to", str(destination), "-o", "json"
-    )
+    result = _export("--to", str(destination), "-o", "json")
 
     assert result.exit_code == 0
     assert destination.read_text() == canonical_json(_DASHBOARD)
@@ -131,7 +133,7 @@ def test_to_takes_the_document_so_a_json_run_leaves_stdout_empty(
 #
 # `lint_paths([])` is `ok` -- that is `lint_paths` reporting "zero
 # findings", which is true. The *command* must not report the same thing as
-# success: a wrong --root or a --path that matches nothing produced a green
+# success: a wrong root or a --path that matches nothing produced a green
 # CI job that linted no files at all.
 
 
@@ -140,10 +142,10 @@ def _lint(*argv: str) -> Result:
 
 
 def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
-    tmp_path: Path,
+    root: Path,
 ) -> None:
-    write_workspace(tmp_path)
-    result = _lint("--root", str(tmp_path))
+    write_workspace(root)
+    result = _lint()
 
     assert result.exit_code == 1
     assert "no dashboards found" in result.stderr
@@ -153,10 +155,10 @@ def test_lint_dashboards_exits_nonzero_when_nothing_was_linted(
 
 
 def test_lint_dashboards_allow_empty_opts_back_into_exit_zero(
-    tmp_path: Path,
+    root: Path,
 ) -> None:
-    write_workspace(tmp_path)
-    result = _lint("--root", str(tmp_path), "--allow-empty")
+    write_workspace(root)
+    result = _lint("--allow-empty")
 
     assert result.exit_code == 0
     assert "no dashboards found" in result.stderr
@@ -166,7 +168,7 @@ def test_lint_dashboards_exit_zero_still_means_a_clean_lint(
     tmp_path: Path,
 ) -> None:
     good = tmp_path / "good.json"
-    good.write_text(_PASSING_DASHBOARD)
+    good.write_text(PASSING_DASHBOARD)
 
     result = _lint("--path", str(good))
 
@@ -174,7 +176,7 @@ def test_lint_dashboards_exit_zero_still_means_a_clean_lint(
     assert "1 dashboards passed" in result.stderr
 
 
-# --- the projections that carry the wire document ---------------------------
+# --- the projections -------------------------------------------------------
 
 
 def test_table_projection_is_one_greppable_line_per_finding(tmp_path: Path) -> None:
@@ -192,25 +194,39 @@ def test_table_projection_is_one_greppable_line_per_finding(tmp_path: Path) -> N
     assert any("[R002-uid]" in line for line in lines)
 
 
-def test_json_and_yaml_projections_are_the_same_wire_document(
-    tmp_path: Path,
-) -> None:
+def test_lint_json_is_the_findings_and_the_files_scanned(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text('{"panels": [], "templating": {"list": []}}')
-    expected = lint_result_to_dict(lint_paths([bad]))
+    path = bad.as_posix()
 
-    as_json = _lint("--path", str(bad), "-o", "json")
-    as_yaml = _lint("--path", str(bad), "-o", "yaml")
+    result = _lint("--path", str(bad), "-o", "json")
 
-    assert as_json.exit_code == 1
-    assert json.loads(as_json.stdout) == expected
-    assert parse_yaml(as_yaml.stdout) == expected
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        1,
+        {
+            "files_scanned": 1,
+            "findings": [
+                {"path": path, "rule": "R001-title", "message": "missing or empty .title"},
+                {"path": path, "rule": "R002-uid", "message": "missing or empty .uid"},
+                {
+                    "path": path,
+                    "rule": "R003-schema-version",
+                    "message": ".schemaVersion must be >= 38, got None",
+                },
+                {
+                    "path": path,
+                    "rule": "R007-templated-ds",
+                    "message": "no templating variable of type 'datasource' (dashboard is not portable)",
+                },
+            ],
+        },
+    )
 
 
 def test_lint_has_no_markdown_projection(tmp_path: Path) -> None:
     """`md` is offered only where a markdown projection exists (cli/output.py)."""
     good = tmp_path / "good.json"
-    good.write_text(_PASSING_DASHBOARD)
+    good.write_text(PASSING_DASHBOARD)
 
     result = _lint("--path", str(good), "-o", "md")
 

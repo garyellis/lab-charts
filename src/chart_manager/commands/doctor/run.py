@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from functools import partial
 
 from chart_manager.commands import validate
 from chart_manager.commands.doctor.models import DoctorReport
@@ -34,25 +35,31 @@ def run(
     `workspace` loads the repository; outside one the schema checks are skipped
     and git/gh probe `settings.root`.
     """
+    loaded: RepositoryWorkspace | WorkspaceNotFoundError
     try:
-        repository: RepositoryWorkspace | None = workspace()
-        schemas = validate.KubeconformSchemaDoctor(repository)
+        loaded = workspace()
     except WorkspaceNotFoundError as exc:
-        repository, schemas = None, validate.KubeconformSchemaDoctor(None, skip_reason=str(exc))
-    root = repository.root if repository else settings.root.resolve()
+        loaded = exc
+    root = settings.root.resolve() if isinstance(loaded, WorkspaceNotFoundError) else loaded.root
     timeout = settings.command_timeout
     context = settings.kube_context
     checks: dict[str, Callable[[], Sequence[Check]]] = {
-        "helm": Helm(runner, context=context, timeout=timeout).preflight,
+        "helm": Helm(runner, binary="helm", context=context, timeout=timeout).preflight,
         "kubeconform": Kubeconform(runner, timeout=timeout).preflight,
         "kyverno": Kyverno(runner, timeout=timeout).preflight,
         "kubectl": Kubectl(runner, context=context, timeout=timeout).preflight,
         "kind": Kind(runner, docker_host=settings.docker_host, timeout=timeout).preflight,
-        "git": Git(root, runner).preflight,
-        "github": Github(root, runner).preflight,
-        "renovate": Renovate(runner).preflight,
-        "schemas": schemas.preflight,
-        "events": preflight_event_store,
+        "git": Git(root, runner, timeout=timeout).preflight,
+        "github": Github(root, runner, timeout=timeout).preflight,
+        "renovate": partial(
+            Renovate(runner).preflight, token_configured=settings.renovate_token is not None
+        ),
+        "schemas": partial(
+            validate.schema_preflight,
+            loaded,
+            validate.open_schema_store(runner, settings),
+        ),
+        "events": partial(preflight_event_store, settings),
     }
     results = (result for name, check in checks.items() for result in _run_check(name, check))
     return DoctorReport(checks=tuple(results))

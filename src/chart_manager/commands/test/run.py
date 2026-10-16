@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import replace
 
+from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.commands.test.hooks import ChartTestHookRunner
 from chart_manager.commands.test.models import (
     ActionKind,
@@ -23,35 +24,29 @@ from chart_manager.commands.test.models import (
 )
 from chart_manager.commands.test.plan import (
     CompiledPlan,
+    Requires,
     SkippedRequirement,
     compile_plan,
-    without_required_helm_tests,
 )
 from chart_manager.integrations.helm import Helm
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError, SpecError
-from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart_tests import ChartTestCatalog
-from chart_manager.shared.charts.dependency_update import ensure_dependencies
-from chart_manager.shared.cluster import bootstrap
-from chart_manager.shared.cluster.converge import (
-    DEFAULT_TIMEOUT,
-    Release,
-    ReleaseFailed,
-    converge,
-    installed,
-    wait,
-)
-from chart_manager.shared.cluster.local_cluster import load_cluster
-from chart_manager.shared.cluster.progress import (
-    ProgressCallback,
+from chart_manager.plumbing.progress import (
+    Progress,
     detail,
-    emit,
     failure,
     info,
     step,
     warn,
 )
+from chart_manager.settings import Settings
+from chart_manager.shared.charts.dependency_update import ensure_dependencies
+from chart_manager.shared.cluster import bootstrap
+from chart_manager.shared.cluster.bootstrap import BootstrapStep
+from chart_manager.shared.cluster.converge import ReleaseFailed, converge, installed, wait
+from chart_manager.shared.cluster.local_cluster import load_cluster
+from chart_manager.shared.cluster.releases import release
 from chart_manager.shared.cluster.session import Session, attach, find, provision
 from chart_manager.shared.cluster.session import teardown as delete_cluster
 from chart_manager.shared.workspace import RepositoryWorkspace
@@ -76,7 +71,10 @@ def plan(request: ChartTestRequest, *, workspace: RepositoryWorkspace) -> Lifecy
     With `--skip-requires` the plan describes reusing an existing cluster, and warns
     about the fallback when none exists, which only a live cluster can decide.
     """
-    compiled = _compile(request, workspace, lint_helm=None)
+    requires: Requires = "skip" if request.skip_requires else "install"
+    compiled, _ = _compile(
+        request, workspace, load_cluster(workspace), lint_helm=None, requires=requires
+    )
     if not request.skip_requires:
         return compiled.plan
     if request.ensure_cluster:
@@ -100,7 +98,7 @@ def run(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     settings: Settings,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> ChartTestOutcome:
     """Provision, bootstrap, install the chart's requirements and the chart, then test it.
 
@@ -123,19 +121,21 @@ def run(
         if request.lint and not verify_only
         else None
     )
-    effective = replace(request, skip_requires=False) if fresh_cluster else request
-    compiled = _compile(effective, workspace, lint_helm=lint_helm)
+    requires: Requires = (
+        "install-untested" if fresh_cluster else "skip" if request.skip_requires else "install"
+    )
+    compiled, bootstrap_steps = _compile(
+        request, workspace, cluster, lint_helm=lint_helm, requires=requires
+    )
     test_plan = compiled.plan
     if fresh_cluster:
-        requested = [(request.chart, request.profile)]
-        test_plan = without_required_helm_tests(test_plan, requested)
         message = (
             f"cluster {name} does not exist; --skip-requires must install bootstrap and "
             "required charts before testing the selected target; required charts will "
             "not be Helm-tested"
         )
         _LOG.warning("%s", message)
-        emit(progress, warn(message))
+        progress(warn(message))
     _LOG.info(
         "chart test started: chart=%s profile=%s cluster=%s actions=%d skip_requires=%s",
         request.chart,
@@ -160,13 +160,13 @@ def run(
 
     outcome = ChartTestOutcome(chart=request.chart, profile=request.profile, cluster_name=name)
     if verify_only:
-        bootstrap.verify(cluster, root=root, releases=installed(session))
+        bootstrap.verify(bootstrap_steps, root=root, releases=installed(session))
     else:
         try:
-            bootstrap.bootstrap(session, cluster, root=root, progress=progress)
+            bootstrap.bootstrap(session, bootstrap_steps, root=root, progress=progress)
         except ReleaseFailed as exc:
             if exc.diagnostics.strip():
-                emit(progress, info(exc.diagnostics))
+                progress(info(exc.diagnostics))
             raise
     _require_skipped(request, compiled.skipped, session)
 
@@ -187,7 +187,7 @@ def run(
 
 def teardown_plan(request: TeardownRequest, *, workspace: RepositoryWorkspace) -> LifecyclePlan:
     """The cleanup hooks `teardown` would run, in order; touches nothing."""
-    compiled = _compile(
+    compiled, _ = _compile(
         ChartTestRequest(
             chart=request.chart,
             profile=request.profile,
@@ -196,7 +196,9 @@ def teardown_plan(request: TeardownRequest, *, workspace: RepositoryWorkspace) -
             include_dependent_tests=request.include_dependent_tests,
         ),
         workspace,
+        load_cluster(workspace),
         lint_helm=None,
+        requires="install",
     )
     cleanups = tuple(a for a in compiled.plan.actions if a.kind is ActionKind.HOOK_CLEANUP)
     return replace(compiled.plan, actions=cleanups)
@@ -208,7 +210,7 @@ def teardown(
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
     settings: Settings,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> TeardownOutcome:
     """Run every cleanup hook, continuing past failures, then delete the cluster unless kept."""
     cleanups = teardown_plan(request, workspace=workspace)
@@ -217,7 +219,7 @@ def teardown(
     if session is None:
         message = f"cluster {name} does not exist; running cleanup hooks without a kube context"
         _LOG.warning("%s", message)
-        emit(progress, warn(message))
+        progress(warn(message))
     hooks = ChartTestHookRunner(
         workspace.root,
         runner=runner,
@@ -227,18 +229,18 @@ def teardown(
     outcomes = []
     for action in cleanups.actions:
         subject = _subject(action)
-        emit(progress, step(_LABELS[action.kind], subject))
+        progress(step(_LABELS[action.kind], subject))
         try:
             hooks.run(action)
         except ChartManagerError as exc:
-            emit(progress, failure("Failed", f"{subject}: {exc}"))
+            progress(failure("Failed", f"{subject}: {exc}"))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "FAIL", str(exc)))
         else:
-            emit(progress, detail("Completed", subject))
+            progress(detail("Completed", subject))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "PASS"))
     deleted, delete_error = False, None
     if session is not None and not request.keep_cluster:
-        emit(progress, step("Deleting test cluster", name))
+        progress(step("Deleting test cluster", name))
         try:
             deleted = delete_cluster(session)
         except ChartManagerError as exc:
@@ -253,13 +255,24 @@ def teardown(
 
 
 def _compile(
-    request: ChartTestRequest, workspace: RepositoryWorkspace, *, lint_helm: Helm | None
-) -> CompiledPlan:
-    """Resolve what bootstrap owns (linting it with `lint_helm`), then compile the plan."""
+    request: ChartTestRequest,
+    workspace: RepositoryWorkspace,
+    cluster: LocalCluster,
+    *,
+    lint_helm: Helm | None,
+    requires: Requires,
+) -> tuple[CompiledPlan, tuple[BootstrapStep, ...]]:
+    """Resolve bootstrap (linting it with `lint_helm`), then compile the plan without it."""
     root = workspace.root
-    owned = bootstrap.preflight(load_cluster(workspace), root=root, helm=lint_helm)
-    catalog = ChartTestCatalog(root, charts_dir=workspace.spec.charts_dir)
-    return compile_plan(request, root=root, catalog=catalog, bootstrap_owned=owned)
+    steps = bootstrap.preflight(cluster, root=root, helm=lint_helm)
+    compiled = compile_plan(
+        request,
+        root=root,
+        charts_dir=workspace.charts_root,
+        bootstrap_owned=bootstrap.owned(steps),
+        requires=requires,
+    )
+    return compiled, steps
 
 
 def _require_skipped(
@@ -281,7 +294,7 @@ def _execute(
     session: Session,
     test_plan: LifecyclePlan,
     hooks: ChartTestHookRunner,
-    progress: ProgressCallback | None,
+    progress: Progress,
 ) -> tuple[tuple[ActionOutcome, ...], str]:
     """Run each action once, skipping the rest after a failure; cleanups wait for teardown."""
     outcomes: list[ActionOutcome] = []
@@ -291,10 +304,10 @@ def _execute(
         subject = _subject(action)
         if action.kind is ActionKind.HOOK_CLEANUP or failed:
             reason = "cleanup hooks run at teardown" if not failed else "an earlier action failed"
-            emit(progress, detail("Skipped", subject))
+            progress(detail("Skipped", subject))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "SKIP", reason))
             continue
-        emit(progress, step(_LABELS[action.kind], subject))
+        progress(step(_LABELS[action.kind], subject))
         try:
             _perform(session, action, hooks)
         except (MissingToolError, SpecError):
@@ -304,44 +317,38 @@ def _execute(
             diagnostics = _diagnostics(session, action, exc)
             _LOG.error(
                 "cluster action failed: chart=%s action=%s namespace=%s: %s",
-                action.target.chart,
+                action.entry.chart.name,
                 action.action_id,
-                action.target.namespace,
+                action.entry.namespace,
                 exc,
             )
-            emit(progress, failure("Failed", f"{subject}: {exc}"))
+            progress(failure("Failed", f"{subject}: {exc}"))
             if diagnostics.strip():
-                emit(progress, info(diagnostics))
+                progress(info(diagnostics))
             outcomes.append(ActionOutcome(action.action_id, action.kind.value, "FAIL", str(exc)))
             continue
-        emit(progress, detail("Completed", subject))
+        progress(detail("Completed", subject))
         outcomes.append(ActionOutcome(action.action_id, action.kind.value, "PASS"))
     return tuple(outcomes), diagnostics
 
 
 def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunner) -> None:
-    namespace = action.target.namespace or ""
-    release = action.target.release or action.target.chart
+    entry = action.entry
     if action.kind is ActionKind.NAMESPACE_ENSURE:
-        session.kubectl.create_namespace(namespace)
+        session.kubectl.create_namespace(entry.namespace)
     elif action.kind is ActionKind.HELM_LINT:
-        ensure_dependencies(session.helm, action.chart_path)
-        session.helm.lint(action.chart_path, list(action.values))
-    elif action.kind in (ActionKind.INSTALL, ActionKind.WORKLOAD_READY):
-        target = Release(
-            name=release,
-            chart=action.chart_path,
-            namespace=namespace,
-            values=action.values,
-            timeout=action.timeout or DEFAULT_TIMEOUT,
-        )
-        if action.kind is ActionKind.INSTALL:
-            converge(session, target)
-        else:
-            wait(session, target)
+        ensure_dependencies(session.helm, entry.chart.path)
+        session.helm.lint(entry.chart.path, list(entry.values))
+    elif action.kind is ActionKind.INSTALL:
+        converge(session, release(entry, sets={}))
+    elif action.kind is ActionKind.WORKLOAD_READY:
+        wait(session, release(entry, sets={}))
     elif action.kind is ActionKind.HELM_TEST:
         result = session.helm.test(
-            release, namespace=namespace, timeout=action.timeout or DEFAULT_TIMEOUT
+            entry.chart.name,
+            namespace=entry.namespace,
+            timeout=parse_duration(entry.spec.timeout),
+            subprocess_timeout=None,
         )
         if result.returncode != 0:
             output = (result.stderr or result.stdout).strip()
@@ -355,16 +362,9 @@ def _perform(session: Session, action: LifecycleAction, hooks: ChartTestHookRunn
 def _diagnostics(session: Session, action: LifecycleAction, exc: ChartManagerError) -> str:
     if isinstance(exc, ReleaseFailed):
         return exc.diagnostics
-    if action.target.namespace is None:
-        return ""
-    try:
-        return session.kubectl.diagnostics(action.target.namespace)
-    except ChartManagerError as error:
-        _LOG.warning("namespace diagnostics unavailable: %s", error)
-        return ""
+    return session.kubectl.diagnostics(action.entry.namespace)
 
 
 def _subject(action: LifecycleAction) -> str:
-    profile = f":{action.target.profile}" if action.target.profile else ""
-    namespace = f" in {action.target.namespace}" if action.target.namespace else ""
-    return f"{action.target.chart}{profile}{namespace}"
+    entry = action.entry
+    return f"{entry.chart.name}:{entry.profile} in {entry.namespace}"

@@ -12,13 +12,12 @@ import re
 import shutil
 import tarfile
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from chart_manager.commands.validate.schemas.crd import generate_crd_schemas
 from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
-    KubeconformSchemaRenderError,
     KubeconformSchemaStoreError,
 )
 from chart_manager.commands.validate.schemas.inventory import scan_rendered_directory
@@ -28,14 +27,8 @@ from chart_manager.commands.validate.schemas.models import (
     SchemaScope,
     content_digest,
 )
-from chart_manager.plumbing.errors import ChartManagerError, SpecError
-from chart_manager.plumbing.exit_codes import Outcome
-from chart_manager.shared.charts.chart import (
-    Chart,
-    ChartRepository,
-    load_chart,
-    load_chart_metadata,
-)
+from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.shared.charts.chart import Chart, chart_names, load_chart
 from chart_manager.shared.charts.dependencies import deps_are_fresh
 from chart_manager.shared.charts.lifecycle import (
     CapabilityStatus,
@@ -45,8 +38,8 @@ from chart_manager.shared.charts.lifecycle import (
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 #: Render each chart in every environment, CRDs included, into ``<out>/<chart>/<env>``;
-#: return one line per failed render.
-RenderCrds = Callable[[Sequence[Chart], Path], Sequence[str]]
+#: return each failed render's error by (chart, env).
+RenderCrds = Callable[[Sequence[Chart], Path], Mapping[tuple[str, str], str]]
 
 _LOG = logging.getLogger(__name__)
 
@@ -188,22 +181,22 @@ def _possible_crd_bytes(name: str, data: bytes, *, depth: int = 0) -> bool:
     return False
 
 
-def _possible_crd_provider(path: Path) -> bool:
+def _possible_crd_provider(chart: Chart) -> bool:
+    dependencies = chart.metadata.dependencies
     try:
-        metadata = load_chart_metadata(path / "Chart.yaml")
-        if metadata.dependencies and (
-            not deps_are_fresh(path)
-            or any((dep.repository or "").startswith("file:") for dep in metadata.dependencies)
+        if dependencies and (
+            not deps_are_fresh(chart.path)
+            or any((dep.repository or "").startswith("file:") for dep in dependencies)
         ):
             return True
-        for item in path.rglob("*"):
+        for item in chart.path.rglob("*"):
             if item.is_symlink():
                 return True
             if item.is_file() and _possible_crd_bytes(
-                item.relative_to(path).as_posix(), item.read_bytes()
+                item.relative_to(chart.path).as_posix(), item.read_bytes()
             ):
                 return True
-    except (OSError, SpecError):
+    except OSError:
         return True
     return False
 
@@ -260,18 +253,17 @@ def providers(workspace: RepositoryWorkspace) -> list[Chart]:
 
     A chart whose dependencies are stale always counts; update them first to narrow this.
     """
-    repository = ChartRepository(workspace.root, charts_dir=workspace.spec.charts_dir)
     charts: list[Chart] = []
     errors: list[str] = []
-    for name in repository.list_names():
-        if not _possible_crd_provider(repository.charts_dir / name):
-            continue
+    for name in chart_names(workspace.charts_root):
         try:
             chart = load_chart(workspace.chart_path(name))
         except ChartManagerError as exc:
             errors.append(f"{name}: {exc}")
             continue
-        if validation_status(chart.lifecycle) is CapabilityStatus.ENABLED:
+        if validation_status(chart.lifecycle) is CapabilityStatus.ENABLED and (
+            _possible_crd_provider(chart)
+        ):
             charts.append(chart)
     if errors:
         raise KubeconformSchemaConfigurationError(
@@ -289,7 +281,8 @@ def prepare(
     """Schema locations generated from the CRDs the repository's charts render.
 
     Charts whose cached schemas are current are not rendered again; `render` renders the rest.
-    Two charts defining one CRD differently, or a failed render, raise.
+    A failed render is logged and contributes no schemas, and its chart is not cached.
+    Two charts defining one CRD differently raise.
     """
     policy = workspace.spec.validation
     if policy is None or not policy.schemas.generate_from_crds:
@@ -344,19 +337,24 @@ def _prepare(
             output = Path(temporary)
             failures = render(uncached, output)
             if failures:
-                raise KubeconformSchemaRenderError(
-                    "CRD provider render failed:\n" + "\n".join(failures),
-                    outcome=Outcome.FAILED,
+                _LOG.warning(
+                    "CRD provider render failed; its CRDs are left out:\n%s",
+                    "\n".join(
+                        f"{chart}/{env}: {error}" for (chart, env), error in failures.items()
+                    ),
                 )
             for target in uncached:
+                # A chart whose renders all failed may have no output directory.
                 crds = [
                     crd
-                    for rendered in sorted((output / target.name).iterdir())
+                    for env_dir in sorted((output / target.name).glob("*"))
+                    if (target.name, env_dir.name) not in failures
                     for crd in scan_rendered_directory(
-                        rendered, scope=SchemaScope(chart=target.name, environment=rendered.name)
+                        env_dir, scope=SchemaScope(chart=target.name, environment=env_dir.name)
                     )
                 ]
                 rendered[target.name] = generate_crd_schemas(crds)
+        failed = {chart for chart, _ in failures}
         for target, fingerprint, _cache, schemas in prepared:
             if schemas is not None:
                 continue
@@ -372,7 +370,7 @@ def _prepare(
             )
             # A cold render hydrates dependencies; publish against those final
             # bytes on this very run, provided authored inputs stayed stable.
-            if after is not None and stable:
+            if after is not None and stable and target.name not in failed:
                 _write_cached(root / "charts" / f"{after}.json", schemas)
     for target, _, _, schemas in prepared:
         for schema in schemas if schemas is not None else rendered[target.name]:

@@ -9,13 +9,16 @@ from chart_manager.plumbing.errors import ChartManagerError
 
 @pytest.mark.parametrize(
     ("raw", "seconds"),
-    [("10s", 10.0), ("5m", 300.0), ("1h", 3600.0), ("90", 90.0), ("1.5s", 1.5)],
+    [
+        ("10s", 10.0), ("5m", 300.0), ("1h", 3600.0), ("90", 90.0), ("1.5s", 1.5),
+        ("1h30m", 5400.0), ("2m30s", 150.0), ("500ms", 0.5),
+    ],
 )
 def test_parse_duration_units(raw: str, seconds: float) -> None:
     assert parse_duration(raw) == seconds
 
 
-@pytest.mark.parametrize("raw", ["", "  ", "5 mins", "abc", "5d"])
+@pytest.mark.parametrize("raw", ["", "  ", "5 mins", "abc", "5d", "1h30"])
 def test_parse_duration_rejects_malformed_input(raw: str) -> None:
     with pytest.raises(ChartManagerError, match="invalid duration"):
         parse_duration(raw)

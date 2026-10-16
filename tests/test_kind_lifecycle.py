@@ -9,11 +9,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from chart_manager.integrations.kind import KIND_CLUSTER_LABEL, Kind, kind_context
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import PROBE_TIMEOUT, CheckStatus
 from chart_manager.plumbing.yaml_files import parse_yaml
 from tests.conftest import FakeCommandRunner, OnPath, Predicate, checks_by_name
+
+
+def _kind(runner: FakeCommandRunner) -> Kind:
+    return Kind(runner, docker_host=None, timeout=None)
 
 
 def _is_docker_ps(running_only: bool) -> Predicate:
@@ -43,7 +49,7 @@ def test_stop_cluster_stops_all_node_containers() -> None:
         _is_docker_ps(running_only=True),
         stdout="chart-manager-control-plane\nchart-manager-worker\nchart-manager-worker2\n",
     )
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
     assert kind.stop_cluster("chart-manager") is True
 
@@ -68,7 +74,7 @@ def test_stop_cluster_stops_all_node_containers() -> None:
 def test_stop_cluster_returns_false_when_no_containers() -> None:
     runner = FakeCommandRunner()
     runner.respond(_is_docker_ps(running_only=True), stdout="")
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
     assert kind.stop_cluster("chart-manager") is False
     assert not any(c[:2] == ("docker", "stop") for c in runner.calls)
@@ -77,7 +83,7 @@ def test_stop_cluster_returns_false_when_no_containers() -> None:
 def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
     runner = FakeCommandRunner()
     runner.respond(_is_docker_ps(running_only=True), returncode=1)
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
     assert kind.stop_cluster("chart-manager") is False
 
@@ -87,61 +93,42 @@ def test_stop_cluster_handles_docker_ps_failure_as_absent() -> None:
 # ----- ensure_cluster on stopped cluster ------------------------------------
 
 
-def test_ensure_cluster_starts_stopped_cluster() -> None:
+@pytest.mark.parametrize(
+    ("running", "every", "started"),
+    [
+        pytest.param(
+            "",
+            "chart-manager-control-plane\n",
+            "chart-manager-control-plane",
+            id="all-stopped",
+        ),
+        # Gating on any-running would no-op here and leave the worker stopped.
+        pytest.param(
+            "chart-manager-control-plane\n",
+            "chart-manager-control-plane\nchart-manager-worker\n",
+            "chart-manager-worker",
+            id="partial-state",
+        ),
+    ],
+)
+def test_ensure_cluster_starts_only_the_stopped_nodes(
+    running: str, every: str, started: str
+) -> None:
     """`kind get clusters` lists the cluster even when its containers are
-    stopped -- ensure_cluster must detect that and start them rather than
-    no-op'ing or trying to re-create.
+    stopped -- ensure_cluster must start the stopped subset (the `-a` listing
+    minus the running one) rather than no-op'ing or trying to re-create.
     """
     runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
-    # Running query returns empty -> stopped.
-    runner.respond(_is_docker_ps(running_only=True), stdout="")
-    # docker ps -a returns the stopped containers.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\n",
-    )
-    kind = Kind(runner=runner)
+    runner.respond(_is_docker_ps(running_only=True), stdout=running)
+    runner.respond(_is_docker_ps(running_only=False), stdout=every)
+    kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
-
-    # Must NOT have called `kind create cluster`.
-    assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
-    # Must have issued `docker start` on the discovered containers.
-    start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    assert start_calls == [("docker", "start", "chart-manager-control-plane")]
-
-
-def test_ensure_cluster_starts_only_stopped_nodes_in_partial_state() -> None:
-    """Multi-node partial state: one node running, one stopped.
-
-    The bug this guards against: pre-fix ensure_cluster gated on
-    `is_running` (any-running), which returned True here and silently
-    no-op'd, leaving the stopped worker stopped. The fix diffs the
-    "with -a" and "without -a" listings and issues `docker start` only
-    on the stopped subset.
-    """
-    runner = FakeCommandRunner()
-    runner.respond(_is_kind_get_clusters, stdout="chart-manager\n")
-    # Running set: control-plane only.
-    runner.respond(
-        _is_docker_ps(running_only=True),
-        stdout="chart-manager-control-plane\n",
-    )
-    # Full set (running + stopped): control-plane + a stopped worker.
-    runner.respond(
-        _is_docker_ps(running_only=False),
-        stdout="chart-manager-control-plane\nchart-manager-worker\n",
-    )
-    kind = Kind(runner=runner)
-
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
     start_calls = [c for c in runner.calls if c[:2] == ("docker", "start")]
-    # Only the stopped worker must be started; control-plane is already up
-    # and starting it again would be a no-op-with-warning.
-    assert start_calls == [("docker", "start", "chart-manager-worker")]
+    assert start_calls == [("docker", "start", started)]
 
 
 def test_ensure_cluster_noop_when_already_running() -> None:
@@ -157,9 +144,9 @@ def test_ensure_cluster_noop_when_already_running() -> None:
         _is_docker_ps(running_only=False),
         stdout="chart-manager-control-plane\n",
     )
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     assert not any(c[:3] == ("kind", "create", "cluster") for c in runner.calls)
     assert not any(c[:2] == ("docker", "start") for c in runner.calls)
@@ -168,9 +155,9 @@ def test_ensure_cluster_noop_when_already_running() -> None:
 def test_ensure_cluster_creates_when_absent() -> None:
     runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="")  # no clusters
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
-    kind.ensure_cluster("chart-manager")
+    kind.ensure_cluster("chart-manager", config=None)
 
     create_calls = [c for c in runner.calls if c[:3] == ("kind", "create", "cluster")]
     assert len(create_calls) == 1
@@ -182,7 +169,7 @@ def test_ensure_cluster_creates_when_absent() -> None:
 def test_ensure_cluster_passes_kind_config_without_overriding_its_image() -> None:
     runner = FakeCommandRunner()
     runner.respond(_is_kind_get_clusters, stdout="")
-    kind = Kind(runner=runner)
+    kind = _kind(runner)
 
     kind.ensure_cluster("chart-manager", config=Path("kind-config.yaml"))
 
@@ -224,48 +211,21 @@ def _exercise(kind: Kind) -> None:
     kind.container_host_ports("a")
 
 
-def test_docker_host_is_scoped_onto_every_invocation() -> None:
+def test_every_invocation_is_scoped_to_the_docker_host_and_timeout() -> None:
     runner = FakeCommandRunner(stdout="a\n")
-    _exercise(Kind(runner=runner, docker_host="tcp://remote:2375"))
+    _exercise(Kind(runner, docker_host="tcp://remote:2375", timeout=15.0))
 
     assert runner.records
-    for record in runner.records:
-        assert record.env == {"DOCKER_HOST": "tcp://remote:2375"}, record.args
+    for r in runner.records:
+        assert (r.env, r.timeout) == ({"DOCKER_HOST": "tcp://remote:2375"}, 15.0), r.args
 
 
-def test_docker_host_default_passes_no_env_at_all() -> None:
-    # None must be indistinguishable from the pre-Wave-4 behavior: the child
-    # inherits the process environment untouched.
+def test_unset_docker_host_and_timeout_inherit_the_env_unbounded() -> None:
+    # No env at all: the child inherits the process environment untouched.
     runner = FakeCommandRunner(stdout="a\n")
-    _exercise(Kind(runner=runner))
+    _exercise(_kind(runner))
 
-    assert runner.records
-    assert {record.env for record in runner.records} == {None}
-
-
-def test_two_instances_drive_two_daemons_from_one_runner() -> None:
-    runner = FakeCommandRunner(stdout="a\n")
-    Kind(runner=runner, docker_host="unix:///a.sock").clusters()
-    Kind(runner=runner, docker_host="unix:///b.sock").clusters()
-
-    assert [record.env for record in runner.records] == [
-        {"DOCKER_HOST": "unix:///a.sock"},
-        {"DOCKER_HOST": "unix:///b.sock"},
-    ]
-
-
-def test_instance_timeout_is_threaded_to_every_invocation() -> None:
-    runner = FakeCommandRunner(stdout="a\n")
-    _exercise(Kind(runner=runner, timeout=15.0))
-
-    assert {record.timeout for record in runner.records} == {15.0}
-
-
-def test_timeout_default_is_unbounded() -> None:
-    runner = FakeCommandRunner(stdout="a\n")
-    _exercise(Kind(runner=runner))
-
-    assert {record.timeout for record in runner.records} == {None}
+    assert {(r.env, r.timeout) for r in runner.records} == {(None, None)}
 
 
 def test_kind_context_is_the_one_home_for_the_naming_convention() -> None:
@@ -285,7 +245,7 @@ def test_a_stopped_docker_daemon_is_reported_not_a_missing_binary(on_path: OnPat
         stderr="Cannot connect to the Docker daemon\n",
     )
 
-    checks = checks_by_name(Kind(runner).preflight())
+    checks = checks_by_name(_kind(runner).preflight())
 
     assert checks["kind"].status is CheckStatus.OK
     assert checks["docker"].status is CheckStatus.OK
@@ -297,7 +257,7 @@ def test_the_daemon_probe_is_scoped_to_the_configured_docker_host(on_path: OnPat
     on_path("kind", "docker")
     runner = FakeCommandRunner(stdout="27.3.1\n")
 
-    Kind(runner, docker_host="tcp://remote:2375").preflight()
+    Kind(runner, docker_host="tcp://remote:2375", timeout=None).preflight()
 
     daemon_call = next(r for r in runner.records if r.args[:2] == ("docker", "version"))
     assert daemon_call.env == {"DOCKER_HOST": "tcp://remote:2375"}

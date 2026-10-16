@@ -10,7 +10,7 @@ from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.settings import Settings
 from chart_manager.shared.cluster import session
-from tests.conftest import FakeCommandRunner, Reply
+from tests.conftest import FakeCommandRunner, Reply, kind_runner
 
 READYZ = ("kubectl", "get", "--raw=/readyz", "--context", "kind-lab")
 
@@ -30,16 +30,8 @@ def _cluster(tmp_path: Path, hooks: dict[str, list[str]] | None = None) -> Local
     )
 
 
-def _runner(*clusters: str) -> FakeCommandRunner:
-    return (
-        FakeCommandRunner()
-        .respond(("kind", "get", "clusters"), stdout="\n".join(clusters))
-        .respond(READYZ, stdout="ok")
-    )
-
-
 def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_path: Path) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     dev = session.provision(
         _cluster(tmp_path),
@@ -48,6 +40,7 @@ def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_pat
         run_hooks=False,
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
     assert runner.calls == [
@@ -61,13 +54,19 @@ def test_provision_creates_an_absent_cluster_and_waits_for_its_apiserver(tmp_pat
 def test_provision_runs_hooks_around_the_cluster_and_rewaits_after_the_post_hook(
     tmp_path: Path,
 ) -> None:
-    runner = _runner("lab").respond(("docker", "ps"), stdout="")
+    runner = kind_runner("lab").respond(("docker", "ps"), stdout="")
     cluster = _cluster(
         tmp_path, {"preProvision": ["./scripts/pre"], "postProvision": ["post", "--x"]}
     )
 
     session.provision(
-        cluster, root=tmp_path, name="lab", run_hooks=True, runner=runner, settings=Settings()
+        cluster,
+        root=tmp_path,
+        name="lab",
+        run_hooks=True,
+        runner=runner,
+        settings=Settings(),
+        progress=[].append,
     )
 
     assert [call for call in runner.calls if call[0] != "docker"] == [
@@ -94,11 +93,17 @@ def test_provision_runs_hooks_around_the_cluster_and_rewaits_after_the_post_hook
 
 
 def test_provision_skips_authored_hooks_when_hooks_are_off(tmp_path: Path) -> None:
-    runner = _runner("lab").respond(("docker", "ps"), stdout="")
+    runner = kind_runner("lab").respond(("docker", "ps"), stdout="")
     cluster = _cluster(tmp_path, {"preProvision": ["pre"], "postProvision": ["post"]})
 
     session.provision(
-        cluster, root=tmp_path, name="lab", run_hooks=False, runner=runner, settings=Settings()
+        cluster,
+        root=tmp_path,
+        name="lab",
+        run_hooks=False,
+        runner=runner,
+        settings=Settings(),
+        progress=[].append,
     )
 
     assert ("pre",) not in runner.calls
@@ -121,6 +126,7 @@ def test_provision_with_replace_deletes_the_cluster_after_the_pre_hook(tmp_path:
         runner=runner,
         settings=Settings(),
         replace=True,
+        progress=[].append,
     )
 
     assert runner.calls == [
@@ -134,14 +140,14 @@ def test_provision_with_replace_deletes_the_cluster_after_the_pre_hook(tmp_path:
 
 
 def test_find_returns_a_session_only_for_an_existing_cluster() -> None:
-    runner = _runner("other", "lab")
+    runner = kind_runner("other", "lab")
 
     assert session.find("lab", runner=runner, settings=Settings()) is not None
     assert session.find("absent", runner=runner, settings=Settings()) is None
 
 
 def test_teardown_deletes_an_existing_cluster_and_reports_an_absent_one() -> None:
-    runner = _runner("lab")
+    runner = kind_runner("lab")
     dev = session.attach("lab", runner=runner, settings=Settings())
     gone = session.attach("gone", runner=runner, settings=Settings())
 
@@ -152,7 +158,7 @@ def test_teardown_deletes_an_existing_cluster_and_reports_an_absent_one() -> Non
 
 
 def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: Path) -> None:
-    runner = _runner("lab").respond(("pre",), returncode=9, stderr="blocked")
+    runner = kind_runner("lab").respond(("pre",), returncode=9, stderr="blocked")
 
     with pytest.raises(ExternalCommandError, match="blocked"):
         session.provision(
@@ -163,6 +169,7 @@ def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: 
             runner=runner,
             settings=Settings(),
             replace=True,
+            progress=[].append,
         )
 
     assert not any(call[:2] == ("kind", "delete") for call in runner.calls)
@@ -172,7 +179,7 @@ def test_a_failed_pre_hook_stops_provision_before_anything_is_deleted(tmp_path: 
 def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
     tmp_path: Path, entry: str
 ) -> None:
-    runner = _runner("lab")
+    runner = kind_runner("lab")
     settings = Settings(
         kube_context="ambient", docker_host="tcp://remote:2375", command_timeout=30.0
     )
@@ -185,18 +192,20 @@ def test_a_session_addresses_its_own_context_and_the_configured_docker_host(
             run_hooks=False,
             runner=runner,
             settings=settings,
+            progress=[].append,
         )
     else:
         dev = session.attach("lab", runner=runner, settings=settings)
         dev.kind.clusters()
-        dev.kubectl.wait_apiserver_ready()
-    dev.helm.upgrade_install("app", tmp_path, namespace="app")
+        dev.kubectl.wait_apiserver_ready(timeout=60.0)
+    dev.helm.upgrade_install("app", tmp_path, namespace="app", timeout=60.0)
 
     kind, kubectl, helm = (
         [r for r in runner.records if r.args[0] == tool] for tool in ("kind", "kubectl", "helm")
     )
     assert kind and all(r.env == {"DOCKER_HOST": "tcp://remote:2375"} for r in kind)
     assert [r.args[-2:] for r in kubectl] == [("--context", "kind-lab")]
+    assert {r.args[-2:] for r in helm} == {("--kube-context", "kind-lab")}
     assert {r.timeout for r in kind + kubectl} == {30.0}
     # Installs keep helm's own --timeout; the command timeout would kill a slow --wait.
-    assert helm and {r.timeout for r in helm} == {None}
+    assert {r.timeout for r in helm} == {None}

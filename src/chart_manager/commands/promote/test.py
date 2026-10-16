@@ -12,11 +12,15 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from functools import partial
 
 import chart_manager.commands.promote.report as report
-from chart_manager.commands.promote.fanout import RunResult, run_matched
+from chart_manager.commands.promote.fanout import (
+    TRANSITIONS_MAX,
+    RunResult,
+    check_request,
+    record,
+    run_matched,
+)
 from chart_manager.commands.promote.matching import filter_matched_statuses
 from chart_manager.commands.promote.state import (
     NO_MATCH_REF,
@@ -27,11 +31,11 @@ from chart_manager.commands.promote.state import (
     Verdict,
 )
 from chart_manager.commands.promote.telemetry import PromotionTelemetry
-from chart_manager.integrations.helm import Helm, format_helm_duration
+from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus, Kubectl
 from chart_manager.plumbing.commands import CommandResult, CommandRunner
-from chart_manager.plumbing.duration import require_positive_seconds
-from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout, ExternalCommandError
+from chart_manager.plumbing.progress import Progress
 from chart_manager.plumbing.text import truncate_bytes
 from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
@@ -45,7 +49,9 @@ _LOG = logging.getLogger(__name__)
 _IN_FLIGHT_PHASES = frozenset({"Pending", "Running", "Unknown", ""})
 _STALE_PHASES = frozenset({"Succeeded", "Failed"})
 
-_PHASE_LOG_MAX = 5
+#: Smallest per-HR budget, which is helm's `--timeout`: room for a test pod to
+#: schedule, pull its image and run before helm gives up on a healthy test.
+_MIN_PER_HR_SEC = 30.0
 #: Allowance the `helm test` subprocess gets beyond `per_hr_timeout_seconds` (helm's
 #: own `--timeout`), so helm's timeout fires before we kill the subprocess;
 #: still capped by the remaining total budget.
@@ -92,26 +98,17 @@ class TestRequest:
 
     def __post_init__(self) -> None:
         """Validate the tunables; raise ChartManagerError on any out-of-range value."""
-        if not self.chart_name:
-            raise ChartManagerError("chart_name must be non-empty")
-        if not self.version:
-            raise ChartManagerError("version must be non-empty")
-        if self.concurrency < 1:
-            raise ChartManagerError(f"concurrency must be >= 1 (got {self.concurrency})")
+        check_request(
+            chart_name=self.chart_name,
+            version=self.version,
+            concurrency=self.concurrency,
+            per_poll_timeout_seconds=self.per_poll_timeout_seconds,
+            per_hr_timeout_seconds=self.per_hr_timeout_seconds,
+            total_timeout_seconds=self.total_timeout_seconds,
+            min_per_hr_seconds=_MIN_PER_HR_SEC,
+        )
         if self.pod_log_tail < 1:
             raise ChartManagerError(f"pod_log_tail must be >= 1 (got {self.pod_log_tail})")
-        require_positive_seconds("per_poll_timeout_seconds", self.per_poll_timeout_seconds)
-        require_positive_seconds("per_hr_timeout_seconds", self.per_hr_timeout_seconds)
-        require_positive_seconds("total_timeout_seconds", self.total_timeout_seconds)
-        if self.per_hr_timeout_seconds < 30.0:
-            raise ChartManagerError(
-                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s) must be >= 30s"
-            )
-        if self.total_timeout_seconds < self.per_hr_timeout_seconds:
-            raise ChartManagerError(
-                f"total_timeout_seconds ({self.total_timeout_seconds:g}s) must be >= "
-                f"per_hr_timeout_seconds ({self.per_hr_timeout_seconds:g}s)"
-            )
 
 
 @dataclass(frozen=True)
@@ -137,7 +134,7 @@ class TestOutcome:
     helm_test_stderr: str | None
     test_pods: tuple[TestPodSnapshot, ...]
     last_status: HelmReleaseStatus | None
-    phase_log: tuple[Transition, ...]
+    transitions: tuple[Transition, ...]
     diagnostics: str | None
     duration_seconds: float
 
@@ -158,7 +155,7 @@ def _no_match_outcome(elapsed: float) -> TestOutcome:
         helm_test_stderr=None,
         test_pods=(),
         last_status=None,
-        phase_log=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=elapsed,
     )
@@ -176,11 +173,8 @@ class _RunContext:
     started_mono: float
     total_deadline: float
     cancel_event: threading.Event
-    # `deque(maxlen=)` rather than a hand-rolled slice-off: monitor's
-    # ring already worked this way, and two implementations of "keep the last
-    # N transitions" is one more than the concept needs.
-    phase_log: deque[Transition] = field(
-        default_factory=lambda: deque(maxlen=_PHASE_LOG_MAX)
+    transitions: deque[Transition] = field(
+        default_factory=lambda: deque(maxlen=TRANSITIONS_MAX)
     )
 
 
@@ -190,7 +184,7 @@ def run(
     runner: CommandRunner,
     settings: Settings,
     events: EventWriter,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
+    progress: Progress,
     clock: Callable[[], float] = time.monotonic,
 ) -> TestResult:
     """Test every matching HelmRelease in parallel; return an aggregate TestResult.
@@ -203,7 +197,13 @@ def run(
     kubectl = Kubectl(runner, context=settings.kube_context, timeout=settings.command_timeout)
     # verbose=False: concurrent `helm test` streams would interleave; the
     # output is captured onto each outcome instead.
-    helm = Helm(runner, verbose=False, context=settings.kube_context)
+    helm = Helm(
+        runner,
+        binary="helm",
+        verbose=False,
+        context=settings.kube_context,
+        timeout=None,  # each `helm test` passes its own cap
+    )
     tester = _Tester(kubectl, helm, clock, progress)
     start = clock()
     matched = filter_matched_statuses(
@@ -269,7 +269,7 @@ class _Tester:
     kubectl: Kubectl
     helm: Helm
     clock: Callable[[], float]
-    progress: Callable[[HelmReleaseRef, Transition], None] | None
+    progress: Progress
 
     # --- per-HR pipeline ---------------------------------------------------
 
@@ -289,7 +289,8 @@ class _Tester:
             total_deadline=total_deadline,
             cancel_event=cancel_event,
         )
-        self._fire(ctx, "Preflight", f"chart={request.chart_name}@{request.version}")
+        detail = f"chart={request.chart_name}@{request.version}"
+        record(ctx.transitions, ctx.ref, self.progress, "Preflight", detail)
 
         preflight = self._preflight(ctx)
         if preflight is not None:
@@ -338,7 +339,8 @@ class _Tester:
 
         Returns None when the caller should proceed.
         """
-        self._fire(ctx, "Reaping", "checking for existing test pods")
+        detail = "checking for existing test pods"
+        record(ctx.transitions, ctx.ref, self.progress, "Reaping", detail)
         try:
             pods = self.kubectl.list_test_pods(
                 ctx.ref, timeout=ctx.request.per_poll_timeout_seconds
@@ -398,11 +400,8 @@ class _Tester:
 
     def _run_helm(self, ctx: _RunContext) -> TestOutcome:
         """Invoke `helm test` (subprocess cap bounded by the total deadline) and classify."""
-        self._fire(
-            ctx,
-            "Running",
-            f"helm test {ctx.ref.release_name} -n {ctx.ref.storage_namespace}",
-        )
+        detail = f"helm test {ctx.ref.release_name} -n {ctx.ref.storage_namespace}"
+        record(ctx.transitions, ctx.ref, self.progress, "Running", detail)
         # The subprocess cap is bounded by the total deadline so a runaway
         # helm test can't outlive the global budget even if its own
         # --timeout claims another N minutes.
@@ -419,29 +418,29 @@ class _Tester:
                 namespace=ctx.ref.storage_namespace,
                 # helm's per-hook `--timeout` stays the uncapped per-HR budget;
                 # `subprocess_cap` above is the hard wall-clock stop.
-                timeout=format_helm_duration(ctx.request.per_hr_timeout_seconds),
+                timeout=ctx.request.per_hr_timeout_seconds,
                 logs=True,
                 subprocess_timeout=subprocess_cap,
             )
+        except CommandTimeout:
+            reason = (
+                Reason.TOTAL_BUDGET_EXHAUSTED
+                if self.clock() >= ctx.total_deadline
+                else Reason.PER_HR_BUDGET_EXHAUSTED
+            )
+            # Which budget tripped decides whether the operator raises
+            # --per-hr-timeout or accepts the run was too big.
+            _LOG.warning(
+                "helm test timed out: ns=%s name=%s reason=%s per_hr=%gs total=%gs",
+                ctx.ref.namespace,
+                ctx.ref.name,
+                reason,
+                ctx.request.per_hr_timeout_seconds,
+                ctx.request.total_timeout_seconds,
+            )
+            return self._finalize_timed_out(ctx, reason)
         except ExternalCommandError as exc:
             msg = str(exc)
-            if "timed out" in msg:
-                reason = (
-                    Reason.TOTAL_BUDGET_EXHAUSTED
-                    if self.clock() >= ctx.total_deadline
-                    else Reason.PER_HR_BUDGET_EXHAUSTED
-                )
-                # Which budget tripped decides whether the operator raises
-                # --per-hr-timeout or accepts the run was too big.
-                _LOG.warning(
-                    "helm test timed out: ns=%s name=%s reason=%s per_hr=%gs total=%gs",
-                    ctx.ref.namespace,
-                    ctx.ref.name,
-                    reason,
-                    ctx.request.per_hr_timeout_seconds,
-                    ctx.request.total_timeout_seconds,
-                )
-                return self._finalize_timed_out(ctx, reason)
             _LOG.error(
                 "helm test invocation failed outside a verdict: ns=%s name=%s: %s",
                 ctx.ref.namespace,
@@ -468,7 +467,6 @@ class _Tester:
         rc = result.returncode
 
         if rc == 0:
-            self._fire(ctx, "Finished", "passed")
             return self._finalize(
                 ctx,
                 verdict=Verdict.PASSED,
@@ -481,7 +479,6 @@ class _Tester:
         # a stderr line matching one of these phrasings. Treat as passed,
         # no diagnostics, no cluster event calls.
         if _NO_TESTS_PATTERN.search(stderr):
-            self._fire(ctx, "Finished", "no tests defined")
             return self._finalize(
                 ctx,
                 verdict=Verdict.PASSED,
@@ -491,7 +488,6 @@ class _Tester:
             )
 
         if _HELM_UNAVAILABLE_PATTERN.search(stderr):
-            self._fire(ctx, "Finished", "helm unavailable")
             return self._finalize(
                 ctx,
                 verdict=Verdict.FAILED,
@@ -501,7 +497,6 @@ class _Tester:
             )
 
         if "already exists" in stderr.lower():
-            self._fire(ctx, "Finished", "test pod conflict")
             return self._finalize(
                 ctx,
                 verdict=Verdict.FAILED,
@@ -510,7 +505,6 @@ class _Tester:
                 helm_result=result,
             )
 
-        self._fire(ctx, "Finished", f"failed (rc={rc})")
         return self._finalize(
             ctx,
             verdict=Verdict.FAILED,
@@ -560,6 +554,7 @@ class _Tester:
         # the failure path. Folding that into the reported duration inflates
         # exactly the outcomes whose timing matters most.
         duration_seconds = self.clock() - ctx.started_mono
+        record(ctx.transitions, ctx.ref, self.progress, "Finished", f"{verdict}: {reason}")
 
         diagnostics: str | None = None
         test_pods: tuple[TestPodSnapshot, ...] = ()
@@ -617,7 +612,7 @@ class _Tester:
             helm_test_stderr=stderr,
             test_pods=test_pods,
             last_status=last_status,
-            phase_log=tuple(ctx.phase_log),
+            transitions=tuple(ctx.transitions),
             diagnostics=diagnostics,
             duration_seconds=duration_seconds,
         )
@@ -710,11 +705,9 @@ class _Tester:
         if ctx.ref.target_namespace:
             parts.append(f"\n### Events (namespace {ctx.ref.target_namespace})")
             parts.append(
-                report.safe_events(
-                    partial(
-                        self.kubectl.namespace_events,
-                        ctx.ref.target_namespace,
-                        timeout=ctx.request.per_poll_timeout_seconds,
+                report.capped_events(
+                    self.kubectl.namespace_events(
+                        ctx.ref.target_namespace, timeout=ctx.request.per_poll_timeout_seconds
                     )
                 )
             )
@@ -829,16 +822,3 @@ class _Tester:
                 )
             )
         return tuple(snapshots), None
-
-    # --- progress ---------------------------------------------------------
-
-    def _fire(self, ctx: _RunContext, phase: str, detail: str) -> None:
-        """Record a phase transition (ring-buffered) and fire the progress callback safely."""
-        t = Transition(at=datetime.now(UTC), phase=phase, detail=detail)
-        ctx.phase_log.append(t)
-        if self.progress is None:
-            return
-        try:
-            self.progress(ctx.ref, t)
-        except Exception:
-            _LOG.exception("test progress callback raised")

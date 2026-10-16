@@ -9,9 +9,8 @@ import pytest
 
 from chart_manager.commands import validate
 from chart_manager.commands.validate import cli as validate_cli
-from chart_manager.plumbing.errors import MissingToolError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from tests.conftest import cli, write_workspace
+from chart_manager.plumbing.errors import MissingToolError, SpecError
+from tests.conftest import RENDER_DIR, cli, write_workspace
 
 PASSED = validate.CheckResult("passed")
 
@@ -68,8 +67,6 @@ def test_flags_become_the_request(fake_run, tmp_path: Path) -> None:  # type: ig
         "--tool-timeout",
         "5",
         "--verbose",
-        "--progress",
-        "none",
         "-o",
         "json",
     )
@@ -100,32 +97,39 @@ def test_all_or_a_named_chart_skips_change_detection(fake_run, argv, charts, cha
     assert (fake_run.requests[0].charts, fake_run.requests[0].changes) == (charts, changes)
 
 
-def test_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no-untyped-def]
-    fake_run.result = outcome_with("error")
-
-    assert cli("chart", "validate", "--all", "-o", "json").exit_code == exit_code_for(Outcome.TOOL)
-
-
-def test_a_missing_binary_reaches_main_unchanged(fake_run) -> None:  # type: ignore[no-untyped-def]
-    """`main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
+@pytest.mark.parametrize(
+    ("argv", "error"),
+    [(("--all",), MissingToolError), (("charts/broken",), SpecError)],
+    ids=["missing binary", "malformed lifecycle of the named chart"],
+)
+def test_a_domain_error_reaches_main_unchanged(fake_run, tmp_path: Path, argv, error) -> None:  # type: ignore[no-untyped-def]
+    """`main.py` maps each error to its exit code (see test_exit_codes.py)."""
+    broken = tmp_path / "charts" / "broken"
+    broken.mkdir(parents=True)
+    (broken / "Chart.yaml").write_text("apiVersion: v2\nname: broken\nversion: 0.1.0\n")
+    (broken / "chart-lifecycle.yaml").write_text("kind: Wrong\n")
     fake_run.result = MissingToolError("required tool not found on PATH: helm")
+
+    result = cli("chart", "validate", *argv, "-o", "json")
+
+    assert isinstance(result.exception, error)
+
+
+def test_json_output_is_the_run_document_and_the_exit_code_follows_the_outcome(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("error", warnings=("slow",))
 
     result = cli("chart", "validate", "--all", "-o", "json")
 
-    assert isinstance(result.exception, MissingToolError)
-
-
-def test_json_output_lists_each_row_with_its_checks(fake_run) -> None:  # type: ignore[no-untyped-def]
-    fake_run.result = outcome_with("failed")
-
-    payload = json.loads(cli("chart", "validate", "--all", "-o", "json").stdout)
-
-    assert payload["exit_code"] == exit_code_for(Outcome.FAILED)
-    assert payload["rows"][0]["checks"]["schema"] == {
-        "status": "failed",
-        "detail": "Widget/demo: bad",
-        "elapsed_seconds": None,
-    }
+    row = {"chart": "demo", "env": "dev", "release": "demo", "namespace": "lab-dev"}
+    passed = {"status": "passed", "detail": "", "elapsed_seconds": None}
+    error = {"status": "error", "detail": "Widget/demo: bad", "elapsed_seconds": None}
+    rows = [{**row, "checks": {"render": passed, "schema": error}}]
+    empty = ("requested_charts", "requested_envs", "ignored_changes", "unmatched_changes")
+    diagnostics = {"rows_filtered_out": 0, "charts_unvalidated": 0} | {key: [] for key in empty}
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        4,
+        {"rows": rows, "spec_errors": [], "warnings": ["slow"], "diagnostics": diagnostics},
+    )
 
 
 def test_output_all_writes_the_summaries_and_the_step_summary(
@@ -143,15 +147,14 @@ def test_output_all_writes_the_summaries_and_the_step_summary(
         "all",
         "--keep",
         "--github-step-summary",
-        "--progress",
-        "none",
     )
 
     out = fake_run.requests[0].out
-    assert result.exit_code == exit_code_for(Outcome.FAILED)
+    assert result.exit_code == 1
     assert "demo" in result.stdout
     assert (out / "summary.md").read_text() == step_summary.read_text()
-    assert json.loads((out / "summary.json").read_text())["rows"][0]["chart"] == "demo"
+    document = cli("chart", "validate", "--all", "-o", "json").stdout
+    assert json.loads((out / "summary.json").read_text()) == json.loads(document)
 
 
 @pytest.mark.parametrize(
@@ -190,9 +193,28 @@ def test_an_unknown_chart_or_environment_is_a_usage_error_naming_the_flag(
 def test_a_table_run_ends_with_a_summary_of_spec_errors(fake_run) -> None:  # type: ignore[no-untyped-def]
     fake_run.result = outcome_with("passed", spec_errors=("broken: bad",))
 
-    result = cli("chart", "validate", "--all", "-o", "table", "--progress", "none")
+    result = cli("chart", "validate", "--all", "-o", "table")
 
     assert "summary: 1 spec error(s)" in result.output
+
+
+def test_markdown_output_is_the_summary_alone_on_stdout(fake_run) -> None:  # type: ignore[no-untyped-def]
+    fake_run.result = outcome_with("failed")
+
+    result = cli("chart", "validate", "--all", "-o", "md")
+
+    assert (result.exit_code, result.stdout) == (
+        1,
+        "## validate\n\n"
+        "| Chart | Env | Release | Render | Schema | Policy |\n"
+        "|---|---|---|---|---|---|\n"
+        "| demo | dev | demo | \u2705 | \u274c | \u00b7 |\n\n"
+        "**1 rows \u00b7 0 passing \u00b7 1 failing \u00b7 0 skipped**\n\n"
+        "### Failures\n\n"
+        "<details><summary>demo/dev \u2014 schema</summary>\n\n"
+        "```\nWidget/demo: bad\n```\n\n"
+        "</details>\n",
+    )
 
 
 def test_markdown_explains_an_empty_run_and_lists_the_diagnostics(fake_run) -> None:  # type: ignore[no-untyped-def]
@@ -214,3 +236,17 @@ def test_markdown_explains_an_empty_run_and_lists_the_diagnostics(fake_run) -> N
     assert "- Requested charts: demo" in markdown
     assert "  - `charts/demo/notes.txt`" in markdown
     assert "- Charts without manifest-validation configuration: 2" in markdown
+
+
+def test_cache_clean_dry_run_reports_the_render_dir_and_removes_nothing(root: Path) -> None:
+    write_workspace(root)
+    rendered = root.resolve() / RENDER_DIR
+    (rendered / "run-1").mkdir(parents=True)
+
+    result = cli("chart", "cache", "clean", "--dry-run", "-o", "json")
+
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {"path": rendered.as_posix(), "exists": True, "runs": 1},
+    )
+    assert rendered.is_dir()

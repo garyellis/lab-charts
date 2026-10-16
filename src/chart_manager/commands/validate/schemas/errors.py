@@ -9,17 +9,13 @@ from chart_manager.plumbing.exit_codes import Outcome
 class KubeconformSchemaError(ChartManagerError):
     """Base class for expected kubeconform schema subsystem failures."""
 
+    outcome = Outcome.TOOL
+
 
 class KubeconformSchemaConfigurationError(KubeconformSchemaError):
     """The authored schema policy or rendered CRD inputs are inconsistent."""
 
-
-class KubeconformSchemaRenderError(KubeconformSchemaError):
-    """CRD provider rendering failed; preserve the validation runner's classification."""
-
-    def __init__(self, message: str, *, outcome: Outcome) -> None:
-        super().__init__(message)
-        self.outcome = outcome
+    outcome = Outcome.SPEC
 
 
 class KubeconformSchemaIntegrityError(KubeconformSchemaError):
@@ -29,17 +25,17 @@ class KubeconformSchemaIntegrityError(KubeconformSchemaError):
 class KubeconformSchemaLockError(KubeconformSchemaIntegrityError):
     """The committed schema lock is missing, malformed, or inconsistent."""
 
+    outcome = Outcome.SPEC
+
 
 class KubeconformSchemaStoreError(KubeconformSchemaIntegrityError):
     """An immutable store generation is incomplete or corrupt."""
 
 
-class KubeconformSchemaSourceError(KubeconformSchemaError):
-    """Base class for immutable schema-source access failures."""
-
-
-class KubeconformSchemaSourceEnvironmentError(KubeconformSchemaSourceError):
+class KubeconformSchemaSourceEnvironmentError(KubeconformSchemaError):
     """A schema source could not be reached from the caller's environment."""
+
+    outcome = Outcome.ENVIRONMENT
 
 
 __all__ = [
@@ -47,8 +43,6 @@ __all__ = [
     "KubeconformSchemaError",
     "KubeconformSchemaIntegrityError",
     "KubeconformSchemaLockError",
-    "KubeconformSchemaRenderError",
     "KubeconformSchemaSourceEnvironmentError",
-    "KubeconformSchemaSourceError",
     "KubeconformSchemaStoreError",
 ]

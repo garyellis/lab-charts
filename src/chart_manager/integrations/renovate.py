@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -72,7 +71,7 @@ class Renovate:
         self._binary = "renovate"
         self._validator_binary = "renovate-config-validator"
 
-    def preflight(self) -> tuple[Check, ...]:
+    def preflight(self, *, token_configured: bool) -> tuple[Check, ...]:
         """Report both Renovate binaries and whether a token is configured.
 
         The validator is checked for *presence only*: it is a node bin stub
@@ -93,7 +92,7 @@ class Renovate:
                 version_args=(),
                 remediation="ships with Renovate -- `npm install -g renovate`",
             ),
-            _token_check(),
+            _token_check(token_configured),
         )
 
     def run(self, request: RenovateRequest) -> RenovateResult:
@@ -240,21 +239,17 @@ def _log_subprocess_output(value: str, *, error: bool) -> None:
             _LOG.info("renovate> %s", line)
 
 
-def _token_check() -> Check:
-    """Whether a credential Renovate can authenticate with is in the environment.
+def _token_check(configured: bool) -> Check:
+    """Whether the process was given RENOVATE_TOKEN, the token `chart upgrade` hands Renovate.
 
-    The same two names, in the same order, that `commands/upgrade/run.py`
-    hands to `RenovateRequest.token`: Renovate spells its own setting
-    RENOVATE_TOKEN, while GitHub Actions exposes its repository token as
-    GITHUB_TOKEN. Reported as ENVIRONMENT rather than SPEC -- nothing the
-    author wrote is wrong, the process just was not given a credential.
+    Reported as ENVIRONMENT rather than SPEC -- nothing the author wrote is
+    wrong, the process just was not given a credential.
     """
-    for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
-        if os.environ.get(variable):
-            return Check.ok("renovate-token", f"{variable} is set")
+    if configured:
+        return Check.ok("renovate-token", "RENOVATE_TOKEN is set")
     return Check.failed(
         "renovate-token",
-        "neither RENOVATE_TOKEN nor GITHUB_TOKEN is set",
+        "RENOVATE_TOKEN is not set",
         remediation="export RENOVATE_TOKEN with a token that can read and open PRs",
         outcome=Outcome.ENVIRONMENT,
     )

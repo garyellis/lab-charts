@@ -1,4 +1,4 @@
-"""Wire contract for a compiled lifecycle plan (`chart test --dry-run -o json`).
+"""The document for a compiled lifecycle plan (`chart test --dry-run -o json`).
 
 Emits a stable key set rather than omitting empty ones, so
 `jq '.actions[].timeout'` works on every run.
@@ -8,49 +8,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from chart_manager.commands.test.models import (
-    ActionTarget,
-    LifecycleAction,
-    LifecyclePlan,
-)
+from chart_manager.commands.test.models import LifecycleAction, LifecyclePlan
+from chart_manager.plumbing.commands import redact
 
 __all__ = ["plan_to_dict"]
 
 
 def plan_to_dict(plan: LifecyclePlan) -> dict[str, Any]:
-    """Project a compiled `LifecyclePlan` onto the wire payload."""
+    """Project a compiled `LifecyclePlan` onto its document."""
     return {
         "chart": plan.chart,
         "profile": plan.profile,
-        "environment": plan.environment,
         "actions": [_action(action) for action in plan.actions],
         "warnings": list(plan.warnings),
     }
 
 
 def _action(action: LifecycleAction) -> dict[str, Any]:
-    """JSON-serialize one planned action in compiled execution order."""
+    """One planned action; a hook's command is masked as the table masks it."""
+    entry = action.entry
     return {
         "action_id": action.action_id,
         "kind": action.kind.value,
-        "target": _target(action.target),
-        # The digest is what makes a plan comparable across two compilations
-        # of the same inputs; it is the key a consumer caches or diffs on.
-        "input_digest": action.input_digest,
-        "chart_path": action.chart_path.as_posix(),
-        "values": [path.as_posix() for path in action.values],
-        "timeout": action.timeout,
-        "metadata": dict(action.metadata),
-        "command": list(action.command),
-    }
-
-
-def _target(target: ActionTarget) -> dict[str, Any]:
-    """JSON-serialize the coordinates one action acts on."""
-    return {
-        "chart": target.chart,
-        "profile": target.profile,
-        "environment": target.environment,
-        "release": target.release,
-        "namespace": target.namespace,
+        "chart": entry.chart.name,
+        "profile": entry.profile,
+        "namespace": entry.namespace,
+        "chart_path": entry.chart.path.as_posix(),
+        "values": [path.as_posix() for path in entry.values],
+        "timeout": entry.spec.timeout,
+        "command": redact(action.command),
     }

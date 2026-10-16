@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from chart_manager.plumbing.errors import ChartManagerError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.shared.charts.chart import Chart
 
 
 class UpgradeError(ChartManagerError):
@@ -19,7 +21,7 @@ class UpgradeError(ChartManagerError):
 class UpgradeRequest:
     """Ask Renovate to discover and apply updates for one wrapper chart."""
 
-    chart_path: Path
+    chart: Chart
     dry_run: bool = False
 
 
@@ -33,6 +35,16 @@ class UpgradeStatus(StrEnum):
     STATUS_UNKNOWN = "status_unknown"
 
 
+#: The exit outcome of each `UpgradeStatus`; an unknown pull request status is a `TOOL` failure.
+UPGRADE_OUTCOME: Mapping[UpgradeStatus, Outcome] = {
+    UpgradeStatus.DRY_RUN: Outcome.SUCCESS,
+    UpgradeStatus.NO_CHANGES: Outcome.SUCCESS,
+    UpgradeStatus.PR_OPEN: Outcome.SUCCESS,
+    UpgradeStatus.PR_UPDATED: Outcome.SUCCESS,
+    UpgradeStatus.STATUS_UNKNOWN: Outcome.TOOL,
+}
+
+
 @dataclass(frozen=True)
 class UpgradeResult:
     """What one `chart upgrade` run proposed; Renovate's own output stays in diagnostics."""
@@ -43,11 +55,16 @@ class UpgradeResult:
     proposed_version: str | None
     branch: str | None
     group: str
-    outcome: UpgradeStatus
+    status: UpgradeStatus
     diagnostics: tuple[str, ...] = ()
     repository: str | None = None
     pr_url: str | None = None
     pr_number: int | None = None
+
+    @property
+    def outcome(self) -> Outcome:
+        """How the run ended, for its exit code."""
+        return UPGRADE_OUTCOME[self.status]
 
 
 @dataclass(frozen=True)
@@ -88,7 +105,7 @@ class UpdateMetadata:
 class FinalizeRequest:
     """Finalize Renovate's edits to one chart against its Chart.yaml at HEAD."""
 
-    chart_path: Path
+    chart: Chart
     update_data: Mapping[str, Any]
 
 
@@ -100,6 +117,11 @@ class FinalizeResult:
     previous_version: str
     version: str
     changed: bool
+
+    @property
+    def outcome(self) -> Outcome:
+        """Finalize either succeeds or raises."""
+        return Outcome.SUCCESS
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,6 @@ from chart_manager.commands.test.models import LifecycleAction
 from chart_manager.plumbing.commands import CommandRunner, redact
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
-from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT
 
 _LOG = logging.getLogger(__name__)
 
@@ -36,21 +35,21 @@ class ChartTestHookRunner:
     def run(self, action: LifecycleAction) -> None:
         """Run the hook; raise ExternalCommandError on a non-zero exit or timeout."""
         phase = action.kind.value.removeprefix("hook-")
-        target = action.target
+        entry = action.entry
         env = {
             "CHART_MANAGER_HOOK_PHASE": phase,
             "CHART_MANAGER_ROOT": str(self.root),
-            "CHART_MANAGER_CHART": target.chart,
-            "CHART_MANAGER_CHART_PATH": str(action.chart_path),
-            "CHART_MANAGER_PROFILE": target.profile or "",
-            "CHART_MANAGER_RELEASE": target.release or "",
-            "CHART_MANAGER_NAMESPACE": target.namespace or "",
+            "CHART_MANAGER_CHART": entry.chart.name,
+            "CHART_MANAGER_CHART_PATH": str(entry.chart.path),
+            "CHART_MANAGER_PROFILE": entry.profile,
+            "CHART_MANAGER_RELEASE": entry.chart.name,
+            "CHART_MANAGER_NAMESPACE": entry.namespace,
             "CHART_MANAGER_KUBE_CONTEXT": self.kube_context,
             "CHART_MANAGER_CLUSTER_NAME": self.cluster_name,
         }
-        timeout = action.timeout or DEFAULT_TIMEOUT
+        timeout = entry.spec.timeout
         command = redact(action.command)
-        _LOG.info("running %s hook for %s/%s: %s", phase, target.chart, target.profile, command)
+        _LOG.info("running %s hook for %s/%s: %s", phase, entry.chart.name, entry.profile, command)
         try:
             result = self.runner.run(
                 action.command,

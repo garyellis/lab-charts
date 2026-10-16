@@ -38,19 +38,11 @@ def test_a_changed_chart_file_selects_that_chart_at_its_default_profile(
     )
 
 
-def _depends_on(chart: Path, *, target: str, profile: str) -> None:
-    path = chart / "chart-lifecycle.yaml"
-    lifecycle = parse_yaml(path.read_text())
-    lifecycle["spec"]["chartTest"]["dependentTests"] = [{"chart": target, "profile": profile}]
-    path.write_text(dump_yaml(lifecycle))
-
-
 def test_a_changed_chart_also_selects_its_dependent_tests_at_their_declared_profile(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    source = make_chart("source")
+    make_chart("source", dependent_tests=[("consumer", "full")])
     make_chart("consumer", profiles={"minimal": {}, "full": {}})
-    _depends_on(source, target="consumer", profile="full")
 
     selection = _select(chart_root, ["charts/source/values.yaml"])
 
@@ -68,9 +60,8 @@ def test_a_changed_chart_also_selects_its_dependent_tests_at_their_declared_prof
 def test_a_dependent_test_naming_an_unknown_profile_is_a_spec_error(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    source = make_chart("source")
+    make_chart("source", dependent_tests=[("consumer", "nope")])
     make_chart("consumer")
-    _depends_on(source, target="consumer", profile="nope")
 
     selection = _select(chart_root, ["charts/source/values.yaml"])
 
@@ -115,6 +106,7 @@ def test_no_changes_selects_every_enabled_chart_at_its_default_profile(
     make_chart("alpha", profiles={"smoke": {}, "full": {}})
     make_chart("beta", profiles={"minimal": {}, "full": {}})
     _disable(make_chart("off"))
+    (make_chart("unmanaged") / "chart-lifecycle.yaml").unlink()
 
     selection = _select(chart_root, None)
 
@@ -179,6 +171,7 @@ def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart
     (chart_root / "platform/network/Chart.yaml").write_text(
         "apiVersion: v2\nname: network\nversion: 1.0.0\n"
     )
+    (chart_root / "kind-config.yaml").write_text("")
     (chart_root / ".chart-manager/local-cluster.yaml").write_text(
         dump_yaml(
             {
@@ -212,12 +205,19 @@ def test_a_change_to_a_local_cluster_bootstrap_chart_selects_every_enabled_chart
     )
 
 
+def test_a_malformed_local_cluster_fails_selection(chart_root: Path, make_chart: MakeChart) -> None:
+    make_chart("alpha")
+    (chart_root / ".chart-manager/local-cluster.yaml").write_text("kind: [\n")
+
+    with pytest.raises(SpecError, match="invalid local resource"):
+        _select(chart_root, ["charts/alpha/values.yaml"])
+
+
 def test_a_fanout_change_and_a_chart_change_together_also_select_dependent_profiles(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    source = make_chart("source")
+    make_chart("source", dependent_tests=[("consumer", "full")])
     make_chart("consumer", profiles={"minimal": {}, "full": {}})
-    _depends_on(source, target="consumer", profile="full")
 
     selection = _select(chart_root, ["kind-config.yaml", "charts/source/values.yaml"])
 

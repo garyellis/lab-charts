@@ -5,24 +5,24 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from chart_manager import main
 from chart_manager import settings as settings_module
 from chart_manager.api.v1alpha1.chart_workspace import ChartWorkspace
-from chart_manager.cli._container import Container, reset_invocation
+from chart_manager.cli._container import Container, container, reset_invocation
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
 from chart_manager.commands.validate.render_dir import clean_render_dir, render_dir_state
 from chart_manager.plumbing.errors import SpecError, WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.settings import Settings, load_settings
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import chart_names
 from chart_manager.shared.workspace import (
-    SCHEMA_LOCK_FILE,
     WORKSPACE_FILE,
     discover_workspace_root,
     load_repository_workspace,
+    pattern_matches,
     resolve_repository_root,
 )
 
@@ -147,7 +147,7 @@ def test_missing_workspace_exits_with_the_environment_code(
     # `CliRunner` stops at Click; the exception is what `main()` maps.
     assert isinstance(result.exception, WorkspaceNotFoundError)
     assert "set CHART_MANAGER_ROOT" in str(result.exception)
-    assert exit_code_for(main._outcome_for(result.exception)) == 5
+    assert exit_code_for(result.exception.outcome) == 5
 
 
 def test_missing_workspace_exit_code_through_main(
@@ -164,6 +164,11 @@ def test_missing_workspace_exit_code_through_main(
 
     assert excinfo.value.code == 5
     assert "no .chart-manager/workspace.yaml" in capsys.readouterr().err
+
+
+def test_the_container_is_unavailable_before_an_invocation_starts() -> None:
+    with pytest.raises(RuntimeError, match="start_invocation"):
+        container()
 
 
 @pytest.mark.parametrize("key", ["charts_dir", "local_config"])
@@ -233,6 +238,52 @@ def test_an_invalid_config_value_names_the_key_and_the_file(
     monkeypatch.setattr(settings_module, "_config_file", config)
 
     with pytest.raises(SpecError, match=r"^invalid settings \(.*config\.yaml\): log_level: "):
+        load_settings()
+
+
+def test_the_schema_cache_root_override_expands_home_and_must_be_absolute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHART_MANAGER_SCHEMA_CACHE_ROOT", "~/x")
+    assert load_settings().schema_cache_root == Path.home() / "x"
+
+    monkeypatch.setenv("CHART_MANAGER_SCHEMA_CACHE_ROOT", "relative/x")
+    with pytest.raises(SpecError, match="schema_cache_root"):
+        load_settings()
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, False), ("", False), ("1", True)])
+def test_ci_is_read_from_the_unprefixed_variable(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, expected: bool
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("CI", value)
+
+    assert load_settings().ci is expected
+
+
+def test_each_token_is_read_only_from_its_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "g")
+    monkeypatch.setenv("RENOVATE_TOKEN", "")
+    settings = load_settings()
+    assert settings.github_token == SecretStr("g")
+    assert settings.renovate_token is None
+
+    monkeypatch.delenv("GITHUB_TOKEN")
+    monkeypatch.setenv("RENOVATE_TOKEN", "r")
+    settings = load_settings()
+    assert settings.github_token is None
+    assert settings.renovate_token == SecretStr("r")
+
+
+def test_the_events_backend_is_one_of_the_supported_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    assert load_settings().events_backend == "cosmos"
+
+    monkeypatch.setenv("EVENTS_BACKEND", "sqlite")
+    with pytest.raises(SpecError, match="events_backend"):
         load_settings()
 
 
@@ -383,17 +434,6 @@ def test_fanout_normalizes_dedupes_and_sorts() -> None:
     assert resource.spec.fanout.validation == ("a/file", "z/**")
 
 
-def test_chart_test_fanout_and_shared_charts_load_from_chart_test_keys(tmp_path: Path) -> None:
-    workspace = workspace_for(
-        tmp_path,
-        fanout={"chartTest": ["kind/**"]},
-        chartTest={"sharedCharts": ["base"]},
-    )
-
-    assert workspace.matching_chart_test_patterns("kind/config.yaml") == ("kind/**",)
-    assert workspace.matching_chart_test_patterns("charts/base/values.yaml") == ("charts/base",)
-
-
 @pytest.mark.parametrize(
     "spec",
     [
@@ -428,38 +468,8 @@ def test_fanout_rejects_unsafe_or_unsupported_patterns(pattern: str) -> None:
         ("charts/**/foo.tmpl", "charts/a/b/other.tmpl", False),
     ],
 )
-def test_fanout_matching(pattern: str, path: str, expected: bool) -> None:
-    workspace = workspace_for(Path("/repo"), fanout={"validation": [pattern]})
-
-    assert workspace.matches_validation_fanout(path) is expected
-
-
-def test_implicit_fanout_includes_marker_policies_cluster_and_shared_charts(
-    tmp_path: Path,
-) -> None:
-    local = tmp_path / ".chart-manager/local-cluster.yaml"
-    local.parent.mkdir(exist_ok=True)
-    local.write_text(
-        """apiVersion: chartmanager.io/v1alpha1
-kind: LocalCluster
-metadata: {name: default}
-spec:
-  cluster: {config: kind/config.yaml}
-  bootstrap:
-    releases:
-      - {type: lifecycle, chart: charts/cni, profile: minimal}
-""",
-        encoding="utf-8",
-    )
-    workspace = workspace_for(tmp_path, chartTest={"sharedCharts": ["base"]})
-
-    assert workspace.matches_validation_fanout("policies/rule.yaml")
-    assert workspace.matches_validation_fanout(WORKSPACE_FILE)
-    assert workspace.matches_validation_fanout(SCHEMA_LOCK_FILE)
-    assert workspace.matching_chart_test_patterns(WORKSPACE_FILE)
-    assert workspace.matching_chart_test_patterns("kind/config.yaml")
-    assert workspace.matching_chart_test_patterns("charts/cni/templates/cni.yaml")
-    assert workspace.matching_chart_test_patterns("charts/base/templates/crd.yaml")
+def test_pattern_matching(pattern: str, path: str, expected: bool) -> None:
+    assert pattern_matches(pattern, path) is expected
 
 
 def test_render_cleanup_rejects_symlink_components(tmp_path: Path) -> None:
@@ -520,9 +530,7 @@ def test_charts_dir_dot_works_for_discovery_ci_and_grafana(tmp_path: Path) -> No
     dashboard.parent.mkdir(parents=True)
     dashboard.write_text("{}", encoding="utf-8")
 
-    repository = ChartRepository(tmp_path, charts_dir=Path("."))
-
-    assert repository.list_names() == ["alpha", "grafana-dashboards"]
+    assert chart_names(tmp_path / ".") == ["alpha", "grafana-dashboards"]
     workspace = workspace_for(tmp_path, chartsDir=Path("."))
     assert workspace.chart_name_from_repo_path("alpha/values.yaml") == "alpha"
     assert discover_dashboards(workspace=workspace) == [dashboard]

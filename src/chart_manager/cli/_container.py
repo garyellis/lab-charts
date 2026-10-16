@@ -1,10 +1,8 @@
 """The per-invocation `Container` and the surface glue every command's `cli.py` needs.
 
-  * `Container` -- the settings, the workspace and the command runner for one
-    invocation; each command wires its own adapters from them;
-  * `container()` -- returns the current invocation's `Container`;
-  * `exit_if_failed()` -- the surface's rule for a result that reports its
-    own failure.
+  * `Container` -- the settings, the workspace, the command runner and the
+    event writer for one invocation; each command wires its own adapters from them;
+  * `container()` -- returns the current invocation's `Container`.
 
 Several `cli.py` modules alias `container` into their own namespace
 (`from ..._container import container as _container`) so a test can
@@ -16,13 +14,13 @@ and `container()` returns it, so workspace.yaml is parsed once per invocation.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
-import typer
-
 from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.settings import Settings, load_settings
+from chart_manager.shared.events.store import get_event_store
+from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import (
     RepositoryWorkspace,
     load_repository_workspace,
@@ -33,9 +31,9 @@ from chart_manager.shared.workspace import (
 class Container:
     """One invocation's settings, workspace and command runner. Construct once; the caller holds it."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        """Bind settings (defaults reproduce today's CLI behavior)."""
-        self._settings = settings if settings is not None else load_settings()
+    def __init__(self, settings: Settings) -> None:
+        """Bind the invocation's settings."""
+        self._settings = settings
         self._command_runner: CommandRunner | None = None
         self._workspaces: dict[Path | None, RepositoryWorkspace] = {}
 
@@ -55,10 +53,18 @@ class Container:
             configured = root
             if configured is None and "root" in self._settings.model_fields_set:
                 configured = self._settings.root
-            compiled = load_repository_workspace(resolve_repository_root(configured=configured))
+            compiled = load_repository_workspace(
+                resolve_repository_root(configured=configured, start=Path.cwd())
+            )
             self._workspaces[key] = compiled
             self._workspaces[compiled.root] = compiled
         return self._workspaces[key]
+
+    def event_writer(self) -> EventWriter:
+        """A lifecycle-event writer; the store is opened on its first write."""
+        return EventWriter(
+            source=self._settings.event_source, store=partial(get_event_store, self._settings)
+        )
 
     def command_runner(self) -> CommandRunner:
         """The shared subprocess runner (stateless; memoized)."""
@@ -74,7 +80,7 @@ _invocation: Container | None = None
 def start_invocation() -> Container:
     """Build the invocation's container (after `--config` is applied)."""
     global _invocation
-    _invocation = Container()
+    _invocation = Container(load_settings())
     return _invocation
 
 
@@ -84,35 +90,15 @@ def reset_invocation() -> None:
     _invocation = None
 
 
-def container(settings: Settings | None = None) -> Container:
-    """Return the current invocation's `Container`, or one bound to `settings`.
+def container() -> Container:
+    """Return the current invocation's `Container`.
 
-    `settings=None` resolves the process configuration
-    (`CHART_MANAGER_* env > config.yaml > defaults`), which is what every
-    command does. Passing one is the injection point for a test.
+    Raises `RuntimeError` when no invocation has started: the root callback
+    calls `start_invocation()` before any command runs.
     """
-    if settings is not None:
-        return Container(settings)
     if _invocation is None:
-        return Container()
+        raise RuntimeError("no invocation has started; call start_invocation() first")
     return _invocation
-
-
-def exit_if_failed(ok: bool) -> None:
-    """The surface's single rule for a result that reports its own failure.
-
-    Commands report partial failure on the result object rather than by
-    raising, so a surface that only renders it reports success for a run in
-    which charts failed.
-
-    A boolean `ok` is all these results carry, so `Outcome.FAILED` is the
-    only outcome derivable from it -- "the thing you asked about failed".
-    A command whose result can distinguish *why* it
-    failed should map its own outcome instead of funnelling through here,
-    the way `commands/promote/cli.py::pr` maps `PROMOTE_OUTCOME`.
-    """
-    if not ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
 
 
 def repository_root() -> Path:
@@ -123,7 +109,6 @@ def repository_root() -> Path:
 __all__ = [
     "Container",
     "container",
-    "exit_if_failed",
     "repository_root",
     "reset_invocation",
     "start_invocation",

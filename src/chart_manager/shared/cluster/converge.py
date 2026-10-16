@@ -8,11 +8,13 @@ operator creates from the release's custom resources), and its CRDs becoming
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import (
     ChartManagerError,
     ExternalCommandError,
@@ -22,6 +24,8 @@ from chart_manager.plumbing.errors import (
 from chart_manager.plumbing.yaml_files import parse_yaml_documents
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.cluster.session import Session
+
+_LOG = logging.getLogger(__name__)
 
 WORKLOAD_KINDS = ("deployment", "statefulset", "daemonset")
 #: The install and wait budget when a release names none.
@@ -66,6 +70,9 @@ def converge(session: Session, release: Release) -> Literal["applied", "no-chang
     Raises `ReleaseFailed` with diagnostics when a step fails. A missing tool or a
     configuration error is raised as it is: it is not this release's failure.
     """
+    _LOG.info(
+        "installing %s (%s) into namespace %s", release.name, release.chart, release.namespace
+    )
     step: Step = "dependency update"
     try:
         if isinstance(release.chart, Path):
@@ -77,7 +84,7 @@ def converge(session: Session, release: Release) -> Literal["applied", "no-chang
             namespace=release.namespace,
             values=list(release.values),
             sets=dict(release.sets),
-            timeout=release.timeout,
+            timeout=parse_duration(release.timeout),
             wait=False,
             version=release.version,
             repo=release.repo,
@@ -97,7 +104,7 @@ def installed(session: Session) -> dict[tuple[str, str], str]:
     """Every Helm release in the cluster, in any state: (namespace, name) -> status."""
     return {
         (info.namespace, info.name): info.status
-        for info in session.helm.list_releases(all_namespaces=True, any_status=True)
+        for info in session.helm.list_releases(all_namespaces=True)
     }
 
 
@@ -126,7 +133,8 @@ def wait(session: Session, release: Release) -> None:
             kind, namespace=release.namespace, selector=selector
         ):
             workloads[(kind, release.namespace, name)] = None
+    timeout = parse_duration(release.timeout)
     for kind, namespace, name in sorted(workloads, key=lambda w: WORKLOAD_KINDS.index(w[0])):
-        session.kubectl.rollout_status(kind, name, namespace=namespace, timeout=release.timeout)
+        session.kubectl.rollout_status(kind, name, namespace=namespace, timeout=timeout)
     for crd in crds:
-        session.kubectl.wait_established(crd, timeout=release.timeout)
+        session.kubectl.wait_established(crd, timeout=timeout)

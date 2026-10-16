@@ -27,7 +27,7 @@ def cluster_status(
     name: str,
     kind: Kind,
     root: Path,
-    config: Path | None = None,
+    config: Path | None,
 ) -> DevClusterStatus:
     """Collect the current state of the cluster, or report that it does not exist.
 
@@ -35,11 +35,10 @@ def cluster_status(
     kubeconfig error that says nothing `exists: false` did not.
     """
     if session is None:
-        return DevClusterStatus(cluster_name=name, exists=False)
+        return DevClusterStatus(exists=False)
     releases, releases_error = _releases(session.helm)
     urls, urls_error = _urls(session.kubectl)
     return DevClusterStatus(
-        cluster_name=name,
         exists=True,
         context=session.context,
         provider="kind",

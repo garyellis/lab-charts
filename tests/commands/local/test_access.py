@@ -24,7 +24,7 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.integrations.kubectl import VirtualService
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
-from chart_manager.shared.cluster.progress import ProgressEvent
+from chart_manager.plumbing.progress import ProgressEvent
 
 # Re-use the same shape of fakes the existing converge tests use; new
 # behaviour gets new attributes (e.g. VS host list, port mapping set) and
@@ -53,7 +53,7 @@ class _RecordingKubectl:
     def wait_workloads_ready(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
-    def wait_certificate_ready(self, name: str, *, namespace: str, timeout: str = "120s") -> None:
+    def wait_certificate_ready(self, name: str, *, namespace: str, timeout: float) -> None:
         self.cert_waits.append((name, namespace, timeout))
         if self._cert_raise is not None:
             raise self._cert_raise
@@ -62,12 +62,6 @@ class _RecordingKubectl:
         if self._vs_raise is not None:
             raise self._vs_raise
         return list(self._virtualservices)
-
-    # Returns [] because this file's tests don't exercise the
-    # gateway-host path; gateway-host-driven assertions live in
-    # test_apps_domain_detection.py.
-    def list_gateway_hosts(self) -> list[str]:
-        return []
 
     def create_namespace(self, _namespace: str) -> None:
         pass
@@ -86,7 +80,7 @@ class _Kind:
     def __init__(self, *, host_ports: set[int] | None = None) -> None:
         self._host_ports = host_ports if host_ports is not None else set()
 
-    def ensure_cluster(self, _name: str, *, config: Path | None = None) -> None:
+    def ensure_cluster(self, _name: str, *, config: Path | None) -> None:
         pass
 
     def control_plane_ip(self, _name: str) -> str:
@@ -94,20 +88,6 @@ class _Kind:
 
     def container_host_ports(self, _name: str) -> set[int]:
         return set(self._host_ports)
-
-
-class _Recorder:
-    """Collect progress events and flatten them to text for substring asserts."""
-
-    def __init__(self) -> None:
-        self.events: list[ProgressEvent] = []
-
-    def __call__(self, event: ProgressEvent) -> None:
-        self.events.append(event)
-
-    @property
-    def text(self) -> str:
-        return "\n".join(f"{e.label or ''} {e.message}".strip() for e in self.events)
 
 
 _GATEWAY_SYNCED = (DevClusterEntryOutcome("istio-gateway", "minimal", "istio-ingress"),)
@@ -274,22 +254,20 @@ def test_apps_wildcard_wait_invoked_when_istio_gateway_in_summary(
     tmp_path: Path,
 ) -> None:
     kubectl = _RecordingKubectl()
-    progress = _Recorder()
     summary = RunSummary(no_change=list(_GATEWAY_SYNCED))
-    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=[].append)  # type: ignore[arg-type]
 
-    assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", "120s")]
+    assert kubectl.cert_waits == [("apps-wildcard", "istio-ingress", 120.0)]
 
 
 def test_apps_wildcard_wait_not_invoked_when_owner_chart_absent(
     tmp_path: Path,
 ) -> None:
     kubectl = _RecordingKubectl()
-    progress = _Recorder()
     summary = RunSummary(
         applied=[DevClusterEntryOutcome("grafana", "minimal", "observability")]
     )
-    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=[].append)  # type: ignore[arg-type]
     assert kubectl.cert_waits == []
 
 
@@ -300,11 +278,11 @@ def test_apps_wildcard_wait_timeout_is_warning_not_error(
     kubectl = _RecordingKubectl(
         cert_raise=ExternalCommandError("timed out waiting"),
     )
-    progress = _Recorder()
+    events: list[ProgressEvent] = []
     summary = RunSummary(applied=list(_GATEWAY_SYNCED))
-    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=progress)  # type: ignore[arg-type]
-    assert "warn:" in progress.text
-    assert "apps-wildcard cert not Ready" in progress.text
+    wait_apps_wildcard_ready(summary, kubectl=kubectl, progress=events.append)  # type: ignore[arg-type]
+    assert events[-1].severity == "warn"
+    assert "apps-wildcard cert not Ready" in events[-1].message
 
 
 # ----- port-mapping drift ---------------------------------------------------
@@ -332,17 +310,18 @@ def test_port_mapping_drift_warning_when_live_missing_expected(tmp_path: Path) -
         "        hostPort: 443\n",
     )
     kind = _Kind(host_ports={80})
-    progress = _Recorder()
+    events: list[ProgressEvent] = []
 
     warn_on_port_mapping_drift(
         "chart-manager",
         kind=kind,  # type: ignore[arg-type]
         root=tmp_path,
-        progress=progress,
+        progress=events.append,
         config=tmp_path / "kind-config.yaml",
     )
-    assert "kind cluster port mappings do not match kind-config" in progress.text
-    assert "443" in progress.text
+    [event] = events
+    assert "kind cluster port mappings do not match kind-config" in event.message
+    assert "443" in event.message
 
 
 def test_port_mapping_drift_no_warning_when_matching(tmp_path: Path) -> None:
@@ -358,15 +337,15 @@ def test_port_mapping_drift_no_warning_when_matching(tmp_path: Path) -> None:
         "        hostPort: 443\n",
     )
     kind = _Kind(host_ports={80, 443})
-    progress = _Recorder()
+    events: list[ProgressEvent] = []
     warn_on_port_mapping_drift(
         "chart-manager",
         kind=kind,  # type: ignore[arg-type]
         root=tmp_path,
-        progress=progress,
+        progress=events.append,
         config=tmp_path / "kind-config.yaml",
     )
-    assert "kind cluster port mappings do not match" not in progress.text
+    assert events == []
 
 
 def test_port_mapping_drift_without_kind_config_is_silent_but_logged(
@@ -381,18 +360,18 @@ def test_port_mapping_drift_without_kind_config_is_silent_but_logged(
     and it is what keeps a typo'd `spec.cluster.config` from disabling the
     check permanently with no signal at all.
     """
-    progress = _Recorder()
+    events: list[ProgressEvent] = []
 
     with caplog.at_level("WARNING"):
         warn_on_port_mapping_drift(
             "chart-manager",
             kind=_Kind(host_ports=set()),  # type: ignore[arg-type]
             root=tmp_path,
-            progress=progress,
+            progress=events.append,
             config=tmp_path / "kind-config.yaml",
         )
 
-    assert "kind cluster port mappings" not in progress.text
+    assert events == []
     [record] = [r for r in caplog.records if r.levelname == "WARNING"]
     assert "port-mapping drift check skipped" in record.getMessage()
     assert "cluster=chart-manager" in record.getMessage()

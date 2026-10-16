@@ -1,11 +1,11 @@
-"""Cosmos DB access: cached client and document containers, env-var configured."""
+"""Cosmos DB access: a cached client and document containers, env-var configured."""
 
 import functools
 import os
 from typing import Any
 
 import azure.identity
-from azure.cosmos import ContainerProxy, CosmosClient, PartitionKey, exceptions
+from azure.cosmos import ContainerProxy, CosmosClient
 
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import PROBE_TIMEOUT, Check, first_line
@@ -87,31 +87,10 @@ class CosmosContainer:
         ]
 
 
-@functools.cache
-def get_container(database: str, container: str, partition_key: str) -> CosmosContainer:
-    """Return a (cached) container, creating database/container if allowed.
-
-    On 403 (AAD data-plane auth can't create resources) falls back to plain
-    get-client handles, assuming the resources were pre-provisioned.
-    """
-    client = get_cosmos_client()
-    try:
-        db = client.create_database_if_not_exists(id=database)
-        return CosmosContainer(
-            db.create_container_if_not_exists(
-                id=container,
-                partition_key=PartitionKey(path=partition_key),
-            )
-        )
-    except exceptions.CosmosHttpResponseError as e:
-        if e.status_code != 403:
-            raise
-        # AAD token auth: the data SDK forbids database/container creation
-        # (management is control-plane only). Assume the resources were
-        # pre-provisioned out-of-band (IaC/CLI). A genuine missing-resource or
-        # permission error will still surface on the first item operation.
-        db = client.get_database_client(database)
-        return CosmosContainer(db.get_container_client(container))
+def get_container(database: str, container: str) -> CosmosContainer:
+    """Return a handle on an existing container; nothing is created."""
+    db = get_cosmos_client().get_database_client(database)
+    return CosmosContainer(db.get_container_client(container))
 
 
 def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) -> Check:
@@ -121,21 +100,14 @@ def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) 
     is a different sentence from "the endpoint refused us" and only the
     first is fixable without leaving the terminal.
 
-    Deliberately reads existing handles rather than calling `get_container`:
-    that function *creates* the database and container as a side effect, and
-    a preflight that provisions infrastructure is not a preflight. It also
-    builds its own client rather than reusing the cached one, so the probe
+    Builds its own client rather than reusing the cached one, so the probe
     is capped at `timeout` instead of the writer's ten seconds.
     """
     if not (os.environ.get("COSMOS_CONNECTION_STRING") or os.environ.get("COSMOS_ENDPOINT")):
         return Check.failed(
             "events-backend",
-            "EVENTS_BACKEND=cosmos but neither COSMOS_CONNECTION_STRING nor "
-            "COSMOS_ENDPOINT is set",
-            remediation=(
-                "export COSMOS_ENDPOINT (plus COSMOS_KEY or an Azure credential), "
-                "or set EVENTS_BACKEND=none to run without telemetry"
-            ),
+            "neither COSMOS_CONNECTION_STRING nor COSMOS_ENDPOINT is set",
+            remediation="export COSMOS_ENDPOINT (plus COSMOS_KEY or an Azure credential)",
             outcome=Outcome.ENVIRONMENT,
         )
     target = f"cosmos {database}/{container}"
@@ -151,8 +123,8 @@ def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) 
             "events-backend",
             f"{target} unreachable: {first_line(str(exc)) or type(exc).__name__}",
             remediation=(
-                "check COSMOS_ENDPOINT and credentials, and that the database "
-                "and container exist"
+                "check COSMOS_ENDPOINT and credentials; create a missing database "
+                "or container with `mise run events:provision`"
             ),
             outcome=Outcome.ENVIRONMENT,
         )

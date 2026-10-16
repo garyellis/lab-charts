@@ -1,4 +1,4 @@
-"""The dashboard lint rules, the run's tally and its wire document."""
+"""The dashboard lint rules and the run's tally."""
 
 import json
 from pathlib import Path
@@ -12,13 +12,13 @@ from chart_manager.commands.grafana.dashboard_lint import (
     lint_paths,
     rendered_configmap_name,
 )
-from chart_manager.commands.grafana.wire import lint_result_to_dict
-from tests.commands.grafana.conftest import PASSING_DASHBOARD as _PASSING_DASHBOARD
+from chart_manager.plumbing.exit_codes import Outcome
+from tests.conftest import PASSING_DASHBOARD
 
 
 def test_passing(tmp_path: Path) -> None:
     p = tmp_path / "ok.json"
-    p.write_text(_PASSING_DASHBOARD)
+    p.write_text(PASSING_DASHBOARD)
     assert lint_dashboard(p) == []
 
 
@@ -54,8 +54,8 @@ def test_text_panel_does_not_require_datasource(tmp_path: Path) -> None:
 
 # ----- LintResult -----------------------------------------------------------
 #
-# The pass/fail rule and the "N findings across M/N dashboards" tally come
-# off the result so any surface reports the same verdict.
+# The outcome and the "N findings across M/N dashboards" tally come off
+# the result so any surface reports the same verdict.
 
 
 def test_lint_result_is_ok_when_every_dashboard_passes(tmp_path: Path) -> None:
@@ -70,7 +70,7 @@ def test_lint_result_is_ok_when_every_dashboard_passes(tmp_path: Path) -> None:
 
     result = lint_paths([good])
 
-    assert result.ok
+    assert result.outcome is Outcome.SUCCESS
     assert result.findings == ()
     assert result.files_scanned == 1
     assert result.files_with_findings == 0
@@ -92,7 +92,7 @@ def test_lint_result_counts_files_not_findings(tmp_path: Path) -> None:
 
     result = lint_paths([good, bad])
 
-    assert not result.ok
+    assert result.outcome is Outcome.FAILED
     assert result.files_scanned == 2
     assert result.files_with_findings == 1
     assert {f.path for f in result.findings} == {bad}
@@ -101,7 +101,7 @@ def test_lint_result_counts_files_not_findings(tmp_path: Path) -> None:
 def test_lint_result_on_empty_target_list_is_ok(tmp_path: Path) -> None:
     result = lint_paths([])
 
-    assert result.ok
+    assert result.outcome is Outcome.SUCCESS
     assert result.files_scanned == 0
     assert result.files_with_findings == 0
 
@@ -121,32 +121,11 @@ def test_expand_targets_recurses_into_a_directory(tmp_path: Path) -> None:
     """`--path DIR` lints the JSON under it, as the default discovery does."""
     tree = tmp_path / "dashboards"
     (tree / "nested").mkdir(parents=True)
-    (tree / "a.json").write_text(_PASSING_DASHBOARD)
-    (tree / "nested" / "b.json").write_text(_PASSING_DASHBOARD)
+    (tree / "a.json").write_text(PASSING_DASHBOARD)
+    (tree / "nested" / "b.json").write_text(PASSING_DASHBOARD)
     (tree / "notes.txt").write_text("not a dashboard")
 
     assert expand_targets([tree]) == [tree / "a.json", tree / "nested" / "b.json"]
-
-
-def test_wire_payload_carries_the_tally_as_well_as_the_findings(
-    tmp_path: Path,
-) -> None:
-    """`files_scanned` is not derivable from an empty `findings` list.
-
-    A clean run over 40 dashboards and a run that found no dashboards at all
-    both produce no findings; the tally is what separates them, which is the
-    distinction the tally exists for.
-    """
-    bad = tmp_path / "bad.json"
-    bad.write_text('{"panels": [], "templating": {"list": []}}')
-
-    payload = lint_result_to_dict(lint_paths([bad]))
-
-    assert payload["ok"] is False
-    assert payload["files_scanned"] == 1
-    assert payload["files_with_findings"] == 1
-    assert {finding["rule"] for finding in payload["findings"]} >= {"R001-title", "R002-uid"}
-    assert {finding["path"] for finding in payload["findings"]} == {bad.as_posix()}
 
 
 def test_a_binary_file_is_a_finding_and_not_a_decode_traceback(tmp_path: Path) -> None:
@@ -183,7 +162,7 @@ def _link(url: str) -> Any:
 )
 def test_lint_rejects(tmp_path: Path, edit: Any, rule: str) -> None:
     dashboard = tmp_path / "dashboard.json"
-    payload = json.loads(_PASSING_DASHBOARD)
+    payload = json.loads(PASSING_DASHBOARD)
     edit(payload)
     dashboard.write_text(json.dumps(payload))
 
@@ -195,8 +174,8 @@ def test_lint_paths_rejects_duplicate_uids(tmp_path: Path) -> None:
     second = tmp_path / "two" / "b.json"
     first.parent.mkdir()
     second.parent.mkdir()
-    first.write_text(_PASSING_DASHBOARD)
-    second.write_text(_PASSING_DASHBOARD)
+    first.write_text(PASSING_DASHBOARD)
+    second.write_text(PASSING_DASHBOARD)
 
     result = lint_paths([first, second])
 

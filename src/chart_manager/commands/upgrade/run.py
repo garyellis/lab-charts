@@ -8,7 +8,11 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
-from chart_manager.commands.upgrade.finalize import DATA_FILE_TEMPLATE, wrapper_version
+from chart_manager.commands.upgrade.finalize import (
+    CHART_FILE,
+    DATA_FILE_TEMPLATE,
+    wrapper_version,
+)
 from chart_manager.commands.upgrade.models import (
     UpgradeError,
     UpgradePlan,
@@ -16,7 +20,6 @@ from chart_manager.commands.upgrade.models import (
     UpgradeResult,
     UpgradeStatus,
 )
-from chart_manager.commands.upgrade.paths import CHART_FILE, resolve_chart_path
 from chart_manager.commands.upgrade.telemetry import emit_pr_open
 from chart_manager.integrations.git import Git
 from chart_manager.integrations.github import Github, PullRequest
@@ -24,6 +27,8 @@ from chart_manager.integrations.renovate import Renovate, RenovateRequest
 from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import parse_yaml_mapping
+from chart_manager.settings import Settings
+from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.events.writer import EventWriter
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -43,18 +48,16 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
+    settings: Settings,
     events: EventWriter,
 ) -> UpgradeResult:
     """Run Renovate for one chart and report the pull request it opened or updated."""
     root = workspace.root
-    git = Git(root, runner)
-    github = Github(root, runner)
+    token = settings.renovate_token
+    git = Git(root, runner, timeout=settings.command_timeout)
+    github = Github(root, runner, timeout=settings.command_timeout)
     repository = _repository(git)
-    plan = _build_upgrade_plan(
-        root,
-        request.chart_path,
-        charts_dir=workspace.spec.charts_dir,
-    )
+    plan = _build_upgrade_plan(root, request.chart)
     _LOG.info("Planning dependency upgrade for chart %s", plan.chart)
     _LOG.debug("Chart path: %s", plan.chart_path)
     _LOG.debug("Renovate branch prefix: %s", plan.branch_prefix)
@@ -69,12 +72,11 @@ def run(
         additional_config_path=chart_config if chart_config.is_file() else None,
         runtime_overlay=plan.runtime_overlay,
         dry_run="full" if request.dry_run else None,
-        # Renovate's own name first, then the token GitHub Actions provides.
-        token=os.environ.get("RENOVATE_TOKEN") or os.environ.get("GITHUB_TOKEN"),
+        token=token.get_secret_value() if token is not None else None,
     )
     if request.dry_run:
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
-        outcome, current_pr = UpgradeStatus.DRY_RUN, None
+        status, current_pr = UpgradeStatus.DRY_RUN, None
         previously_proposed = proposed_version = None
     else:
         existing_pr, found_existing = _find_pull_request(github, plan.branch_prefix, diagnostics)
@@ -83,10 +85,10 @@ def run(
         previously_proposed, _ = _proposed_version(plan, github, existing_pr)
         diagnostics.extend(_renovate(runner, renovate_request, chart=plan.chart))
         current_pr, found_current = _find_pull_request(github, plan.branch_prefix, diagnostics)
-        outcome = _outcome(
+        status = _outcome(
             existing_pr, current_pr, lookup_failed=not (found_existing and found_current)
         )
-        if outcome is UpgradeStatus.NO_CHANGES:
+        if status is UpgradeStatus.NO_CHANGES:
             diagnostics.append(
                 f"Renovate completed without an open pull request under "
                 f"{plan.branch_prefix}; no eligible update was proposed"
@@ -102,7 +104,7 @@ def run(
         # The branch Renovate actually opened; None when no PR is open for this chart.
         branch=current_pr.branch if current_pr is not None else None,
         group=plan.group,
-        outcome=outcome,
+        status=status,
         diagnostics=tuple(diagnostics),
         repository=repository,
         pr_url=current_pr.url if current_pr is not None else None,
@@ -111,10 +113,10 @@ def run(
     # Emitted last: the upgrade is already pushed, so telemetry can only cost latency.
     emit_pr_open(events, upgrade_result, previously_proposed=previously_proposed)
     _LOG.info(
-        "Upgrade result for %s: outcome=%s current=%s proposed=%s branch=%s pr=%s "
+        "Upgrade result for %s: status=%s current=%s proposed=%s branch=%s pr=%s "
         "diagnostics=%d",
         plan.chart,
-        upgrade_result.outcome,
+        upgrade_result.status,
         upgrade_result.current_version,
         upgrade_result.proposed_version or "(none)",
         upgrade_result.branch or "(none)",
@@ -274,25 +276,15 @@ def _renovate_warnings(output: str) -> tuple[str, ...]:
     )
 
 
-def _build_upgrade_plan(
-    root: Path,
-    chart_path: Path,
-    *,
-    charts_dir: Path,
-) -> UpgradePlan:
+def _build_upgrade_plan(root: Path, chart: Chart) -> UpgradePlan:
     """Build deterministic chart identity, branch, group and callback overlay."""
-    repo_root, resolved, chart = resolve_chart_path(
-        root,
-        chart_path,
-        charts_dir=charts_dir,
-    )
-    version = str(wrapper_version(chart.get("version"), source="Chart.yaml version"))
-    name = resolved.name
+    version = str(wrapper_version(chart.metadata.version, source="Chart.yaml version"))
+    name = chart.name
     group = _GROUP.format(chart=name)
     # Renovate prunes stale branches by `branchPrefix` alone; a per-chart prefix keeps a
     # one-chart run from autoclosing every other chart's pull request.
     branch_prefix = _BRANCH_PREFIX.format(chart=name)
-    relative = resolved.relative_to(repo_root).as_posix()
+    relative = chart.path.relative_to(root).as_posix()
     overlay: Mapping[str, object] = {
         # `force` survives the merge with the repository's renovate.json, so a stray
         # branchPrefix there cannot break the per-chart scope.
@@ -323,8 +315,8 @@ def _build_upgrade_plan(
         },
     }
     return UpgradePlan(
-        repo_root=repo_root,
-        chart_path=resolved,
+        repo_root=root,
+        chart_path=chart.path,
         chart=name,
         current_version=version,
         branch_prefix=branch_prefix,

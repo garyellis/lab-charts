@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from chart_manager.commands.upgrade import (
     UpgradeError,
@@ -13,28 +14,13 @@ from chart_manager.commands.upgrade import (
 )
 from chart_manager.commands.upgrade.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
-from chart_manager.shared.events.model import BuildPhase, PlatformLifecycleEvent
-from chart_manager.shared.events.store import EventQuery
+from chart_manager.settings import Settings
+from chart_manager.shared.charts.chart import load_chart
+from chart_manager.shared.events.model import BuildPhase
 from chart_manager.shared.events.writer import EventWriter
-from tests.conftest import FakeCommandRunner, Reply, workspace_for
+from tests.conftest import EventLog, FakeCommandRunner, Reply, workspace_for
 
 _BRANCH = "renovate/my-chart/my-chart"
-
-
-class _EventLog:
-    """An event store that records each event, and raises `raises` after recording it."""
-
-    def __init__(self, *, raises: Exception | None = None) -> None:
-        self.events: list[PlatformLifecycleEvent] = []
-        self.raises = raises
-
-    def write(self, event: PlatformLifecycleEvent) -> None:
-        self.events.append(event)
-        if self.raises is not None:
-            raise self.raises
-
-    def query(self, query: EventQuery) -> list[dict[str, object]]:
-        raise NotImplementedError
 
 
 def _prs(*branches: str, numbered: bool = True) -> Reply:
@@ -44,7 +30,6 @@ def _prs(*branches: str, numbered: bool = True) -> Reply:
             [
                 {
                     "url": f"https://example.test/pull/{7 + 2 * index}",
-                    "baseRefName": "main",
                     "headRefName": branch,
                     **({"number": 7 + 2 * index} if numbered else {}),
                 }
@@ -82,7 +67,7 @@ def _upgrade(
     runner: FakeCommandRunner,
     *,
     dry_run: bool = False,
-    events: _EventLog | None = None,
+    events: EventLog,
     version: str = "0.4.2",
 ) -> UpgradeResult:
     chart = tmp_path / "charts" / "my-chart"
@@ -92,10 +77,11 @@ def _upgrade(
     )
     (tmp_path / "renovate-global.json").write_text("{}\n", encoding="utf-8")
     return run(
-        UpgradeRequest(chart_path=chart, dry_run=dry_run),
+        UpgradeRequest(chart=load_chart(chart), dry_run=dry_run),
         workspace=workspace_for(tmp_path),
         runner=runner,
-        events=EventWriter(source="chart-manager", store=lambda: events if events is not None else _EventLog()),
+        settings=Settings(RENOVATE_TOKEN=SecretStr("renovate-token")),
+        events=EventWriter(source="chart-manager", store=lambda: events),
     )
 
 
@@ -112,25 +98,14 @@ def _branch_reads(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
 # ----- what Renovate is handed ---------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("tokens", "expected"),
-    [
-        ({"GITHUB_TOKEN": "ci-token"}, "ci-token"),
-        ({"RENOVATE_TOKEN": "renovate-token", "GITHUB_TOKEN": "ci-token"}, "renovate-token"),
-    ],
-)
-def test_dry_run_drives_git_and_renovate_through_the_runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: dict[str, str], expected: str
-) -> None:
-    for name, value in tokens.items():
-        monkeypatch.setenv(name, value)
+def test_dry_run_drives_git_and_renovate_through_the_runner(tmp_path: Path) -> None:
     (tmp_path / "charts" / "my-chart").mkdir(parents=True)
     (tmp_path / "charts" / "my-chart" / "renovate.json").write_text("{}\n", encoding="utf-8")
     runner = _runner(renovate=Reply(stdout="renovate complete\n"))
 
-    result = _upgrade(tmp_path, runner, dry_run=True)
+    result = _upgrade(tmp_path, runner, dry_run=True, events=EventLog())
 
-    assert result.outcome is UpgradeStatus.DRY_RUN
+    assert result.status is UpgradeStatus.DRY_RUN
     assert result.current_version == "0.4.2"
     assert result.chart_path == (tmp_path / "charts/my-chart").resolve()
     assert runner.calls == [
@@ -143,8 +118,7 @@ def test_dry_run_drives_git_and_renovate_through_the_runner(
     ]  # fmt: skip
     env = _renovate_env(runner)
     assert env["RENOVATE_DRY_RUN"] == "full"
-    # RENOVATE_TOKEN first, then the token GitHub Actions provides.
-    assert env["RENOVATE_TOKEN"] == expected
+    assert env["RENOVATE_TOKEN"] == "renovate-token"
     assert env["RENOVATE_CONFIG_FILE"] == str((tmp_path / "renovate-global.json").resolve())
     assert env["RENOVATE_ADDITIONAL_CONFIG_FILE"] == str(
         (tmp_path / "charts/my-chart/renovate.json").resolve()
@@ -154,7 +128,7 @@ def test_dry_run_drives_git_and_renovate_through_the_runner(
 def test_renovate_is_scoped_to_one_chart_and_its_own_branch_namespace(tmp_path: Path) -> None:
     runner = _runner()
 
-    result = _upgrade(tmp_path, runner)
+    result = _upgrade(tmp_path, runner, events=EventLog())
 
     assert result.group == "chart-manager:my-chart"
     overlay = json.loads(_renovate_env(runner)["RENOVATE_CONFIG"])
@@ -182,7 +156,7 @@ def test_a_wrapper_version_that_is_not_strict_x_y_z_is_rejected_before_renovate(
     runner = _runner()
 
     with pytest.raises(UpgradeError, match=r"strict x\.y\.z"):
-        _upgrade(tmp_path, runner, version=version)
+        _upgrade(tmp_path, runner, version=version, events=EventLog())
 
     assert not any(call[0] == "renovate" for call in runner.calls)
 
@@ -191,7 +165,7 @@ def test_relevant_uncommitted_inputs_are_rejected_before_renovate(tmp_path: Path
     runner = _runner().respond(("git", "status"), stdout=" M charts/my-chart/values.yaml\n")
 
     with pytest.raises(UpgradeError, match="uncommitted changes"):
-        _upgrade(tmp_path, runner)
+        _upgrade(tmp_path, runner, events=EventLog())
 
     assert not any(call[0] == "renovate" for call in runner.calls)
 
@@ -202,7 +176,7 @@ def test_repository_comes_from_github_repository_before_the_origin_remote(
     monkeypatch.setenv("GITHUB_REPOSITORY", "ci/charts")
     runner = _runner()
 
-    result = _upgrade(tmp_path, runner, dry_run=True)
+    result = _upgrade(tmp_path, runner, dry_run=True, events=EventLog())
 
     assert result.repository == "ci/charts"
     assert ("git", "remote", "get-url", "origin") not in runner.calls
@@ -226,7 +200,7 @@ def test_a_failed_renovate_run_is_an_upgrade_error(
     tmp_path: Path, renovate: Reply, message: str
 ) -> None:
     with pytest.raises(UpgradeError, match=message):
-        _upgrade(tmp_path, _runner(renovate=renovate))
+        _upgrade(tmp_path, _runner(renovate=renovate), events=EventLog())
 
 
 def test_renovate_stderr_and_warning_headlines_become_diagnostics(tmp_path: Path) -> None:
@@ -235,7 +209,7 @@ def test_renovate_stderr_and_warning_headlines_become_diagnostics(tmp_path: Path
         stderr="node deprecation notice\n",
     )
 
-    result = _upgrade(tmp_path, _runner(renovate=renovate))
+    result = _upgrade(tmp_path, _runner(renovate=renovate), events=EventLog())
 
     assert result.diagnostics[:2] == ("node deprecation notice", "WARN: Package lookup failed")
 
@@ -246,13 +220,13 @@ def test_renovate_stderr_and_warning_headlines_become_diagnostics(tmp_path: Path
 def test_opening_a_pull_request_records_pr_open_for_the_proposed_version(
     tmp_path: Path,
 ) -> None:
-    events = _EventLog()
+    events = EventLog()
     # No pull request before Renovate, one after: the run that opens it.
     runner = _runner(prs=(_prs(), _prs(_BRANCH)), branch_files=(_chart_at("0.4.3"),))
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome is UpgradeStatus.PR_OPEN
+    assert result.status is UpgradeStatus.PR_OPEN
     assert result.proposed_version == "0.4.3"
     assert result.pr_url == "https://example.test/pull/7"
     assert result.pr_number == 7
@@ -288,12 +262,12 @@ def test_opening_a_pull_request_records_pr_open_for_the_proposed_version(
 
 def test_rerun_against_an_unchanged_pull_request_records_nothing(tmp_path: Path) -> None:
     """The branch is read before Renovate, so a re-run that proposes nothing new is silent."""
-    events = _EventLog()
+    events = EventLog()
     runner = _runner(prs=(_prs(_BRANCH),), branch_files=(_chart_at("0.4.3"),))
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome is UpgradeStatus.PR_UPDATED
+    assert result.status is UpgradeStatus.PR_UPDATED
     assert result.proposed_version == "0.4.3"
     # Read twice against the same branch file: once before Renovate, once after.
     assert len(_branch_reads(runner)) == 2
@@ -306,14 +280,14 @@ def test_rerun_that_retargets_the_version_records_pr_open_for_the_new_version(
     tmp_path: Path,
 ) -> None:
     """A major update superseding a patch moves the target while the PR stays open."""
-    events = _EventLog()
+    events = EventLog()
     runner = _runner(
         prs=(_prs(_BRANCH),), branch_files=(_chart_at("0.4.3"), _chart_at("1.0.0"))
     )
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome is UpgradeStatus.PR_UPDATED
+    assert result.status is UpgradeStatus.PR_UPDATED
     assert result.proposed_version == "1.0.0"
     (event,) = events.events
     assert event.build_phase is BuildPhase.PR_OPEN
@@ -327,7 +301,7 @@ def test_a_pull_request_without_a_number_records_no_build_correlation_id(
     tmp_path: Path,
 ) -> None:
     """Half an identifier would join to nothing."""
-    events = _EventLog()
+    events = EventLog()
     runner = _runner(
         prs=(_prs(), _prs(_BRANCH, numbered=False)), branch_files=(_chart_at("0.4.3"),)
     )
@@ -340,12 +314,12 @@ def test_a_pull_request_without_a_number_records_no_build_correlation_id(
 
 
 def test_no_pull_request_after_renovate_is_no_changes(tmp_path: Path) -> None:
-    events = _EventLog()
+    events = EventLog()
     runner = _runner()
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome is UpgradeStatus.NO_CHANGES
+    assert result.status is UpgradeStatus.NO_CHANGES
     assert result.proposed_version is None
     assert _branch_reads(runner) == []
     assert result.diagnostics == (
@@ -356,11 +330,11 @@ def test_no_pull_request_after_renovate_is_no_changes(tmp_path: Path) -> None:
 
 
 def test_an_unavailable_pull_request_status_is_status_unknown(tmp_path: Path) -> None:
-    events = _EventLog()
+    events = EventLog()
 
     result = _upgrade(tmp_path, _runner(prs=(_UNAVAILABLE,)), events=events)
 
-    assert result.outcome is UpgradeStatus.STATUS_UNKNOWN
+    assert result.status is UpgradeStatus.STATUS_UNKNOWN
     assert result.diagnostics == (
         "pull-request status unavailable: gh unavailable",
         "pull-request status unavailable: gh unavailable",
@@ -370,7 +344,7 @@ def test_an_unavailable_pull_request_status_is_status_unknown(tmp_path: Path) ->
 
 def test_dry_run_records_nothing(tmp_path: Path) -> None:
     """Nothing was pushed, so there is no artifact to report."""
-    events = _EventLog()
+    events = EventLog()
 
     _upgrade(tmp_path, _runner(), dry_run=True, events=events)
 
@@ -382,7 +356,9 @@ def test_an_unbumped_wrapper_version_on_the_branch_is_reported(tmp_path: Path) -
     # artifact error, then opens the pull request and exits zero, so an
     # unbumped wrapper version is the only signal this process can see.
     result = _upgrade(
-        tmp_path, _runner(prs=(_prs(_BRANCH),), branch_files=(_chart_at("0.4.2"),))
+        tmp_path,
+        _runner(prs=(_prs(_BRANCH),), branch_files=(_chart_at("0.4.2"),)),
+        events=EventLog(),
     )
 
     assert result.proposed_version == "0.4.2"
@@ -391,7 +367,7 @@ def test_an_unbumped_wrapper_version_on_the_branch_is_reported(tmp_path: Path) -
 
 def test_an_unreadable_branch_file_is_a_diagnostic_and_records_nothing(tmp_path: Path) -> None:
     """An open PR whose version could not be read must not write "my-chart@None"."""
-    events = _EventLog()
+    events = EventLog()
     unreadable = Reply(raises=ExternalCommandError("gh api failed"))
 
     result = _upgrade(
@@ -400,7 +376,7 @@ def test_an_unreadable_branch_file_is_a_diagnostic_and_records_nothing(tmp_path:
 
     assert result.proposed_version is None
     # A failed read is a reporting gap, not an unknown pull-request status.
-    assert result.outcome is UpgradeStatus.PR_UPDATED
+    assert result.status is UpgradeStatus.PR_UPDATED
     assert any("proposed wrapper version unavailable" in line for line in result.diagnostics)
     assert events.events == []
 
@@ -408,19 +384,21 @@ def test_an_unreadable_branch_file_is_a_diagnostic_and_records_nothing(tmp_path:
 def test_more_than_one_branch_for_a_chart_is_reported(tmp_path: Path) -> None:
     both = _prs("renovate/my-chart/a", "renovate/my-chart/b")
 
-    result = _upgrade(tmp_path, _runner(prs=(both,), branch_files=(_chart_at("0.4.3"),)))
+    result = _upgrade(
+        tmp_path, _runner(prs=(both,), branch_files=(_chart_at("0.4.3"),)), events=EventLog()
+    )
 
-    assert result.outcome is UpgradeStatus.PR_UPDATED
+    assert result.status is UpgradeStatus.PR_UPDATED
     assert result.branch == "renovate/my-chart/a"
     assert any("multiple open pull requests" in line for line in result.diagnostics)
 
 
 def test_a_failed_event_write_does_not_fail_the_upgrade(tmp_path: Path) -> None:
     """The branch is already pushed by the time telemetry runs."""
-    events = _EventLog(raises=RuntimeError("cosmos unreachable"))
+    events = EventLog(raises=RuntimeError("cosmos unreachable"))
     runner = _runner(prs=(_prs(), _prs(_BRANCH)), branch_files=(_chart_at("0.4.3"),))
 
     result = _upgrade(tmp_path, runner, events=events)
 
-    assert result.outcome is UpgradeStatus.PR_OPEN
+    assert result.status is UpgradeStatus.PR_OPEN
     assert len(events.events) == 1

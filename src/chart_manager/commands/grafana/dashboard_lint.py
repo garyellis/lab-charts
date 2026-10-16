@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.workspace import RepositoryWorkspace
 
 
@@ -153,20 +154,20 @@ def lint_dashboard(path: Path) -> list[Finding]:
 
 @dataclass(frozen=True)
 class LintResult:
-    """Outcome of one lint run: the findings plus the pass/fail rule itself.
+    """One lint run: the findings and how many files were scanned.
 
-    `ok` is the rule -- a run passes iff nothing was found. Surfaces must
-    read it rather than re-deriving `if findings:`, so a future rule (e.g.
-    warn-level findings that don't fail) changes in exactly one place.
+    `outcome` is the pass/fail rule -- a run passes iff nothing was found.
+    Surfaces read it rather than re-deriving `if findings:`. `files_scanned`
+    separates a clean run from a run over no files.
     """
 
     findings: tuple[Finding, ...]
     files_scanned: int
 
     @property
-    def ok(self) -> bool:
-        """True when the scanned dashboards produced no findings."""
-        return not self.findings
+    def outcome(self) -> Outcome:
+        """FAILED when any dashboard produced a finding, else SUCCESS."""
+        return Outcome.FAILED if self.findings else Outcome.SUCCESS
 
     @property
     def files_with_findings(self) -> int:

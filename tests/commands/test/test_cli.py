@@ -13,11 +13,11 @@ from chart_manager.commands.test import cli as test_cli
 from chart_manager.commands.test.models import (
     ActionKind,
     ActionOutcome,
-    ActionTarget,
     LifecycleAction,
     LifecyclePlan,
 )
 from chart_manager.plumbing.errors import ChartManagerError, MissingToolError
+from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from tests.conftest import MakeChart, cli
 
 LOCAL_CLUSTER = (
@@ -30,26 +30,12 @@ LOCAL_CLUSTER = (
 )
 
 
-def _chart(root: Path, name: str = "alloy") -> Path:
-    path = root / "charts" / name
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "Chart.yaml").write_text(f"apiVersion: v2\nname: {name}\nversion: 0.1.0\n")
-    return path
-
-
-def _plan() -> LifecyclePlan:
+def _plan(entry: InstallPlanEntry) -> LifecyclePlan:
     return LifecyclePlan(
         chart="alloy",
         profile="minimal",
-        actions=tuple(
-            LifecycleAction(
-                action_id=f"chart-test.alloy.minimal.{kind.value}",
-                kind=kind,
-                target=ActionTarget("alloy", "minimal", release="alloy", namespace="observability"),
-                input_digest=f"sha256:{kind.value}",
-                chart_path=Path("charts/alloy"),
-            )
-            for kind in (ActionKind.INSTALL, ActionKind.HELM_TEST)
+        actions=(
+            LifecycleAction(entry, ActionKind.HOOK_POST_INSTALL, ("hook", "--token", "s3cret")),
         ),
         warnings=("istio-base is owned by bootstrap",),
     )
@@ -68,8 +54,9 @@ class Calls:
 
 
 @pytest.fixture
-def calls(chart_root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
-    _chart(chart_root)
+def calls(make_chart: MakeChart, root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
+    make_chart("alloy")
+    (entry,) = install_plan(root / "charts", "alloy", "minimal")
     recorded = Calls()
 
     def record(entry: str, result: Any):
@@ -83,14 +70,10 @@ def calls(chart_root: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
 
         return stub
 
-    monkeypatch.setattr(test_cli, "plan", record("plan", _plan))
+    monkeypatch.setattr(test_cli, "plan", record("plan", lambda: _plan(entry)))
     monkeypatch.setattr(test_cli, "run", record("run", lambda: recorded.outcome))
     monkeypatch.setattr(test_cli, "teardown", record("teardown", lambda: recorded.teardown_outcome))
     return recorded
-
-
-def _cli(root: Path, *args: str):
-    return cli(*args, "--root", str(root))
 
 
 @pytest.mark.parametrize(
@@ -99,7 +82,7 @@ def _cli(root: Path, *args: str):
 def test_chart_test_passes_the_chart_its_charts_dir_and_the_namespace_override(
     chart_root: Path, calls: Calls, extra: list[str], namespace: str | None
 ) -> None:
-    result = _cli(chart_root, "chart", "test", "alloy", *extra)
+    result = cli("chart", "test", "alloy", *extra)
 
     assert result.exit_code == 0, result.output
     assert calls.entry == ["run"]
@@ -109,7 +92,7 @@ def test_chart_test_passes_the_chart_its_charts_dir_and_the_namespace_override(
 
 
 def test_chart_test_passes_skip_requires_and_cluster_name(chart_root: Path, calls: Calls) -> None:
-    result = _cli(chart_root, "chart", "test", "alloy", "--skip-requires", "--cluster-name", "lab")
+    result = cli("chart", "test", "alloy", "--skip-requires", "--cluster-name", "lab")
 
     assert result.exit_code == 0, result.output
     assert calls.requests[0].skip_requires is True
@@ -128,7 +111,7 @@ def test_a_failed_chart_test_raises_a_plain_error_naming_the_failed_action(
         ),
     )
 
-    result = _cli(chart_root, "chart", "test", "alloy")
+    result = cli("chart", "test", "alloy")
 
     assert isinstance(result.exception, ChartManagerError)
     assert "chart-test.alloy.minimal.install" in str(result.exception)
@@ -139,39 +122,58 @@ def test_a_missing_tool_reaches_main_unchanged(chart_root: Path, calls: Calls) -
     """`main.py` maps MissingToolError to exit 127 (see test_exit_codes.py)."""
     calls.raises = MissingToolError("helm not found on PATH")
 
-    result = _cli(chart_root, "chart", "test", "alloy")
+    result = cli("chart", "test", "alloy")
 
     assert isinstance(result.exception, MissingToolError)
 
 
-def test_dry_run_prints_the_plan_and_runs_nothing(chart_root: Path, calls: Calls) -> None:
-    result = _cli(chart_root, "chart", "test", "alloy", "--dry-run")
+def test_dry_run_prints_the_plan_with_redacted_commands_and_runs_nothing(
+    chart_root: Path, calls: Calls
+) -> None:
+    result = cli("chart", "test", "alloy", "--dry-run")
 
-    assert result.exit_code == 0, result.output
+    alloy = chart_root / "charts" / "alloy"
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "chart": "alloy",
+            "profile": "minimal",
+            "actions": [
+                {
+                    "action_id": "chart-test.alloy.minimal.hook-post-install",
+                    "kind": "hook-post-install",
+                    "chart": "alloy",
+                    "profile": "minimal",
+                    "namespace": "default",
+                    "chart_path": alloy.as_posix(),
+                    "values": [(alloy / "values.yaml").as_posix()],
+                    "timeout": "10m",
+                    "command": "hook --token ***",
+                }
+            ],
+            "warnings": ["istio-base is owned by bootstrap"],
+        },
+    )
     assert calls.entry == ["plan"]
-    payload = json.loads(result.stdout)
-    assert [action["kind"] for action in payload["actions"]] == ["install", "helm-test"]
-    assert "dry run" in result.stderr
     assert "owned by bootstrap" in result.stderr
-    assert "dry run" not in result.stdout
+    assert "dry run" in result.stderr
 
 
-@pytest.mark.parametrize("projection", ["table", "json", "yaml"])
-def test_dry_run_honours_every_projection(chart_root: Path, calls: Calls, projection: str) -> None:
-    result = _cli(chart_root, "chart", "test", "alloy", "--dry-run", "-o", projection)
-
-    assert result.exit_code == 0, result.output
-    assert "helm-test" in result.stdout
-
-
-def test_dry_run_takes_the_invocation_wide_output(chart_root: Path, calls: Calls) -> None:
-    result = cli("-o", "yaml", "chart", "test", "alloy", "--dry-run", "--root", str(chart_root))
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [([], ["-o", "table"]), ([], ["-o", "json"]), ([], ["-o", "yaml"]), (["-o", "yaml"], [])],
+)
+def test_dry_run_honours_every_projection_and_the_global_output(
+    chart_root: Path, calls: Calls, before: list[str], after: list[str]
+) -> None:
+    result = cli(*before, "chart", "test", "alloy", "--dry-run", *after)
 
     assert result.exit_code == 0, result.output
+    assert "hook-post-install" in result.stdout
 
 
 def test_output_without_dry_run_is_a_usage_error(chart_root: Path, calls: Calls) -> None:
-    result = _cli(chart_root, "chart", "test", "alloy", "-o", "json")
+    result = cli("chart", "test", "alloy", "-o", "json")
 
     assert result.exit_code == 2
     assert "--dry-run" in result.output
@@ -179,7 +181,7 @@ def test_output_without_dry_run_is_a_usage_error(chart_root: Path, calls: Calls)
 
 
 @pytest.fixture
-def hooked_repo(chart_root: Path, make_chart: MakeChart) -> Path:
+def hooked_repo(chart_root: Path, make_chart: MakeChart, root: Path) -> Path:
     """Two charts with hooks whose script would leave a marker if it ever ran."""
     (chart_root / "kind-config.yaml").write_text("kind: Cluster\n")
     (chart_root / ".chart-manager" / "local-cluster.yaml").write_text(LOCAL_CLUSTER)
@@ -216,25 +218,16 @@ def hooked_repo(chart_root: Path, make_chart: MakeChart) -> Path:
 
 
 def test_dry_run_shows_redacted_hook_commands_and_runs_no_hook(hooked_repo: Path) -> None:
-    table = _cli(hooked_repo, "chart", "test", "app", "--dry-run", "-o", "table")
-    document = _cli(hooked_repo, "chart", "test", "app", "--dry-run", "-o", "json")
+    result = cli("chart", "test", "app", "--dry-run", "-o", "table")
 
-    assert table.exit_code == 0, table.output
-    assert document.exit_code == 0, document.output
+    assert result.exit_code == 0, result.output
     assert not (hooked_repo / "hook-ran").exists()
-    assert "scripts/hook --token ***" in table.stdout
-    assert "s3cret" not in table.stdout
-    actions = json.loads(document.stdout)["actions"]
-    assert [(a["kind"], a["command"]) for a in actions if a["command"]] == [
-        ("hook-pre-install", ["scripts/hook", "--token", "s3cret"]),
-        ("hook-post-install", ["scripts/hook", "post"]),
-        ("hook-cleanup", ["scripts/hook", "--token", "s3cret"]),
-        ("hook-cleanup", ["scripts/hook", "cleanup"]),
-    ]
+    assert "scripts/hook --token ***" in result.stdout
+    assert "s3cret" not in result.stdout
 
 
 def test_chart_teardown_defaults(chart_root: Path, calls: Calls) -> None:
-    result = _cli(chart_root, "chart", "teardown", "alloy")
+    result = cli("chart", "teardown", "alloy")
 
     assert result.exit_code == 0, result.output
     assert calls.requests == [test.TeardownRequest(chart="alloy")]
@@ -243,8 +236,7 @@ def test_chart_teardown_defaults(chart_root: Path, calls: Calls) -> None:
 def test_chart_teardown_passes_plan_options_and_keep_cluster(
     chart_root: Path, calls: Calls
 ) -> None:
-    result = _cli(
-        chart_root,
+    result = cli(
         "chart",
         "teardown",
         "alloy",
@@ -287,7 +279,7 @@ def test_chart_teardown_fails_naming_the_failed_cleanup_and_delete(
         delete_error="kind delete cluster failed",
     )
 
-    result = _cli(chart_root, "chart", "teardown", "alloy")
+    result = cli("chart", "teardown", "alloy")
 
     message = str(result.exception)
     assert isinstance(result.exception, ChartManagerError)
@@ -300,8 +292,7 @@ def test_chart_teardown_fails_naming_the_failed_cleanup_and_delete(
 def test_chart_teardown_dry_run_lists_redacted_cleanups_and_runs_nothing(
     hooked_repo: Path, keep: bool
 ) -> None:
-    result = _cli(
-        hooked_repo,
+    result = cli(
         "chart",
         "teardown",
         "app",

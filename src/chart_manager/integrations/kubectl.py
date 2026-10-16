@@ -1,24 +1,19 @@
-"""kubectl wrapper: secrets, port-forwards, readiness waits, Flux HelmReleases, pods,
-events, diagnostics."""
+"""kubectl wrapper: secrets, readiness waits, Flux HelmReleases, pods, events,
+diagnostics."""
 
 from __future__ import annotations
 
 import base64
 import json
 import logging
-import os
-import signal
-import socket
-import subprocess
 import time
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import IO, Any
+from typing import Any
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
-from chart_manager.plumbing.duration import parse_duration as _parse_duration
+from chart_manager.plumbing.commands import CommandResult, CommandRunner
+from chart_manager.plumbing.duration import format_duration
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import (
@@ -32,6 +27,13 @@ from chart_manager.plumbing.preflight import (
 _LOG = logging.getLogger(__name__)
 
 _FLUX_GROUP_PREFIX = "helm.toolkit.fluxcd.io/"
+
+# A waiting command's subprocess cap is its wait length plus this, so kubectl
+# reports its own timeout before the cap kills it.
+_WAIT_SLACK_SECONDS = 30.0
+
+# Each kubectl call `diagnostics` makes gets this long.
+_DIAGNOSTICS_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -130,15 +132,8 @@ class WorkloadRollout:
 class Kubectl:
     """Run kubectl subcommands through a CommandRunner, pinned to one cluster.
 
-    Matches the `Helm` constructor shape. Before that, this adapter took no
-    context at all, so `Settings.kube_context` reached two of six adapters
-    and every other kubectl call hit
-    whatever `kubectl config current-context` happened to be. That is wrong
-    the moment two clusters exist and unusable for a process serving
-    concurrent requests against different ones.
-
-    `context=None` reproduces the ambient-kubeconfig behavior exactly: no
-    flag is added to any argv.
+    `context=None` addresses the ambient kubeconfig context; `timeout=None`
+    leaves each call unbounded.
 
     This is the one home for kubectl queries, the Flux HelmRelease ones
     included: HelmReleases are ordinary custom resources.
@@ -146,49 +141,68 @@ class Kubectl:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
-        context: str | None = None,
-        timeout: float | None = None,
+        context: str | None,
+        timeout: float | None,
     ) -> None:
         """Bind a runner and pin every invocation to a context and timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._context = context
-        # Per-subprocess wall-clock cap. None = unbounded, which is what
-        # every call site got before this existed; `kubectl get` and the
-        # rollout waits could otherwise pin a worker indefinitely.
         self.timeout = timeout
 
-    @property
-    def context(self) -> str | None:
-        """The kubeconfig context this instance is pinned to, if any.
+    def _run(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+        capture: bool = True,
+        timeout: float | None = None,
+        pinned: bool = True,
+    ) -> CommandResult:
+        """Every kubectl invocation: `kubectl <args>`, pinned to the context and cap.
 
-        Read by callers that must name the same cluster in a *detached*
-        child (port-forward) rather than through `run`.
+        `timeout` overrides the instance cap for callers with a tighter
+        budget. `pinned=False` drops `--context` for the preflight probes,
+        which read the kubeconfig rather than a cluster.
         """
-        return self._context
+        argv = ["kubectl", *args]
+        if pinned and self._context is not None:
+            argv += ["--context", self._context]
+        return self.runner.run(
+            argv,
+            check=check,
+            capture=capture,
+            timeout=timeout if timeout is not None else self.timeout,
+        )
 
-    def _with_context(self, args: list[str], *, context: str | None = None) -> list[str]:
-        """Append --context when a context applies; `context` overrides the pin.
+    def _wait(self, args: list[str], timeout: float, *, capture: bool = False) -> None:
+        """Run a kubectl command that waits up to `timeout` seconds, capped just past it."""
+        self._run(
+            [*args, f"--timeout={format_duration(timeout)}"],
+            capture=capture,
+            timeout=timeout + _WAIT_SLACK_SECONDS,
+        )
 
-        Appended rather than inserted after `kubectl` because kubectl accepts
-        global flags anywhere in argv, and appending leaves every existing
-        subcommand-prefix assertion in the suite valid.
+    def _json(self, args: list[str], *, timeout: float | None = None) -> dict[str, Any]:
+        """Run `kubectl <args>` and parse stdout as a JSON object.
+
+        Raises ExternalCommandError on a non-zero exit and on stdout that is
+        not a JSON object, the bucket the HelmRelease monitor treats as a
+        poll error.
         """
-        resolved = context if context is not None else self._context
-        if resolved is None:
-            return args
-        return [*args, "--context", resolved]
-
-    def _budget(self, override: float | None) -> float | None:
-        """Resolve a per-call timeout against the instance cap.
-
-        `self.timeout` is a deployment knob (`Settings.command_timeout`).
-        The HelmRelease watchers own a *tighter*, per-poll budget that
-        changes between requests, so the polled methods take an override
-        rather than forcing a fresh adapter per poll. None = use the pin.
-        """
-        return override if override is not None else self.timeout
+        stdout = self._run(args, timeout=timeout).stdout
+        try:
+            payload = json.loads(stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise ExternalCommandError(
+                f"failed to parse kubectl JSON output: {exc}; payload[:200]={stdout[:200]!r}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ExternalCommandError(
+                f"kubectl JSON payload was not an object: {stdout[:200]!r}"
+            )
+        return payload
 
     # --- preflight ---------------------------------------------------------
 
@@ -196,7 +210,7 @@ class Kubectl:
         """Report the kubectl binary and the kubecontext this instance addresses.
 
         Both belong here rather than in `doctor`: the context pin is this
-        adapter's own state (`--context` is appended by `_with_context`), so
+        adapter's own state (`--context` is appended by `_run`), so
         nothing else can say whether the cluster the next kubectl call will
         talk to is even named in the kubeconfig.
 
@@ -223,10 +237,11 @@ class Kubectl:
         if self._context is None:
             return self._current_context_check()
         try:
-            result = self.runner.run(
-                ["kubectl", "config", "get-contexts", "-o", "name"],
+            result = self._run(
+                ["config", "get-contexts", "-o", "name"],
                 check=False,
                 timeout=PROBE_TIMEOUT,
+                pinned=False,
             )
         except ExternalCommandError as exc:
             return _kubeconfig_unreadable(first_line(str(exc)))
@@ -246,10 +261,11 @@ class Kubectl:
     def _current_context_check(self) -> Check:
         """The ambient `kubectl config current-context`, when nothing is pinned."""
         try:
-            result = self.runner.run(
-                ["kubectl", "config", "current-context"],
+            result = self._run(
+                ["config", "current-context"],
                 check=False,
                 timeout=PROBE_TIMEOUT,
+                pinned=False,
             )
         except ExternalCommandError as exc:
             return _kubeconfig_unreadable(first_line(str(exc)))
@@ -268,20 +284,8 @@ class Kubectl:
 
     def get_secret_value(self, name: str, key: str, *, namespace: str) -> str:
         """Return a base64-decoded value from a Secret's `data` field."""
-        result = self.runner.run(
-            self._with_context(
-                [
-                    "kubectl",
-                    "-n",
-                    namespace,
-                    "get",
-                    "secret",
-                    name,
-                    "-o",
-                    f"jsonpath={{.data.{key}}}",
-                ]
-            ),
-            timeout=self.timeout,
+        result = self._run(
+            ["-n", namespace, "get", "secret", name, "-o", f"jsonpath={{.data.{key}}}"]
         )
         encoded = result.stdout.strip()
         if not encoded:
@@ -295,92 +299,18 @@ class Kubectl:
                 f"secret {namespace}/{name} key {key!r} is not valid base64-utf8: {exc}"
             ) from exc
 
-    def port_forward(
-        self,
-        *,
-        namespace: str,
-        service: str,
-        ports: Sequence[str],
-        context: str | None = None,
-        stdout: IO[str] | None = None,
-    ) -> subprocess.Popen[bytes]:
-        """Start a detached port-forward and return the Popen handle.
-
-        Caller is responsible for the process lifecycle (signalling, reaping).
-        stderr is merged into stdout; the child runs in a new session so it
-        survives the CLI process exiting.
-
-        `context` defaults to the instance pin.
-        """
-        args = self._with_context(
-            [
-                "kubectl",
-                "port-forward",
-                "-n",
-                namespace,
-                f"svc/{service}",
-                *ports,
-            ],
-            context=context,
-        )
-        return subprocess.Popen(
-            args,
-            stdout=stdout if stdout is not None else subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
-    @contextmanager
-    def port_forward_session(
-        self,
-        *,
-        namespace: str,
-        service: str,
-        remote_port: int,
-        context: str | None = None,
-        readiness_timeout: float = 10.0,
-        poll_interval: float = 0.1,
-    ) -> Iterator[int]:
-        """Run a short-lived port-forward and yield the bound local port.
-
-        Picks a free local port via the kernel, starts kubectl, waits until
-        the local side is accepting connections, yields the port number, and
-        always SIGTERMs the child on exit. Use for inline API calls (e.g.,
-        Grafana export).
-        """
-        local_port = _pick_free_port()
-        proc = self.port_forward(
-            context=context,
-            namespace=namespace,
-            service=service,
-            ports=[f"{local_port}:{remote_port}"],
-        )
-        try:
-            _wait_for_local_port(proc, local_port, readiness_timeout, poll_interval)
-            yield local_port
-        finally:
-            if proc.poll() is None:
-                with suppress(ProcessLookupError):
-                    os.kill(proc.pid, signal.SIGTERM)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-
     def create_namespace(self, namespace: str) -> None:
-        """Create a namespace, tolerating it already existing (check=False)."""
-        self.runner.run(
-            self._with_context(["kubectl", "create", "namespace", namespace]),
-            check=False,
-            timeout=self.timeout,
-        )
+        """Create a namespace; one that already exists is fine, any other failure raises."""
+        try:
+            self._run(["create", "namespace", namespace])
+        except ExternalCommandError as exc:
+            if "AlreadyExists" not in exc.stderr:
+                raise
 
     def wait_apiserver_ready(
         self,
-        timeout: str = "60s",
         *,
+        timeout: float,
         poll_interval: float = 2.0,
     ) -> None:
         """Block until the apiserver's /readyz endpoint returns 200.
@@ -392,27 +322,21 @@ class Kubectl:
         internally, and it's cheap because it's a single GET against the
         apiserver's own health endpoint -- no etcd traversal.
 
-        `timeout` accepts kube-style duration suffixes (s, m, h) for
-        symmetry with the rollout-status callers; parsed locally so this
-        method has no kubectl-version dependency.
+        Polls in Python for `timeout` seconds; each poll keeps the instance cap.
 
         Raises ExternalCommandError on timeout. Distinct from
         ChartManagerError so the CLI exit-code mapping treats this as a
         tool-level failure, matching how subprocess failures bubble up
         elsewhere.
         """
-        deadline = time.monotonic() + _parse_duration(timeout)
+        deadline = time.monotonic() + timeout
         # Keep up to _MAX_RECENT_STDERRS *distinct* stderrs in arrival order
         # so a flapping endpoint (DNS then 503 then connection refused) is
         # legible in the final timeout message instead of being collapsed to
         # whatever the last poll happened to see.
         recent_stderrs: list[str] = []
         while time.monotonic() < deadline:
-            result = self.runner.run(
-                self._with_context(["kubectl", "get", "--raw=/readyz"]),
-                check=False,
-                timeout=self.timeout,
-            )
+            result = self._run(["get", "--raw=/readyz"], check=False)
             if result.returncode == 0 and result.stdout.strip() == "ok":
                 return
             stderr = (result.stderr or result.stdout or "").strip()
@@ -423,69 +347,53 @@ class Kubectl:
             time.sleep(poll_interval)
         detail = "; ".join(recent_stderrs) if recent_stderrs else "<empty>"
         raise ExternalCommandError(
-            f"kube-apiserver did not become ready within {timeout} "
+            f"kube-apiserver did not become ready within {format_duration(timeout)} "
             f"(recent responses: {detail})"
         )
 
-    def wait_nodes_ready(self, *, timeout: str = "10m") -> None:
+    def wait_nodes_ready(self, *, timeout: float) -> None:
         """Wait until every cluster node reports Ready.
 
         Local bootstrap uses this CNI-neutral gate after installing whichever
         networking chart the repository selected.
         """
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl",
-                    "wait",
-                    "--for=condition=Ready",
-                    "nodes",
-                    "--all",
-                    f"--timeout={timeout}",
-                ]
-            ),
-            timeout=self.timeout,
-        )
+        self._wait(["wait", "--for=condition=Ready", "nodes", "--all"], timeout, capture=True)
 
     def wait_certificate_ready(
-        self, name: str, *, namespace: str, timeout: str = "120s"
+        self, name: str, *, namespace: str, timeout: float
     ) -> None:
         """Block until cert-manager marks `Certificate/<name>` Ready.
 
-        Thin wrapper around `kubectl wait --for=condition=Ready`, with a
-        kube-style timeout. The cert-manager Certificate's `Ready` condition
-        flips True only after the controller has issued a x509 cert and the
-        backing Secret has been populated; this is the right gate for the
-        `apps-wildcard` lab cert before we start advertising URLs whose TLS
-        depends on it. Propagates ExternalCommandError on timeout / failure.
+        Thin wrapper around `kubectl wait --for=condition=Ready`. The
+        cert-manager Certificate's `Ready` condition flips True only after the
+        controller has issued a x509 cert and the backing Secret has been
+        populated; this is the right gate for the `apps-wildcard` lab cert
+        before we start advertising URLs whose TLS depends on it. Propagates
+        ExternalCommandError on timeout / failure.
         """
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl",
-                    "-n",
-                    namespace,
-                    "wait",
-                    "--for=condition=Ready",
-                    f"certificate/{name}",
-                    f"--timeout={timeout}",
-                ]
-            ),
-            capture=False,
-            timeout=self.timeout,
+        self._wait(
+            ["-n", namespace, "wait", "--for=condition=Ready", f"certificate/{name}"], timeout
         )
 
     def list_virtualservices(self) -> list[VirtualService]:
         """Return every VirtualService across the cluster: namespace, hosts, annotations.
 
-        Best-effort: when the CRD isn't installed (lab pre-istio, or the
-        sandbox-test path entirely) we return [] rather than surfacing the
-        kubectl error -- the caller treats "no VirtualServices" as the
-        normal early-install state. Non-string hosts and annotation values
-        are dropped; order is kubectl's (namespace, then name).
+        Returns [] when the CRD isn't installed (lab pre-istio, the
+        sandbox-test path); any other kubectl failure or unreadable JSON
+        raises ExternalCommandError, so a dead cluster doesn't read as "no
+        routes". Non-string hosts and annotation values are dropped; order
+        is kubectl's (namespace, then name).
         """
+        try:
+            payload = self._json(["get", "virtualservice", "-A", "-o", "json"])
+        except ExternalCommandError as exc:
+            if "doesn't have a resource type" in exc.stderr:
+                return []
+            raise
         found: list[VirtualService] = []
-        for item in self._list_items("virtualservice"):
+        for item in payload.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
             metadata = item.get("metadata") or {}
             hosts = (item.get("spec") or {}).get("hosts", []) or []
             annotations = metadata.get("annotations") or {}
@@ -502,42 +410,6 @@ class Kubectl:
             )
         return found
 
-    def list_gateway_hosts(self) -> list[str]:
-        """Return all Gateway `.spec.servers[].hosts[]` across the cluster.
-
-        Best-effort like `list_virtualservices`; dedup'd and sorted.
-        Used to derive the lab apps-domain for access URLs -- the
-        gateway's hosts are the source of truth for the domain the
-        gateway listener will admit.
-        """
-        hosts: set[str] = set()
-        for item in self._list_items("gateway"):
-            for server in (item.get("spec") or {}).get("servers", []) or []:
-                for host in (server or {}).get("hosts", []) or []:
-                    if isinstance(host, str) and host:
-                        hosts.add(host)
-        return sorted(hosts)
-
-    def _list_items(self, resource: str) -> list[dict[str, Any]]:
-        """Shared `kubectl get <resource> -A -o json` -> `.items[]`.
-
-        Best-effort: a non-zero kubectl, missing CRD, or unparseable
-        JSON yields []. Any future addition (e.g. an HTTPRoute variant
-        for gateway-api) only writes the per-item projection.
-        """
-        result = self.runner.run(
-            self._with_context(["kubectl", "get", resource, "-A", "-o", "json"]),
-            check=False,
-            timeout=self.timeout,
-        )
-        if result.returncode != 0:
-            return []
-        try:
-            payload = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
-        return [item for item in payload.get("items", []) or [] if isinstance(item, dict)]
-
     def workload_names(
         self, kind: str, *, namespace: str, selector: str | None = None
     ) -> list[str]:
@@ -546,16 +418,13 @@ class Kubectl:
         A failed listing raises rather than reading as "none here": a readiness gate
         that passes when it cannot see the cluster is worse than no gate.
         """
-        listing = self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "-n", namespace, "get", kind,
-                    *(("-l", selector) if selector is not None else ()),
-                    "-o", "jsonpath={.items[*].metadata.name}",
-                ]
-            ),
+        listing = self._run(
+            [
+                "-n", namespace, "get", kind,
+                *(("-l", selector) if selector is not None else ()),
+                "-o", "jsonpath={.items[*].metadata.name}",
+            ],
             check=False,
-            timeout=self.timeout,
         )
         if listing.returncode != 0:
             detail = (listing.stderr or listing.stdout).strip()
@@ -566,37 +435,21 @@ class Kubectl:
             )
         return listing.stdout.split()
 
-    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: str) -> None:
+    def rollout_status(self, kind: str, name: str, *, namespace: str, timeout: float) -> None:
         """Block until one Deployment, StatefulSet or DaemonSet has rolled out."""
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "-n", namespace, "rollout", "status",
-                    f"{kind}/{name}", f"--timeout={timeout}",
-                ]
-            ),
-            capture=False,
-            timeout=self.timeout,
-        )
+        self._wait(["-n", namespace, "rollout", "status", f"{kind}/{name}"], timeout)
 
-    def wait_established(self, crd: str, *, timeout: str) -> None:
+    def wait_established(self, crd: str, *, timeout: float) -> None:
         """Block until a CustomResourceDefinition is `Established`."""
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "wait", "--for=condition=Established",
-                    f"customresourcedefinition/{crd}", f"--timeout={timeout}",
-                ]
-            ),
-            capture=False,
-            timeout=self.timeout,
+        self._wait(
+            ["wait", "--for=condition=Established", f"customresourcedefinition/{crd}"], timeout
         )
 
     def wait_workloads_ready(
         self,
         namespace: str,
-        timeout: str = "10m",
         *,
+        timeout: float,
         selector: str | None = None,
     ) -> None:
         """Run rollout status for every matching workload in a namespace, serially."""
@@ -616,13 +469,13 @@ class Kubectl:
         timeout: float | None = None,
     ) -> list[HelmReleaseRef]:
         """List HelmReleases (all namespaces by default); unparseable items are skipped."""
-        args = ["kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io"]
+        args = ["get", "helmreleases.helm.toolkit.fluxcd.io"]
         if namespace is None:
             args.append("-A")
         else:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._json(args, timeout=timeout)
         refs: list[HelmReleaseRef] = []
         for item in payload.get("items", []) or []:
             ref = _ref_from_item(item)
@@ -638,10 +491,10 @@ class Kubectl:
     ) -> HelmReleaseStatus:
         """Fetch one HelmRelease and snapshot its status (stamped with wall-clock time)."""
         args = [
-            "kubectl", "-n", ref.namespace, "get",
+            "-n", ref.namespace, "get",
             "helmreleases.helm.toolkit.fluxcd.io", ref.name, "-o", "json",
         ]
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._json(args, timeout=timeout)
         observed_at = datetime.now(UTC)
         return _status_from_item(payload, ref, observed_at)
 
@@ -652,15 +505,11 @@ class Kubectl:
         timeout: float | None = None,
     ) -> list[WorkloadRollout]:
         """List workloads labeled as owned by this release, with rollout convergence."""
-        selector = (
-            f"helm.toolkit.fluxcd.io/name={ref.name},"
-            f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
-        )
         args = [
-            "kubectl", "get", "deployment,statefulset,daemonset",
-            "-A", "-l", selector, "-o", "json",
+            "get", "deployment,statefulset,daemonset",
+            "-A", "-l", _flux_owner_selector(ref), "-o", "json",
         ]
-        payload = self.get_json(args, timeout=timeout)
+        payload = self._json(args, timeout=timeout)
         rollouts: list[WorkloadRollout] = []
         for item in payload.get("items", []) or []:
             rollout = _rollout_from_item(item)
@@ -679,18 +528,14 @@ class Kubectl:
         Queries the target namespace for both `helm.sh/hook=test` and the
         legacy `test-success` label, deduping pods that carry both.
         """
-        base = (
-            f"helm.toolkit.fluxcd.io/name={ref.name},"
-            f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
-        )
         seen: set[tuple[str, str]] = set()
         pods: list[tuple[str, str, str]] = []
         for hook in ("test", "test-success"):
             args = [
-                "kubectl", "-n", ref.target_namespace, "get", "pods",
-                "-l", f"{base},helm.sh/hook={hook}", "-o", "json",
+                "-n", ref.target_namespace, "get", "pods",
+                "-l", f"{_flux_owner_selector(ref)},helm.sh/hook={hook}", "-o", "json",
             ]
-            payload = self.get_json(args, timeout=timeout)
+            payload = self._json(args, timeout=timeout)
             for item in payload.get("items", []) or []:
                 metadata = item.get("metadata") or {}
                 ns = str(metadata.get("namespace") or "")
@@ -707,31 +552,12 @@ class Kubectl:
 
     # --- pods and events ---------------------------------------------------
 
-    def get_json(
-        self, args: Sequence[str], *, timeout: float | None = None
-    ) -> dict[str, Any]:
-        """Run `kubectl <args>` and parse stdout as a JSON object.
-
-        Raises ExternalCommandError on a non-zero exit (via the runner) and
-        on stdout that is not a JSON object.
-        """
-        result = self.runner.run(
-            self._with_context(list(args)), timeout=self._budget(timeout)
-        )
-        return _parse_json(result.stdout)
-
     def delete_pod(
         self, namespace: str, name: str, *, timeout: float | None = None
     ) -> None:
         """Delete a pod, tolerating it already being gone (--ignore-not-found)."""
-        self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "-n", namespace, "delete", "pod", name,
-                    "--ignore-not-found",
-                ]
-            ),
-            timeout=self._budget(timeout),
+        self._run(
+            ["-n", namespace, "delete", "pod", name, "--ignore-not-found"], timeout=timeout
         )
 
     def pod_logs(
@@ -745,17 +571,12 @@ class Kubectl:
         timeout: float | None = None,
     ) -> str:
         """Return pod logs; empty string if the pod is gone, raises on other failures."""
-        args = [
-            "kubectl", "-n", namespace, "logs", name,
-            f"--tail={tail}",
-        ]
+        args = ["-n", namespace, "logs", name, f"--tail={tail}"]
         if container is not None:
             args.extend(["-c", container])
         if previous:
             args.append("--previous")
-        result = self.runner.run(
-            self._with_context(args), check=False, timeout=self._budget(timeout)
-        )
+        result = self._run(args, check=False, timeout=timeout)
         if result.returncode == 0:
             return result.stdout
         stderr = result.stderr or ""
@@ -770,120 +591,51 @@ class Kubectl:
             )
             return ""
         raise ExternalCommandError(
-            f"command failed ({result.returncode}): {' '.join(args)}\n{stderr.strip()}",
+            f"command failed ({result.returncode}): kubectl {' '.join(args)}\n{stderr.strip()}",
             stderr=stderr,
             returncode=result.returncode,
         )
 
-    def namespace_events(self, namespace: str, *, timeout: float | None = None) -> str:
-        """Return namespace events sorted by time; never raises (check=False)."""
-        result = self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "get", "events", "-n", namespace,
-                    "--sort-by=.lastTimestamp",
-                ]
-            ),
-            check=False,
-            timeout=self._budget(timeout),
-        )
+    def _best_effort(self, what: str, args: list[str], *, timeout: float) -> str:
+        """Output of `kubectl <args>`; any failure, timeout or missing kubectl, as text."""
+        try:
+            result = self._run(args, check=False, timeout=timeout)
+        except ExternalCommandError as exc:
+            return f"<{what} unavailable: {exc}>"
         return result.stdout + result.stderr
 
-    def workload_events(
-        self,
-        kind: str,
-        namespace: str,
-        name: str,
-        *,
-        timeout: float | None = None,
-    ) -> str:
-        """Return events scoped to one workload object; never raises (check=False)."""
-        result = self.runner.run(
-            self._with_context(
-                [
-                    "kubectl", "get", "events", "-n", namespace,
-                    "--field-selector",
-                    f"involvedObject.name={name},involvedObject.kind={kind}",
-                    "--sort-by=.lastTimestamp",
-                ]
-            ),
-            check=False,
-            timeout=self._budget(timeout),
+    def namespace_events(self, namespace: str, *, timeout: float) -> str:
+        """Namespace events sorted by time. Never raises: a failure is returned as text."""
+        return self._best_effort(
+            "events",
+            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp"],
+            timeout=timeout,
         )
-        return result.stdout + result.stderr
+
+    def workload_events(self, kind: str, namespace: str, name: str, *, timeout: float) -> str:
+        """One workload's events. Never raises: a failure is returned as text."""
+        return self._best_effort(
+            "events",
+            [
+                "get", "events", "-n", namespace,
+                "--field-selector", f"involvedObject.name={name},involvedObject.kind={kind}",
+                "--sort-by=.lastTimestamp",
+            ],
+            timeout=timeout,
+        )
 
     def diagnostics(self, namespace: str) -> str:
-        """Return a markdown-ish dump of pods and events for the namespace; never raises."""
-        pods = self.runner.run(
-            self._with_context(["kubectl", "get", "pods", "-n", namespace, "-o", "wide"]),
-            check=False,
-            timeout=self.timeout,
+        """Pods and events for a namespace. Never raises: a failure is returned as text."""
+        pods = self._best_effort(
+            "pods",
+            ["get", "pods", "-n", namespace, "-o", "wide"],
+            timeout=_DIAGNOSTICS_TIMEOUT_SECONDS,
         )
-        # The events half delegates instead of building its own argv: this
-        # method and `namespace_events` were the two copies of
-        # `get events --sort-by=.lastTimestamp` that finding 8 called out.
-        return "\n\n".join(
-            [
-                f"## pods\n{pods.stdout}{pods.stderr}",
-                f"## events\n{self.namespace_events(namespace)}",
-            ]
-        )
+        events = self.namespace_events(namespace, timeout=_DIAGNOSTICS_TIMEOUT_SECONDS)
+        return f"## pods\n{pods}\n\n## events\n{events}"
 
 
 _MAX_RECENT_STDERRS = 4
-
-
-def _parse_json(stdout: str) -> dict[str, Any]:
-    """Parse kubectl stdout into a dict; raise ExternalCommandError on non-JSON/non-object.
-
-    ExternalCommandError rather than the broader ChartManagerError so this
-    lands in the same bucket as every other adapter's parse failure. The
-    HelmRelease monitor's best-effort handlers catch ExternalCommandError;
-    raising the parent type here meant a malformed kubectl payload escaped
-    them and aborted the run instead of being recorded as a poll error.
-    """
-    try:
-        payload = json.loads(stdout or "{}")
-    except json.JSONDecodeError as exc:
-        snippet = (stdout or "")[:200]
-        raise ExternalCommandError(
-            f"failed to parse kubectl JSON output: {exc}; payload[:200]={snippet!r}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise ExternalCommandError(
-            f"kubectl JSON payload was not an object: {stdout[:200]!r}"
-        )
-    return payload
-
-
-def _pick_free_port() -> int:
-    """Ask the kernel for a free port. TOCTOU race: the port is released before use."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_for_local_port(
-    proc: subprocess.Popen[bytes],
-    port: int,
-    timeout: float,
-    poll_interval: float,
-) -> None:
-    """Poll until the forwarded local port accepts connections; raise on exit/timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise ChartManagerError(
-                f"kubectl port-forward exited before binding (rc={proc.returncode})"
-            )
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(poll_interval)
-    raise ChartManagerError(
-        f"kubectl port-forward did not bind 127.0.0.1:{port} within {timeout:.0f}s"
-    )
 
 
 def _client_version(stdout: str) -> str:
@@ -909,6 +661,14 @@ def _kubeconfig_unreadable(detail: str) -> Check:
         f"could not read the kubeconfig: {detail}",
         remediation="check KUBECONFIG and that ~/.kube/config is readable",
         outcome=Outcome.ENVIRONMENT,
+    )
+
+
+def _flux_owner_selector(ref: HelmReleaseRef) -> str:
+    """The label selector Flux stamps on every object a HelmRelease owns."""
+    return (
+        f"helm.toolkit.fluxcd.io/name={ref.name},"
+        f"helm.toolkit.fluxcd.io/namespace={ref.namespace}"
     )
 
 

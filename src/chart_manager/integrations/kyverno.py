@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.preflight import Check, probe_binary
 
@@ -81,14 +81,12 @@ class Kyverno:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
-        binary: str | Path | None = None,
-        timeout: float | None = None,
+        timeout: float | None,
     ) -> None:
-        """Bind a CommandRunner, binary path (default `kyverno`), and timeout."""
-        self.runner = runner or SubprocessRunner()
-        self._bin = str(binary) if binary is not None else "kyverno"
+        """Bind a CommandRunner and a per-subprocess timeout."""
+        self.runner = runner
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --tool-timeout so a hung kyverno doesn't pin a worker.
         self.timeout = timeout
@@ -98,7 +96,7 @@ class Kyverno:
         return (
             probe_binary(
                 self.runner,
-                self._bin,
+                "kyverno",
                 name="kyverno",
                 version_args=("version",),
                 remediation=(
@@ -144,7 +142,7 @@ class Kyverno:
             # No manifests => identical to the empty-stdout case below.
             return KyvernoReport(results=(), summary={})
 
-        args: list[str] = [self._bin, "apply"]
+        args: list[str] = ["kyverno", "apply"]
         args.extend(str(p) for p in policy_paths)
         for manifest in manifests:
             args.extend(["--resource", str(manifest)])

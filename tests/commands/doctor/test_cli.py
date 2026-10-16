@@ -8,15 +8,7 @@ import pytest
 
 from chart_manager.commands.doctor import DoctorReport
 from chart_manager.commands.doctor import cli as doctor_cli
-from chart_manager.plumbing.exit_codes import (
-    EXIT_ENVIRONMENT,
-    EXIT_MISSING_BINARY,
-    EXIT_SPEC,
-    EXIT_SUCCESS,
-    EXIT_TOOL,
-    EXIT_USAGE,
-    Outcome,
-)
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from tests.conftest import cli
 
@@ -48,16 +40,16 @@ def test_a_clean_preflight_exits_zero(fake_doctor) -> None:
 
     result = cli("doctor")
 
-    assert result.exit_code == EXIT_SUCCESS, result.output
+    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
-        (Outcome.SPEC, EXIT_SPEC),
-        (Outcome.TOOL, EXIT_TOOL),
-        (Outcome.ENVIRONMENT, EXIT_ENVIRONMENT),
-        (Outcome.MISSING_BINARY, EXIT_MISSING_BINARY),
+        (Outcome.SPEC, 3),
+        (Outcome.TOOL, 4),
+        (Outcome.ENVIRONMENT, 5),
+        (Outcome.MISSING_BINARY, 127),
     ],
 )
 def test_every_failure_outcome_goes_through_the_exit_code_table(
@@ -77,45 +69,33 @@ def test_a_skipped_check_does_not_make_the_command_fail(fake_doctor) -> None:
     """`EVENTS_BACKEND=none` is the real case: supported, and not a problem."""
     fake_doctor(_HEALTHY, Check.skipped("events-backend", "telemetry disabled"))
 
-    assert cli("doctor").exit_code == EXIT_SUCCESS
+    assert cli("doctor").exit_code == 0
 
 
 # --- projections ------------------------------------------------------------
 
 
-def test_json_is_the_only_thing_on_stdout(fake_doctor) -> None:
+def test_json_is_the_document_alone_on_stdout(fake_doctor) -> None:
     """`chart-manager doctor -o json | jq` must not choke on a summary line."""
-    fake_doctor(_HEALTHY, _MISSING)
+    fake_doctor(_MISSING)
 
     result = cli("doctor", "-o", "json")
 
-    payload = json.loads(result.stdout)
-    assert payload["ok"] is False
-    assert payload["outcome"] == "missing-binary"
-    assert payload["for"] is None
-    assert [check["name"] for check in payload["checks"]] == ["helm", "kubeconform"]
-
-
-def test_the_json_check_shape_is_the_documented_four_keys(fake_doctor) -> None:
-    """name / status / detail / remediation. A consumer may rely on all four."""
-    fake_doctor(_MISSING)
-
-    payload = json.loads(cli("doctor", "-o", "json").stdout)
-
-    assert payload["checks"][0] == {
-        "name": "kubeconform",
-        "status": "failed",
-        "detail": "kubeconform not found on PATH",
-        "remediation": "install kubeconform",
-    }
-
-
-def test_structured_check_data_is_additive_to_the_wire_shape(fake_doctor) -> None:
-    fake_doctor(Check.ok("schema-store", "ready=true", data={"ready": True, "missing": 0}))
-
-    payload = json.loads(cli("doctor", "-o", "json").stdout)
-
-    assert payload["checks"][0]["data"] == {"ready": True, "missing": 0}
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        127,
+        {
+            "checks": [
+                {
+                    "name": "kubeconform",
+                    "status": "failed",
+                    "detail": "kubeconform not found on PATH",
+                    "remediation": "install kubeconform",
+                    "outcome": "missing-binary",
+                    "data": None,
+                }
+            ]
+        },
+    )
 
 
 def test_the_table_carries_the_remediation_beside_the_failure(fake_doctor) -> None:
@@ -144,7 +124,7 @@ def test_the_global_output_flag_reaches_doctor(fake_doctor) -> None:
 
     result = cli("-o", "json", "doctor")
 
-    assert json.loads(result.stdout)["ok"] is True
+    assert json.loads(result.stdout)["checks"][0]["name"] == "helm"
 
 
 def test_a_projection_doctor_cannot_produce_is_a_usage_error(fake_doctor) -> None:
@@ -153,4 +133,4 @@ def test_a_projection_doctor_cannot_produce_is_a_usage_error(fake_doctor) -> Non
 
     result = cli("doctor", "-o", "yaml")
 
-    assert result.exit_code == EXIT_USAGE
+    assert result.exit_code == 2

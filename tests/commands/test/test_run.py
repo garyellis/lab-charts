@@ -9,10 +9,10 @@ import pytest
 from chart_manager.commands import test
 from chart_manager.commands.test.run import plan, run, teardown
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError, MissingToolError
+from chart_manager.plumbing.progress import ProgressEvent
 from chart_manager.settings import Settings
-from chart_manager.shared.cluster.progress import ProgressEvent
 from chart_manager.shared.workspace import load_repository_workspace as load_workspace
-from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv
+from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, kind_runner, plain_argv
 
 LOCAL_CLUSTER = """\
 apiVersion: chartmanager.io/v1alpha1
@@ -50,16 +50,10 @@ def repo(chart_root: Path, make_chart: MakeChart) -> Path:
                 "requires": [{"chart": "db", "profile": "minimal"}],
             }
         },
+        dependent_tests=[("web", "minimal")],
     )
+    make_chart("web", profiles={"minimal": {"requires": [{"chart": "app", "profile": "minimal"}]}})
     return chart_root
-
-
-def _runner(*clusters: str) -> FakeCommandRunner:
-    return (
-        FakeCommandRunner()
-        .respond(argv_prefix("kind", "get", "clusters"), stdout="\n".join(clusters))
-        .respond(argv_prefix("kubectl", "get", "--raw=/readyz"), stdout="ok")
-    )
 
 
 def _run(repo: Path, runner: FakeCommandRunner, **request: object) -> test.ChartTestOutcome:
@@ -68,6 +62,7 @@ def _run(repo: Path, runner: FakeCommandRunner, **request: object) -> test.Chart
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
 
@@ -90,7 +85,7 @@ def _steps(runner: FakeCommandRunner) -> list[tuple[str, ...]]:
 def test_run_provisions_bootstraps_then_installs_requires_first_and_tests_the_target(
     repo: Path,
 ) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     outcome = _run(repo, runner)
 
@@ -114,7 +109,7 @@ def test_a_failed_install_fails_the_outcome_with_diagnostics_and_skips_the_rest(
     repo: Path,
 ) -> None:
     runner = (
-        _runner()
+        kind_runner()
         .respond(argv_prefix("helm", "upgrade", "--install", "db"), returncode=1, stderr="db broke")
         .respond(argv_prefix("kubectl", "get", "pods", "-n", "data"), stdout="db-0 Pending")
     )
@@ -131,7 +126,7 @@ def test_a_failed_install_fails_the_outcome_with_diagnostics_and_skips_the_rest(
 
 
 def test_a_failed_helm_test_is_a_failed_action_not_an_exception(repo: Path) -> None:
-    runner = _runner().respond(argv_prefix("helm", "test", "app"), returncode=1, stderr="probe failed")
+    runner = kind_runner().respond(argv_prefix("helm", "test", "app"), returncode=1, stderr="probe failed")
 
     outcome = _run(repo, runner)
 
@@ -148,7 +143,7 @@ def test_a_missing_helm_binary_is_raised_as_itself(repo: Path) -> None:
             raise MissingToolError("helm not found")
         return False
 
-    runner = _runner().respond(helm_missing)
+    runner = kind_runner().respond(helm_missing)
 
     with pytest.raises(MissingToolError):
         _run(repo, runner)
@@ -161,8 +156,8 @@ def test_skip_requires_on_an_existing_cluster_verifies_instead_of_installing(
         '[{"name": "cni", "namespace": "kube-system", "revision": "1", "status": "deployed"},'
         ' {"name": "db", "namespace": "data", "revision": "1", "status": "failed"}]'
     )
-    runner = _runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+    runner = kind_runner("lab").respond(
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     outcome = _run(repo, runner, skip_requires=True)
@@ -176,8 +171,8 @@ def test_skip_requires_names_a_missing_requirement_before_installing_anything(
     repo: Path,
 ) -> None:
     listing = '[{"name": "cni", "namespace": "kube-system", "revision": "1", "status": "deployed"}]'
-    runner = _runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+    runner = kind_runner("lab").respond(
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     with pytest.raises(ChartManagerError, match="app requires db:minimal, not installed in data"):
@@ -190,7 +185,7 @@ def test_skip_requires_raises_a_failed_listing_instead_of_reading_it_as_not_inst
     repo: Path,
 ) -> None:
     """An unreachable cluster is a tool error, not "not installed"."""
-    runner = _runner("lab").respond(
+    runner = kind_runner("lab").respond(
         argv_prefix("helm", "list"), returncode=1, stderr="Kubernetes cluster unreachable"
     )
 
@@ -207,7 +202,7 @@ def test_a_pre_install_hook_runs_after_its_namespace_and_before_its_install(
         "app",
         profiles={"minimal": {"namespace": "apps", "hooks": {"preInstall": ["true", "pre"]}}},
     )
-    runner = _runner()
+    runner = kind_runner()
 
     _run(repo, runner)
 
@@ -231,13 +226,14 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
         "app",
         profiles={"minimal": {"namespace": "apps", "hooks": {"cleanup": ["true", "bye"]}}},
     )
-    runner = _runner("lab")
+    runner = kind_runner("lab")
 
     outcome = teardown(
         test.TeardownRequest(chart="app", cluster_name="lab"),
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
     assert outcome.ok and outcome.cluster_deleted
@@ -250,7 +246,7 @@ def test_teardown_runs_cleanup_hooks_then_deletes_the_cluster(
 def test_plan_lists_namespace_install_and_helm_test_per_chart_requires_first(repo: Path) -> None:
     lifecycle_plan = plan(test.ChartTestRequest(chart="app"), workspace=load_workspace(repo))
 
-    assert [(a.target.chart, a.kind.value) for a in lifecycle_plan.actions] == [
+    assert [(a.entry.chart.name, a.kind.value) for a in lifecycle_plan.actions] == [
         ("db", "namespace-ensure"),
         ("db", "install"),
         ("db", "helm-test"),
@@ -261,7 +257,7 @@ def test_plan_lists_namespace_install_and_helm_test_per_chart_requires_first(rep
 
 
 def test_no_ensure_cluster_attaches_without_creating_anything(repo: Path) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     outcome = _run(repo, runner, ensure_cluster=False)
 
@@ -271,21 +267,21 @@ def test_no_ensure_cluster_attaches_without_creating_anything(repo: Path) -> Non
     assert install[install.index("--kube-context") + 1] == "kind-lab"
 
 
-def test_skip_requires_on_a_new_cluster_installs_requirements_but_tests_only_the_target(
+def test_skip_requires_on_a_new_cluster_installs_requirements_but_tests_only_selected_charts(
     repo: Path,
 ) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
-    outcome = _run(repo, runner, skip_requires=True)
+    outcome = _run(repo, runner, skip_requires=True, include_dependent_tests=True)
 
     assert outcome.ok
     steps = _steps(runner)
-    assert [s[3] for s in steps if s[:2] == ("helm", "upgrade")] == ["cni", "db", "app"]
-    assert [s[2] for s in steps if s[:2] == ("helm", "test")] == ["app"]
+    assert [s[3] for s in steps if s[:2] == ("helm", "upgrade")] == ["cni", "db", "app", "web"]
+    assert [s[2] for s in steps if s[:2] == ("helm", "test")] == ["app", "web"]
 
 
 def test_lint_runs_before_each_charts_install_and_fails_it(repo: Path) -> None:
-    runner = _runner().respond(argv_prefix("helm", "lint", str(repo / "charts" / "app")), returncode=1)
+    runner = kind_runner().respond(argv_prefix("helm", "lint", str(repo / "charts" / "app")), returncode=1)
 
     outcome = _run(repo, runner, lint=True)
 
@@ -301,7 +297,7 @@ def test_a_failed_pre_install_hook_stops_before_the_install(
         "app",
         profiles={"minimal": {"namespace": "apps", "hooks": {"preInstall": ["true", "pre"]}}},
     )
-    runner = _runner().respond(("true", "pre"), returncode=3, stderr="no token")
+    runner = kind_runner().respond(("true", "pre"), returncode=3, stderr="no token")
 
     outcome = _run(repo, runner)
 
@@ -314,7 +310,7 @@ def test_cleanup_hooks_are_left_for_teardown(repo: Path, make_chart: MakeChart) 
         "app",
         profiles={"minimal": {"namespace": "apps", "hooks": {"cleanup": ["true", "bye"]}}},
     )
-    runner = _runner()
+    runner = kind_runner()
 
     outcome = _run(repo, runner)
 
@@ -330,6 +326,7 @@ def _teardown(repo: Path, runner: FakeCommandRunner, **request: object) -> test.
         workspace=load_workspace(repo),
         runner=runner,
         settings=Settings(),
+        progress=[].append,
     )
 
 
@@ -353,7 +350,7 @@ def with_cleanups(repo: Path, make_chart: MakeChart) -> Path:
 
 
 def test_teardown_cleans_up_in_reverse_install_order_past_a_failure(with_cleanups: Path) -> None:
-    runner = _runner("lab").respond(("true", "app"), returncode=1, stderr="gone")
+    runner = kind_runner("lab").respond(("true", "app"), returncode=1, stderr="gone")
 
     outcome = _teardown(with_cleanups, runner)
 
@@ -364,7 +361,7 @@ def test_teardown_cleans_up_in_reverse_install_order_past_a_failure(with_cleanup
 
 
 def test_teardown_keep_cluster_runs_cleanups_without_deleting(with_cleanups: Path) -> None:
-    runner = _runner("lab")
+    runner = kind_runner("lab")
 
     outcome = _teardown(with_cleanups, runner, keep_cluster=True)
 
@@ -373,7 +370,7 @@ def test_teardown_keep_cluster_runs_cleanups_without_deleting(with_cleanups: Pat
 
 
 def test_teardown_of_a_missing_cluster_still_runs_cleanups(with_cleanups: Path) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     outcome = _teardown(with_cleanups, runner)
 
@@ -384,7 +381,7 @@ def test_teardown_of_a_missing_cluster_still_runs_cleanups(with_cleanups: Path) 
 
 
 def test_teardown_reports_a_failed_delete(with_cleanups: Path) -> None:
-    runner = _runner("lab").respond(argv_prefix("kind", "delete"), returncode=1, stderr="busy")
+    runner = kind_runner("lab").respond(argv_prefix("kind", "delete"), returncode=1, stderr="busy")
 
     outcome = _teardown(with_cleanups, runner)
 
@@ -396,7 +393,7 @@ def test_a_failed_bootstrap_release_is_raised_as_a_tool_error_after_its_diagnost
     repo: Path,
 ) -> None:
     runner = (
-        _runner()
+        kind_runner()
         .respond(argv_prefix("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
         .respond(argv_prefix("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
     )

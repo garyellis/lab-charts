@@ -85,7 +85,9 @@ def test_helm_probes_the_binary_it_actually_resolved(on_path: OnPath) -> None:
     on_path(f"{FAKE_BIN}/mise/helm")
     runner = FakeCommandRunner(stdout="v3.16.2\n")
 
-    checks = Helm(runner, binary=f"{FAKE_BIN}/mise/helm").preflight()
+    checks = Helm(
+        runner, binary=f"{FAKE_BIN}/mise/helm", timeout=None, context=None
+    ).preflight()
 
     assert checks_by_name(checks)["helm"].status is CheckStatus.OK
     assert runner.calls[0][0] == f"{FAKE_BIN}/mise/helm"

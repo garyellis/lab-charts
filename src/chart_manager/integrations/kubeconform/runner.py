@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from chart_manager.plumbing.commands import CommandRunner, SubprocessRunner
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import ExternalCommandError, SpecError, YamlError
 from chart_manager.plumbing.preflight import Check, probe_binary
 from chart_manager.plumbing.schema_locations import expand_schema_location, validate_schema_location
@@ -62,14 +62,12 @@ class Kubeconform:
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
-        binary: str | Path | None = None,
-        timeout: float | None = None,
+        timeout: float | None,
     ) -> None:
-        """Bind a CommandRunner, binary path (default `kubeconform`), and timeout."""
-        self.runner = runner or SubprocessRunner()
-        self._bin = str(binary) if binary is not None else "kubeconform"
+        """Bind a CommandRunner and a per-subprocess timeout."""
+        self.runner = runner
         # Per-subprocess wall-clock cap. None = unbounded. Validate sets
         # this from --tool-timeout so a hung kubeconform doesn't pin a worker.
         self.timeout = timeout
@@ -84,7 +82,7 @@ class Kubeconform:
         return (
             probe_binary(
                 self.runner,
-                self._bin,
+                "kubeconform",
                 name="kubeconform",
                 version_args=("-v",),
                 remediation=(
@@ -129,7 +127,7 @@ class Kubeconform:
             frozenset(skip_kinds or []),
         )
 
-        args: list[str] = [self._bin, "-output", "json", "-summary"]
+        args: list[str] = ["kubeconform", "-output", "json", "-summary"]
         if strict:
             args.append("-strict")
         for loc in schema_locations:

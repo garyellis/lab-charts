@@ -11,6 +11,8 @@ from chart_manager.commands.upgrade import (
     UpgradeError,
     finalize,
 )
+from chart_manager.settings import Settings
+from chart_manager.shared.charts.chart import load_chart
 from tests.conftest import FakeCommandRunner, workspace_for
 
 
@@ -44,10 +46,12 @@ def _finalize(tmp_path: Path, baseline: str, *updates: dict[str, Any]) -> Finali
         ("git", "show", "HEAD:charts/demo/Chart.yaml"), stdout=baseline
     )
     request = FinalizeRequest(
-        chart_path=tmp_path / "charts" / "demo",
+        chart=load_chart(tmp_path / "charts" / "demo"),
         update_data={"updates": list(updates)},
     )
-    return finalize.run(request, workspace=workspace_for(tmp_path), runner=runner)
+    return finalize.run(
+        request, workspace=workspace_for(tmp_path), runner=runner, settings=Settings()
+    )
 
 
 def _changelog(chart: Path) -> str:
@@ -169,8 +173,9 @@ def test_an_unreadable_baseline_is_an_upgrade_error(tmp_path: Path) -> None:
 
     with pytest.raises(UpgradeError, match="cannot read baseline"):
         finalize.run(
-            FinalizeRequest(chart_path=chart, update_data={"updates": []}),
+            FinalizeRequest(chart=load_chart(chart), update_data={"updates": []}),
             workspace=workspace_for(tmp_path),
             runner=runner,
+            settings=Settings(),
         )
     assert runner.calls == [("git", "show", "HEAD:charts/demo/Chart.yaml")]

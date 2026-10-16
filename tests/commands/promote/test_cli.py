@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-import threading
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,14 +23,34 @@ from chart_manager.commands.promote.state import (
 )
 from chart_manager.commands.promote.test import TestOutcome, TestResult
 from chart_manager.integrations.github import PullRequest
-from chart_manager.integrations.kubectl import (
-    ConditionSnapshot,
-    HelmReleaseRef,
-    HelmReleaseStatus,
-)
+from chart_manager.integrations.kubectl import HelmReleaseRef, HelmReleaseStatus
+from chart_manager.plumbing.progress import Progress, RowUpdate
 from tests.conftest import cli
 
 # ----- helpers ------------------------------------------------------------
+
+_AT = datetime(2026, 1, 1, tzinfo=UTC)
+_REF_DOC = {
+    "api_version": "helm.toolkit.fluxcd.io/v2",
+    "name": "loki",
+    "namespace": "loki",
+    "release_name": "loki",
+    "storage_namespace": "loki",
+    "target_namespace": "loki",
+}
+_STATUS_DOC = {
+    "conditions": [],
+    "desired_chart_name": "loki",
+    "desired_chart_version": "0.2.0",
+    "generation": 1,
+    "history_chart_version": "0.2.0",
+    "last_applied_revision": None,
+    "observed_at": "2026-01-01T00:00:00+00:00",
+    "observed_generation": 1,
+    "ref": _REF_DOC,
+    "resource_version": "1",
+    "suspended": False,
+}
 
 
 def _ref(name: str = "loki", ns: str = "loki") -> HelmReleaseRef:
@@ -47,7 +67,7 @@ def _ref(name: str = "loki", ns: str = "loki") -> HelmReleaseRef:
 def _status(ref: HelmReleaseRef) -> HelmReleaseStatus:
     return HelmReleaseStatus(
         ref=ref,
-        observed_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+        observed_at=_AT,
         generation=1,
         observed_generation=1,
         resource_version="1",
@@ -56,15 +76,7 @@ def _status(ref: HelmReleaseRef) -> HelmReleaseStatus:
         desired_chart_version="0.2.0",
         last_applied_revision=None,
         history_chart_version="0.2.0",
-        conditions=(
-            ConditionSnapshot(
-                type="Ready",
-                status="True",
-                reason="ReconciliationSucceeded",
-                message="ok",
-                last_transition_time=None,
-            ),
-        ),
+        conditions=(),
     )
 
 
@@ -75,7 +87,7 @@ def _ready_outcome(ref: HelmReleaseRef) -> MonitorOutcome:
         reason="Ready",
         last_status=_status(ref),
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=1.5,
     )
@@ -88,7 +100,7 @@ def _failed_outcome(ref: HelmReleaseRef) -> MonitorOutcome:
         reason="InstallFailed",
         last_status=_status(ref),
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(Transition(_AT, "Failed", "InstallFailed"),),
         diagnostics="## loki/loki - failed: InstallFailed\nbad chart values",
         duration_seconds=3.2,
     )
@@ -104,7 +116,7 @@ def _passed_test_outcome(ref: HelmReleaseRef) -> TestOutcome:
         helm_test_stderr="",
         test_pods=(),
         last_status=_status(ref),
-        phase_log=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=2.0,
     )
@@ -112,16 +124,15 @@ def _passed_test_outcome(ref: HelmReleaseRef) -> TestOutcome:
 
 @dataclass
 class _FakeStage:
-    """Stands in for a stage's `run()`: records each request and progress callback."""
+    """Stands in for a stage's `run()`: records each request and reports one phase."""
 
     result: Any
     raise_exc: BaseException | None = None
     captured_requests: list[Any] = field(default_factory=list)
-    captured_progress: list[Any] = field(default_factory=list)
 
-    def __call__(self, request: Any, *, progress: Any, **_adapters: Any) -> Any:
+    def __call__(self, request: Any, *, progress: Progress, **_adapters: Any) -> Any:
         self.captured_requests.append(request)
-        self.captured_progress.append(progress)
+        progress(RowUpdate(("loki", "loki"), "phase", "Polling", "waiting"))
         if self.raise_exc is not None:
             raise self.raise_exc
         return self.result
@@ -152,15 +163,11 @@ def _install_fake_test(
 def _ok_result(outcomes: tuple[MonitorOutcome, ...] = ()) -> MonitorResult:
     if not outcomes:
         outcomes = (_ready_outcome(_ref()),)
-    return MonitorResult(outcomes=outcomes, total_duration_seconds=1.2, total_timed_out=False)
+    return MonitorResult("loki", "0.2.0", outcomes, 1.2, total_timed_out=False)
 
 
 def _bad_result() -> MonitorResult:
-    return MonitorResult(
-        outcomes=(_failed_outcome(_ref()),),
-        total_duration_seconds=3.5,
-        total_timed_out=False,
-    )
+    return MonitorResult("loki", "0.2.0", (_failed_outcome(_ref()),), 3.5, total_timed_out=False)
 
 
 @pytest.fixture(autouse=True)
@@ -194,54 +201,65 @@ def test_pretty_ok_exit_0_summary_in_stdout(monkeypatch: pytest.MonkeyPatch) -> 
     assert not res.stdout.lstrip().startswith("{")
 
 
-def test_pretty_failure_exit_1_diagnostics_in_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_monitor(monkeypatch, result=_bad_result())
+def test_a_failure_shows_its_reason_in_the_table_and_its_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timed_out = replace(_failed_outcome(_ref()), verdict="timed-out", reason="PerHRBudgetExhausted")
+    _install_fake_monitor(
+        monkeypatch, result=MonitorResult("loki", "0.2.0", (timed_out,), 1.0, total_timed_out=False)
+    )
     res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 1
-    assert "InstallFailed" in res.stdout
+    assert "PerHRBudgetExhausted" in res.stdout
+    assert "bad chart values" in res.stdout
 
 
-def test_json_mode_emits_parseable_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_monitor(monkeypatch, result=_ok_result())
+def test_monitor_json_is_the_result_and_silences_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_monitor(monkeypatch, result=_bad_result())
     res = cli(*_BASE, "--output", "json")
-    assert res.exit_code == 0
-    assert res.stdout.endswith("\n")
-    payload = json.loads(res.stdout)
-    assert payload["command"] == "monitor"
-    assert payload["ok"] is True
-    # No ANSI escapes leaked into json stream.
-    assert "\x1b[" not in res.stdout
+    assert res.stderr == ""
+    assert (res.exit_code, json.loads(res.stdout)) == (
+        1,
+        {
+            "chart": "loki",
+            "outcomes": [
+                {
+                    "diagnostics": "## loki/loki - failed: InstallFailed\nbad chart values",
+                    "duration_seconds": 3.2,
+                    "last_status": _STATUS_DOC,
+                    "last_workloads": [],
+                    "reason": "InstallFailed",
+                    "transitions": [
+                        {
+                            "at": "2026-01-01T00:00:00+00:00",
+                            "detail": "InstallFailed",
+                            "phase": "Failed",
+                        }
+                    ],
+                    "ref": _REF_DOC,
+                    "verdict": "failed",
+                }
+            ],
+            "total_duration_seconds": 3.5,
+            "total_timed_out": False,
+            "version": "0.2.0",
+        },
+    )
 
 
 # ----- progress wiring -----------------------------------------------------
 
 
-def test_table_mode_renders_progress_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
-    def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
-        # Watchers report from their own threads, 20 transitions each.
-        def watch(i: int) -> None:
-            for j in range(20):
-                progress(_ref(f"hr{i}", "ns"), Transition(datetime.now(UTC), "Polling", f"d{j}"))
-
-        threads = [threading.Thread(target=watch, args=(i,)) for i in range(5)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        return _ok_result()
-
-    monkeypatch.setattr(promote_cli, "run_monitor", run)
+def test_table_mode_off_a_terminal_prints_progress_lines_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_monitor(monkeypatch, result=_ok_result())
     res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 0
-    assert all(f"hr{i}" in res.stderr for i in range(5))
+    assert res.stderr == "loki/loki phase: Polling waiting\n"
     assert "Polling" not in res.stdout
-
-
-def test_json_mode_omits_progress_callback(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = _install_fake_monitor(monkeypatch, result=_ok_result())
-    res = cli(*_BASE, "--output", "json")
-    assert res.exit_code == 0
-    assert fake.captured_progress[0] is None
 
 
 # ----- auto mode resolution ------------------------------------------------
@@ -252,7 +270,20 @@ def test_auto_mode_under_ci_env_picks_json(monkeypatch: pytest.MonkeyPatch) -> N
     _install_fake_monitor(monkeypatch, result=_ok_result())
     res = cli(*_BASE, "--output", "auto")
     assert res.exit_code == 0
-    assert json.loads(res.stdout)["ok"] is True
+    assert json.loads(res.stdout)["chart"] == "loki"
+
+
+# ----- global options reach promote --------------------------------------
+
+def test_verbose_debug_logs_reach_stderr_under_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(_request: Any, *, progress: Any, **_adapters: Any) -> MonitorResult:
+        logging.getLogger("chart_manager.commands.promote").debug("polling loki/loki")
+        return _ok_result()
+
+    monkeypatch.setattr(promote_cli, "run_monitor", run)
+    res = cli("-v", *_BASE, "--output", "json")
+    assert (res.exit_code, json.loads(res.stdout)["chart"]) == (0, "loki")
+    assert "polling loki/loki" in res.stderr
 
 
 # ----- namespace coercion --------------------------------------------------
@@ -268,50 +299,40 @@ def test_namespace_reaches_the_request_with_empty_meaning_all(
     assert fake.captured_requests[0].namespace == expected
 
 
-# ----- json output -----------------------------------------------------------
-
-
-def test_json_schema_matches_expected_dict(monkeypatch: pytest.MonkeyPatch) -> None:
-    ref_ready = _ref("a", "ns1")
-    ref_failed = _ref("b", "ns2")
-    ref_timeout = _ref("c", "ns3")
-    failed = _failed_outcome(ref_failed)
-    timeout = MonitorOutcome(
-        ref=ref_timeout,
-        verdict="timed-out",
-        reason="PerHRBudgetExhausted",
-        last_status=None,
-        last_workloads=(),
-        recent_transitions=(),
-        diagnostics="## ns3/c - timed-out: PerHRBudgetExhausted",
-        duration_seconds=300.0,
-    )
-    result = MonitorResult(
-        outcomes=(_ready_outcome(ref_ready), failed, timeout),
-        total_duration_seconds=305.0,
-        total_timed_out=False,
-    )
-    _install_fake_monitor(monkeypatch, result=result)
-    res = cli(*_BASE, "--output", "json")
-    assert res.exit_code == 1
-    payload = json.loads(res.stdout)
-    verdicts = [o["verdict"] for o in payload["outcomes"]]
-    assert verdicts == ["ready", "failed", "timed-out"]
-    assert payload["outcomes"][1]["diagnostics"]
-    assert payload["outcomes"][2]["reason"] == "PerHRBudgetExhausted"
-    assert payload["ok"] is False
-
-
 # ----- test (helm test) command -------------------------------------------
 
 
-def test_test_pod_log_tail_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = TestResult(
-        outcomes=(_passed_test_outcome(_ref()),),
-        total_duration_seconds=2.0,
-        total_timed_out=False,
+def test_test_json_is_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_test(monkeypatch, result=_passed_test_result())
+    res = cli(*_TEST_BASE, "--output", "json")
+    assert (res.exit_code, json.loads(res.stdout)) == (
+        0,
+        {
+            "chart": "loki",
+            "outcomes": [
+                {
+                    "diagnostics": None,
+                    "duration_seconds": 2.0,
+                    "helm_test_returncode": 0,
+                    "helm_test_stderr": "",
+                    "helm_test_stdout": "PASS",
+                    "last_status": _STATUS_DOC,
+                    "transitions": [],
+                    "reason": "AllTestsPassed",
+                    "ref": _REF_DOC,
+                    "test_pods": [],
+                    "verdict": "passed",
+                }
+            ],
+            "total_duration_seconds": 2.0,
+            "total_timed_out": False,
+            "version": "0.2.0",
+        },
     )
-    fake = _install_fake_test(monkeypatch, result=result)
+
+
+def test_test_pod_log_tail_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_test(monkeypatch, result=_passed_test_result())
     res = cli(*_TEST_BASE, "--pod-log-tail", "50")
     assert res.exit_code == 0
     assert fake.captured_requests[0].pod_log_tail == 50
@@ -331,11 +352,7 @@ _TEST_BASE = ["promote", "test", "--chart", "loki", "--version", "0.2.0"]
 
 
 def _passed_test_result() -> TestResult:
-    return TestResult(
-        outcomes=(_passed_test_outcome(_ref()),),
-        total_duration_seconds=2.0,
-        total_timed_out=False,
-    )
+    return TestResult("loki", "0.2.0", (_passed_test_outcome(_ref()),), 2.0, total_timed_out=False)
 
 
 def _timeouts(request: Any) -> tuple[float, float, float]:
@@ -405,13 +422,11 @@ def test_no_match_outcome_pretty_message(monkeypatch: pytest.MonkeyPatch) -> Non
         reason="NoHelmReleasesMatched",
         last_status=None,
         last_workloads=(),
-        recent_transitions=(),
+        transitions=(),
         diagnostics=None,
         duration_seconds=0.1,
     )
-    result = MonitorResult(
-        outcomes=(no_match,), total_duration_seconds=0.1, total_timed_out=False
-    )
+    result = MonitorResult("loki", "0.2.0", (no_match,), 0.1, total_timed_out=False)
     _install_fake_monitor(monkeypatch, result=result)
     res = cli(*_BASE, "--output", "table")
     assert res.exit_code == 1
@@ -438,9 +453,13 @@ _PROMOTE_BASE = [
 ]
 
 
+_CHANGED = Path("/tmp/flux/prod/loki.yaml")
+_BRANCH = "promote/prod/loki-0.2.0"
+
+
 def _match(current: str = "0.1.0") -> HelmReleaseMatch:
     return HelmReleaseMatch(
-        path=Path("/tmp/flux/prod/loki.yaml"),
+        path=_CHANGED,
         doc_index=0,
         name="loki",
         namespace="loki",
@@ -457,44 +476,36 @@ def _promote_result(status: PromoteStatus) -> PromoteResult:
     """
     match status:
         case PromoteStatus.NO_CHANGES:
-            return PromoteResult(status=status, matches=[_match("0.2.0")])
+            fields: dict[str, Any] = {"matches": [_match("0.2.0")]}
         case PromoteStatus.DRY_RUN:
-            return PromoteResult(
-                status=status,
-                matches=[_match()],
-                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
-                branch="promote/prod/loki-0.2.0",
-            )
+            fields = {"matches": [_match()], "changed_files": [_CHANGED], "branch": _BRANCH}
         case PromoteStatus.ABORTED:
-            return PromoteResult(
-                status=status,
-                matches=[_match("0.9.0")],
-                branch="promote/prod/loki-0.2.0",
-                downgrades=[_match("0.9.0")],
-            )
+            fields = {
+                "matches": [_match("0.9.0")],
+                "branch": _BRANCH,
+                "downgrades": [_match("0.9.0")],
+            }
         case PromoteStatus.ALREADY_OPEN:
-            return PromoteResult(
-                status=status,
-                matches=[_match()],
-                branch="promote/prod/loki-0.2.0",
-                pull_request=PullRequest(url="https://gh/org/r/pull/7", number=7),
-            )
+            fields = {
+                "matches": [_match()],
+                "branch": _BRANCH,
+                "pull_request": PullRequest(url="https://gh/org/r/pull/7", number=7),
+            }
         case PromoteStatus.PR_OPENED:
-            return PromoteResult(
-                status=status,
-                matches=[_match()],
-                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
-                branch="promote/prod/loki-0.2.0",
-                pull_request=PullRequest(url="https://gh/org/r/pull/8", number=8),
-            )
+            fields = {
+                "matches": [_match()],
+                "changed_files": [_CHANGED],
+                "branch": _BRANCH,
+                "pull_request": PullRequest(url="https://gh/org/r/pull/8", number=8),
+            }
         case PromoteStatus.PUSHED:
-            return PromoteResult(
-                status=status,
-                matches=[_match()],
-                changed_files=[Path("/tmp/flux/prod/loki.yaml")],
-                branch="promote/prod/loki-0.2.0",
-                pull_request=PullRequest(url="", number=None),
-            )
+            fields = {
+                "matches": [_match()],
+                "changed_files": [_CHANGED],
+                "branch": _BRANCH,
+                "pull_request": PullRequest(url="", number=None),
+            }
+    return PromoteResult("loki", "0.2.0", "prod", status, **fields)
 
 
 def _install_fake_promote(
@@ -515,15 +526,13 @@ def _install_fake_promote(
 
 
 @pytest.mark.parametrize("status", list(PromoteStatus))
-def test_promote_exit_code_and_json_ok_per_status(
+def test_promote_exit_code_per_status(
     status: PromoteStatus, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only a declined downgrade fails, and `.ok` and `$?` always agree."""
+    """Only a declined downgrade fails."""
     _install_fake_promote(monkeypatch, result=_promote_result(status))
     res = cli(*_PROMOTE_BASE, "--output", "json")
-    expected = 1 if status is PromoteStatus.ABORTED else 0
-    assert res.exit_code == expected, res.output
-    assert json.loads(res.stdout)["ok"] is (expected == 0)
+    assert res.exit_code == (1 if status is PromoteStatus.ABORTED else 0), res.output
 
 
 def test_promote_outcome_covers_every_status() -> None:
@@ -620,33 +629,33 @@ def test_promote_interactive_decline_exits_1(monkeypatch: pytest.MonkeyPatch) ->
 # ----- promote: the json projection ---------------------------------------
 
 
-def test_promote_json_parses_cleanly_off_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """stdout carries the projection and nothing else.
-
-    An *explicit* `--output json` also silences narration ("json
-    implies --quiet"), so stderr is empty here. The stdout purity
-    is still checked by `json.loads` below.
-
-    The companion property -- that the narration still exists and is merely
-    suppressed -- is held by
-    `test_promote_auto_json_keeps_narration_on_stderr`, which reaches the same
-    json projection through `auto` rather than by asking for it. Without that
-    sibling this test would pass just as well against a promote that had
-    stopped narrating entirely.
-    """
+def test_promote_json_is_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit `--output json` silences narration, so stdout holds only the document."""
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
     res = cli(*_PROMOTE_BASE, "--output", "json")
 
-    assert res.exit_code == 0, res.output
-    payload = json.loads(res.stdout)
-    assert payload["command"] == "promote"
-    assert payload["status"] == "pr-opened"
-    assert payload["ok"] is True
-    assert payload["environment"] == "prod"
-    assert payload["chart"] == "loki"
-    assert payload["pull_request"]["url"] == "https://gh/org/r/pull/8"
-    assert "pr opened" not in res.stdout
-    assert res.stderr == ""
+    match = {
+        "current_version": "0.1.0",
+        "doc_index": 0,
+        "name": "loki",
+        "namespace": "loki",
+        "path": "/tmp/flux/prod/loki.yaml",
+    }
+    assert (res.exit_code, json.loads(res.stdout), res.stderr) == (
+        0,
+        {
+            "branch": "promote/prod/loki-0.2.0",
+            "changed_files": ["/tmp/flux/prod/loki.yaml"],
+            "chart": "loki",
+            "downgrades": [],
+            "environment": "prod",
+            "matches": [match],
+            "pull_request": {"branch": "", "number": 8, "url": "https://gh/org/r/pull/8"},
+            "status": "pr-opened",
+            "version": "0.2.0",
+        },
+        "",
+    )
 
 
 def test_promote_auto_json_keeps_narration_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -665,18 +674,6 @@ def test_promote_auto_json_keeps_narration_on_stderr(monkeypatch: pytest.MonkeyP
     assert json.loads(res.stdout)["status"] == "pr-opened"
     assert "pr opened" in res.stderr
     assert "pr opened" not in res.stdout
-
-
-def test_promote_json_carries_a_failure_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A nonzero exit still emits a parseable document -- CI needs both."""
-    _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.ABORTED))
-    res = cli(*_PROMOTE_BASE, "--output", "json")
-
-    assert res.exit_code == 1
-    payload = json.loads(res.stdout)
-    assert payload["ok"] is False
-    assert payload["status"] == "aborted"
-    assert payload["downgrades"][0]["current_version"] == "0.9.0"
 
 
 def test_promote_pretty_writes_nothing_to_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -698,11 +695,8 @@ def test_promote_rejects_an_unknown_output_mode(monkeypatch: pytest.MonkeyPatch)
     """`--output yaml` must fail, not silently fall back to table.
 
     Exit 2, not 1: naming a projection a command does not have is a *usage*
-    error, and P1.4 made every `--output` speak one vocabulary with one
-    rejection path (`typer.BadParameter`, via `cli/output.py`). This command
-    used to raise `ChartManagerError` and exit 1 while `chart validate`
-    rejected its equivalent with exit 2 -- unifying the vocabularies
-    necessarily unified that too. This is not the P2.1 exit-code work.
+    error, and every `--output` shares one rejection path
+    (`typer.BadParameter`, via `cli/output.py`).
     """
     _install_fake_promote(monkeypatch, result=_promote_result(PromoteStatus.PR_OPENED))
     res = cli(*_PROMOTE_BASE, "--output", "yaml")

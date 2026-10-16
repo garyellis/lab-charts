@@ -1,15 +1,13 @@
-"""`chart validate`'s output: the terminal table, markdown and JSON forms of one run."""
+"""`chart validate`'s output: the terminal table and markdown forms of one run."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 from typing import get_args
 
 from rich.table import Table
 from rich.text import Text
 
-from chart_manager.commands.validate.display import STATUS_STYLE
 from chart_manager.commands.validate.models import (
     FAILING,
     CheckName,
@@ -18,49 +16,11 @@ from chart_manager.commands.validate.models import (
     Row,
     ValidateOutcome,
 )
-from chart_manager.plumbing.exit_codes import exit_code_for
 
 _CHECKS: tuple[CheckName, ...] = get_args(CheckName)
 _EMOJI = {"passed": "✅", "failed": "❌", "error": "⚠️", "skipped": "➖"}  # noqa: RUF001
 _NOT_RUN = "·"
-
-
-def to_json(outcome: ValidateOutcome, *, rendered: Path) -> dict[str, object]:
-    """The run as a jq-friendly dict; `elapsed_seconds` is always present."""
-    passing, failing, _ = _tally(outcome)
-    return {
-        "exit_code": exit_code_for(outcome.outcome()),
-        "rendered_root": str(rendered),
-        "summary": {
-            "rows": len(outcome.rows),
-            "passing_rows": passing,
-            "failing_rows": failing,
-            "spec_errors": len(outcome.spec_errors),
-        },
-        "rows": [
-            {
-                "chart": row.chart,
-                "env": row.env,
-                "release": row.release,
-                "namespace": row.namespace,
-                "checks": {
-                    name: {
-                        "status": result.status,
-                        "detail": result.detail,
-                        "elapsed_seconds": (
-                            None
-                            if result.elapsed_seconds is None
-                            else round(result.elapsed_seconds, 3)
-                        ),
-                    }
-                    for name, result in row.checks.items()
-                },
-            }
-            for row in outcome.rows
-        ],
-        "spec_errors": list(outcome.spec_errors),
-        "warnings": list(outcome.warnings),
-    }
+_STYLES = {"passed": "green", "failed": "red", "error": "bold red", "skipped": "dim"}
 
 
 def to_markdown(outcome: ValidateOutcome, *, timings: bool) -> str:
@@ -148,7 +108,7 @@ def to_table(outcome: ValidateOutcome, *, timings: bool) -> Table:
         cells: list[str | Text] = [row.chart, row.env, row.release]
         for name in _CHECKS:
             status = _status(row, name)
-            cells.append(Text(status or "-", style=STATUS_STYLE.get(status, "dim")))
+            cells.append(Text(status or "-", style=_STYLES.get(status, "dim")))
         if timings:
             cells.append(Text(_elapsed(row), style="dim"))
         table.add_row(*cells)

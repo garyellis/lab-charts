@@ -1,17 +1,9 @@
 """`chart-manager event emit build|promote`.
 
-The emit path had no CLI coverage before P1.5, which is why the restructuring
-lands with it. Everything here goes through the real writer seam: the whole
-suite pins `EVENTS_BACKEND=none` (`conftest.hermetic_terminal`), and each test
-that cares about the payload substitutes a recording `EventWriter` at the
-module seam `commands/events/cli.py::_make_event_writer` rather than reaching into the
-store.
-
-Alias equivalence for the old `events build|promote` spelling is not asserted
-here -- `tests/test_cli_aliases.py` owns that property for every alias at
-once. What *is* asserted here is the part the alias gate cannot see: that the
-deprecated `--chart` / `--version` flag pair still resolves to the same ref as
-the positional.
+Everything here goes through the real writer seam: the whole suite clears
+`EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test that cares about the
+payload substitutes a recording `EventWriter` at the module seam
+`commands/events/cli.py::_make_event_writer` rather than reaching into the store.
 """
 
 from __future__ import annotations
@@ -23,8 +15,9 @@ from typing import Any
 import pytest
 
 from chart_manager.commands.events import cli as events_cli
-from chart_manager.plumbing.exit_codes import EXIT_ENVIRONMENT
+from chart_manager.plumbing.exit_codes import exit_code_for
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
+from chart_manager.shared.events.query import EventsDisabledError
 from tests.conftest import FakeCosmosContainer, cli
 
 
@@ -127,36 +120,28 @@ def test_a_non_utc_at_offset_is_normalized_to_utc(writer: RecordingWriter) -> No
     assert writer.build_calls[0]["timestamp"] == datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
 
 
-def test_a_naive_at_timestamp_is_a_usage_error(writer: RecordingWriter) -> None:
-    """A backfill from a laptop in another timezone must not shift history."""
-    result = cli(
-        "event", "emit", "build", "grafana@1.2.3",
-        "--phase", "merged", "--at", "2026-07-30T12:00:00",
-    )
-
-    assert result.exit_code == 2
-    assert writer.build_calls == []
-
-
 @pytest.mark.parametrize(
-    "token",
-    ["grafana", "@1.2.3", "a@b@c", "grafana@"],
-    ids=["no-version", "no-chart", "two-separators", "empty-version"],
+    "argv",
+    [
+        ("grafana", "--phase", "published"),
+        ("@1.2.3", "--phase", "published"),
+        ("a@b@c", "--phase", "published"),
+        ("grafana@", "--phase", "published"),
+        ("--phase", "published"),
+        # A backfill from a laptop in another timezone must not shift history.
+        ("grafana@1.2.3", "--phase", "merged", "--at", "2026-07-30T12:00:00"),
+    ],
+    ids=[
+        "no-version", "no-chart", "two-separators", "empty-version", "missing-ref", "naive-at",
+    ],
 )
-def test_a_malformed_ref_is_a_usage_error(writer: RecordingWriter, token: str) -> None:
-    """Exit 2 with usage, matching how `--at` already reports a bad value.
-
-    Crucially, nothing is written: a ref the system cannot address must not
-    produce a ledger record under a guessed correlation id.
+def test_an_invalid_emit_is_a_usage_error(
+    writer: RecordingWriter, argv: tuple[str, ...]
+) -> None:
+    """A bad ref or a timestamp with no timezone exits 2 and writes nothing,
+    so no record is stored under a guessed value.
     """
-    result = cli("event", "emit", "build", token, "--phase", "published")
-
-    assert result.exit_code == 2
-    assert writer.build_calls == []
-
-
-def test_a_missing_ref_is_a_usage_error(writer: RecordingWriter) -> None:
-    result = cli("event", "emit", "build", "--phase", "published")
+    result = cli("event", "emit", "build", *argv)
 
     assert result.exit_code == 2
     assert writer.build_calls == []
@@ -193,7 +178,6 @@ def test_strict_turns_a_failed_emit_into_a_failure(
 
     monkeypatch.setattr(events_cli, "_make_event_writer", Exploding)
 
-    # `--strict`, not `--strict-events`: P1.3 owns that rename.
     result = cli(
         "event", "emit", "build", "grafana@1.2.3", "--phase", "published", "--strict-events"
     )
@@ -263,11 +247,9 @@ def test_dry_run_prints_the_composed_document_and_confirms_nothing(
     reaches it; EVENTS_BACKEND is unset, which is the shipped default.
     """
     monkeypatch.setattr(
-        events_cli,
-        "get_event_store",
-        lambda: pytest.fail("--dry-run resolved an event store"),
+        "chart_manager.cli._container.get_event_store",
+        lambda settings: pytest.fail("--dry-run resolved an event store"),
     )
-    monkeypatch.delenv("EVENTS_BACKEND", raising=False)
 
     result = cli(
         "event", "emit", "build", "grafana@1.2.3",
@@ -417,52 +399,29 @@ def test_the_table_shows_the_pr_url(reader) -> None:
     assert "pull/38" in result.stdout.replace("\n", "")
 
 
-def test_the_json_projection_is_the_wire_document(reader) -> None:
-    result = cli("event", "list", "grafana@1.2.3", "-o", "json")
-
-    payload = json.loads(result.stdout)
-    assert payload["chart"] == "grafana"
-    assert payload["correlation_id"] == "grafana@1.2.3"
-    assert payload["count"] == 1
-    assert payload["events"] == [_EVENT_DOC]
-
-
 def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
-    """conftest pins EVENTS_BACKEND=none, which is also the shipped default."""
+    """conftest clears EVENTS_BACKEND; `none` is the shipped default."""
     result = cli("event", "list")
 
-    assert result.exit_code == EXIT_ENVIRONMENT
-    assert "EVENTS_BACKEND" in result.stderr
+    assert isinstance(result.exception, EventsDisabledError)
+    assert exit_code_for(result.exception.outcome) == 5
+    assert "EVENTS_BACKEND" in str(result.exception)
     assert result.stdout == ""
 
 
-def test_list_against_dynamodb_says_the_read_side_is_cosmos_only(
+def test_list_json_is_the_events_newest_first_across_mixed_timezone_stamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("EVENTS_BACKEND", "dynamodb")
-
-    result = cli("event", "list")
-
-    assert result.exit_code == EXIT_ENVIRONMENT
-    assert "Cosmos-only" in result.stderr
-    assert "query-events-dynamodb" in result.stderr
-
-
-def test_list_renders_newest_first_across_mixed_timezone_stamps(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End to end through the real dispatch: a +02:00 stamp that is *older*
-    in real time must not lead the listing just because it string-sorts
-    newer. The fake container returns the backend's string order."""
-
+    """A +02:00 stamp that is older in real time must not lead the listing
+    just because it string-sorts newer. The fake container returns the
+    backend's string order."""
     offset = dict(_EVENT_DOC, chart_name="older", timestamp="2026-08-01T14:30:00+02:00")
     utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
     container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
 
     monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
-    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda **kwargs: container)
+    monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda *_: container)
 
     result = cli("event", "list", "-o", "json")
 
-    charts = [event["chart_name"] for event in json.loads(result.stdout)["events"]]
-    assert charts == ["newer", "older"]
+    assert (result.exit_code, json.loads(result.stdout)) == (0, {"events": [utc, offset]})

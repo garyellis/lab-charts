@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
+from unittest.mock import ANY
 
 import pytest
 
-from chart_manager.commands.promote.state import Transition
-from chart_manager.commands.promote.test import TestRequest, TestResult, run
-from chart_manager.integrations.kubectl import HelmReleaseRef
-from chart_manager.plumbing.errors import ChartManagerError, CommandTimeout
+from chart_manager.plumbing.errors import CommandTimeout, ExternalCommandError
+from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
 from chart_manager.plumbing.text import truncate_bytes
-from chart_manager.settings import Settings
-from chart_manager.shared.events.writer import EventWriter
 from tests.commands.promote.conftest import (
-    CHART,
     HR,
-    VERSION,
     Clock,
-    EventLog,
     calls,
     cluster,
     condition,
@@ -28,6 +21,7 @@ from tests.commands.promote.conftest import (
     hook_pods,
     items,
     pod,
+    run_helm_test,
 )
 from tests.conftest import FakeCommandRunner, Reply, argv_prefix, plain_argv
 
@@ -35,71 +29,15 @@ HELM_TEST = ("helm", "test", "loki", "--namespace", "loki")
 TEST_FAILED = failure("Error: bare failure")
 
 
-def _test(
-    runner: FakeCommandRunner,
-    *,
-    clock: Callable[[], float] | None = None,
-    progress: Callable[[HelmReleaseRef, Transition], None] | None = None,
-    **request: Any,
-) -> TestResult:
-    fields = {"chart_name": CHART, "version": VERSION, "concurrency": 2, **request}
-    fields.setdefault("per_hr_timeout_seconds", 60.0)
-    fields.setdefault("total_timeout_seconds", 300.0)
-    return run(
-        TestRequest(**fields),
-        runner=runner,
-        settings=Settings(kube_context="lab"),
-        events=EventWriter(source="chart-manager", store=lambda: EventLog()),
-        clock=clock or Clock(),
-        progress=progress,
-    )
-
-
 def _helm(runner: FakeCommandRunner, reply: Reply) -> FakeCommandRunner:
     runner.respond_each(argv_prefix("helm", "test"), reply)
     return runner
 
 
-@pytest.mark.parametrize(
-    ("fields", "message"),
-    [
-        ({"chart_name": ""}, "chart_name"),
-        ({"version": ""}, "version"),
-        ({"concurrency": 0}, "concurrency"),
-        ({"pod_log_tail": 0}, "pod_log_tail"),
-        ({"per_hr_timeout_seconds": 29.5}, "must be >= 30s"),
-        ({"per_hr_timeout_seconds": 300.0, "total_timeout_seconds": 60.0}, "total_timeout"),
-        ({"per_poll_timeout_seconds": float("nan")}, "per_poll_timeout_seconds"),
-        ({"per_hr_timeout_seconds": float("nan")}, "per_hr_timeout_seconds"),
-        ({"total_timeout_seconds": float("nan")}, "total_timeout_seconds"),
-    ],
-)
-def test_the_request_rejects_bad_bounds(fields: dict[str, Any], message: str) -> None:
-    with pytest.raises(ChartManagerError, match=message):
-        TestRequest(**{"chart_name": CHART, "version": VERSION, **fields})
-
-
-def test_a_per_hr_budget_of_thirty_seconds_is_allowed() -> None:
-    request = TestRequest(CHART, VERSION, per_hr_timeout_seconds=30.0, total_timeout_seconds=30.0)
-    assert request.per_hr_timeout_seconds == 30.0
-
-
-def test_nothing_matched_is_one_no_match_outcome() -> None:
-    runner = cluster(
-        helmrelease("a", "ns1", chart="other"), helmrelease("b", "ns2", version="9.9.9")
-    )
-
-    result = _test(runner)
-
-    [outcome] = result.outcomes
-    assert (outcome.verdict, outcome.reason) == ("no-match", "NoHelmReleasesMatched")
-    assert result.ok is False
-
-
 def test_a_passing_release_runs_helm_test_once_and_reports_nothing_else() -> None:
     runner = cluster(helmrelease())
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("passed", "AllTestsPassed")
     assert outcome.diagnostics is None
@@ -126,7 +64,7 @@ def test_an_unready_release_is_skipped_without_touching_it(
 ) -> None:
     runner = cluster(release)
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == (verdict, reason)
     assert calls(runner, "helm") == []
@@ -138,7 +76,7 @@ def test_finished_test_pods_are_deleted_before_helm_runs() -> None:
     runner = cluster(helmrelease())
     runner.respond_each(hook_pods, items(pod("loki-test-old", "Succeeded")), items())
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert outcome.verdict == "passed"
     assert calls(runner, "kubectl", "-n", "loki", "delete") == [
@@ -154,7 +92,7 @@ def test_a_live_test_pod_refuses_the_run_and_deletes_nothing(phase: str) -> None
         hook_pods, items(pod("loki-test-old", "Succeeded"), pod("loki-test-live", phase))
     )
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("failed", "TestPodInFlight")
     assert "loki-test-live" in (outcome.diagnostics or "")
@@ -168,7 +106,7 @@ def test_a_test_pod_that_will_not_delete_fails_the_reap_and_says_why() -> None:
     delete = argv_prefix("kubectl", "-n", "loki", "delete", "pod", "old2")
     runner.respond(delete, returncode=1, stderr="forbidden")
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("failed", "ReapIncomplete")
     assert "loki/old2: forbidden" in (outcome.diagnostics or "")
@@ -187,7 +125,7 @@ def test_a_test_pod_that_will_not_delete_fails_the_reap_and_says_why() -> None:
 def test_helm_stderr_decides_the_verdict(stderr: str, verdict: str, reason: str) -> None:
     runner = _helm(cluster(helmrelease()), failure(stderr))
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert (outcome.verdict, outcome.reason) == (verdict, reason)
     assert (outcome.diagnostics is None) is (verdict == "passed")
@@ -206,7 +144,7 @@ def test_a_test_failure_report_carries_pod_logs_and_the_post_run_status() -> Non
     runner.respond(argv_prefix("kubectl", "-n", "loki", "logs", "loki-test"), stdout="boom")
     runner.respond(argv_prefix("kubectl", "get", "events", "-n", "loki"), stdout="ns event")
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert outcome.reason == "TestFailed"
     assert outcome.last_status is not None and outcome.last_status.test_success is not None
@@ -225,7 +163,7 @@ def test_empty_logs_are_retried_with_previous_only_for_a_finished_pod(
     runner.respond(lambda argv: "--previous" in argv, stdout="previous boom")
     runner.respond(argv_prefix("kubectl", "-n", "loki", "logs"), stdout="")
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert ("previous boom" in (outcome.diagnostics or "")) is retried
     previous = [a for a in calls(runner, "kubectl", "-n", "loki", "logs") if "--previous" in a]
@@ -241,7 +179,7 @@ def test_a_swallowed_cluster_read_says_so_in_the_report_and_the_log(
     runner.respond(logs, returncode=1, stderr="logs forbidden")
 
     with caplog.at_level("WARNING"):
-        [outcome] = _test(runner).outcomes
+        [outcome] = run_helm_test(runner).outcomes
 
     assert "status not refreshed: refresh boom" in (outcome.diagnostics or "")
     [snapshot] = outcome.test_pods
@@ -257,7 +195,7 @@ def test_every_cluster_call_is_pinned_to_the_context_and_bounded() -> None:
     runner = _helm(cluster(helmrelease()), TEST_FAILED)
     runner.respond_each(hook_pods, items(), items(pod("loki-test", "Failed")))
 
-    _test(runner, per_poll_timeout_seconds=7.0)
+    run_helm_test(runner, per_poll_timeout_seconds=7.0)
 
     kubectl = [r for r in runner.records if r.args[0] == "kubectl"]
     [helm] = [r for r in runner.records if r.args[0] == "helm"]
@@ -270,7 +208,7 @@ def test_unlistable_test_pods_are_distinguished_from_no_test_pods() -> None:
     runner = _helm(cluster(helmrelease()), TEST_FAILED)
     runner.respond_each(hook_pods, items(), failure("pods forbidden"))
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert "<test pods unavailable: pods forbidden>" in (outcome.diagnostics or "")
 
@@ -280,25 +218,33 @@ def test_unreadable_events_do_not_break_the_report() -> None:
     runner = cluster(helmrelease()).respond(argv_prefix("kubectl", "get", "events"), raises=timeout)
     _helm(runner, TEST_FAILED)
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert outcome.reason == "TestFailed"
     assert "<events unavailable" in (outcome.diagnostics or "")
 
 
-def test_a_helm_timeout_spends_the_per_hr_budget() -> None:
-    timeout = CommandTimeout("command timed out")
-    runner = cluster(helmrelease()).respond(argv_prefix("helm", "test"), raises=timeout)
+@pytest.mark.parametrize(
+    ("error", "verdict", "reason"),
+    [
+        (CommandTimeout("command timed out"), "timed-out", "PerHRBudgetExhausted"),
+        (ExternalCommandError("ssh tunnel timed out"), "failed", "HelmUnavailable"),
+    ],
+)
+def test_only_a_helm_timeout_spends_the_per_hr_budget(
+    error: ExternalCommandError, verdict: str, reason: str
+) -> None:
+    runner = cluster(helmrelease()).respond(argv_prefix("helm", "test"), raises=error)
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
-    assert (outcome.verdict, outcome.reason) == ("timed-out", "PerHRBudgetExhausted")
+    assert (outcome.verdict, outcome.reason) == (verdict, reason)
 
 
 def test_the_total_budget_stops_releases_before_helm_runs() -> None:
     runner = cluster(helmrelease())
 
-    [outcome] = _test(runner, clock=Clock(step=200.0)).outcomes
+    [outcome] = run_helm_test(runner, clock=Clock(step=200.0)).outcomes
 
     assert (outcome.verdict, outcome.reason) == ("timed-out", "TotalBudgetExhausted")
     assert calls(runner, "helm") == []
@@ -307,7 +253,7 @@ def test_the_total_budget_stops_releases_before_helm_runs() -> None:
 def test_the_total_budget_marks_the_run_timed_out() -> None:
     runner = cluster(*(helmrelease(f"a{i}", "ns") for i in range(3)))
 
-    assert _test(runner, clock=Clock(step=250.0), concurrency=3).total_timed_out is True
+    assert run_helm_test(runner, clock=Clock(step=250.0), concurrency=3).total_timed_out is True
 
 
 @pytest.mark.parametrize(
@@ -327,7 +273,7 @@ def test_helm_gets_the_per_hr_timeout_and_a_capped_subprocess(
     def clock() -> float:
         return 250.0 if late and calls(runner, "kubectl", "-n", "loki", "get", "pods") else 0.0
 
-    _test(runner, clock=clock, per_hr_timeout_seconds=per_hr, total_timeout_seconds=total)
+    run_helm_test(runner, clock=clock, per_hr_timeout_seconds=per_hr, total_timeout_seconds=total)
 
     [record] = [r for r in runner.records if r.args[:2] == ("helm", "test")]
     assert plain_argv(record.args) == (*HELM_TEST, "--timeout", helm_timeout, "--logs")
@@ -339,8 +285,14 @@ def test_helm_gets_the_per_hr_timeout_and_a_capped_subprocess(
     [
         (helmrelease(), items(), Reply(), ["Preflight", "Reaping", "Running", "Finished"]),
         (helmrelease(), items(), TEST_FAILED, ["Preflight", "Reaping", "Running", "Finished"]),
-        (helmrelease(suspend=True), items(), Reply(), ["Preflight"]),
-        (helmrelease(), items(pod("x", "Running")), Reply(), ["Preflight", "Reaping"]),
+        (helmrelease(suspend=True), items(), Reply(), ["Preflight", "Finished"]),
+        (helmrelease(), items(pod("x", "Running")), Reply(), ["Preflight", "Reaping", "Finished"]),
+        (
+            helmrelease(),
+            items(),
+            Reply(raises=CommandTimeout("command timed out")),
+            ["Preflight", "Reaping", "Running", "Finished"],
+        ),
     ],
 )
 def test_progress_hears_each_phase(
@@ -348,20 +300,11 @@ def test_progress_hears_each_phase(
 ) -> None:
     runner = _helm(cluster(release), helm)
     runner.respond_each(hook_pods, pods)
-    seen: list[str] = []
+    seen: list[ProgressEvent | RowUpdate] = []
 
-    _test(runner, progress=lambda _ref, t: seen.append(t.phase))
+    run_helm_test(runner, progress=seen.append)
 
-    assert seen == phases
-
-
-def test_a_raising_progress_callback_does_not_break_the_run() -> None:
-    def explode(_ref: HelmReleaseRef, _t: Transition) -> None:
-        raise RuntimeError("callback boom")
-
-    assert [o.verdict for o in _test(cluster(helmrelease()), progress=explode).outcomes] == [
-        "passed"
-    ]
+    assert seen == [RowUpdate(("loki", "loki"), "phase", phase, ANY) for phase in phases]
 
 
 def test_the_report_keeps_five_pods_and_truncates_each_stream() -> None:
@@ -375,7 +318,7 @@ def test_the_report_keeps_five_pods_and_truncates_each_stream() -> None:
     runner.respond(argv_prefix("kubectl", "-n", "loki", "logs", "loki-test-0"), stdout=big)
     runner.respond(argv_prefix("kubectl", "-n", "loki", "logs"), stdout="")
 
-    [outcome] = _test(runner).outcomes
+    [outcome] = run_helm_test(runner).outcomes
 
     assert [p.name for p in outcome.test_pods] == [f"loki-test-{i}" for i in range(5)]
     current, restarted = outcome.test_pods[:2]

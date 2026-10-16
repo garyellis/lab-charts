@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+from tests.integration.conftest import require
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.integration
 def test_extracts_chart_dependency_and_literal_test_images() -> None:
     """The scoped managers find both Helm and template-owned image updates."""
-    if shutil.which("mise") is None:
-        pytest.skip("mise is required for Renovate extraction")
+    require("mise")
     env = {
         **os.environ,
         "LOG_LEVEL": "debug",
@@ -31,22 +31,9 @@ def test_extracts_chart_dependency_and_literal_test_images() -> None:
         ),
     }
 
-    # Resolve both tools through mise. Executing Renovate's /usr/bin/env node
-    # shebang can otherwise pick a system Node ahead of the pinned runtime.
-    renovate = subprocess.run(
-        ["mise", "which", "renovate"], cwd=ROOT, env=env,
-        check=True, text=True, capture_output=True, timeout=30,
-    ).stdout.strip()
+    # `mise exec` puts the pinned Node first on PATH for Renovate's shebang.
     completed = subprocess.run(
-        [
-            "mise",
-            "exec",
-            "--",
-            "node",
-            renovate,
-            "--platform=local",
-            "--dry-run=extract",
-        ],
+        ["mise", "exec", "--", "renovate", "--platform=local", "--dry-run=extract"],
         cwd=ROOT,
         env=env,
         check=False,

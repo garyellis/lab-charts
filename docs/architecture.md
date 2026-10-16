@@ -9,14 +9,14 @@ those rules.
 
 ```text
 chart_manager/
-  main.py         composition root: global options, the command tree, _outcome_for
+  main.py         composition root: global options, the command tree, error exit codes
   commands/       one package per CLI subcommand; leaves and composites (ADR-0002)
-  cli/            toolkit below commands: output, streams, options, Container
+  cli/            toolkit below commands: output (`finish`), streams, options, Container
   shared/         what two or more commands use: cluster > charts | events > workspace
   settings.py     process configuration and DEFAULT_CLUSTER_NAME
   integrations/   every call to the outside world, one module per system
   api/            authored, versioned YAML contracts
-  plumbing/       errors, exit codes, YAML, paths, command runner
+  plumbing/       errors, exit codes, documents, YAML, paths, command runner, progress
 ```
 
 Each row imports only from rows below it, except that `settings.py`,
@@ -28,15 +28,15 @@ The policy and algorithms over `api/` models and `Chart.yaml` live in
 
 | Module | What it decides |
 |---|---|
-| `shared/charts/chart.py` | Helm metadata read from `Chart.yaml`; `ChartRepository` |
+| `shared/charts/chart.py` | `load_chart`: one `Chart` from its directory, `Chart.yaml` and lifecycle, names agreeing; `chart_names` |
 | `shared/charts/dependencies.py` | Whether materialized chart dependencies are stale |
 | `shared/charts/dependency_update.py` | Whether to run `helm dependency update` (only when stale) and its default timeout |
 | `shared/charts/lifecycle.py` | Loading `chart-lifecycle.yaml`, identity agreement, the `require_*` capability gates |
-| `shared/charts/chart_tests.py` | `ChartTestCatalog`: charts composed with their enabled chart tests |
-| `shared/charts/install_plan.py` | Dependency resolution and install order |
+| `shared/charts/install_plan.py` | `install_plan`: a chart-test profile and its requirements, dependencies first, each resolved to namespace, values and timeout |
 | `commands/local/targets.py` | Loading `LocalStack`; resolving a `local` target |
 | `shared/cluster/local_cluster.py` | Loading `LocalCluster` and checking the paths it names |
 | `shared/cluster/session.py` | Provision, attach, stop and tear down a kind cluster |
+| `shared/cluster/releases.py` | The Helm `Release` an install-plan entry or authored release installs |
 | `shared/cluster/converge.py` | The one release install and its readiness wait; `installed()` |
 | `shared/cluster/bootstrap.py` | The LocalCluster's ordered bootstrap releases, through `converge` |
 | `shared/workspace.py` | Fixed-marker discovery; loading and compiling immutable repository policy |

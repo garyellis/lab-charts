@@ -59,7 +59,8 @@ Use `${DS_PROMETHEUS}` for Prometheus-compatible data sources. The exporter
 normalizes the live `thanos` and `mimir` UIDs:
 
 ```bash
-uv run chart-manager grafana dashboard export <uid> \
+kubectl -n observability port-forward svc/grafana 3000:80 &
+uv run chart-manager grafana dashboard export <uid> --url http://127.0.0.1:3000 \
   --to charts/grafana-dashboards/dashboards/<group>/<name>.json
 uv run chart-manager grafana dashboard lint -o table
 ```

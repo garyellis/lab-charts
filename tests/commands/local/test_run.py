@@ -9,11 +9,12 @@ import pytest
 from chart_manager.commands import local
 from chart_manager.commands.local import run as local_run
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
+from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.progress import ProgressEvent
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import ResolvedChartTarget
-from chart_manager.shared.cluster.progress import ProgressEvent
+from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.workspace import load_repository_workspace
-from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv
+from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, kind_runner, plain_argv
 
 LOCAL_CLUSTER = """\
 apiVersion: chartmanager.io/v1alpha1
@@ -51,17 +52,8 @@ def repo(chart_root: Path, make_chart: MakeChart) -> Path:
     return chart_root
 
 
-def _runner(*clusters: str) -> FakeCommandRunner:
-    return (
-        FakeCommandRunner()
-        .respond(argv_prefix("kind", "get", "clusters"), stdout="\n".join(clusters))
-        .respond(argv_prefix("kubectl", "get", "--raw=/readyz"), stdout="ok")
-        .respond(argv_prefix("kubectl", "get", "virtualservices"), returncode=1)
-    )
-
-
-def _target(repo: Path) -> ResolvedChartTarget:
-    return ResolvedChartTarget(name="app", path=(repo / "charts" / "app").resolve())
+def _target(repo: Path) -> Chart:
+    return load_chart((repo / "charts" / "app").resolve())
 
 
 def _installs(runner: FakeCommandRunner) -> list[str]:
@@ -74,18 +66,18 @@ def _up(repo: Path, runner: FakeCommandRunner, **options: object) -> local.DevCl
         workspace=load_repository_workspace(repo),
         runner=runner,
         settings=Settings(),
-        **options,  # type: ignore[arg-type]
+        **{"progress": [].append, **options},  # type: ignore[arg-type]
     )
 
 
 def test_up_provisions_bootstraps_and_converges_the_chart_after_its_requirements(
     repo: Path,
 ) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     result = _up(repo, runner)
 
-    assert result.ok
+    assert result.outcome is Outcome.SUCCESS
     assert _installs(runner) == ["cni", "db", "app"]
     assert [(o.chart, o.namespace) for o in result.applied] == [
         ("cni", "kube-system"),
@@ -100,11 +92,11 @@ def test_up_provisions_bootstraps_and_converges_the_chart_after_its_requirements
 
 
 def test_up_records_a_failed_release_and_keeps_converging(repo: Path) -> None:
-    runner = _runner().respond(argv_prefix("helm", "upgrade", "--install", "db"), returncode=1)
+    runner = kind_runner().respond(argv_prefix("helm", "upgrade", "--install", "db"), returncode=1)
 
     result = _up(repo, runner)
 
-    assert not result.ok
+    assert result.outcome is Outcome.FAILED
     assert [(f.chart, f.namespace) for f in result.failed] == [("db", "data")]
     assert "app" in _installs(runner)
 
@@ -114,8 +106,8 @@ def test_skip_installed_skips_deployed_and_failed_releases(repo: Path) -> None:
         '[{"name": "db", "namespace": "data", "revision": "1", "status": "failed"},'
         ' {"name": "app", "namespace": "apps", "revision": "1", "status": "pending-install"}]'
     )
-    runner = _runner("lab").respond(
-        argv_prefix("helm", "list", "-o", "json", "-A", "--all"), stdout=listing
+    runner = kind_runner("lab").respond(
+        argv_prefix("helm", "list", "-o", "json", "-A"), stdout=listing
     )
 
     result = _up(repo, runner, skip_installed=True)
@@ -125,7 +117,7 @@ def test_skip_installed_skips_deployed_and_failed_releases(repo: Path) -> None:
 
 
 def test_reset_runs_the_pre_hook_once_then_deletes_and_recreates_the_cluster(repo: Path) -> None:
-    runner = _runner("chart-manager")
+    runner = kind_runner("chart-manager")
 
     local_run.reset(
         _target(repo),
@@ -133,6 +125,7 @@ def test_reset_runs_the_pre_hook_once_then_deletes_and_recreates_the_cluster(rep
         runner=runner,
         settings=Settings(),
         run_hooks=True,
+        progress=[].append,
     )
 
     calls = [plain_argv(a) for a in runner.calls]
@@ -148,14 +141,14 @@ def test_down_stops_the_running_nodes(repo: Path) -> None:
         lambda argv: argv[:2] == ("docker", "ps"), stdout="chart-manager-control-plane\n"
     )
 
-    result = local_run.down(runner=runner, settings=Settings())
+    result = local_run.down(runner=runner, settings=Settings(), progress=[].append)
 
     assert result.changed
     assert ("docker", "stop", "chart-manager-control-plane") in runner.calls
 
 
 def test_status_of_an_absent_cluster_says_so_and_asks_nothing_else(repo: Path) -> None:
-    runner = _runner()
+    runner = kind_runner()
 
     status = local_run.status(
         workspace=load_repository_workspace(repo), runner=runner, settings=Settings()
@@ -170,7 +163,7 @@ def test_status_lists_releases_sorted_by_namespace_and_name(repo: Path) -> None:
         '[{"name": "web", "namespace": "z", "revision": "2", "status": "deployed"},'
         ' {"name": "db", "namespace": "a", "revision": "1", "status": "failed"}]'
     )
-    runner = _runner("chart-manager").respond(argv_prefix("helm", "list"), stdout=listing)
+    runner = kind_runner("chart-manager").respond(argv_prefix("helm", "list"), stdout=listing)
 
     status = local_run.status(
         workspace=load_repository_workspace(repo), runner=runner, settings=Settings()
@@ -184,7 +177,7 @@ def test_status_lists_releases_sorted_by_namespace_and_name(repo: Path) -> None:
 
 
 def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path) -> None:
-    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None, progress=[].append)
 
     assert [(e.chart, e.source) for e in plan.entries] == [
         ("db", "target"),
@@ -195,7 +188,7 @@ def test_plan_lists_bootstrap_and_target_releases_and_touches_nothing(repo: Path
 
 def test_plan_fails_on_an_unresolvable_profile_like_the_real_run(repo: Path) -> None:
     with pytest.raises(ChartManagerError):
-        local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing")
+        local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile="missing", progress=[].append)
 
 
 def test_plan_warns_that_local_up_does_not_run_chart_test_hooks(
@@ -229,13 +222,13 @@ def test_plan_leaves_out_a_requirement_bootstrap_installs(repo: Path) -> None:
         )
     )
 
-    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None)
+    plan = local_run.plan(_target(repo), workspace=load_repository_workspace(repo), profile=None, progress=[].append)
 
     assert [(e.chart, e.source) for e in plan.entries] == [("db", "bootstrap"), ("app", "target")]
 
 
 def test_status_records_a_failed_release_listing_instead_of_raising(repo: Path) -> None:
-    runner = _runner("chart-manager").respond(
+    runner = kind_runner("chart-manager").respond(
         argv_prefix("helm", "list"), returncode=1, stderr="unreachable"
     )
 
@@ -250,7 +243,7 @@ def test_status_records_a_failed_release_listing_instead_of_raising(repo: Path) 
 def test_status_survives_a_repository_with_no_local_cluster(chart_root: Path) -> None:
     status = local_run.status(
         workspace=load_repository_workspace(chart_root),
-        runner=_runner("chart-manager"),
+        runner=kind_runner("chart-manager"),
         settings=Settings(),
     )
 
@@ -260,7 +253,7 @@ def test_status_survives_a_repository_with_no_local_cluster(chart_root: Path) ->
 
 def test_a_failed_bootstrap_release_stops_up_after_printing_its_diagnostics(repo: Path) -> None:
     runner = (
-        _runner()
+        kind_runner()
         .respond(argv_prefix("helm", "upgrade", "--install", "cni"), returncode=1, stderr="no cni")
         .respond(argv_prefix("kubectl", "get", "pods", "-n", "kube-system"), stdout="cni-0 Pending")
     )

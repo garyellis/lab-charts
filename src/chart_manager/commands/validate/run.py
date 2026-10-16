@@ -23,13 +23,10 @@ from chart_manager.commands.validate.models import (
     ValidateOutcome,
     ValidateRequest,
 )
-from chart_manager.commands.validate.progress import NULL_PROGRESS, Progress
 from chart_manager.commands.validate.schemas import generated
-from chart_manager.commands.validate.schemas.runtime import (
-    KubeconformSchemaRuntime,
-    load_kubeconform_schema_runtime,
-)
-from chart_manager.commands.validate.schemas.store import default_schema_cache_root
+from chart_manager.commands.validate.schemas import lock as schema_lock
+from chart_manager.commands.validate.schemas.lock import UpstreamSchemas
+from chart_manager.commands.validate.schemas.store import open_schema_store
 from chart_manager.commands.validate.select import Selection, select, selected_row
 from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kubeconform import Kubeconform, ResourceResult
@@ -42,6 +39,8 @@ from chart_manager.plumbing.errors import (
     MissingToolError,
     SpecError,
 )
+from chart_manager.plumbing.progress import Progress, RowUpdate
+from chart_manager.settings import Settings
 from chart_manager.shared.charts.chart import Chart, load_chart
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
 from chart_manager.shared.charts.lifecycle import require_validation
@@ -53,12 +52,15 @@ def run(
     *,
     workspace: RepositoryWorkspace,
     runner: CommandRunner,
-    progress: Progress = NULL_PROGRESS,
+    settings: Settings,
+    progress: Progress,
 ) -> ValidateOutcome:
     """Render each requested chart in each environment, then run its validation checks.
 
     - An unknown chart or environment in the request raises before any work.
     - A missing run-wide prerequisite (tool binary, schema lock or cache) raises.
+    - A CRD provider's failed render fails only that environment's row; other run-wide
+      errors still raise.
     - A chart's configuration error goes to `spec_errors`, and its row is left out.
     - A failed check is recorded on its row, and the row's later checks are skipped.
 
@@ -81,7 +83,7 @@ def run(
         )
     out = request.out
     rows = [row for row in selection.rows if not request.envs or row.env in request.envs]
-    checker = _Checker(request, workspace, runner, progress)
+    checker = _Checker(request, workspace, runner, settings, progress)
 
     def check(row: Row) -> Row | str:
         try:
@@ -92,16 +94,12 @@ def run(
             return f"{row.chart}: {exc}"
         return replace(row, checks=checks)
 
-    progress.start(rows)
-    try:
-        if request.verbose or request.fail_fast:
-            results = _one_at_a_time(rows, check, checker, fail_fast=request.fail_fast)
-        else:
-            workers = request.workers if request.workers > 0 else _auto_workers()
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                results = list(pool.map(check, rows))
-    finally:
-        progress.stop()
+    if request.verbose or request.fail_fast:
+        results = _one_at_a_time(rows, check, checker, fail_fast=request.fail_fast)
+    else:
+        workers = request.workers if request.workers > 0 else _auto_workers()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(check, rows))
     return ValidateOutcome(
         rows=tuple(result for result in results if isinstance(result, Row)),
         spec_errors=(
@@ -188,15 +186,17 @@ class _Checker:
         request: ValidateRequest,
         workspace: RepositoryWorkspace,
         runner: CommandRunner,
+        settings: Settings,
         progress: Progress,
     ) -> None:
         self.request = request
         self.workspace = workspace
         self.runner = runner
+        self.settings = settings
         self.progress = progress
         self.kubeconform = Kubeconform(runner, timeout=request.tool_timeout)
         self.kyverno = Kyverno(runner, timeout=request.tool_timeout)
-        self.schemas: KubeconformSchemaRuntime | None = None
+        self.schemas: tuple[tuple[str, ...], UpstreamSchemas] | ChartManagerError | None = None
         self.schemas_lock = threading.Lock()
         # Rows run in parallel: one chart's rows share one dependency update.
         self.dependency_locks: dict[Path, threading.Lock] = {}
@@ -218,12 +218,16 @@ class _Checker:
             if skip:
                 checks["schema"] = self._skipped(row, "schema", skip)
             else:
-                schemas = self._schemas()
-                locations = _schema_locations(self.workspace.root, chart.name, spec)
+                crds, upstream = self._schemas()
+                locations = [
+                    *crds,
+                    *_schema_locations(self.workspace.root, chart.name, spec),
+                    *upstream.locations,
+                ]
                 checks["schema"] = self._timed(
                     row,
                     "schema",
-                    lambda: _schema(self.kubeconform, schemas, spec, locations, rendered),
+                    lambda: _schema(self.kubeconform, upstream, spec, locations, rendered),
                 )
         if "policy" in self.request.checks:
             skip = _skip_reason(spec.validators.policy, checks, rendered)
@@ -242,31 +246,40 @@ class _Checker:
         return replace(row, checks={name: self._skipped(row, name, reason) for name in names})
 
     def _timed(self, row: Row, name: CheckName, check: Callable[[], CheckResult]) -> CheckResult:
-        self.progress.on_event(row, name, "running")
         started = time.monotonic()
-        result = replace(check(), elapsed_seconds=time.monotonic() - started)
-        self.progress.on_event(row, name, result.status, result.elapsed_seconds)
-        return result
+        result = check()
+        elapsed = time.monotonic() - started
+        self.progress(RowUpdate((row.chart, row.env), name, result.status, f"{elapsed:.1f}s"))
+        return replace(result, elapsed_seconds=elapsed)
 
     def _skipped(self, row: Row, name: CheckName, reason: str) -> CheckResult:
-        self.progress.on_event(row, name, "skipped")
+        self.progress(RowUpdate((row.chart, row.env), name, "skipped", ""))
         return CheckResult("skipped", reason)
 
-    def _schemas(self) -> KubeconformSchemaRuntime:
-        """The locked schema generation plus schemas generated from CRDs, loaded on first use."""
+    def _schemas(self) -> tuple[tuple[str, ...], UpstreamSchemas]:
+        """Schemas generated from CRDs and the locked upstream schemas, loaded on first use.
+
+        The first load error is remembered and raised for every row.
+        """
         with self.schemas_lock:
             if self.schemas is None:
-                runtime = load_kubeconform_schema_runtime(self.workspace)
-                self._update_dependencies(generated.providers(self.workspace))
-                crds = generated.prepare(
-                    self.workspace, render=self._render_crds, cache_root=default_schema_cache_root()
-                )
-                self.schemas = replace(runtime, generated_schema_locations=crds)
+                try:
+                    store = open_schema_store(self.runner, self.settings)
+                    upstream = schema_lock.locations(self.workspace, store)
+                    self._update_dependencies(generated.providers(self.workspace))
+                    crds = generated.prepare(
+                        self.workspace, render=self._render_crds, cache_root=store.cache_root
+                    )
+                    self.schemas = (crds, upstream)
+                except ChartManagerError as exc:
+                    self.schemas = exc
+            if isinstance(self.schemas, ChartManagerError):
+                raise self.schemas
             return self.schemas
 
-    def _render_crds(self, charts: Sequence[Chart], out: Path) -> list[str]:
-        """Render each chart in every environment with its CRDs; one line per failure."""
-        failures = []
+    def _render_crds(self, charts: Sequence[Chart], out: Path) -> dict[tuple[str, str], str]:
+        """Render each chart in every environment with its CRDs; each failure by (chart, env)."""
+        failures = {}
         for chart in charts:
             spec = require_validation(chart.lifecycle, chart_name=chart.name)
             helm = _helm(self.runner, spec, verbose=False, timeout=self.request.tool_timeout)
@@ -279,7 +292,7 @@ class _Checker:
                 except SpecError as exc:
                     result = CheckResult("failed", str(exc))
                 if result.status != "passed":
-                    failures.append(f"{chart.name}/{env}: {result.detail}")
+                    failures[(chart.name, env)] = result.detail
         return failures
 
     def _update_dependencies(self, charts: Sequence[Chart]) -> None:
@@ -318,6 +331,12 @@ class _Checker:
             shutil.rmtree(out)
         try:
             self._ensure_dependencies(helm, chart)
+        except MissingToolError:
+            raise
+        except ExternalCommandError as exc:
+            # A failed fetch says nothing about the chart; only `helm template` can reject it.
+            return CheckResult(status="error", detail=str(exc))
+        try:
             helm.template(
                 row.release,
                 chart.path,
@@ -337,9 +356,14 @@ class _Checker:
 def _helm(
     runner: CommandRunner, spec: ManifestValidationSpec, *, verbose: bool, timeout: float | None
 ) -> Helm:
-    return Helm(
-        runner, version=spec.helm_version, binary=spec.helm_binary, verbose=verbose, timeout=timeout
-    )
+    """The helm the spec pins: its helmBinary, its helmVersion from mise, else PATH's."""
+    binary = "helm"
+    if spec.helm_binary is not None:
+        binary = spec.helm_binary
+    elif spec.helm_version is not None:
+        where = runner.run(["mise", "where", f"helm@{spec.helm_version}"], timeout=timeout)
+        binary = f"{where.stdout.strip()}/bin/helm"
+    return Helm(runner, binary=binary, verbose=verbose, timeout=timeout, context=None)
 
 
 def _skip_reason(
@@ -358,22 +382,17 @@ def _skip_reason(
 
 def _schema(
     kubeconform: Kubeconform,
-    schemas: KubeconformSchemaRuntime,
+    upstream: UpstreamSchemas,
     spec: ManifestValidationSpec,
-    chart_locations: list[str],
+    locations: list[str],
     rendered: Path,
 ) -> CheckResult:
-    locations = schemas.locations()
     try:
         report = kubeconform.validate(
             rendered,
-            kubernetes_version=schemas.lock.policy.kubernetes_version,
-            schema_locations=[
-                *locations.generated_schema_locations,
-                *chart_locations,
-                *locations.fallback_schema_locations,
-            ],
-            skip_kinds=[*schemas.ignored_missing_kinds(), *spec.ignore_missing_schemas],
+            kubernetes_version=upstream.kubernetes_version,
+            schema_locations=locations,
+            skip_kinds=[*upstream.skip_kinds, *spec.ignore_missing_schemas],
         )
     except MissingToolError:
         raise

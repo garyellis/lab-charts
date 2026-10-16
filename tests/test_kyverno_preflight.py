@@ -11,6 +11,6 @@ def test_kyverno_owns_its_version_flag(on_path: OnPath) -> None:
     on_path("kyverno")
     runner = FakeCommandRunner(stdout="v1.13.0\n")
 
-    Kyverno(runner).preflight()
+    Kyverno(runner, timeout=None).preflight()
 
     assert ("kyverno", "version") in runner.calls

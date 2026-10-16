@@ -10,6 +10,7 @@ from chart_manager.commands import plan
 from chart_manager.commands.plan.run import run
 from chart_manager.plumbing.errors import ExternalCommandError
 from chart_manager.plumbing.yaml_files import dump_yaml, parse_yaml
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import FakeCommandRunner, MakeChart, argv_prefix, plain_argv, workspace_for
 
@@ -22,7 +23,12 @@ def _workspace(root: Path) -> RepositoryWorkspace:
 
 
 def _run(root: Path, request: plan.PlanRequest, runner: FakeCommandRunner | None = None):  # type: ignore[no-untyped-def]
-    return run(request, workspace=_workspace(root), runner=runner or FakeCommandRunner())
+    return run(
+        request,
+        workspace=_workspace(root),
+        runner=runner or FakeCommandRunner(),
+        settings=Settings(),
+    )
 
 
 def _with_validation(chart: Path, *envs: str) -> None:
@@ -37,36 +43,25 @@ def _with_validation(chart: Path, *envs: str) -> None:
     path.write_text(dump_yaml(lifecycle))
 
 
-def _depends_on(chart: Path, *, target: str, profile: str) -> None:
-    path = chart / "chart-lifecycle.yaml"
-    lifecycle = parse_yaml(path.read_text())
-    lifecycle["spec"]["chartTest"]["dependentTests"] = [{"chart": target, "profile": profile}]
-    path.write_text(dump_yaml(lifecycle))
-
-
 def _rows(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
-    return [(row.chart, row.env) for row in outcome.validation.rows]
+    return [(row.chart, row.env) for row in outcome.validation]
 
 
 def _tests(outcome: plan.PlanOutcome) -> list[tuple[str, str]]:
-    return [(entry.chart, entry.profile) for entry in outcome.chart_tests.tests]
+    return [(entry.chart, entry.profile) for entry in outcome.chart_tests]
 
 
 def test_a_chart_change_selects_its_validation_its_chart_tests_and_its_publish(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    source = make_chart("source")
-    _with_validation(source, "dev", "prod")
+    _with_validation(make_chart("source", dependent_tests=[("consumer", "full")]), "dev", "prod")
     make_chart("consumer", profiles={"minimal": {}, "full": {}})
-    _depends_on(source, target="consumer", profile="full")
 
     outcome = _run(chart_root, plan.PlanRequest(changes=("charts/source/values.yaml",)))
 
     assert outcome.changed_files == ("charts/source/values.yaml",)
     assert _rows(outcome) == [("source", "dev"), ("source", "prod")]
-    assert [r.code for r in outcome.validation.reasons[("source", "dev")]] == [
-        "validation-trigger"
-    ]
+    assert [r.code for r in outcome.validation[0].reasons] == ["validation-trigger"]
     assert _tests(outcome) == [("consumer", "full"), ("source", "minimal")]
     assert outcome.publish == ("source",)
     assert outcome.spec_errors == ()
@@ -120,7 +115,7 @@ def test_a_workspace_file_change_selects_every_validation_row_and_chart_test(
 def test_chart_test_spec_errors_reach_the_plan_outcome(
     chart_root: Path, make_chart: MakeChart
 ) -> None:
-    _depends_on(make_chart("source"), target="source", profile="nope")
+    make_chart("source", dependent_tests=[("source", "nope")])
 
     outcome = _run(chart_root, plan.PlanRequest(changes=("charts/source/values.yaml",)))
 

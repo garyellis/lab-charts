@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Create the configured events backend's Cosmos database/container or DynamoDB table.
+
+Idempotent: anything that already exists is left as it is. The names, keys
+and clients come from chart-manager itself, so they cannot drift from what
+the event store writes to. Run with `mise run events:provision`.
+"""
+
+import sys
+
+from chart_manager.settings import load_settings
+from chart_manager.shared.events.store import (
+    COSMOS_DATABASE,
+    EVENTS_RESOURCE,
+    PARTITION_KEY,
+    SORT_KEY,
+)
+
+
+def provision_cosmos() -> None:
+    from azure.cosmos import PartitionKey
+
+    from chart_manager.integrations.cosmos import get_cosmos_client
+
+    database = get_cosmos_client().create_database_if_not_exists(id=COSMOS_DATABASE)
+    database.create_container_if_not_exists(
+        id=EVENTS_RESOURCE, partition_key=PartitionKey(path=f"/{PARTITION_KEY}")
+    )
+    print(f"cosmos {COSMOS_DATABASE}/{EVENTS_RESOURCE} ready")
+
+
+def provision_dynamodb() -> None:
+    from chart_manager.integrations.dynamodb import get_dynamodb_resource
+
+    resource = get_dynamodb_resource()
+    try:
+        table = resource.create_table(
+            TableName=EVENTS_RESOURCE,
+            KeySchema=[
+                {"AttributeName": PARTITION_KEY, "KeyType": "HASH"},
+                {"AttributeName": SORT_KEY, "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": PARTITION_KEY, "AttributeType": "S"},
+                {"AttributeName": SORT_KEY, "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+    except resource.meta.client.exceptions.ResourceInUseException:
+        table = resource.Table(EVENTS_RESOURCE)
+    table.wait_until_exists()
+    print(f"dynamodb table {EVENTS_RESOURCE} ready")
+
+
+def main() -> None:
+    backend = load_settings().events_backend
+    if backend == "cosmos":
+        provision_cosmos()
+    elif backend == "dynamodb":
+        provision_dynamodb()
+    else:
+        sys.exit("events are disabled: set EVENTS_BACKEND=cosmos or EVENTS_BACKEND=dynamodb")
+
+
+if __name__ == "__main__":
+    main()

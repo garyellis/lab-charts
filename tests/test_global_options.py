@@ -176,7 +176,7 @@ def test_environment_root_reaches_a_nested_group(
 
     result = cli("grafana", "dashboard", "lint")
 
-    # No dashboards under `elsewhere` -> the P0.4 empty exit. Reaching this
+    # No dashboards under `elsewhere` -> the empty exit. Reaching this
     # at all proves the group's root was resolved without a per-command flag.
     assert result.exit_code == 1
     assert "no dashboards found" in result.stderr
@@ -392,9 +392,9 @@ def test_upgrade_finalize_parsing_is_unchanged() -> None:
     assert "upgrade-finalize" in command.commands
     assert "--path" in declared
 
-    # Nothing the callback declares may also be a flag on this command: an
-    # option name owned by both would change which parser consumes it.
-    assert declared.isdisjoint(_root_option_names())
+    # Beyond the shared `-o`, nothing the callback declares may also be a root
+    # flag: an option name owned by both would change which parser consumes it.
+    assert (declared - {"-o", "--output"}).isdisjoint(_root_option_names())
 
     # The regex allows `--path <value>` and nothing else after the name, so
     # a *required* new flag would break Renovate even though it parses here.

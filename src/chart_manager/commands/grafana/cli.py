@@ -14,7 +14,7 @@ wanted in the process for a `chart list`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.markup import escape
@@ -22,11 +22,12 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli._options import ClusterNameOption
 from chart_manager.cli.streams import console, narration
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.settings import DEFAULT_CLUSTER_NAME
+
+if TYPE_CHECKING:
+    from chart_manager.commands.grafana.dashboard_lint import LintResult
 
 #: Where the lab's Grafana runs: the namespace `charts/grafana` declares for
 #: its chart-test profiles. Owned here, not borrowed from a fallback.
@@ -51,12 +52,18 @@ DashboardOutputOption = Annotated[
 def grafana_dashboard_export(
     ctx: typer.Context,
     uid: Annotated[str, typer.Argument(help="Dashboard UID to export.")],
-    cluster_name: ClusterNameOption = DEFAULT_CLUSTER_NAME,
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Base URL of Grafana, e.g. http://127.0.0.1:3000 from `kubectl port-forward svc/grafana 3000:80`.",
+        ),
+    ],
     namespace: NamespaceOption = GRAFANA_NAMESPACE,
     release: Annotated[
         str,
         typer.Option(
-            "--release", help="Grafana Helm release name (drives secret and service name)."
+            "--release", help="Grafana Helm release name (names the admin-password Secret)."
         ),
     ] = "grafana",
     to: Annotated[
@@ -68,11 +75,10 @@ def grafana_dashboard_export(
     ] = None,
     output: DashboardOutputOption = None,
 ) -> None:
-    """Export a dashboard from a kind-deployed Grafana and normalize for git.
+    """Export a dashboard from Grafana and normalize for git.
 
-    Auth + connectivity are resolved from the cluster: the admin password is
-    read from secret/<release>, then an ephemeral port-forward to svc/<release>
-    carries the HTTP GET. No pre-existing port-forward required.
+    `--url` is where Grafana answers, typically a `kubectl port-forward` you
+    run yourself. The admin password is read from secret/<release>.
 
     `--to` is *where* the document goes; `-o` is what shape it takes. Until
     this command was renamed `-o` named the destination file, which is the one
@@ -100,7 +106,7 @@ def grafana_dashboard_export(
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
     request = ExportRequest(
-        uid=uid, cluster_name=cluster_name, namespace=namespace, release=release
+        uid=uid, url=url, namespace=namespace, release=release
     )
     invocation = _container()
     kubectl = Kubectl(
@@ -170,16 +176,13 @@ def grafana_dashboard_lint(
 
     `-o table` is one greppable `path: [rule] message` line per finding --
     the shape a human scans and a CI log grep matches. `-o json`/`-o yaml`
-    are the same report as the wire document owned by
-    `commands/grafana/wire.py`, which carries the tally as well as the
-    findings so a consumer does not have to count lines.
+    are the result's document: the findings and `files_scanned`.
     """
     from chart_manager.commands.grafana.dashboard_lint import (
         discover_dashboards,
         expand_targets,
         lint_paths,
     )
-    from chart_manager.commands.grafana.wire import lint_result_to_dict
 
     mode = output_mod.resolve(output, ctx, allowed=_DASHBOARD_OUTPUTS, console=console)
     # `discover_dashboards` reads the container's workspace rather than a
@@ -205,22 +208,22 @@ def grafana_dashboard_lint(
         raise typer.Exit(code=exit_code_for(Outcome.SUCCESS if allow_empty else Outcome.FAILED))
 
     result = lint_paths(targets)
-    # The findings are this command's report -- its data projection.
-    if mode != output_mod.TABLE:
-        output_mod.emit(lint_result_to_dict(result), mode=mode)
-    else:
-        # `typer.echo`, not `console.print`: a finding carries a rule id in
-        # square brackets and a message quoting a PromQL expression, so Rich
-        # would read `[R002-uid]` as markup and would wrap the long ones --
-        # and a wrapped finding is no longer one greppable line.
-        for finding in result.findings:
-            typer.echo(finding.render())
-
-    # The pass/fail tally narrates the run rather than reporting a finding.
-    if not result.ok:
+    # The tally narrates in every mode, so it prints before the findings.
+    if result.findings:
         narration.print(
-            f"\n[red]{len(result.findings)} findings across "
+            f"[red]{len(result.findings)} findings across "
             f"{result.files_with_findings}/{result.files_scanned} dashboards[/red]"
         )
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
-    narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
+    else:
+        narration.print(f"[green]ok[/green]: {result.files_scanned} dashboards passed")
+    output_mod.finish(result, mode=mode, render=_print_findings)
+
+
+def _print_findings(result: LintResult) -> None:
+    """Print one greppable line per finding."""
+    # `typer.echo`, not `console.print`: a finding carries a rule id in
+    # square brackets and a message quoting a PromQL expression, so Rich
+    # would read `[R002-uid]` as markup and would wrap the long ones --
+    # and a wrapped finding is no longer one greppable line.
+    for finding in result.findings:
+        typer.echo(finding.render())

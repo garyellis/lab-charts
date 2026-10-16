@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from chart_manager.plumbing.errors import ChartManagerError, SpecError, YamlError
+from chart_manager.plumbing.errors import ChartManagerError, YamlError
 from chart_manager.plumbing.yaml_files import load_yaml_file, parse_yaml_mapping
 from chart_manager.shared.charts.chart import (
     ChartDependency,
-    ChartRepository,
-    load_chart_metadata,
+    chart_names,
+    load_chart,
 )
 
 # Dependency archives are untrusted inputs.  Helm packages place Chart.yaml
@@ -92,10 +92,10 @@ def build_helm_dependency_index(
 ) -> dict[str, set[str]]:
     """Map each local chart name to the managed charts that depend on it.
 
-    Loads ordinary Helm chart metadata, so charts without enabled cluster
-    tests — including library charts — still enter the index. Malformed
-    charts are skipped by this best-effort repository-wide scan; explicitly
-    requested charts remain strict.
+    Charts without enabled cluster tests — including library charts — still
+    enter the index. A chart that fails to load is skipped by this
+    best-effort repository-wide scan; explicitly requested charts remain
+    strict.
 
     Only repository-less or ``file://`` dependencies are indexed, and a
     chart's dependency on its own name is skipped. Wrapper charts depend on
@@ -106,10 +106,10 @@ def build_helm_dependency_index(
     own edits are planned by its triggers, so neither needs fanout.
     """
     index: dict[str, set[str]] = {}
-    repository = ChartRepository(root, charts_dir=charts_dir)
-    for name in repository.list_names():
+    charts_root = root.resolve() / charts_dir
+    for name in chart_names(charts_root):
         try:
-            chart = repository.get(name)
+            chart = load_chart(charts_root / name)
         except ChartManagerError:
             continue
         for dependency in chart.metadata.dependencies:
@@ -322,11 +322,10 @@ def _materialized_identities(
                 if not metadata_path.exists():
                     # Generated/cache directories are not chart artifacts.
                     continue
-                metadata = load_chart_metadata(metadata_path)
-                identity = _metadata_identity(metadata.name, metadata.version)
+                identity = _identity_from_chart_yaml(metadata_path.read_bytes())
             else:
                 continue
-        except (OSError, SpecError):
+        except (OSError, YamlError):
             return None
         if identity is None or identity in identities:
             return None
@@ -388,8 +387,8 @@ def _packaged_chart_identity(path: Path) -> _DependencyIdentity | None:
 
 
 def _identity_from_chart_yaml(raw: bytes) -> _DependencyIdentity:
-    data = parse_yaml_mapping(raw, source="packaged Chart.yaml")
+    data = parse_yaml_mapping(raw, source="dependency Chart.yaml")
     identity = _metadata_identity(data.get("name"), data.get("version"))
     if identity is None:
-        raise YamlError("packaged Chart.yaml has invalid name or version")
+        raise YamlError("dependency Chart.yaml has invalid name or version")
     return identity

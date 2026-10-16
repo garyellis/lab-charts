@@ -18,8 +18,8 @@ stays accepted as a hidden alias and reaches the same resolver.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -29,15 +29,14 @@ from rich.table import Table
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container
-from chart_manager.cli.streams import console, errors, narration
-from chart_manager.commands.events.wire import events_to_dict
-from chart_manager.plumbing.exit_codes import exit_code_for
+from chart_manager.cli.streams import console, narration
+from chart_manager.plumbing.documents import to_document
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.shared.events.failure import emit_non_fatal
 from chart_manager.shared.events.model import BuildPhase, PromotionPhase
 from chart_manager.shared.events.query import (
     DEFAULT_LIMIT,
     EventQuery,
-    EventReadError,
 )
 from chart_manager.shared.events.ref import (
     ChartRef,
@@ -45,7 +44,7 @@ from chart_manager.shared.events.ref import (
     parse_ref,
     parse_selector,
 )
-from chart_manager.shared.events.store import get_event_store, query_events
+from chart_manager.shared.events.store import query_events
 from chart_manager.shared.events.writer import EventWriter
 
 RefArgument = Annotated[
@@ -59,7 +58,7 @@ RefArgument = Annotated[
 
 def _make_event_writer() -> EventWriter:
     """Build the lifecycle-event writer (module-level so tests can override)."""
-    return EventWriter(source=container().settings.event_source, store=get_event_store)
+    return container().event_writer()
 
 
 def _parse_at(at: str | None) -> datetime | None:
@@ -118,24 +117,12 @@ DryRunOption = Annotated[
 def _emit_dry_run(document: dict[str, Any], *, ctx: typer.Context, output: str | None) -> None:
     """Print the document a real run would write, in the resolved `-o` form.
 
-    The JSON round-trip is what makes the printout the *stored* shape:
-    `to_dict` leaves phase enums and the images tuple as Python objects and
-    lets the backend's encoder flatten them, so encoding here -- with the
-    same stdlib encoder -- shows the values a reader of the ledger would
-    see, and keeps `-o yaml` from choking on an Enum.
+    `to_document` flattens the phase enums and the images tuple `to_dict`
+    leaves as Python objects, so the printout is the stored shape.
     """
-    stored: dict[str, Any] = json.loads(json.dumps(document, default=str))
+    stored = to_document(document)
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
-    output_mod.emit(stored, mode=mode, table=_document_table(stored))
-
-
-def _document_table(document: dict[str, Any]) -> Table:
-    """One event document as Field/Value rows, leaves spelled as JSON."""
-    table = Table("Field", "Value")
-    for field, value in document.items():
-        rendered = value if isinstance(value, str) else json.dumps(value)
-        table.add_row(escape(field), escape(rendered))
-    return table
+    output_mod.emit(stored, mode=mode, table=output_mod.document_table(stored, title="event"))
 
 
 def _emit(
@@ -145,7 +132,7 @@ def _emit(
 
     The writer is built by the caller, but backend resolution still happens
     lazily on first write -- i.e. inside `fn` and therefore inside the shared
-    `emit_non_fatal` boundary -- so a misconfigured EVENTS_BACKEND stays
+    `emit_non_fatal` boundary -- so a misconfigured events backend stays
     non-fatal.
 
     The confirmation line is printed only on success: `emit_non_fatal`
@@ -251,8 +238,7 @@ def promote(
 
 # --- the read side ---------------------------------------------------------
 
-#: The listing renders as a table, or as the wire document from
-#: `commands/events/wire.py`.
+#: The listing renders as a table, or as its document.
 _LIST_OUTPUTS = (output_mod.TABLE, output_mod.JSON, output_mod.YAML)
 
 ListOutputOption = Annotated[str | None, output_mod.output_option(*_LIST_OUTPUTS)]
@@ -274,9 +260,21 @@ LimitOption = Annotated[
 ]
 
 
+@dataclass(frozen=True)
+class EventPage:
+    """The stored event documents a query selected, newest first; `event list`'s result."""
+
+    events: tuple[dict[str, Any], ...]
+
+    @property
+    def outcome(self) -> Outcome:
+        """Always SUCCESS: an unreadable ledger raises `EventReadError` instead."""
+        return Outcome.SUCCESS
+
+
 def _query_events(request: EventQuery) -> list[dict[str, Any]]:
     """Run the read-side selection (module-level so tests can override)."""
-    return query_events(request)
+    return query_events(container().settings, request)
 
 
 def list_events(
@@ -287,8 +285,8 @@ def list_events(
 ) -> None:
     """List recent lifecycle events, newest first.
 
-    Requires an events backend that can serve reads (EVENTS_BACKEND=cosmos
-    today). The refusals are typed: `none`/unset says events are disabled
+    Requires an events backend that can serve reads
+    (EVENTS_BACKEND=cosmos today). The refusals are typed: `none`/unset says events are disabled
     and how to enable them; `dynamodb` says the read side is Cosmos-only.
     Both exit through the error's own outcome in the exit-code table --
     nothing the caller asked about failed, the environment has no readable
@@ -301,25 +299,19 @@ def list_events(
         # A usage error, exactly as `_parse_ref` narrows it for emit.
         raise typer.BadParameter(str(exc)) from exc
     request = EventQuery.from_selector(parsed, limit=limit)
-    try:
-        events = _query_events(request)
-    except EventReadError as exc:
-        errors.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(code=exit_code_for(exc.outcome)) from exc
-    if not events:
-        # Narration, not data: an empty table (or a count:0 document) is the
-        # projection; this line says the emptiness is real, not a bug.
+    page = EventPage(tuple(_query_events(request)))
+    if not page.events:
+        # Narration, not data: an empty table (or an empty `events` list) is
+        # the projection; this line says the emptiness is real, not a bug.
         narration.print("no events matched")
-    output_mod.emit(
-        events_to_dict(events, query=request), mode=mode, table=_events_table(events)
-    )
+    output_mod.finish(page, mode=mode, render=_print_events)
 
 
-def _events_table(events: Sequence[dict[str, Any]]) -> Table:
-    """Render recent activity for a human: one row per event, newest first."""
+def _print_events(page: EventPage) -> None:
+    """Print recent activity for a human: one row per event, newest first."""
     table = Table("Chart", "Version", "Phase", "Env", "PR", "Source", "Timestamp", "Age")
     now = datetime.now(UTC)
-    for event in events:
+    for event in page.events:
         table.add_row(
             escape(str(event.get("chart_name") or "?")),
             escape(str(event.get("chart_version") or "-")),
@@ -330,7 +322,7 @@ def _events_table(events: Sequence[dict[str, Any]]) -> Table:
             _stamp(event.get("timestamp")),
             _age(event.get("timestamp"), now=now),
         )
-    return table
+    console.print(table)
 
 
 def _pr_link(pr_url: Any) -> str:

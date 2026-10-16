@@ -1,12 +1,12 @@
 name: ci
 
 # Combined PR/main pipeline:
-#   layering     → import contracts ([tool.importlinter] in pyproject.toml).
-#   chart-contracts → offline rendered-chart source contracts.
-#   prep         → compute diff + sandbox chart matrix once.
-#   validate     → static checks (helm template, kubeconform, kyverno) via CLI.
-#   sandbox-test → ephemeral kind cluster per chart, end-to-end install.
-#   publish      → publish PR previews or final artifacts for merged chart changes.
+#   chart-manager   → import contracts, `mise run check`, integration tests.
+#   chart-contracts → chart source contracts and dashboard lint.
+#   prep            → compute diff + sandbox chart matrix once.
+#   validate        → static checks (helm template, kubeconform, kyverno) via CLI.
+#   sandbox-test    → ephemeral kind cluster per chart, end-to-end install.
+#   publish         → publish PR previews or final artifacts for merged chart changes.
 #
 # validate and sandbox-test run in parallel after prep — they're independent
 # signals. `chart-manager plan` owns both validation
@@ -43,12 +43,8 @@ permissions:
   contents: read
 
 jobs:
-  # Enforce the import contracts in pyproject.toml's [tool.importlinter]
-  # (ADR-0001, ADR-0002); `mise run lint-layering` runs the same command.
-  #
-  # Keep the fast Python and workflow quality gates together. Runtime chart
-  # validation and cluster tests remain in their dedicated jobs below.
-  layering:
+  # chart-manager's gates, as the mise tasks run them locally.
+  chart-manager:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -57,58 +53,18 @@ jobs:
       - name: Install mise + tools
         uses: jdx/mise-action@v4
 
-      # actionlint is pinned in .mise.toml, like the other CI tools. Checking
-      # the workflow with the project toolchain keeps this gate reproducible
-      # locally and avoids another action dependency.
-      - name: Workflow syntax
-        run: actionlint .github/workflows/ci.yaml
-
       - name: Import contracts
-        run: uv run --extra dev lint-imports
+        run: mise run check:imports
 
-      # The unit suite. Integration-marked tests are excluded by the addopts
-      # in pyproject.toml; they need helm/kubeconform/kyverno on PATH and are
-      # covered by the explicit contract step and runtime jobs below.
-      - name: Unit tests
-        run: uv run --extra dev pytest -q
+      # check:imports already ran above.
+      - name: Check
+        run: mise run --skip-deps check
 
-      # The lifecycle resource is part of the chart artifact contract: later
-      # automation must be able to read the exact intent that was packaged.
-      # Keep real Helm/kubeconform proofs in the fast gate: packaging mistakes
-      # and CRD conversion regressions must not rely on local-only integration tests.
-      - name: ChartLifecycle and schema integration contracts
-        run: |
-          # Fail the gate instead of silently skipping the real-tool proofs.
-          helm version --short
-          kubeconform -v
-          uv run --extra dev pytest -q -m integration \
-            tests/integration/test_chart_lifecycle_packaging.py \
-            tests/integration/test_manifest_validation_schema_e2e.py \
-            tests/integration/test_crd_schema_constraints.py \
-            tests/integration/test_schema_precedence.py
+      # A missing tool fails the test instead of skipping it.
+      - name: Integration tests
+        run: mise run check:integration
 
-      # Lint the package and the suite. Exemptions (and why each exists) live
-      # in pyproject.toml under [tool.ruff.lint.per-file-ignores].
-      - name: Lint
-        run: uv run --extra dev ruff check src/ tests/ .github/scripts/validation_cache.py
-
-      # Mypy is intentionally scoped to production code. The package baseline
-      # is clean; test annotations stay lightweight by design.
-      - name: Type check
-        run: uv run --extra dev mypy src/chart_manager
-
-      # Dead code. Scope and confidence live in pyproject.toml under [tool.vulture].
-      - name: Dead code
-        run: uv run --extra dev vulture
-
-      # Counts of patterns no lint rule catches; fails if one rises above
-      # scripts/drift-baseline.json.
-      - name: Drift ratchet
-        run: scripts/check-drift
-
-  # Keep rendered-chart behavior and security contracts independent from the
-  # Python architecture gate. The aggregator prepares each chart's locked
-  # dependencies, then runs every chart-owned offline source contract.
+  # Chart content, independent from chart-manager's gates.
   chart-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -118,8 +74,8 @@ jobs:
       - name: Install mise + tools
         uses: jdx/mise-action@v4
 
-      - name: Chart source contracts
-        run: scripts/check-chart-source-contracts
+      - name: Chart contracts
+        run: mise run check:charts
 
   prep:
     runs-on: ubuntu-latest
@@ -656,7 +612,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
-    needs: [prep, layering, chart-contracts, validate, sandbox-test]
+    needs: [prep, chart-manager, chart-contracts, validate, sandbox-test]
     if: >-
       ${{
         !cancelled() &&
@@ -674,7 +630,7 @@ jobs:
             )
           ) &&
         needs.prep.outputs.publish_charts != '' &&
-        needs.layering.result == 'success' &&
+        needs.chart-manager.result == 'success' &&
         needs.chart-contracts.result == 'success' &&
         needs.validate.result == 'success' &&
         (needs.sandbox-test.result == 'success' || needs.sandbox-test.result == 'skipped')

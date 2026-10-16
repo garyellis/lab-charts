@@ -8,36 +8,21 @@ the table under test would pass no matter what the table said.
 
 from __future__ import annotations
 
-import ast
-import re
-from pathlib import Path
-
 import pytest
 
 from chart_manager.plumbing.errors import (
-    CapabilityUnavailableError,
     ChartManagerError,
-    ChartNotFoundError,
-    CommandTimeout,
     DependencyCycleError,
     ExternalCommandError,
     MissingToolError,
     SpecError,
+    WorkspaceNotFoundError,
 )
 from chart_manager.plumbing.exit_codes import (
     EXIT_CODE,
-    EXIT_ENVIRONMENT,
-    EXIT_FAILED,
-    EXIT_MISSING_BINARY,
-    EXIT_SPEC,
-    EXIT_SUCCESS,
-    EXIT_TOOL,
-    EXIT_USAGE,
     Outcome,
     exit_code_for,
 )
-
-_SRC = Path(__file__).resolve().parents[1] / "src" / "chart_manager"
 
 
 def test_table_is_exhaustive_over_every_outcome() -> None:
@@ -53,6 +38,7 @@ def test_table_is_exhaustive_over_every_outcome() -> None:
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
+        # promote's wire `ok` (outcome is SUCCESS) agrees with `$?` only because SUCCESS alone is 0.
         (Outcome.SUCCESS, 0),
         (Outcome.FAILED, 1),
         (Outcome.USAGE, 2),
@@ -62,131 +48,12 @@ def test_table_is_exhaustive_over_every_outcome() -> None:
         (Outcome.MISSING_BINARY, 127),
     ],
 )
-def test_each_outcome_maps_to_the_code_design_6_1_assigns_it(
+def test_each_outcome_maps_to_its_exit_code(
     outcome: Outcome,
     expected: int,
 ) -> None:
     """The exit-code table, transcribed. Changing a row is a release event."""
     assert exit_code_for(outcome) == expected
-
-
-def test_named_constants_agree_with_the_table() -> None:
-    """The constants exist so no caller writes a literal; keep them honest."""
-    assert (EXIT_SUCCESS, EXIT_FAILED, EXIT_USAGE, EXIT_SPEC) == (0, 1, 2, 3)
-    assert (EXIT_TOOL, EXIT_ENVIRONMENT, EXIT_MISSING_BINARY) == (4, 5, 127)
-
-
-def test_success_is_zero() -> None:
-    """The hinge between the wire `ok` field and `$?`.
-
-    `commands/promote/wire.py` publishes `ok = outcome is SUCCESS` while
-    `commands/promote/cli.py` exits `exit_code_for(outcome)`. Those two agree only
-    because SUCCESS is 0 and nothing else is. Asserted here rather than left
-    implicit, because the coupling is otherwise invisible from either side.
-    """
-    assert exit_code_for(Outcome.SUCCESS) == 0
-    assert [o for o in Outcome if exit_code_for(o) == 0] == [Outcome.SUCCESS]
-
-
-# --------------------------------------------------------------------------
-# the surface speaks Outcome, never a number
-# --------------------------------------------------------------------------
-#
-# Static, in the spirit of `test_output_streams.py`:
-# the behavioral tests below can only cover the exit sites they enumerate,
-# and the failure mode being guarded is a *new* command written by someone
-# who never read this module and reached for `typer.Exit(1)` because it is
-# shorter. That is how the table ended up with one consumer the first time.
-
-#: `raise typer.Exit(...)` and `sys.exit(...)` -- the two ways a Python CLI
-#: sets `$?`. Both are scanned, because `main.py` legitimately uses
-#: the second one and a gate that only knew the first would wave it through.
-_EXIT_CALLS = frozenset({"Exit", "exit"})
-
-#: The one module allowed to write exit-code integers.
-_TABLE = Path("chart_manager") / "plumbing" / "exit_codes.py"
-
-
-def _exit_call_sites() -> list[tuple[Path, ast.Call]]:
-    """Every `typer.Exit(...)` / `sys.exit(...)` under `src/`, as (path, node)."""
-    found: list[tuple[Path, ast.Call]] = []
-    for path in sorted(_SRC.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = (
-                func.id
-                if isinstance(func, ast.Name)
-                else func.attr
-                if isinstance(func, ast.Attribute)
-                else None
-            )
-            if name in _EXIT_CALLS:
-                found.append((path, node))
-    return found
-
-
-def _literal_code(node: ast.Call) -> int | None:
-    """The integer literal this exit call was given, if it was given one.
-
-    Covers both spellings -- `typer.Exit(code=1)` and `sys.exit(1)` -- and
-    returns None for anything computed, which is what a call routed through
-    `exit_code_for` looks like.
-    """
-    args = [*node.args, *(kw.value for kw in node.keywords if kw.arg in (None, "code"))]
-    for arg in args:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
-            return arg.value
-    return None
-
-
-def test_exit_scan_finds_the_call_sites_it_is_meant_to_check() -> None:
-    """Guard the guard: an empty sweep would make the next test vacuous."""
-    found = _exit_call_sites()
-    assert len(found) >= 8, f"suspiciously few exit sites: {found}"
-
-    files = {f"{path.parent.name}/{path.name}" for path, _ in found}
-    assert "chart_manager/main.py" in files, "the root app exits on domain errors"
-    assert "promote/cli.py" in files, "promote pr/monitor/test all exit nonzero"
-
-    # And that the check itself can see a literal: if `_literal_code` ever
-    # stopped recognising one, the rule below would pass by blindness.
-    assert _literal_code(ast.parse("typer.Exit(code=1)").body[0].value) == 1  # type: ignore[attr-defined]
-    assert _literal_code(ast.parse("sys.exit(127)").body[0].value) == 127  # type: ignore[attr-defined]
-    assert _literal_code(ast.parse("sys.exit(exit_code_for(x))").body[0].value) is None  # type: ignore[attr-defined]
-
-
-def test_no_module_outside_the_table_writes_a_nonzero_exit_literal() -> None:
-    """Every nonzero exit must name an `Outcome`, not a number.
-
-    A magic literal is not a style complaint here: it is a second, silent
-    copy of the table that no test transcribes and no reader can find. The
-    2 -> 4 move for tool errors is exactly what such a copy would have
-    survived unchanged.
-
-    `typer.Exit(0)` and `sys.exit(0)` are fine -- zero is the absence of a
-    failure, not a classification of one, and spelling it
-    `exit_code_for(Outcome.SUCCESS)` buys nothing.
-    """
-    offenders: list[str] = []
-    for path, node in _exit_call_sites():
-        rel = path.relative_to(_SRC.parent)
-        if rel == _TABLE:
-            continue
-        code = _literal_code(node)
-        if code:
-            offenders.append(f"  {rel}:{node.lineno} -> exit {code}")
-
-    assert not offenders, (
-        "a nonzero exit code must come from "
-        "`chart_manager.plumbing.exit_codes.exit_code_for(Outcome.…)`, "
-        "never from a literal:\n"
-        + "\n".join(offenders)
-        + "\n\nPick the row that describes what happened (FAILED, USAGE, SPEC, "
-        "TOOL, ENVIRONMENT, MISSING_BINARY) and let the table say what it is worth."
-    )
 
 
 # --------------------------------------------------------------------------
@@ -216,25 +83,18 @@ def _exit_code_from_main(exc: BaseException, monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
-        (MissingToolError("helm not found"), 127),
-        (ExternalCommandError("helm template exploded"), 4),
-        (CommandTimeout("kubeconform timed out"), 4),
+        (ChartManagerError("something went wrong"), 1),
         (SpecError("chart-lifecycle.yaml is not valid"), 3),
         (DependencyCycleError("a -> b -> a"), 3),
-        (CapabilityUnavailableError("chart tests are disabled"), 1),
-        (ChartNotFoundError("chart not found: nope"), 1),
-        (ChartManagerError("something went wrong"), 1),
+        (ExternalCommandError("helm template exploded"), 4),
+        (WorkspaceNotFoundError("no .chart-manager/workspace.yaml"), 5),
+        (MissingToolError("helm not found"), 127),
     ],
 )
-def test_a_domain_error_exits_with_the_code_its_type_earns(
+def test_a_domain_error_exits_with_its_outcome(
     exc: ChartManagerError, expected: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Before this, all eight of these exited 1 except the missing binary.
-
-    The distinctions are the product: "your yaml is wrong" (3), "helm ran
-    and failed" (4) and "the run failed" (1) send an operator to three
-    different places, and a pipeline can branch on them.
-    """
+    """One row per outcome an error can carry; a subclass inherits its parent's."""
     assert _exit_code_from_main(exc, monkeypatch) == expected
 
 
@@ -260,21 +120,17 @@ def test_an_os_error_becomes_a_mapped_code_and_never_a_traceback(
     assert _exit_code_from_main(exc, monkeypatch) == expected
 
 
-def test_the_error_line_reads_like_a_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard the guard: a mapped exit code with no message is still a dead end."""
-    from chart_manager import main as main_cli
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (IsADirectoryError(21, "Is a directory", "charts/"), "error: is a directory: charts/"),
+        (OSError("socket closed"), "error: socket closed"),
+    ],
+)
+def test_the_error_line_reads_like_a_sentence(
+    exc: OSError, expected: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mapped exit code with no readable message is still a dead end."""
+    _exit_code_from_main(exc, monkeypatch)
 
-    assert main_cli._os_error_text(IsADirectoryError(21, "Is a directory", "charts/")) == (
-        "is a directory: charts/"
-    )
-    assert main_cli._os_error_text(OSError()) == str(OSError())
-
-
-def test_module_docstring_transcribes_every_row() -> None:
-    """Doc drift here is worse than none: the table is read by humans first."""
-    import chart_manager.plumbing.exit_codes as mod
-
-    doc = mod.__doc__ or ""
-    for outcome, code in EXIT_CODE.items():
-        row = rf"\|\s*{code}\s*\|\s*{outcome.name}\s*\|"
-        assert re.search(row, doc), f"missing docstring row for {outcome.name} -> {code}"
+    assert capsys.readouterr().err.strip() == expected

@@ -8,8 +8,6 @@ import pytest
 
 from chart_manager.api.v1alpha1.local_cluster import LocalCluster
 from chart_manager.cli._options import provision_hooks_enabled
-from chart_manager.commands.local.models import DevClusterPlan
-from chart_manager.commands.local.wire import plan_to_dict
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.shared.cluster.local_cluster import load_cluster
 from tests.conftest import workspace_for
@@ -63,32 +61,8 @@ def test_hook_contract_rejects_shell_empty_and_unsafe_commands(
         load_cluster(workspace_for(tmp_path))
 
 
-@pytest.mark.parametrize("value", ["1", "TRUE", " yes ", "On"])
-def test_ci_truthy_disables_hooks_unless_explicitly_overridden(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
-    monkeypatch.setenv("CI", value)
-    assert provision_hooks_enabled(None) is False
-    assert provision_hooks_enabled(True) is True
-    assert provision_hooks_enabled(False) is False
-
-
-def test_non_ci_default_enables_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CI", raising=False)
-    assert provision_hooks_enabled(None) is True
-
-
-def test_local_machine_plan_reports_hook_argv_and_activation() -> None:
-    payload = plan_to_dict(
-        DevClusterPlan(
-            command="up",
-            cluster_name="lab",
-            provisioning_hooks_enabled=False,
-            provisioning_hooks=(("preProvision", ("./prepare", "arg")),),
-        )
-    )
-
-    assert payload["provisioning_hooks_enabled"] is False
-    assert payload["provisioning_hooks"] == [
-        {"phase": "preProvision", "argv": ["./prepare", "arg"]}
-    ]
+def test_ci_disables_hooks_unless_explicitly_overridden() -> None:
+    assert provision_hooks_enabled(None, ci=True) is False
+    assert provision_hooks_enabled(True, ci=True) is True
+    assert provision_hooks_enabled(False, ci=False) is False
+    assert provision_hooks_enabled(None, ci=False) is True

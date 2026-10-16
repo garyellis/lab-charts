@@ -13,15 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.integrations import helm as helm_module
 from chart_manager.integrations.helm import Helm, UpgradeResult
 from tests.conftest import FakeCommandRunner, Reply
 
 
-@pytest.fixture(autouse=True)
-def _clear_mise_cache() -> None:
-    helm_module._clear_mise_cache()
-
+def _helm(runner: FakeCommandRunner) -> Helm:
+    return Helm(runner, binary="helm", timeout=None, context=None)
 
 
 def _scripted(*, list_responses: list[str], upgrade_response: str = "") -> FakeCommandRunner:
@@ -50,86 +47,51 @@ def _release(revision: int) -> str:
     )
 
 
-def test_upgrade_install_classifies_no_change_when_revision_steady(tmp_path: Path) -> None:
-    # helm list returns revision=3 both before and after -> nothing rolled.
-    runner = _scripted(list_responses=[_release(3), _release(3)])
-    helm = Helm(runner=runner)
+@pytest.mark.parametrize(
+    ("list_responses", "status", "revision_before", "revision_after"),
+    [
+        pytest.param([_release(3), _release(3)], "no-change", 3, 3, id="revision-steady"),
+        pytest.param(["[]", _release(1)], "applied", None, 1, id="first-install"),
+        pytest.param([_release(2), _release(3)], "applied", 2, 3, id="revision-bump"),
+    ],
+)
+def test_upgrade_install_classifies_by_the_revision_before_and_after(
+    tmp_path: Path,
+    list_responses: list[str],
+    status: str,
+    revision_before: int | None,
+    revision_after: int,
+) -> None:
+    helm = _helm(_scripted(list_responses=list_responses))
 
     result = helm.upgrade_install(
         "demo",
         tmp_path / "demo",
         namespace="demo-ns",
-        timeout="1m",
+        timeout=60.0,
         wait=False,
     )
 
     assert isinstance(result, UpgradeResult)
-    assert result.status == "no-change"
-    assert result.revision_before == 3
-    assert result.revision_after == 3
+    assert result.status == status
+    assert result.revision_before == revision_before
+    assert result.revision_after == revision_after
 
 
-def test_upgrade_install_classifies_applied_on_first_install(tmp_path: Path) -> None:
-    # Before: release not present (empty list). After: revision=1.
+def test_upgrade_install_renders_its_wait_and_uses_a_repository_url_without_repo_state() -> None:
     runner = _scripted(list_responses=["[]", _release(1)])
-    helm = Helm(runner=runner)
 
-    result = helm.upgrade_install(
-        "demo",
-        tmp_path / "demo",
-        namespace="demo-ns",
-        wait=False,
-    )
-
-    assert result.status == "applied"
-    assert result.revision_before is None
-    assert result.revision_after == 1
-
-
-def test_upgrade_install_classifies_applied_on_revision_bump(tmp_path: Path) -> None:
-    runner = _scripted(list_responses=[_release(2), _release(3)])
-    helm = Helm(runner=runner)
-
-    result = helm.upgrade_install(
-        "demo",
-        tmp_path / "demo",
-        namespace="demo-ns",
-        wait=False,
-    )
-
-    assert result.status == "applied"
-    assert result.revision_before == 2
-    assert result.revision_after == 3
-
-
-def test_upgrade_install_passes_an_exact_oci_version() -> None:
-    runner = _scripted(list_responses=["[]", _release(1)])
-    helm = Helm(runner=runner)
-
-    helm.upgrade_install(
-        "demo",
-        "oci://example.test/charts/demo",
-        namespace="demo-ns",
-        version="1.2.3",
-    )
-
-    upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
-    assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
-
-
-def test_upgrade_install_uses_a_repository_url_without_managing_repo_state() -> None:
-    runner = _scripted(list_responses=["[]", _release(1)])
-    helm = Helm(runner=runner)
-
-    helm.upgrade_install(
+    _helm(runner).upgrade_install(
         "demo",
         "demo",
         namespace="demo-ns",
+        timeout=90.0,
         version="1.2.3",
         repo="https://example.test/helm",
     )
 
     upgrade = next(argv for argv in runner.calls if "upgrade" in argv)
+    assert upgrade[upgrade.index("--timeout") + 1] == "90s"
     assert upgrade[upgrade.index("--repo") + 1] == "https://example.test/helm"
     assert upgrade[upgrade.index("--version") + 1] == "1.2.3"
     assert not any("repo" in argv and "add" in argv for argv in runner.calls)

@@ -37,7 +37,6 @@ def healthy(on_path: OnPath, monkeypatch: pytest.MonkeyPatch) -> FakeCommandRunn
     """A machine where every tool runs and every token is set."""
     on_path(*_TOOLCHAIN)
     monkeypatch.setenv("RENOVATE_TOKEN", "fake")
-    monkeypatch.setenv("EVENTS_BACKEND", "none")
     return FakeCommandRunner(stdout="v1.0.0\n")
 
 
@@ -65,7 +64,6 @@ def test_every_check_runs_in_report_order(healthy: FakeCommandRunner, tmp_path: 
         "schema-store",
         "events-backend",
     ]
-    assert report.ok
     assert report.outcome is Outcome.SUCCESS
 
 
@@ -84,9 +82,8 @@ def test_outside_a_workspace_the_schema_checks_are_skipped_with_the_reason(
     [
         ((), {"RENOVATE_TOKEN": None}, Outcome.ENVIRONMENT),
         (("helm",), {"RENOVATE_TOKEN": None}, Outcome.MISSING_BINARY),
-        ((), {"EVENTS_BACKEND": "postgres", "RENOVATE_TOKEN": None}, Outcome.SPEC),
     ],
-    ids=["environment", "missing-binary-beats-environment", "spec-beats-environment"],
+    ids=["environment", "missing-binary-beats-environment"],
 )
 def test_the_outcome_follows_the_documented_precedence(
     healthy: FakeCommandRunner,
@@ -107,7 +104,6 @@ def test_the_outcome_follows_the_documented_precedence(
 
     report = run(settings=Settings(root=tmp_path), runner=healthy, workspace=_outside)
 
-    assert not report.ok
     assert report.outcome is expected
 
 

@@ -19,8 +19,11 @@ EVERY_ROW = {APP, ("demo", "ci"), ("demo", "dev")}
 def workspace(tmp_path: Path) -> RepositoryWorkspace:
     """`demo` (dev, ci) with one per-env trigger and an ignore; `app` (dev) depends on it.
 
-    Any change in `demo` also selects every environment of `app`, which renders it.
+    Any change in `demo` also selects every environment of `app`, which renders it. The
+    malformed LocalCluster shows selection never reads it.
     """
+    (tmp_path / ".chart-manager").mkdir()
+    (tmp_path / ".chart-manager/local-cluster.yaml").write_text("kind: [\n")
     write_validation_chart(
         tmp_path,
         "demo",
@@ -51,6 +54,8 @@ def workspace(tmp_path: Path) -> RepositoryWorkspace:
         (["charts/app/values-ci.yaml"], set(), "matches no trigger"),
         (["charts/app/Chart.yaml"], {APP}, None),
         (["src/chart_manager/x.py"], EVERY_ROW, None),
+        (["policies/rule.yaml"], EVERY_ROW, None),
+        ([".chart-manager/schemas.lock.yaml"], EVERY_ROW, None),
         (None, EVERY_ROW, None),
         (["charts/demo/docs/a.md"], {APP}, "triggerIgnores"),
         (["README.md"], set(), None),
@@ -62,6 +67,8 @@ def workspace(tmp_path: Path) -> RepositoryWorkspace:
         "default-trigger-env-not-declared",
         "chart-yaml-all-envs",
         "fanout",
+        "policies",
+        "schema-lock",
         "everything",
         "ignored-dependent-still-selected",
         "outside-charts",

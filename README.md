@@ -48,8 +48,8 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
 | `uv run chart-manager chart upgrade charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
 | `uv run chart-manager promote pr\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
-| `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; `event emit --dry-run` previews a document without a backend. |
-| `uv run chart-manager grafana dashboard export <uid> --to <path>` | Export one dashboard from the kind Grafana as canonical JSON. `lint` checks committed dashboards. |
+| `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; create its database and container once with `mise run events:provision`. `event emit --dry-run` previews a document without a backend. |
+| `uv run chart-manager grafana dashboard export <uid> --url http://127.0.0.1:3000 --to <path>` | Export one dashboard as canonical JSON from the Grafana at `--url` (run `kubectl -n observability port-forward svc/grafana 3000:80` first). `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
 
 ## Local clusters
@@ -189,8 +189,8 @@ and that file is always canonical JSON regardless of `-o`.
 CI runs the same commands you run locally.
 
 ```text
-layering (import contract, lint, types, unit tests) ────────────────────┐
-chart-contracts (offline rendered-chart contracts) ────────────────────┤
+chart-manager (import contracts, check, integration tests) ─────────────┐
+chart-contracts (chart source contracts, dashboard lint) ──────────────┤
 prep ──┬── validate ───────────────────────────────────────────────────┤
        └── sandbox-test (matrix per chart) ────────────────────────────┴── publish
 ```
@@ -262,12 +262,14 @@ If upstream synchronization fails, CI runs render-only validation and uploads
 retained manifests; this diagnostic fallback never turns the failure green.
 Template rejection is a validation failure, dependency-fetch failure is an
 environment failure, and process crashes remain tool failures.
-The fast CI gate also runs the real Helm/kubeconform packaging and schema
-integration suites; missing tools fail that gate instead of silently skipping tests.
+The `chart-manager` job also runs every integration test (`mise run check:integration`);
+a missing tool fails a test instead of skipping it.
 
 The cache lives under `$XDG_CACHE_HOME/chart-manager/schemas/v3/`
-(default `~/.cache/chart-manager/schemas/v3/`), with separate `repositories/` and
-`derived/` directories. Previous cache formats are left untouched and never
+(`~/.cache/chart-manager/schemas/v3/` when `XDG_CACHE_HOME` is unset or relative),
+with separate `repositories/` and `derived/` directories.
+`CHART_MANAGER_SCHEMA_CACHE_ROOT` (or `schema_cache_root:` in the operator config)
+moves the root that holds `v3/`. Previous cache formats are left untouched and never
 reused. Run `mise run schemas` once to populate the new upstream cache.
 Automatic pruning of old snapshots and interrupted staging directories is
 intentionally deferred to a future maintenance command.

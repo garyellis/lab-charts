@@ -8,7 +8,6 @@ from pathlib import Path
 from chart_manager.plumbing.commands import (
     CommandResult,
     CommandRunner,
-    SubprocessRunner,
 )
 from chart_manager.plumbing.errors import ChartManagerError, ExternalCommandError
 from chart_manager.plumbing.exit_codes import Outcome
@@ -45,24 +44,23 @@ class Kind:
     identity is already a per-call argument here and a second, instance-level
     way to say it would be a false symmetry with two sources of truth.
 
-    What *was* ambient is the docker daemon the node containers live on.
+    What is ambient is the docker daemon the node containers live on.
     `docker_host` scopes that to this adapter via `DOCKER_HOST` on each
     invocation, so one process can manage kind clusters on two daemons
-    without touching its own environment. None = the ambient daemon, which
-    is exactly today's behavior.
+    without touching its own environment. None = the ambient daemon.
     """
 
     def __init__(
         self,
-        runner: CommandRunner | None = None,
+        runner: CommandRunner,
         *,
-        docker_host: str | None = None,
-        timeout: float | None = None,
+        docker_host: str | None,
+        timeout: float | None,
     ) -> None:
         """Bind a runner and pin every invocation to a daemon and timeout."""
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner
         self._env = {"DOCKER_HOST": docker_host} if docker_host is not None else None
-        # Per-subprocess wall-clock cap. None = unbounded (today's behavior);
+        # Per-subprocess wall-clock cap. None = unbounded;
         # nothing else bounds `docker ps` or a `kind create cluster`.
         self.timeout = timeout
 
@@ -120,7 +118,7 @@ class Kind:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-    def ensure_cluster(self, name: str, *, config: Path | None = None) -> None:
+    def ensure_cluster(self, name: str, *, config: Path | None) -> None:
         """Converge to a running cluster: create if absent, start stopped nodes, else no-op."""
         # `kind get clusters` lists clusters whose node containers exist on
         # the host docker daemon, regardless of whether those containers are

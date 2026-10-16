@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,6 +10,8 @@ import pytest
 
 from chart_manager.commands.validate.schemas.crd import _strict_schema
 from chart_manager.integrations.kubeconform import Kubeconform
+from chart_manager.plumbing.commands import SubprocessRunner
+from tests.integration.conftest import require
 
 pytestmark = pytest.mark.integration
 
@@ -117,8 +118,7 @@ def test_nested_composition_preserves_parent_declared_siblings(
 
 
 def _assert_verdicts(tmp_path, constraint, valid, invalid, *, root_constraint=False):
-    if shutil.which("kubeconform") is None:
-        pytest.skip("kubeconform is required")
+    require("kubeconform")
     schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -149,7 +149,7 @@ def _assert_verdicts(tmp_path, constraint, valid, invalid, *, root_constraint=Fa
                 }
             )
         )
-    report = Kubeconform().validate(
+    report = Kubeconform(SubprocessRunner(), timeout=None).validate(
         manifests,
         schema_locations=[str(schema_path)],
         extra_args=["-verbose"],

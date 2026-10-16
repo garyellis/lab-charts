@@ -80,8 +80,8 @@ an artifact error and still opens the PR, so a wrapper version matching the
 baseline is reported as a diagnostic (Renovate independently flags the PR
 with a warning and a failing status check).
 
-`-o json` includes the chart, path, current and proposed versions, branch,
-outcome, PR data, and diagnostics. The default `auto` prints a table at a
+`-o json` includes the chart, its path, current and proposed versions, branch,
+group, status, PR URL and number, and diagnostics. The default `auto` prints a table at a
 terminal and `json` in a pipe.
 
 ## Renovate callback

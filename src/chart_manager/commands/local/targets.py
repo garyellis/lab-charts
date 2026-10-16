@@ -11,7 +11,7 @@ from chart_manager.api.v1alpha1.local_stack import LocalStack
 from chart_manager.plumbing.errors import SpecError
 from chart_manager.plumbing.names import dns_label
 from chart_manager.plumbing.paths import inside_root, relative_path
-from chart_manager.shared.charts.chart import ResolvedChartTarget, chart_target
+from chart_manager.shared.charts.chart import Chart, chart_target
 from chart_manager.shared.cluster.local_cluster import load_resource, validate_release
 
 DEFAULT_STACKS_DIR = Path("stacks")
@@ -28,7 +28,7 @@ class ResolvedStackTarget(BaseModel):
     stack: LocalStack
 
 
-type ResolvedLocalTarget = ResolvedChartTarget | ResolvedStackTarget
+type ResolvedLocalTarget = Chart | ResolvedStackTarget
 
 
 class LocalTargetResolver:

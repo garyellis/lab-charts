@@ -12,13 +12,17 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate.models import CheckName
 from chart_manager.commands.validate.run import run
+from chart_manager.commands.validate.schemas.errors import KubeconformSchemaStoreError
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
+from chart_manager.plumbing.progress import ProgressEvent, RowUpdate
+from chart_manager.settings import Settings
 from chart_manager.shared.workspace import RepositoryWorkspace
 from tests.conftest import (
     ONE_DEPENDENCY_LOCK,
     FakeCommandRunner,
     crd_manifest,
+    git_runner,
     materialize_dependency,
     workspace_for,
     write_validation_chart,
@@ -26,6 +30,18 @@ from tests.conftest import (
 
 RENDER: frozenset[CheckName] = frozenset({"render"})
 CONFIG_MAP = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n"
+APP_WITH_ONE_DEPENDENCY = (
+    "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
+    "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
+)
+
+
+def _run(
+    request: validate.ValidateRequest, *, workspace: RepositoryWorkspace, **kw: Any
+) -> validate.ValidateOutcome:
+    """`run()` with the schema cache under the workspace root, where `schema_cache` puts it."""
+    settings = Settings(schema_cache_root=workspace.root / "schema-cache")
+    return run(request, workspace=workspace, settings=settings, **{"progress": [].append, **kw})
 
 
 def renders(manifest: str):
@@ -46,7 +62,7 @@ def test_one_chart_in_one_environment_renders_into_one_passed_row(tmp_path: Path
     write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner()
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), envs=("dev",), checks=RENDER
         ),
@@ -66,7 +82,7 @@ def test_a_helm_template_failure_fails_the_row_with_helms_error(tmp_path: Path) 
     write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=1, stderr="bad values")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=runner,
@@ -82,7 +98,7 @@ def test_an_unknown_environment_in_the_request_raises_before_any_work(tmp_path: 
     runner = FakeCommandRunner()
 
     with pytest.raises(SpecError, match="prod"):
-        run(
+        _run(
             validate.ValidateRequest(
                 out=tmp_path / "out", charts=("demo",), envs=("prod",), checks=RENDER
             ),
@@ -98,7 +114,7 @@ def test_rendering_into_a_reused_out_dir_drops_the_previous_manifests(tmp_path: 
     stale.parent.mkdir(parents=True)
     stale.write_text("kind: ConfigMap\n")
 
-    run(
+    _run(
         validate.ValidateRequest(charts=("demo",), out=tmp_path / "out", checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
@@ -137,12 +153,12 @@ def test_the_schema_check_reports_kubeconforms_verdict_on_the_rendered_manifests
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), returncode=returncode, stdout=stdout)
     )
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=schema_workspace,
         runner=runner,
@@ -173,9 +189,9 @@ def test_the_schema_check_is_skipped_without_running_kubeconform(
     helm: dict[str, Any],
 ) -> None:
     write_validation_chart(tmp_path, "demo", **validation)
-    runner = FakeCommandRunner().respond(**helm)
+    runner = git_runner().respond(**helm)
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=schema_workspace,
         runner=runner,
@@ -198,12 +214,12 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
     (tmp_path / "schemas").mkdir()
     gadget = "apiVersion: example.io/v1\nkind: Gadget\nmetadata:\n  name: demo\n"
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(gadget))
         .respond(("kubeconform",), stdout=json.dumps({"resources": []}))
     )
 
-    run(
+    _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=schema_workspace,
         runner=runner,
@@ -218,7 +234,7 @@ def test_the_charts_schema_locations_and_ignored_kinds_reach_kubeconform(
 def test_a_chart_that_disables_kubeconform_needs_no_schema_lock(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo", validators={"kubeconform": False})
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner().respond(renders(CONFIG_MAP)),
@@ -231,9 +247,9 @@ def test_a_schema_location_whose_directory_is_missing_is_a_spec_error(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
     write_validation_chart(tmp_path, "demo", schemaLocations=["schemas/{{.ResourceKind}}.json"])
-    runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
+    runner = git_runner().respond(renders(CONFIG_MAP))
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=schema_workspace,
         runner=runner,
@@ -270,7 +286,7 @@ def test_the_policy_check_reports_kyvernos_verdict_on_the_rendered_manifests(
         .respond(("kyverno", "apply"), returncode=returncode, stdout=stdout)
     )
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
         ),
@@ -298,7 +314,7 @@ def test_the_policy_check_is_skipped_without_running_kyverno(
         (tmp_path / "policies").mkdir()
     runner = FakeCommandRunner().respond(renders(CONFIG_MAP))
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
         ),
@@ -317,10 +333,10 @@ def test_the_charts_extra_policies_reach_kyverno_and_must_exist(tmp_path: Path) 
         out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "policy"})
     )
 
-    missing = run(request, workspace=workspace_for(tmp_path), runner=runner)
+    missing = _run(request, workspace=workspace_for(tmp_path), runner=runner)
     assert "extra-policies" in missing.spec_errors[0]
     (chart / "extra-policies").mkdir()
-    run(request, workspace=workspace_for(tmp_path), runner=runner)
+    _run(request, workspace=workspace_for(tmp_path), runner=runner)
 
     (kyverno,) = [call for call in runner.calls if call[0] == "kyverno"]
     assert str(chart / "extra-policies") in kyverno
@@ -332,12 +348,12 @@ def test_a_failed_schema_check_skips_the_policy_check(
     write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), returncode=1, stdout=kubeconform_report("statusInvalid"))
     )
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
         workspace=schema_workspace,
         runner=runner,
@@ -354,14 +370,14 @@ def test_a_chart_whose_render_fails_skips_its_checks_while_the_others_run(
         write_validation_chart(tmp_path, name)
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(lambda argv: argv[1:3] == ("template", "one"), returncode=1, stderr="bad")
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
         .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
     )
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("one", "two", "three")),
         workspace=schema_workspace,
         runner=runner,
@@ -378,7 +394,7 @@ def test_a_charts_config_error_is_collected_while_the_other_charts_run(tmp_path:
     write_validation_chart(tmp_path, "broken", environments={"dev": {"values": ["missing.yaml"]}})
     write_validation_chart(tmp_path, "fine")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("broken", "fine"), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
@@ -398,7 +414,7 @@ def test_without_named_charts_the_changed_files_select_the_rows(tmp_path: Path) 
     broken = write_validation_chart(tmp_path, "broken")
     (broken / "Chart.yaml").write_text("name: other\n")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=(), changes=("charts/demo/values-ci.yaml",), checks=RENDER
         ),
@@ -418,7 +434,7 @@ def test_named_charts_narrow_the_changed_rows_and_warnings_reach_the_outcome(
     write_validation_chart(tmp_path, "other", environments=two_envs)
     changes = ("charts/demo/values-ci.yaml", "charts/other/values-ci.yaml", "charts/demo/notes.txt")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), changes=changes, checks=RENDER
         ),
@@ -434,7 +450,7 @@ def test_an_unknown_environment_raises_when_the_rows_come_from_changes(tmp_path:
     write_validation_chart(tmp_path, "demo")
 
     with pytest.raises(SpecError, match="prod"):
-        run(
+        _run(
             validate.ValidateRequest(
                 out=tmp_path / "out", charts=(), changes=(), envs=("prod",), checks=RENDER
             ),
@@ -450,7 +466,7 @@ def test_a_malformed_named_chart_is_collected_while_the_other_named_chart_runs(
     broken = write_validation_chart(tmp_path, "broken")
     (broken / "chart-lifecycle.yaml").write_text("kind: nonsense\n")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("broken", "fine"), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
@@ -467,12 +483,12 @@ def test_a_charts_crds_become_the_first_schema_location(
     (provider / "templates").mkdir()
     (provider / "templates" / "crd.yaml").write_text(crd_manifest())
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(crd_manifest()))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
     )
 
-    run(
+    _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("provider",), checks=frozenset({"render", "schema"})
         ),
@@ -493,10 +509,7 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     app = write_validation_chart(tmp_path, "app")
-    (app / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
-        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
-    )
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
 
     def updates(argv: tuple[str, ...]) -> bool:
         if argv[1:3] != ("dependency", "update"):
@@ -508,13 +521,13 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
         return True
 
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(updates)
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
     )
 
-    run(
+    _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "schema"})
         ),
@@ -531,13 +544,10 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
     app = write_validation_chart(
         tmp_path, "app", environments={env: {"values": ["values.yaml"]} for env in envs}
     )
-    (app / "Chart.yaml").write_text(
-        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n"
-        "  - name: foo\n    version: 1.0.0\n    repository: https://example.test/charts\n"
-    )
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
     runner = FakeCommandRunner()
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("app",), checks=RENDER, workers=5),
         workspace=workspace_for(tmp_path),
         runner=runner,
@@ -551,11 +561,28 @@ def test_parallel_rows_of_one_chart_update_its_stale_dependencies_once(tmp_path:
     ] == [(("helm", "dependency", "update", str(app)), 600.0)]
 
 
+def test_a_failed_dependency_update_is_a_tool_error_not_a_chart_failure(tmp_path: Path) -> None:
+    app = write_validation_chart(tmp_path, "app")
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
+    runner = FakeCommandRunner().respond(
+        ("helm", "dependency", "update"), returncode=1, stderr="registry unreachable"
+    )
+
+    outcome = _run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("app",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert outcome.rows[0].checks["render"].status == "error"
+    assert outcome.outcome is Outcome.TOOL
+
+
 def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
     runner = FakeCommandRunner().respond(("helm", "template"), returncode=-9)
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=runner,
@@ -564,11 +591,103 @@ def test_helm_killed_mid_render_is_an_error_not_a_chart_failure(tmp_path: Path) 
     assert outcome.rows[0].checks["render"].status == "error"
 
 
+@pytest.mark.parametrize(
+    ("pin", "binary"),
+    [
+        ({}, "helm"),
+        ({"helmBinary": "/opt/helm"}, "/opt/helm"),
+        ({"helmVersion": "3.20.0"}, "/mise/helm/3.20.0/bin/helm"),
+    ],
+)
+def test_the_chart_renders_with_the_helm_it_pins(
+    tmp_path: Path, pin: dict[str, str], binary: str
+) -> None:
+    write_validation_chart(tmp_path, "demo", **pin)
+    runner = FakeCommandRunner().respond(
+        ("mise", "where", "helm@3.20.0"), stdout="/mise/helm/3.20.0\n"
+    )
+
+    _run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
+        workspace=workspace_for(tmp_path),
+        runner=runner,
+    )
+
+    assert [call[0] for call in runner.calls if call[1:2] == ("template",)] == [binary]
+
+
+def test_a_failed_crd_render_fails_only_its_row_and_the_run_reports_every_row(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    envs = ("dev", "qa", "prod")
+    provider = write_validation_chart(
+        tmp_path,
+        "provider",
+        environments={env: {"values": [f"values-{env}.yaml"]} for env in envs},
+    )
+    for env in envs:
+        (provider / f"values-{env}.yaml").write_text("{}\n")
+    (provider / "templates").mkdir()
+    (provider / "templates" / "crd.yaml").write_text(crd_manifest())
+    runner = (
+        git_runner()
+        .respond(
+            lambda argv: any(arg.endswith("values-qa.yaml") for arg in argv),
+            returncode=1,
+            stderr="bad values",
+        )
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+    )
+
+    outcome = _run(
+        validate.ValidateRequest(
+            out=tmp_path / "out",
+            charts=("provider",),
+            checks=frozenset({"render", "schema"}),
+            workers=3,
+        ),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert {
+        row.env: {name: result.status for name, result in row.checks.items()}
+        for row in outcome.rows
+    } == {
+        "dev": {"render": "passed", "schema": "passed"},
+        "qa": {"render": "failed", "schema": "skipped"},
+        "prod": {"render": "passed", "schema": "passed"},
+    }
+    assert outcome.outcome is Outcome.FAILED
+
+
+def test_a_run_wide_schema_error_raises_after_loading_the_store_once(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace, schema_cache: tuple[Any, Any]
+) -> None:
+    lock, store = schema_cache
+    (store.repository_path(lock.policy.catalog) / "example.io/widget_v1.json").write_text("{}")
+    envs = ("dev", "qa", "prod")
+    write_validation_chart(
+        tmp_path, "demo", environments={env: {"values": ["values.yaml"]} for env in envs}
+    )
+    runner = git_runner().respond(renders(CONFIG_MAP))
+
+    with pytest.raises(KubeconformSchemaStoreError, match="is corrupt"):
+        _run(
+            validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), workers=3),
+            workspace=schema_workspace,
+            runner=runner,
+        )
+    inspections = [call for call in runner.calls if "rev-parse" in call]
+    assert len(inspections) == len(list(store.repositories(lock)))
+
+
 def test_a_missing_helm_binary_stops_the_run(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
 
     with pytest.raises(MissingToolError):
-        run(
+        _run(
             validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
             workspace=workspace_for(tmp_path),
             runner=FakeCommandRunner().respond(
@@ -596,43 +715,25 @@ def test_the_outcome_folds_rows_and_spec_errors_into_one_exit_reason(
     }
     row = validate.Row("demo", "dev", "demo", "lab-dev", checks)
 
-    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome() is expected
+    assert validate.ValidateOutcome(rows=(row,), spec_errors=spec_errors).outcome is expected
 
 
-class RecordingProgress:
-    def __init__(self) -> None:
-        self.started: list[tuple[str, str]] = []
-        self.events: list[tuple[str, str, str, bool]] = []
-        self.stopped = False
-
-    def start(self, rows):  # type: ignore[no-untyped-def]
-        self.started = [(row.chart, row.env) for row in rows]
-
-    def on_event(self, row, check, status, elapsed_s=None):  # type: ignore[no-untyped-def]
-        self.events.append((row.chart, check, status, elapsed_s is not None))
-
-    def stop(self) -> None:
-        self.stopped = True
-
-
-def test_progress_hears_each_check_start_and_finish_with_its_time(tmp_path: Path) -> None:
+def test_progress_hears_each_finished_check_with_its_time(tmp_path: Path) -> None:
     write_validation_chart(tmp_path, "demo")
-    progress = RecordingProgress()
+    events: list[ProgressEvent | RowUpdate] = []
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=("demo",), checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
-        progress=progress,
+        progress=events.append,
     )
 
-    assert progress.started == [("demo", "dev")]
-    assert progress.events == [
-        ("demo", "render", "running", False),
-        ("demo", "render", "passed", True),
+    elapsed = outcome.rows[0].checks["render"].elapsed_seconds
+    assert elapsed is not None
+    assert events == [
+        RowUpdate(("demo", "dev"), "render", "passed", f"{elapsed:.1f}s"),
     ]
-    assert progress.stopped
-    assert outcome.rows[0].checks["render"].elapsed_seconds is not None
 
 
 def test_rows_checked_in_parallel_come_back_in_selection_order(tmp_path: Path) -> None:
@@ -640,7 +741,7 @@ def test_rows_checked_in_parallel_come_back_in_selection_order(tmp_path: Path) -
     for name in names:
         write_validation_chart(tmp_path, name)
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(out=tmp_path / "out", charts=names, checks=RENDER, workers=4),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
@@ -654,7 +755,7 @@ def test_fail_fast_skips_the_rows_after_the_first_failure(tmp_path: Path) -> Non
     write_validation_chart(tmp_path, "two")
     runner = FakeCommandRunner().respond(("helm", "template", "one"), returncode=1)
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("one", "two"), checks=RENDER, fail_fast=True
         ),
@@ -666,19 +767,34 @@ def test_fail_fast_skips_the_rows_after_the_first_failure(tmp_path: Path) -> Non
     assert not [call for call in runner.calls if call[1:3] == ("template", "two")]
 
 
+
+def test_the_schema_stores_git_calls_go_through_the_given_runner(
+    tmp_path: Path, schema_workspace: RepositoryWorkspace
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    runner = git_runner().respond(renders(CONFIG_MAP)).respond(("kubeconform",))
+
+    _run(
+        validate.ValidateRequest(out=tmp_path / "out", charts=("demo",)),
+        workspace=schema_workspace,
+        runner=runner,
+    )
+
+    assert [call for call in runner.calls if call[0] == "git"]
+
 def test_the_tool_timeout_and_verbose_reach_every_tool_call(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
     write_validation_chart(tmp_path, "demo")
     (tmp_path / "policies").mkdir()
     runner = (
-        FakeCommandRunner()
+        git_runner()
         .respond(renders(CONFIG_MAP))
         .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
         .respond(("kyverno", "apply"), stdout=kyverno_report("pass"))
     )
 
-    run(
+    _run(
         validate.ValidateRequest(
             out=tmp_path / "out", charts=("demo",), tool_timeout=30.0, verbose=True
         ),
@@ -687,7 +803,7 @@ def test_the_tool_timeout_and_verbose_reach_every_tool_call(
     )
 
     tools = {record.args[0]: record for record in runner.records}
-    assert {tool: record.timeout for tool, record in tools.items()} == {
+    assert {tool: tools[tool].timeout for tool in ("helm", "kubeconform", "kyverno")} == {
         "helm": 30.0,
         "kubeconform": 30.0,
         "kyverno": 30.0,
@@ -703,7 +819,7 @@ def test_a_symlinked_row_directory_is_refused_rather_than_emptied(tmp_path: Path
     (tmp_path / "out" / "demo").mkdir(parents=True)
     (tmp_path / "out" / "demo" / "dev").symlink_to(elsewhere, target_is_directory=True)
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(charts=("demo",), out=tmp_path / "out", checks=RENDER),
         workspace=workspace_for(tmp_path),
         runner=FakeCommandRunner(),
@@ -726,7 +842,7 @@ def test_the_outcome_records_what_shaped_the_selection(tmp_path: Path) -> None:
     )
     changes = ("charts/demo/templates/cm.yaml", "charts/demo/docs/a.md", "charts/demo/notes.txt")
 
-    outcome = run(
+    outcome = _run(
         validate.ValidateRequest(
             charts=(), out=tmp_path / "out", envs=("ci",), changes=changes, checks=RENDER
         ),

@@ -108,7 +108,7 @@ def test_token_is_environment_only_and_excluded_from_repr(tmp_path: Path) -> Non
     assert result.stderr == "authentication failed: ***"
 
 
-def test_nonzero_exit_is_a_result_for_service_owned_reporting(tmp_path: Path) -> None:
+def test_nonzero_exit_is_returned_not_raised(tmp_path: Path) -> None:
     runner = FakeCommandRunner(returncode=2, stdout="partial", stderr="bad config")
 
     result = Renovate(runner=runner).run(
@@ -231,30 +231,19 @@ def test_presence_only_probes_skip_the_subprocess(on_path: OnPath) -> None:
     assert runner.calls == []
 
 
+@pytest.mark.parametrize(
+    ("configured", "outcome"), [(False, Outcome.ENVIRONMENT), (True, Outcome.SUCCESS)]
+)
 def test_renovate_reports_a_missing_token_as_environment(
-    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
+    on_path: OnPath, configured: bool, outcome: Outcome
 ) -> None:
     """Required configuration is a per-integration preflight matter."""
     on_path("renovate", "renovate-config-validator")
-    for variable in ("RENOVATE_TOKEN", "GITHUB_TOKEN"):
-        monkeypatch.delenv(variable, raising=False)
 
-    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
+    checks = checks_by_name(
+        Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight(token_configured=configured)
+    )
     token = checks["renovate-token"]
 
-    assert token.status is CheckStatus.FAILED
-    assert token.outcome is Outcome.ENVIRONMENT
-
-
-def test_renovate_accepts_the_ci_token_it_actually_falls_back_to(
-    on_path: OnPath, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`commands/upgrade/run.py` reads GITHUB_TOKEN as the fallback; so must the check."""
-    on_path("renovate", "renovate-config-validator")
-    monkeypatch.delenv("RENOVATE_TOKEN", raising=False)
-    monkeypatch.setenv("GITHUB_TOKEN", "ghs_fake")
-
-    checks = checks_by_name(Renovate(FakeCommandRunner(stdout="40.0.0\n")).preflight())
-    token = checks["renovate-token"]
-
-    assert token.status is CheckStatus.OK
+    assert token.outcome is outcome
+    assert "RENOVATE_TOKEN" in token.detail

@@ -14,8 +14,11 @@ from chart_manager.integrations.helm import Helm
 from chart_manager.integrations.kind import Kind, kind_context
 from chart_manager.integrations.kubectl import Kubectl
 from chart_manager.plumbing.commands import CommandRunner
+from chart_manager.plumbing.progress import Progress, step
 from chart_manager.settings import Settings
-from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
+
+# Seconds to wait for the kube-apiserver to answer after the cluster starts.
+APISERVER_READY_TIMEOUT = 60.0
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,7 @@ def provision(
     runner: CommandRunner,
     settings: Settings,
     replace: bool = False,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> Session:
     """Create or start the cluster, then wait until its apiserver answers.
 
@@ -62,12 +65,12 @@ def provision(
             settings=settings,
         )
     if replace:
-        emit(progress, step("Deleting cluster", name))
+        progress(step("Deleting cluster", name))
         teardown(session)
-    emit(progress, step("Ensuring cluster", name))
+    progress(step("Ensuring cluster", name))
     session.kind.ensure_cluster(name, config=kind_config_path(root, cluster))
-    emit(progress, step("Waiting for kube-apiserver"))
-    session.kubectl.wait_apiserver_ready()
+    progress(step("Waiting for kube-apiserver"))
+    session.kubectl.wait_apiserver_ready(timeout=APISERVER_READY_TIMEOUT)
     if hooks is not None and hooks.post_provision is not None:
         post = {
             **env,
@@ -76,8 +79,8 @@ def provision(
             "CHART_MANAGER_PROVIDER_TYPE": "kind",
         }
         _hook(hooks.post_provision, root, post, runner=runner, settings=settings)
-        emit(progress, step("Waiting for kube-apiserver after post-provision hook"))
-        session.kubectl.wait_apiserver_ready()
+        progress(step("Waiting for kube-apiserver after post-provision hook"))
+        session.kubectl.wait_apiserver_ready(timeout=APISERVER_READY_TIMEOUT)
     return session
 
 
@@ -88,7 +91,8 @@ def attach(name: str, *, runner: CommandRunner, settings: Settings) -> Session:
         name=name,
         context=context,
         kind=Kind(runner, docker_host=settings.docker_host, timeout=settings.command_timeout),
-        helm=Helm(runner, context=context),
+        # No command timeout: installs keep helm's own --timeout, which a cap would cut short.
+        helm=Helm(runner, binary="helm", context=context, timeout=None),
         kubectl=Kubectl(runner, context=context, timeout=settings.command_timeout),
     )
 

@@ -16,16 +16,13 @@ from chart_manager.api.v1alpha1.releases import (
     BootstrapRelease,
 )
 from chart_manager.integrations.helm import Helm
+from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError, SpecError
+from chart_manager.plumbing.progress import Progress, step
 from chart_manager.shared.charts.dependency_update import ensure_dependencies
-from chart_manager.shared.charts.lifecycle import require_chart_test_profile
+from chart_manager.shared.charts.install_plan import InstallPlanEntry, install_plan
 from chart_manager.shared.cluster.converge import DEFAULT_TIMEOUT, Release, converge
-from chart_manager.shared.cluster.progress import ProgressCallback, emit, step
-from chart_manager.shared.cluster.releases import (
-    chart_name,
-    helm_release,
-    lifecycle_install_plan,
-)
+from chart_manager.shared.cluster.releases import helm_release, release
 from chart_manager.shared.cluster.session import Session
 
 
@@ -37,6 +34,19 @@ class ExternallySatisfiedLifecycle:
     chart: str
     profile: str
     namespace: str
+
+    @classmethod
+    def of(cls, entry: InstallPlanEntry) -> ExternallySatisfiedLifecycle:
+        """The identity an install-plan entry installs."""
+        return cls(entry.chart.path.resolve(), entry.chart.name, entry.profile, entry.namespace)
+
+
+@dataclass(frozen=True)
+class BootstrapStep:
+    """One authored bootstrap release; a lifecycle release carries its resolved install plan."""
+
+    authored: BootstrapRelease
+    entries: tuple[InstallPlanEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -51,102 +61,92 @@ class BootstrapOutcome:
 
 def bootstrap(
     session: Session,
-    cluster: LocalCluster,
+    steps: tuple[BootstrapStep, ...],
     *,
     root: Path,
-    progress: ProgressCallback | None = None,
+    progress: Progress,
 ) -> tuple[BootstrapOutcome, ...]:
     """Converge every bootstrap release in order; stop at the first that fails."""
     root = root.resolve()
     outcomes: list[BootstrapOutcome] = []
-    for authored in cluster.spec.bootstrap.releases:
-        sets = _runtime_values(session, authored)
-        for release, profile in _releases(root, authored, sets):
-            emit(progress, step("Bootstrapping", f"{release.name} -> {release.namespace}"))
-            status = converge(session, release)
-            outcomes.append(BootstrapOutcome(release.name, profile, release.namespace, status))
-        _wait_ready(session, authored, progress)
+    for bootstrap_step in steps:
+        sets = _runtime_values(session, bootstrap_step.authored)
+        for planned, label in _releases(bootstrap_step, root, sets):
+            progress(step("Bootstrapping", f"{planned.name} -> {planned.namespace}"))
+            status = converge(session, planned)
+            outcomes.append(BootstrapOutcome(planned.name, label, planned.namespace, status))
+        _wait_ready(session, bootstrap_step.authored, progress)
     return tuple(outcomes)
 
 
-def verify(cluster: LocalCluster, *, root: Path, releases: Mapping[tuple[str, str], str]) -> None:
+def verify(
+    steps: tuple[BootstrapStep, ...], *, root: Path, releases: Mapping[tuple[str, str], str]
+) -> None:
     """Require every bootstrap release among `releases` (any state), without installing."""
-    for authored in cluster.spec.bootstrap.releases:
-        for release, _profile in _releases(root.resolve(), authored, {}):
-            if (release.namespace, release.name) not in releases:
+    for bootstrap_step in steps:
+        for required, _label in _releases(bootstrap_step, root.resolve(), {}):
+            if (required.namespace, required.name) not in releases:
                 raise ChartManagerError(
-                    f"bootstrap release {release.name!r} is not installed in namespace "
-                    f"{release.namespace!r}; rerun without --skip-requires to converge it"
+                    f"bootstrap release {required.name!r} is not installed in namespace "
+                    f"{required.namespace!r}; rerun without --skip-requires to converge it"
                 )
 
 
 def preflight(
-    cluster: LocalCluster, *, root: Path, helm: Helm | None = None
-) -> frozenset[ExternallySatisfiedLifecycle]:
-    """Resolve every lifecycle bootstrap plan before the cluster is touched.
+    cluster: LocalCluster, *, root: Path, helm: Helm | None
+) -> tuple[BootstrapStep, ...]:
+    """Resolve every bootstrap release before the cluster is touched.
 
-    Returns the chart/profile/namespace identities bootstrap owns, so the chart under
-    test does not install them again. With `helm`, every bootstrap chart is linted once
-    all of them have resolved.
+    A lifecycle release resolves to its install plan; one whose plan declares chart-test
+    hooks is refused, since bootstrap installs outside the compiled plan. With `helm`,
+    every bootstrap chart is linted once all of them have resolved.
     """
     root = root.resolve()
-    identities: set[ExternallySatisfiedLifecycle] = set()
-    lint_targets: list[tuple[Path, list[Path]]] = []
-    for release in cluster.spec.bootstrap.releases:
-        if not isinstance(release, BootstrapLifecycleRelease):
-            continue
-        catalog, plan = lifecycle_install_plan(root, release, source="bootstrap chart")
-        for entry in plan:
-            chart = catalog.get(entry.chart)
-            profile = require_chart_test_profile(chart.spec, entry.profile)
-            # Bootstrap bypasses the compiled plan: refuse hooks, don't drop them.
-            if profile.hooks is not None:
+    steps = []
+    for authored in cluster.spec.bootstrap.releases:
+        entries: tuple[InstallPlanEntry, ...] = ()
+        if isinstance(authored, BootstrapLifecycleRelease):
+            entries = tuple(
+                install_plan(root / authored.chart.parent, authored.chart.name, authored.profile)
+            )
+        for entry in entries:
+            if entry.spec.hooks is not None:
                 raise SpecError(
-                    f"bootstrap chart {entry.chart}:{entry.profile} declares "
+                    f"bootstrap chart {entry.chart.name}:{entry.profile} declares "
                     "chart-test hooks, which bootstrap does not run"
                 )
-            identities.add(
-                ExternallySatisfiedLifecycle(
-                    chart_path=chart.path.resolve(),
-                    chart=entry.chart,
-                    profile=entry.profile,
-                    namespace=profile.namespace,
-                )
-            )
-            lint_targets.append((chart.path, catalog.value_paths(chart, entry.profile)))
+        steps.append(BootstrapStep(authored, entries))
     if helm is not None:
-        for chart_path, values in lint_targets:
-            ensure_dependencies(helm, chart_path)
-            helm.lint(chart_path, values)
-    return frozenset(identities)
+        for bootstrap_step in steps:
+            for entry in bootstrap_step.entries:
+                ensure_dependencies(helm, entry.chart.path)
+                helm.lint(entry.chart.path, list(entry.values))
+    return tuple(steps)
+
+
+def owned(steps: tuple[BootstrapStep, ...]) -> frozenset[ExternallySatisfiedLifecycle]:
+    """The lifecycle identities bootstrap installs, so a target does not install them again."""
+    return frozenset(
+        ExternallySatisfiedLifecycle.of(entry)
+        for bootstrap_step in steps
+        for entry in bootstrap_step.entries
+    )
 
 
 def _releases(
-    root: Path, authored: BootstrapRelease, sets: dict[str, str]
+    bootstrap_step: BootstrapStep, root: Path, sets: dict[str, str]
 ) -> list[tuple[Release, str]]:
-    """The Helm releases one authored bootstrap release installs, with their row label."""
+    """The Helm releases one bootstrap step installs, with their row label.
+
+    Runtime values go only to the authored release, which is its install plan's last entry.
+    """
+    authored = bootstrap_step.authored
     if isinstance(authored, BootstrapLifecycleRelease):
-        catalog, plan = lifecycle_install_plan(root, authored, source="bootstrap chart")
-        root_chart = chart_name(root, authored.chart)
-        releases = []
-        for entry in plan:
-            chart = catalog.get(entry.chart)
-            profile = require_chart_test_profile(chart.spec, entry.profile)
-            is_root = entry.chart == root_chart and entry.profile == authored.profile
-            releases.append(
-                (
-                    Release(
-                        name=entry.chart,
-                        chart=chart.path,
-                        namespace=profile.namespace,
-                        values=tuple(catalog.value_paths(chart, entry.profile)),
-                        sets=sets if is_root else {},
-                        timeout=profile.timeout,
-                    ),
-                    entry.profile,
-                )
-            )
-        return releases
+        last = bootstrap_step.entries[-1]
+        return [
+            (release(entry, sets=sets if entry is last else {}), entry.profile)
+            for entry in bootstrap_step.entries
+        ]
     return [helm_release(authored, root, sets=sets)]
 
 
@@ -163,17 +163,17 @@ def _runtime_values(session: Session, release: BootstrapRelease) -> dict[str, st
     return {key: facts[value] for key, value in release.runtime_values.items()}
 
 
-def _wait_ready(
-    session: Session, release: BootstrapRelease, progress: ProgressCallback | None
-) -> None:
+def _wait_ready(session: Session, release: BootstrapRelease, progress: Progress) -> None:
     readiness = release.readiness
     if readiness is None:
         return
     gate = readiness.workloads_ready
-    timeout = gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
+    timeout = parse_duration(
+        gate.timeout if gate is not None else getattr(release, "timeout", DEFAULT_TIMEOUT)
+    )
     if readiness.nodes_ready:
-        emit(progress, step("Waiting for cluster nodes"))
+        progress(step("Waiting for cluster nodes"))
         session.kubectl.wait_nodes_ready(timeout=timeout)
     if gate is not None:
-        emit(progress, step("Waiting for bootstrap workloads", gate.namespace))
-        session.kubectl.wait_workloads_ready(gate.namespace, timeout=gate.timeout)
+        progress(step("Waiting for bootstrap workloads", gate.namespace))
+        session.kubectl.wait_workloads_ready(gate.namespace, timeout=timeout)

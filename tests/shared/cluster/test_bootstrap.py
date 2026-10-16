@@ -89,16 +89,19 @@ def test_bootstrap_converges_in_order_then_waits_for_nodes_after_the_network(
     runner = _runner()
     dev = session.attach("dev", runner=runner, settings=Settings())
 
-    outcomes = bootstrap.bootstrap(dev, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
+    root = _repo(tmp_path)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
+
+    outcomes = bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
 
     steps = _steps(runner)
     network, rollout, nodes, metrics = steps
     assert network[:4] == ("helm", "upgrade", "--install", "network")
     assert "--set" in network and "api.host=172.18.0.2" in network and "api.port=6443" in network
     assert rollout == (
-        "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=10m",
+        "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=600s",
     )
-    assert nodes == ("kubectl", "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=4m")
+    assert nodes == ("kubectl", "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=240s")
     assert metrics[:4] == ("helm", "upgrade", "--install", "metrics")
     assert "cluster.name=dev" in metrics
     assert [(o.name, o.namespace) for o in outcomes] == [
@@ -111,24 +114,26 @@ def test_bootstrap_stops_at_the_first_failed_release(tmp_path: Path) -> None:
     runner = _runner().respond(argv_prefix("helm", "upgrade", "--install", "network"), returncode=1)
     dev = session.attach("dev", runner=runner, settings=Settings())
 
+    root = _repo(tmp_path)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
+
     with pytest.raises(ReleaseFailed, match="network"):
-        bootstrap.bootstrap(dev, _cluster([NETWORK, METRICS]), root=_repo(tmp_path))
+        bootstrap.bootstrap(dev, steps, root=root, progress=[].append)
 
     assert not any(plain_argv(argv)[:4] == ("helm", "upgrade", "--install", "metrics") for argv in runner.calls)
 
 
 def test_verify_accepts_a_release_in_any_state_and_names_a_missing_one(tmp_path: Path) -> None:
-    cluster = _cluster([NETWORK, METRICS])
+    root = _repo(tmp_path)
+    steps = bootstrap.preflight(_cluster([NETWORK, METRICS]), root=root, helm=None)
 
     bootstrap.verify(
-        cluster,
-        root=_repo(tmp_path),
+        steps,
+        root=root,
         releases={("kube-system", "network"): "failed", ("monitoring", "metrics"): "deployed"},
     )
     with pytest.raises(ChartManagerError) as missing:
-        bootstrap.verify(
-            cluster, root=tmp_path, releases={("kube-system", "network"): "deployed"}
-        )
+        bootstrap.verify(steps, root=root, releases={("kube-system", "network"): "deployed"})
 
     assert str(missing.value) == (
         "bootstrap release 'metrics' is not installed in namespace 'monitoring'; "

@@ -22,7 +22,7 @@ OPENED = UpgradeResult(
     proposed_version="1.2.4",
     branch="renovate/loki",
     group="chart-manager:loki",
-    outcome=UpgradeStatus.PR_OPEN,
+    status=UpgradeStatus.PR_OPEN,
     diagnostics=("registry lookup retried",),
     pr_url="https://example.test/pull/7",
     pr_number=7,
@@ -75,94 +75,68 @@ def _fake_finalize(monkeypatch: pytest.MonkeyPatch, result: FinalizeResult = UPD
 
 # ----- chart upgrade --------------------------------------------------------
 
-def test_upgrade_json_is_byte_stable_and_flags_become_the_request(
+def test_upgrade_json_is_the_result_and_flags_become_the_request(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _fake_upgrade(monkeypatch)
 
     result = cli("chart", "upgrade", "charts/loki", "--dry-run", "--output", "json")
 
-    assert result.exit_code == 0
-    # Byte-identical: `-o json` is read by CI steps and jq, so key order,
-    # separators and the trailing newline are all part of the contract.
-    assert result.stdout == (
-        '{"base":null,"branch":"renovate/loki","chart":"loki",'
-        '"current_wrapper_version":"1.2.3",'
-        '"diagnostics":["registry lookup retried"],"outcome":"pr_open",'
-        '"path":"charts/loki","proposed_wrapper_version":"1.2.4",'
-        '"pull_request":{"number":7,"url":"https://example.test/pull/7"},'
-        '"repository":"owner/repository"}\n'
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "branch": "renovate/loki",
+            "chart": "loki",
+            "chart_path": "charts/loki",
+            "current_version": "1.2.3",
+            "diagnostics": ["registry lookup retried"],
+            "group": "chart-manager:loki",
+            "pr_number": 7,
+            "pr_url": "https://example.test/pull/7",
+            "proposed_version": "1.2.4",
+            "repository": "owner/repository",
+            "status": "pr_open",
+        },
     )
     (request,) = fake.requests
-    assert request.chart_path == Path("charts/loki")
+    assert request.chart.path == repo / "charts" / "loki"
     assert request.dry_run is True
 
 
-def test_upgrade_table_renders_every_field_in_a_fixed_order(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _fake_upgrade(monkeypatch)
+def test_upgrade_table_renders_every_field(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_upgrade(monkeypatch, UpgradeResult(**{**vars(OPENED), "pr_number": None}))
 
     result = cli("chart", "upgrade", "charts/loki", "--output", "table")
 
     assert result.exit_code == 0
     assert result.stdout == (
-        "repository: owner/repository\n"
-        "base: -\n"
         "chart: loki\n"
-        "path: charts/loki\n"
-        "current wrapper version: 1.2.3\n"
-        "proposed wrapper version: 1.2.4\n"
+        "chart_path: charts/loki\n"
+        "current_version: 1.2.3\n"
+        "proposed_version: 1.2.4\n"
         "branch: renovate/loki\n"
-        "outcome: pr_open\n"
-        "pull request: #7 https://example.test/pull/7\n"
+        "group: chart-manager:loki\n"
+        "status: pr_open\n"
         "diagnostics:\n"
         "- registry lookup retried\n"
+        "repository: owner/repository\n"
+        "pr_url: https://example.test/pull/7\n"
+        "pr_number: -\n"
     )
 
 
-def test_upgrade_with_nothing_to_propose_reports_null_proposal_and_pull_request(
+def test_an_unknown_pull_request_status_exits_as_a_tool_failure_and_still_reports(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The branch was pushed but the PR lookup failed: CI must not read that as a clean run."""
     _fake_upgrade(
-        monkeypatch,
-        UpgradeResult(
-            chart="loki",
-            chart_path=repo / "charts" / "loki",
-            current_version="1.2.3",
-            proposed_version=None,
-            branch=None,
-            group="chart-manager:loki",
-            outcome=UpgradeStatus.NO_CHANGES,
-            repository="owner/repository",
-        ),
+        monkeypatch, UpgradeResult(**{**vars(OPENED), "status": UpgradeStatus.STATUS_UNKNOWN})
     )
 
     result = cli("chart", "upgrade", "charts/loki", "-o", "json")
 
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["path"] == (repo / "charts" / "loki").as_posix()
-    assert payload["proposed_wrapper_version"] is None
-    assert payload["pull_request"] is None
-    assert payload["diagnostics"] == []
-    assert payload["outcome"] == "no_changes"
-
-
-def test_a_pull_request_without_a_number_is_still_reported(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Reporting `"pull_request": null` for a run that opened one would be a lie."""
-    _fake_upgrade(monkeypatch, UpgradeResult(**{**vars(OPENED), "pr_number": None}))
-
-    as_json = cli("chart", "upgrade", "charts/loki", "-o", "json")
-    as_table = cli("chart", "upgrade", "charts/loki", "-o", "table")
-
-    assert json.loads(as_json.stdout)["pull_request"] == {
-        "url": "https://example.test/pull/7",
-        "number": None,
-    }
-    assert "pull request: https://example.test/pull/7\n" in as_table.stdout
+    assert result.exit_code == 4
+    assert '"status": "status_unknown"' in result.stdout
 
 
 @pytest.mark.parametrize("chart", ["loki", "charts/loki"], ids=["name", "path"])
@@ -174,7 +148,7 @@ def test_the_chart_argument_takes_a_name_or_a_repository_relative_path(
     result = cli("chart", "upgrade", chart)
 
     assert result.exit_code == 0
-    assert fake.requests[0].chart_path == Path("charts/loki")
+    assert fake.requests[0].chart.path == repo / "charts" / "loki"
 
 
 def test_upgrade_without_a_chart_is_a_usage_error(
@@ -216,49 +190,29 @@ def test_finalize_is_hidden_and_reads_callback_data_from_outside_the_repository(
     fake = _fake_finalize(monkeypatch)
     monkeypatch.setenv(_DATA_ENV, str(data_file))
 
-    result = cli("upgrade-finalize", "--path", "charts/loki", "--format", "json")
+    result = cli("upgrade-finalize", "--path", "charts/loki", "-o", "json")
 
     assert "upgrade-finalize" not in cli("--help").stdout
-    assert result.exit_code == 0
-    # Renovate's callback reads this line, so pin it byte for byte -- including
-    # the keys finalize cannot populate, and its previous_version/version landing
-    # on current_wrapper_version/proposed_wrapper_version.
-    assert result.stdout == (
-        '{"base":null,"branch":null,"chart":"loki",'
-        '"current_wrapper_version":"1.2.3","diagnostics":[],'
-        '"outcome":"updated","path":"charts/loki",'
-        '"proposed_wrapper_version":"2.0.0","pull_request":null,'
-        '"repository":null}\n'
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {"changed": True, "chart": "loki", "previous_version": "1.2.3", "version": "2.0.0"},
     )
     (request,) = fake.requests
-    assert request.chart_path == Path("charts/loki")
+    assert request.chart.path == repo / "charts" / "loki"
     assert request.update_data["updates"][0]["depName"] == "grafana"
 
 
-def test_finalize_text_renders_the_keys_finalize_cannot_populate(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_finalize_table_renders_every_field(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data_file = repo / "renovate-data.json"
     data_file.write_text('{"updates":[]}', encoding="utf-8")
     _fake_finalize(monkeypatch, UNCHANGED)
 
-    result = cli("upgrade-finalize", "--path", "charts/loki", "--data-file", str(data_file))
+    result = cli(
+        "upgrade-finalize", "--path", "charts/loki", "--data-file", str(data_file), "-o", "table"
+    )
 
     assert result.exit_code == 0
-    # An unchanged finalize still reports a version; `outcome` tells the cases apart.
-    assert result.stdout == (
-        "repository: -\n"
-        "base: -\n"
-        "chart: loki\n"
-        "path: charts/loki\n"
-        "current wrapper version: 1.2.3\n"
-        "proposed wrapper version: 1.2.3\n"
-        "branch: -\n"
-        "outcome: unchanged\n"
-        "pull request: -\n"
-        "diagnostics:\n"
-        "- none\n"
-    )
+    assert result.stdout == "chart: loki\nprevious_version: 1.2.3\nversion: 1.2.3\nchanged: False\n"
 
 
 def _symlinked(repo: Path) -> Path:
@@ -296,4 +250,26 @@ def test_finalize_refuses_unsafe_callback_data_before_run(
 
     assert isinstance(result.exception, ChartManagerError)
     assert message in str(result.exception)
+    assert fake.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("charts/linked", "upgrade path must not contain symlinks: {repo}/charts/linked"),
+        ("linked", "chart not found: {repo}/linked"),
+    ],
+    ids=["symlink", "bare-name"],
+)
+def test_finalize_refuses_a_symlinked_or_bare_chart_path_before_run(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, path: str, message: str
+) -> None:
+    (repo / "charts" / "linked").symlink_to(repo / "charts" / "loki", target_is_directory=True)
+    data_file = repo / "renovate-data.json"
+    data_file.write_text('{"updates":[]}', encoding="utf-8")
+    fake = _fake_finalize(monkeypatch)
+
+    result = cli("upgrade-finalize", "--path", path, "--data-file", str(data_file))
+
+    assert str(result.exception) == message.format(repo=repo)
     assert fake.requests == []

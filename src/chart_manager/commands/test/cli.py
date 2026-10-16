@@ -16,8 +16,8 @@ from chart_manager.cli._options import (
     ProvisionHooksOption,
     provision_hooks_enabled,
 )
+from chart_manager.cli.progress import print_progress
 from chart_manager.cli.streams import console, narration
-from chart_manager.cli.streams import print_progress as _print_progress
 from chart_manager.commands import test
 from chart_manager.commands.test.models import LifecyclePlan
 from chart_manager.commands.test.run import plan, run, teardown, teardown_plan
@@ -54,12 +54,7 @@ def _target(chart: str) -> tuple[str, RepositoryWorkspace]:
 
 
 def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | None) -> None:
-    """Print the compiled chart-test plan; say on stderr what did not happen.
-
-    The plan is what the caller asked for, so it is the projection and goes
-    to stdout. That it was *only* a plan is narration, and stays off the
-    stream a `-o json | jq` consumer reads.
-    """
+    """Print the plan on stdout; say on stderr that nothing ran."""
     mode = output_mod.resolve(output, ctx, allowed=_DRY_RUN_OUTPUTS, console=console)
     output_mod.emit(plan_to_dict(plan), mode=mode, table=_plan_table(plan))
     for warning in plan.warnings:
@@ -72,13 +67,14 @@ def _render_test_plan(plan: LifecyclePlan, *, ctx: typer.Context, output: str | 
 def _plan_table(plan: LifecyclePlan) -> Table:
     table = Table("Step", "Action", "Chart", "Profile", "Namespace", "Release", "Command")
     for step, action in enumerate(plan.actions, start=1):
+        entry = action.entry
         table.add_row(
             str(step),
             action.kind.value,
-            action.target.chart,
-            action.target.profile or "",
-            action.target.namespace or "",
-            action.target.release or "",
+            entry.chart.name,
+            entry.profile,
+            entry.namespace,
+            entry.chart.name,
             escape(redact(action.command)),
         )
     return table
@@ -125,7 +121,7 @@ def chart_test(
     output: DryRunOutputOption = None,
     run_provision_hooks: ProvisionHooksOption = None,
 ) -> None:
-    """Install and exercise one chart on an ephemeral local Kubernetes cluster.
+    """Install and exercise one chart on a test cluster.
 
     `--dry-run` prints the compiled lifecycle plan -- every namespace,
     install and helm test the run would perform, in order -- and exits 0
@@ -139,6 +135,7 @@ def chart_test(
     """
     output_mod.require_dry_run(output, dry_run=dry_run)
     target, workspace = _target(chart)
+    container = _container()
     request = test.ChartTestRequest(
         chart=target,
         profile=profile,
@@ -148,18 +145,17 @@ def chart_test(
         include_dependent_tests=dependent_tests,
         skip_requires=skip_requires,
         lint=lint,
-        run_provision_hooks=provision_hooks_enabled(run_provision_hooks),
+        run_provision_hooks=provision_hooks_enabled(run_provision_hooks, ci=container.settings.ci),
     )
     if dry_run:
         _render_test_plan(plan(request, workspace=workspace), ctx=ctx, output=output)
         return
-    container = _container()
     outcome = run(
         request,
         workspace=workspace,
         runner=container.command_runner(),
         settings=container.settings,
-        progress=_print_progress,
+        progress=print_progress,
     )
     if outcome.failed is not None:
         raise ChartManagerError(
@@ -211,7 +207,7 @@ def chart_teardown(
         workspace=workspace,
         runner=container.command_runner(),
         settings=container.settings,
-        progress=_print_progress,
+        progress=print_progress,
     )
     if not result.ok:
         raise ChartManagerError(_teardown_failure(result))

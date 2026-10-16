@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from chart_manager.cli import _container
 from chart_manager.commands.local import run as local_run
 from chart_manager.commands.local.models import (
+    DevClusterAccessHints,
     DevClusterActionResult,
+    DevClusterCredentials,
+    DevClusterEntryFailure,
+    DevClusterEntryOutcome,
     DevClusterPlan,
     DevClusterPlanEntry,
     DevClusterRelease,
@@ -19,7 +25,8 @@ from chart_manager.commands.local.models import (
 )
 from chart_manager.commands.local.targets import ResolvedStackTarget
 from chart_manager.plumbing.yaml_files import parse_yaml
-from chart_manager.shared.charts.chart import resolve_chart_target
+from chart_manager.settings import Settings
+from chart_manager.shared.charts.chart import Chart, resolve_chart_target
 from tests.conftest import cli
 
 pytestmark = pytest.mark.usefixtures("tmp_workspace")
@@ -77,7 +84,7 @@ def test_sandbox_group_is_removed_without_an_alias() -> None:
 
 
 @pytest.mark.parametrize("command", ["up", "reset"])
-def test_local_commands_require_exactly_one_explicit_selector(command: str) -> None:
+def test_local_commands_require_exactly_one_explicit_selector(root: Path, command: str) -> None:
     result = cli("local", command)
 
     assert result.exit_code != 0
@@ -107,19 +114,19 @@ def test_local_down_has_no_target_selector() -> None:
     assert rejected.exit_code == 2
 
 
-def test_local_up_rejects_the_old_positional_chart_shape(tmp_path: Path) -> None:
-    chart = _chart(tmp_path)
+def test_local_up_rejects_the_old_positional_chart_shape(root: Path) -> None:
+    chart = _chart(root)
 
-    result = cli("local", "up", str(chart), "--root", str(tmp_path))
+    result = cli("local", "up", str(chart))
 
     assert result.exit_code == 2
     assert "unexpected extra argument" in result.output.lower()
 
 
 def test_chart_up_delegates_profile_and_skip_installed(
-    tmp_path: Path, recorded: _RecordingService
+    root: Path, recorded: _RecordingLocalRun
 ) -> None:
-    chart = _chart(tmp_path)
+    chart = _chart(root)
 
     result = cli(
         "local",
@@ -129,23 +136,21 @@ def test_chart_up_delegates_profile_and_skip_installed(
         "--profile",
         "telemetry",
         "--skip-installed",
-        "--root",
-        str(tmp_path),
     )
 
     assert result.exit_code == 0, result.output
     target, options = recorded.requests[0]
-    assert target.kind == "chart"
+    assert isinstance(target, Chart)
     assert options["profile"] == "telemetry"
     assert options["skip_installed"] is True
 
 
 def test_named_stack_up_loads_the_authored_composition(
-    tmp_path: Path, recorded: _RecordingService
+    root: Path, recorded: _RecordingLocalRun
 ) -> None:
-    _stack(tmp_path)
+    _stack(root)
 
-    result = cli("local", "up", "--stack", "platform", "--root", str(tmp_path))
+    result = cli("local", "up", "--stack", "platform")
 
     assert result.exit_code == 0, result.output
     target, _options = recorded.requests[0]
@@ -156,10 +161,10 @@ def test_named_stack_up_loads_the_authored_composition(
 
 @pytest.mark.parametrize("command", ["up", "reset"])
 def test_profile_is_rejected_for_a_stack(
-    tmp_path: Path,
+    root: Path,
     command: str,
 ) -> None:
-    _stack(tmp_path)
+    _stack(root)
     result = cli(
         "local",
         command,
@@ -167,8 +172,6 @@ def test_profile_is_rejected_for_a_stack(
         "platform",
         "--profile",
         "minimal",
-        "--root",
-        str(tmp_path),
     )
 
     assert result.exit_code != 0
@@ -177,13 +180,13 @@ def test_profile_is_rejected_for_a_stack(
 
 # ----- the output vocabulary -------------------------------------------------
 #
-# Design doc 6.2: every command gets `json`, `auto` resolves from the
+# Every command gets `json`, `auto` resolves from the
 # environment, and a projection a command cannot produce is a usage error
 # rather than a silently different answer. `local *` had no `-o` at all.
 
 
-class _RecordingService:
-    """Stands in for `commands.local`: records each call and returns empty results."""
+class _RecordingLocalRun:
+    """Stands in for `commands.local.run`: records each call and returns empty results."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -201,12 +204,11 @@ class _RecordingService:
 
     def down(self, **_options: object) -> DevClusterActionResult:
         self.calls.append("down")
-        return DevClusterActionResult("chart-manager", changed=True)
+        return DevClusterActionResult(changed=True)
 
     def status(self, **_options: object) -> DevClusterStatus:
         self.calls.append("status")
         return DevClusterStatus(
-            cluster_name="chart-manager",
             exists=True,
             context="kind-chart-manager",
             provider="kind",
@@ -218,118 +220,169 @@ class _RecordingService:
             urls=("https://loki.localhost/",),
         )
 
-    def plan(
-        self, target: object, *, profile: str | None, destroys: bool = False, **_options: object
-    ) -> DevClusterPlan:
+    def plan(self, target: object, *, destroys: bool = False, **_options: object) -> DevClusterPlan:
         self.calls.append("plan")
         return DevClusterPlan(
-            command="reset" if destroys else "up",
-            cluster_name="chart-manager",
-            target=getattr(target, "name", None),
-            target_kind=getattr(target, "kind", None),
+            target="alloy",
+            target_kind="chart",
             destroys=destroys,
-            entries=(
-                DevClusterPlanEntry(
-                    chart="alloy", profile=profile or "minimal", namespace="obs", source="target"
-                ),
-            ),
+            entries=(DevClusterPlanEntry("alloy", "minimal", "obs", "target"),),
+            provisioning_hooks=(("preProvision", ("./prepare", "arg")),),
         )
 
     def plan_down(self) -> DevClusterPlan:
         self.calls.append("plan_down")
-        return DevClusterPlan(command="down", cluster_name="chart-manager")
+        return DevClusterPlan()
 
 
 @pytest.fixture
-def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingService:
+def recorded(monkeypatch: pytest.MonkeyPatch) -> _RecordingLocalRun:
     """Route every `local` command at one recording stand-in."""
-    service = _RecordingService()
+    fake = _RecordingLocalRun()
     for name in ("up", "reset", "down", "status", "plan", "plan_down"):
-        monkeypatch.setattr(local_run, name, getattr(service, name))
-    return service
+        monkeypatch.setattr(local_run, name, getattr(fake, name))
+    return fake
 
 
-def _local_argv(command: str, root: Path) -> list[str]:
+def _local_argv(command: str) -> list[str]:
     """The minimum argv for one `local` verb; `up`/`reset` need a selector."""
     selector = ["--chart", "alloy"] if command in {"up", "reset"} else []
-    return ["local", command, *selector, "--root", str(root)]
+    return ["local", command, *selector]
 
 
+_CONVERGED = {"applied": [], "no_change": [], "failed": []}
+
+#: The document each command prints for `_RecordingLocalRun`'s results.
+_DOCUMENTS = {
+    "up": _CONVERGED,
+    "reset": _CONVERGED,
+    "down": {"changed": True},
+    "status": {
+        "exists": True,
+        "context": "kind-chart-manager",
+        "provider": "kind",
+        "releases": [
+            {"name": "loki", "namespace": "observability", "revision": 2, "status": "deployed"}
+        ],
+        "releases_error": None,
+        "urls": ["https://loki.localhost/"],
+        "urls_error": None,
+        "drift": {"missing": [], "error": None},
+    },
+}
+
+
+@pytest.mark.parametrize(("mode", "load"), [("json", json.loads), ("yaml", parse_yaml)])
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
-def test_every_local_command_emits_a_json_document_on_stdout(
-    tmp_path: Path, recorded: _RecordingService, command: str
+def test_every_local_command_prints_its_document(
+    root: Path, recorded: _RecordingLocalRun, command: str, mode: str, load: Callable[[str], Any]
 ) -> None:
-    """One vocabulary, and the payload is the only thing on stdout."""
-    _chart(tmp_path)
+    """One vocabulary, and the document is the only thing on stdout."""
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "json")
+    result = cli(*_local_argv(command), "-o", mode)
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["command"] == command
-    assert payload["cluster_name"] == "chart-manager"
-    assert payload["ok"] is True
+    assert (result.exit_code, load(result.stdout)) == (0, _DOCUMENTS[command])
 
 
-@pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
-def test_every_local_command_emits_yaml(
-    tmp_path: Path, recorded: _RecordingService, command: str
+def test_a_failed_converge_exits_1_and_its_document_has_no_credentials(
+    root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _chart(tmp_path)
+    """Access hints can carry a login, so they never reach the document."""
+    _chart(root)
+    hints = DevClusterAccessHints(
+        urls=("https://app.localhost/",),
+        credentials=(DevClusterCredentials("https://app.localhost/", "admin", "s3cret"),),
+    )
+    monkeypatch.setattr(
+        local_run,
+        "up",
+        lambda _target, **_options: DevClusterResult(
+            applied=(DevClusterEntryOutcome("grafana", "minimal", "observability"),),
+            failed=(DevClusterEntryFailure("loki", "minimal", "observability", "boom"),),
+            hints=hints,
+        ),
+    )
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "yaml")
+    result = cli(*_local_argv("up"), "-o", "json")
 
-    assert result.exit_code == 0, result.output
-    assert parse_yaml(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        1,
+        {
+            "applied": [{"chart": "grafana", "profile": "minimal", "namespace": "observability"}],
+            "no_change": [],
+            "failed": [
+                {
+                    "chart": "loki",
+                    "profile": "minimal",
+                    "namespace": "observability",
+                    "error": "boom",
+                }
+            ],
+        },
+    )
+    assert "s3cret" not in result.stdout
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_auto_resolves_to_json_in_ci(
-    tmp_path: Path,
-    recorded: _RecordingService,
+    root: Path,
+    recorded: _RecordingLocalRun,
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
     """`-o auto` is the default and must go through the shared `_auto` logic."""
-    _chart(tmp_path)
+    _chart(root)
     monkeypatch.setenv("CI", "true")
 
-    result = cli(*_local_argv(command, tmp_path))
+    result = cli(*_local_argv(command))
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _DOCUMENTS[command])
+
+
+def test_ci_1_means_ci_to_auto_output_and_to_provision_hooks(
+    root: Path, recorded: _RecordingLocalRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`CI` is read once, in `Settings`, so every "am I in CI" agrees."""
+    _chart(root)
+    monkeypatch.setenv("CI", "1")
+    # A terminal on stdout, so only CI can make `auto` pick json.
+    monkeypatch.setenv("TTY_COMPATIBLE", "1")
+
+    result = cli(*_local_argv("up"))
+
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _CONVERGED)
+    _target, options = recorded.requests[0]
+    assert options["run_hooks"] is False
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_the_global_output_flag_reaches_every_local_command(
-    tmp_path: Path, recorded: _RecordingService, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli("-o", "json", *_local_argv(command, tmp_path))
+    result = cli("-o", "json", *_local_argv(command))
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["command"] == command
+    assert (result.exit_code, json.loads(result.stdout)) == (0, _DOCUMENTS[command])
 
 
 @pytest.mark.parametrize("command", ["up", "down", "reset", "status"])
 def test_markdown_is_rejected_rather_than_silently_rendered(
-    tmp_path: Path, recorded: _RecordingService, command: str
+    root: Path, recorded: _RecordingLocalRun, command: str
 ) -> None:
     """`md` is offered only where a markdown projection exists (cli/output.py)."""
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "-o", "md")
+    result = cli(*_local_argv(command), "-o", "md")
 
     assert result.exit_code == 2
     assert "md" in result.output
 
 
-def test_status_renders_a_human_table_on_stdout(
-    tmp_path: Path, recorded: _RecordingService
-) -> None:
+def test_status_renders_a_human_table_on_stdout(root: Path, recorded: _RecordingLocalRun) -> None:
     """The whole report is the projection, so none of it hides on stderr."""
-    result = cli("local", "status", "--root", str(tmp_path), "-o", "table")
+    result = cli("local", "status", "-o", "table")
 
     assert result.exit_code == 0, result.output
     for token in ("chart-manager", "running", "kind-chart-manager", "loki", "deployed"):
@@ -338,25 +391,34 @@ def test_status_renders_a_human_table_on_stdout(
 
 
 def test_status_exits_zero_for_an_absent_cluster(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`status` reports; it does not grade. An absent cluster is the answer."""
     monkeypatch.setattr(
         local_run,
         "status",
-        lambda **_options: DevClusterStatus(cluster_name="chart-manager", exists=False),
+        lambda **_options: DevClusterStatus(exists=False),
     )
-    result = cli("local", "status", "--root", str(tmp_path), "-o", "json")
+    result = cli("local", "status", "-o", "json")
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["exists"] is False
-    assert payload["ok"] is False
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "exists": False,
+            "context": None,
+            "provider": None,
+            "releases": [],
+            "releases_error": None,
+            "urls": [],
+            "urls_error": None,
+            "drift": {"missing": [], "error": None},
+        },
+    )
 
 
 # ----- --dry-run -------------------------------------------------------------
 #
-# Design doc 6.3: print the plan in --output form, exit 0, mutate nothing.
+# Print the plan in --output form, exit 0, mutate nothing.
 # Accepted-and-ignored is forbidden, which is why every case below asserts
 # on the *absence* of the mutating call and not only on the exit code.
 
@@ -370,39 +432,65 @@ def test_status_exits_zero_for_an_absent_cluster(
     ],
 )
 def test_dry_run_plans_and_mutates_nothing(
-    tmp_path: Path,
-    recorded: _RecordingService,
+    root: Path,
+    recorded: _RecordingLocalRun,
     command: str,
     planner: str,
     mutator: str,
 ) -> None:
-    _chart(tmp_path)
+    _chart(root)
 
-    result = cli(*_local_argv(command, tmp_path), "--dry-run", "-o", "json")
+    result = cli(*_local_argv(command), "--dry-run", "-o", "json")
 
     assert result.exit_code == 0, result.output
     assert recorded.calls == [planner]
     assert mutator not in recorded.calls
-    payload = json.loads(result.stdout)
-    assert payload["dry_run"] is True
-    assert payload["command"] == command
 
 
-def test_dry_run_reset_is_marked_destructive(tmp_path: Path, recorded: _RecordingService) -> None:
+@pytest.mark.parametrize(("command", "destroys"), [("up", False), ("reset", True)])
+def test_dry_run_prints_the_plan_document(
+    root: Path, recorded: _RecordingLocalRun, command: str, destroys: bool
+) -> None:
     """`up` and `reset` share a plan; only one of them deletes the cluster first."""
-    _chart(tmp_path)
+    _chart(root)
 
-    up = cli(*_local_argv("up", tmp_path), "--dry-run", "-o", "json")
-    reset = cli(*_local_argv("reset", tmp_path), "--dry-run", "-o", "json")
+    result = cli(*_local_argv(command), "--dry-run", "-o", "json")
 
-    assert json.loads(up.stdout)["destroys"] is False
-    assert json.loads(reset.stdout)["destroys"] is True
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "target": "alloy",
+            "target_kind": "chart",
+            "destroys": destroys,
+            "entries": [
+                {"chart": "alloy", "profile": "minimal", "namespace": "obs", "source": "target"}
+            ],
+            "provisioning_hooks_enabled": True,
+            "provisioning_hooks": [["preProvision", ["./prepare", "arg"]]],
+        },
+    )
 
 
-def test_dry_run_renders_the_plan_as_a_table(tmp_path: Path, recorded: _RecordingService) -> None:
-    _chart(tmp_path)
+def test_dry_run_down_prints_an_empty_plan(root: Path, recorded: _RecordingLocalRun) -> None:
+    result = cli("local", "down", "--dry-run", "-o", "json")
 
-    result = cli(*_local_argv("up", tmp_path), "--dry-run", "-o", "table")
+    assert (result.exit_code, json.loads(result.stdout)) == (
+        0,
+        {
+            "target": None,
+            "target_kind": None,
+            "destroys": False,
+            "entries": [],
+            "provisioning_hooks_enabled": True,
+            "provisioning_hooks": [],
+        },
+    )
+
+
+def test_dry_run_renders_the_plan_as_a_table(root: Path, recorded: _RecordingLocalRun) -> None:
+    _chart(root)
+
+    result = cli(*_local_argv("up"), "--dry-run", "-o", "table")
 
     assert result.exit_code == 0, result.output
     assert "Dry run" in result.stdout
@@ -412,9 +500,9 @@ def test_dry_run_renders_the_plan_as_a_table(tmp_path: Path, recorded: _Recordin
     assert "nothing was changed" in result.stderr
 
 
-def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
+def test_dry_run_still_rejects_an_invalid_selection(root: Path) -> None:
     """A dry run is not a bypass: usage errors are decided before the plan."""
-    result = cli("local", "up", "--dry-run", "--root", str(tmp_path))
+    result = cli("local", "up", "--dry-run")
 
     assert result.exit_code != 0
     assert "select exactly one of --chart or --stack" in str(result.exception)
@@ -423,7 +511,7 @@ def test_dry_run_still_rejects_an_invalid_selection(tmp_path: Path) -> None:
 def test_chart_name_and_directory_resolve_to_the_same_target(tmp_path: Path) -> None:
     chart = _chart(tmp_path, "cert-manager")
 
-    workspace = _container.container().workspace(tmp_path)
+    workspace = _container.Container(Settings()).workspace(tmp_path)
     by_name = resolve_chart_target(workspace, "cert-manager")
     by_path = resolve_chart_target(workspace, "./charts/cert-manager")
 

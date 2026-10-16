@@ -5,38 +5,30 @@ Flags, the downgrade guard, output mode and rendering; each handler calls its st
 """
 from __future__ import annotations
 
-import logging
-import os
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import typer
-from rich.console import Console
 
 from chart_manager.cli import output as output_mod
 from chart_manager.cli._container import container as _container
-from chart_manager.cli.streams import data_console, narration_console
-from chart_manager.commands.promote.monitor import MonitorRequest
+from chart_manager.cli.progress import progress_view
+from chart_manager.cli.streams import console, narration
+from chart_manager.commands.promote.monitor import MonitorRequest, MonitorResult
 from chart_manager.commands.promote.monitor import run as run_monitor
 from chart_manager.commands.promote.pr import PromoteRequest, PromoteResult
 from chart_manager.commands.promote.pr import run as run_pr
-from chart_manager.commands.promote.render import (
-    ProgressTable,
-    render_monitor_json,
-    render_monitor_pretty,
-    render_promote_json,
-    render_test_json,
-    render_test_pretty,
-)
+from chart_manager.commands.promote.render import render_pretty
 from chart_manager.commands.promote.scanner import HelmReleaseMatch
-from chart_manager.commands.promote.state import PROMOTE_OUTCOME, PromoteStatus
-from chart_manager.commands.promote.test import TestRequest
+from chart_manager.commands.promote.state import PromoteStatus
+from chart_manager.commands.promote.test import TestRequest, TestResult
 from chart_manager.commands.promote.test import run as run_test
+from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.duration import parse_duration
 from chart_manager.plumbing.errors import ChartManagerError
-from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
-from chart_manager.shared.events.store import get_event_store
+from chart_manager.plumbing.progress import Progress
+from chart_manager.settings import Settings
 from chart_manager.shared.events.writer import EventWriter
 
 # --- helpers --------------------------------------------------------------
@@ -51,26 +43,17 @@ OutputOption = Annotated[
 _PROMOTE_OUTPUTS = (output_mod.TABLE, output_mod.JSON)
 
 
-def _setup_logging_for_mode(mode: str) -> None:
-    """In json mode, route log records to stderr so stdout stays machine-parseable."""
-    if mode == "json":
-        logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
-
-
 def _is_interactive() -> bool:
     """True when it is legitimate to block the run on a prompt.
 
-    Never prompt when stdin is not a TTY or `CI=true`. Both
-    legs matter. `isatty()` alone misses a runner that sets `CI=true` while
-    still allocating a pty -- there the prompt would not EOF, it would sit
-    there until the job's wall-clock timeout. `CI=true` alone misses a
-    `cron` job or a `docker run` without `-i`, where stdin is closed and
-    `typer.confirm` raises `Abort` on EOF instead of asking anything.
-
-    The `CI` test is spelled exactly as `cli/output.py` spells it, so "am I
-    in CI" cannot mean two different things inside one command.
+    Never prompt when stdin is not a TTY or in CI. Both legs matter.
+    `isatty()` alone misses a runner that sets `CI=true` while still
+    allocating a pty -- there the prompt would not EOF, it would sit there
+    until the job's wall-clock timeout. CI alone misses a `cron` job or a
+    `docker run` without `-i`, where stdin is closed and `typer.confirm`
+    raises `Abort` on EOF instead of asking anything.
     """
-    if os.environ.get("CI") == "true":
+    if _container().settings.ci:
         return False
     try:
         return sys.stdin.isatty()
@@ -85,27 +68,6 @@ def _coerce_namespace(ns: str | None) -> str | None:
     if ns is None or ns == "":
         return None
     return ns
-
-
-def _make_console(no_color: bool) -> Console:
-    """Console for the selected `--output` projection (stdout), honoring --no-color.
-
-    Also the console `_resolve_output_mode` probes for `is_terminal`: the
-    `auto` decision is "is the *data* going to a terminal", so it must ask
-    about stdout, not about wherever narration happens to go.
-    """
-    return data_console(no_color=no_color)
-
-
-def _make_narration_console(no_color: bool) -> Console:
-    """Console for progress and status (stderr), honoring --no-color.
-
-    Progress tables and promote's status lines are not the projection, so
-    they belong on stderr regardless of `--output`. Previously they shared
-    the stdout console and were safe only because json mode bypassed them;
-    this makes the separation structural instead of mode-dependent.
-    """
-    return narration_console(no_color=no_color)
 
 
 def _duration_option(value: str, *, flag: str) -> float:
@@ -125,6 +87,52 @@ def _pr_url(result: PromoteResult) -> str:
     return result.pull_request.url if result.pull_request is not None else ""
 
 
+NamespaceOption = Annotated[
+    str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
+]
+EnvOption = Annotated[
+    str | None,
+    typer.Option(
+        "--env",
+        help=(
+            "promotion target this run belongs to; enables lifecycle "
+            "events (omit for an ad-hoc run, which emits nothing)"
+        ),
+    ),
+]
+
+
+class _StageRun[RequestT](Protocol):
+    """A stage's `run`: `monitor.run` or `test.run`."""
+
+    def __call__(
+        self,
+        request: RequestT,
+        /,
+        *,
+        runner: CommandRunner,
+        settings: Settings,
+        events: EventWriter,
+        progress: Progress,
+    ) -> MonitorResult | TestResult: ...
+
+
+def _run_stage[RequestT](
+    mode: str, request: RequestT, run: _StageRun[RequestT], *, noun: str
+) -> None:
+    """Run the stage's request under a progress view and finish with its result."""
+    container = _container()
+    with progress_view(live=narration.is_terminal) as progress:
+        result = run(
+            request,
+            runner=container.command_runner(),
+            settings=container.settings,
+            events=container.event_writer(),
+            progress=progress,
+        )
+    output_mod.finish(result, mode=mode, render=lambda r: render_pretty(r, console, noun=noun))
+
+
 # --- command handlers -----------------------------------------------------
 
 
@@ -132,33 +140,17 @@ def monitor(
     ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
-    namespace: Annotated[
-        str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
-    ] = None,
+    namespace: NamespaceOption = None,
     concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=8)] = 4,
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
     fail_fast: Annotated[bool, typer.Option("--fail-fast")] = False,
-    environment: Annotated[
-        str | None,
-        typer.Option(
-            "--env",
-            help=(
-                "promotion target this run belongs to; enables lifecycle "
-                "events (omit for an ad-hoc run, which emits nothing)"
-            ),
-        ),
-    ] = None,
+    environment: EnvOption = None,
 ) -> None:
     """Wait for matched HelmReleases to converge on chart@version."""
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
-
     request = MonitorRequest(
         chart_name=chart,
         version=version,
@@ -170,65 +162,24 @@ def monitor(
         fail_fast=fail_fast,
         environment=environment,
     )
-
-    container = _container()
-    runner = container.command_runner()
-    events = EventWriter(source=container.settings.event_source, store=get_event_store)
-    # Progress renders onto the narration console: it is never the projection.
-    if mode == output_mod.TABLE:
-        with ProgressTable(narration) as table:
-            result = run_monitor(
-                request,
-                runner=runner,
-                settings=container.settings,
-                events=events,
-                progress=table,
-            )
-    else:
-        result = run_monitor(
-            request, runner=runner, settings=container.settings, events=events, progress=None
-        )
-
-    if mode == output_mod.TABLE:
-        render_monitor_pretty(result, console, chart=chart, version=version)
-    else:
-        render_monitor_json(result, sys.stdout, chart=chart, version=version)
-
-    if not result.ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
+    _run_stage(mode, request, run_monitor, noun="ready")
 
 
 def test(
     ctx: typer.Context,
     chart: Annotated[str, typer.Option("--chart", help="chart name (Flux spec.chart.spec.chart)")],
     version: Annotated[str, typer.Option("--version", help="chart version to match")],
-    namespace: Annotated[
-        str | None, typer.Option("--namespace", help="limit to a single namespace (default: all)")
-    ] = None,
+    namespace: NamespaceOption = None,
     concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=8)] = 4,
     per_poll_timeout: Annotated[str, typer.Option("--per-poll-timeout")] = "10s",
     per_hr_timeout: Annotated[str, typer.Option("--per-hr-timeout")] = "5m",
     total_timeout: Annotated[str, typer.Option("--total-timeout")] = "15m",
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
     pod_log_tail: Annotated[int, typer.Option("--pod-log-tail", min=1)] = 200,
-    environment: Annotated[
-        str | None,
-        typer.Option(
-            "--env",
-            help=(
-                "promotion target this run belongs to; enables lifecycle "
-                "events (omit for an ad-hoc run, which emits nothing)"
-            ),
-        ),
-    ] = None,
+    environment: EnvOption = None,
 ) -> None:
     """Run `helm test` for matched HelmReleases and aggregate the verdict."""
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
-
     request = TestRequest(
         chart_name=chart,
         version=version,
@@ -240,32 +191,7 @@ def test(
         pod_log_tail=pod_log_tail,
         environment=environment,
     )
-
-    container = _container()
-    runner = container.command_runner()
-    events = EventWriter(source=container.settings.event_source, store=get_event_store)
-    # Progress renders onto the narration console: it is never the projection.
-    if mode == output_mod.TABLE:
-        with ProgressTable(narration) as table:
-            result = run_test(
-                request,
-                runner=runner,
-                settings=container.settings,
-                events=events,
-                progress=table,
-            )
-    else:
-        result = run_test(
-            request, runner=runner, settings=container.settings, events=events, progress=None
-        )
-
-    if mode == output_mod.TABLE:
-        render_test_pretty(result, console, chart=chart, version=version)
-    else:
-        render_test_json(result, sys.stdout, chart=chart, version=version)
-
-    if not result.ok:
-        raise typer.Exit(code=exit_code_for(Outcome.FAILED))
+    _run_stage(mode, request, run_test, noun="passed")
 
 
 def pr(
@@ -312,17 +238,13 @@ def pr(
         ),
     ] = False,
     output: OutputOption = None,
-    no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Open a PR in the flux repo that bumps a chart's version in a target environment."""
     # Every status line below is narration and goes to stderr, in `pretty`
     # mode too: promote's human output is a running commentary on a mutation,
     # not a document, so `promote >/dev/null` must still show what happened.
-    # The one thing on stdout is the json projection, written at the end.
-    console = _make_console(no_color)
-    narration = _make_narration_console(no_color)
+    # The one thing on stdout is the json document, written at the end.
     mode = output_mod.resolve(output, ctx, allowed=_PROMOTE_OUTPUTS, console=console)
-    _setup_logging_for_mode(mode)
 
     def _confirm_downgrade(downgrades: list[HelmReleaseMatch], target: str) -> bool:
         """Prompt to proceed on a detected downgrade; auto-yes when --allow-downgrade is set."""
@@ -344,7 +266,7 @@ def pr(
             raise typer.BadParameter(
                 f"refusing to downgrade {chart_name} to {target}: "
                 f"{len(downgrades)} HelmRelease(s) are at a newer version and "
-                "stdin is not a terminal (or CI=true), so the confirmation "
+                "stdin is not a terminal (or running in CI), so the confirmation "
                 "prompt cannot be answered. Re-run with --allow-downgrade to "
                 "promote anyway."
             )
@@ -362,7 +284,8 @@ def pr(
             dry_run=dry_run,
         ),
         runner=container.command_runner(),
-        events=EventWriter(source=container.settings.event_source, store=get_event_store),
+        settings=container.settings,
+        events=container.event_writer(),
         confirm_downgrade=_confirm_downgrade,
     )
 
@@ -396,24 +319,8 @@ def pr(
         case PromoteStatus.PUSHED:
             narration.print(f"[green]pushed[/green] branch={result.branch}")
 
-    if mode == output_mod.JSON:
-        render_promote_json(
-            result,
-            sys.stdout,
-            chart=chart_name,
-            version=version,
-            environment=environment,
-            path=path,
-        )
-
-    # Two lookups, one judgement. `PROMOTE_OUTCOME` answers "did this promote
-    # succeed" -- the same lookup `wire.promote_to_dict` publishes as the
-    # payload's `ok` -- and `exit_code_for` answers "what number is that
-    # worth". Neither re-derives the other's half, so the exit
-    # status and the json a CI step reads cannot disagree.
-    exit_code = exit_code_for(PROMOTE_OUTCOME[result.status])
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    # The narration above is the table form, so a table run prints nothing to stdout.
+    output_mod.finish(result, mode=mode, render=lambda _result: None)
 
 
 __all__ = ["monitor", "pr", "test"]

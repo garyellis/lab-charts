@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from chart_manager.plumbing.errors import MissingToolError
+from chart_manager.plumbing.errors import CommandTimeout, MissingToolError
 from chart_manager.settings import Settings
 from chart_manager.shared.cluster import session
 from chart_manager.shared.cluster.converge import Release, ReleaseFailed, converge, installed
@@ -58,27 +58,30 @@ def _chart(tmp_path: Path) -> Path:
 
 
 def test_converge_installs_without_helm_wait_then_waits_on_the_manifest_and_instance_label(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     runner = _runner(labelled={"deployment": "web made-by-operator"})
     chart = _chart(tmp_path)
+    caplog.set_level("INFO", logger="chart_manager.shared.cluster.converge")
 
     converge(_lab(runner), Release(name="web", chart=chart, namespace="apps", timeout="5m"))
+
+    assert f"installing web ({chart}) into namespace apps" in caplog.messages
 
     calls = _significant(runner)
     install = calls[0]
     assert install[:4] == ("helm", "upgrade", "--install", "web")
     assert "--wait" not in install
-    assert install[install.index("--timeout") + 1] == "5m"
+    assert install[install.index("--timeout") + 1] == "300s"
     assert calls[1] == ("helm", "get", "manifest", "web", "--namespace", "apps")
     waits = calls[2:]
     assert [c for c in waits if "rollout" in c or c[1] == "wait"] == [
-        ("kubectl", "-n", "apps", "rollout", "status", "deployment/web", "--timeout=5m"),
-        ("kubectl", "-n", "apps", "rollout", "status", "deployment/made-by-operator", "--timeout=5m"),
-        ("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/agent", "--timeout=5m"),
+        ("kubectl", "-n", "apps", "rollout", "status", "deployment/web", "--timeout=300s"),
+        ("kubectl", "-n", "apps", "rollout", "status", "deployment/made-by-operator", "--timeout=300s"),
+        ("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/agent", "--timeout=300s"),
         (
             "kubectl", "wait", "--for=condition=Established",
-            "customresourcedefinition/widgets.example.com", "--timeout=5m",
+            "customresourcedefinition/widgets.example.com", "--timeout=300s",
         ),
     ]
 
@@ -103,13 +106,18 @@ def test_a_failed_rollout_raises_release_failed_with_the_namespace_diagnostics(
 def test_a_failed_install_is_reported_with_diagnostics_and_nothing_is_awaited(
     tmp_path: Path,
 ) -> None:
-    runner = _runner().respond(argv_prefix("helm", "upgrade"), returncode=1, stderr="conflict")
+    runner = (
+        _runner()
+        .respond(argv_prefix("helm", "upgrade"), returncode=1, stderr="conflict")
+        .respond(argv_prefix("kubectl", "get", "events"), raises=CommandTimeout("timed out"))
+    )
 
     with pytest.raises(ReleaseFailed) as failed:
         converge(_lab(runner), Release(name="web", chart=_chart(tmp_path), namespace="apps"))
 
     assert failed.value.step == "install"
-    assert "## pods" in failed.value.diagnostics
+    assert "conflict" in str(failed.value)
+    assert "## events\n<events unavailable: timed out>" in failed.value.diagnostics
     assert not any(plain_argv(argv)[:3] == ("helm", "get", "manifest") for argv in runner.calls)
 
 
@@ -154,4 +162,4 @@ def test_installed_maps_every_release_in_any_state_from_one_helm_list() -> None:
     releases = installed(_lab(runner))
 
     assert releases == {("apps", "web"): "deployed", ("data", "db"): "pending-install"}
-    assert [plain_argv(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A", "--all")]
+    assert [plain_argv(argv) for argv in runner.calls] == [("helm", "list", "-o", "json", "-A")]

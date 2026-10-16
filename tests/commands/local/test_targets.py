@@ -19,7 +19,7 @@ from chart_manager.commands.local.targets import (
     ResolvedStackTarget,
 )
 from chart_manager.plumbing.errors import SpecError
-from chart_manager.shared.charts.chart import ResolvedChartTarget
+from chart_manager.shared.charts.chart import Chart
 from chart_manager.shared.cluster.local_cluster import load_cluster, load_resource
 from tests.conftest import LOCAL_CONFIG, REPO_ROOT, workspace_for
 
@@ -416,7 +416,7 @@ spec:
     named_target = resolver.resolve("observability")
     explicit_target = resolver.resolve(stack)
 
-    assert isinstance(chart_target, ResolvedChartTarget)
+    assert isinstance(chart_target, Chart)
     assert chart_target.path == chart
     assert isinstance(named_target, ResolvedStackTarget)
     assert named_target.path == stack

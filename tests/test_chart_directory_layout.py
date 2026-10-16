@@ -18,11 +18,10 @@ from chart_manager.commands import validate
 from chart_manager.commands.catalog import run as catalog
 from chart_manager.commands.grafana.dashboard_lint import discover_dashboards
 from chart_manager.commands.local.targets import LocalTargetResolver
-from chart_manager.commands.upgrade.paths import resolve_chart_path
 from chart_manager.commands.validate.render_dir import render_dir_state
 from chart_manager.integrations.git import Git
 from chart_manager.settings import Settings
-from chart_manager.shared.charts.chart import ChartRepository
+from chart_manager.shared.charts.chart import chart_names, load_chart, resolve_chart_target
 from tests.conftest import FakeCommandRunner, workspace_for, write_workspace
 
 CUSTOM_CHARTS_DIR = Path("deploy/helm")
@@ -89,9 +88,8 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
     dashboard.write_text("{}", encoding="utf-8")
 
     workspace = workspace_for(tmp_path, chartsDir=CUSTOM_CHARTS_DIR)
-    repository = ChartRepository(tmp_path, charts_dir=workspace.spec.charts_dir)
-    assert repository.list_names() == ["demo"]
-    assert repository.get("demo").path == chart
+    assert chart_names(workspace.charts_root) == ["demo"]
+    assert load_chart(workspace.chart_path("demo")).path == chart
 
     runner = (
         FakeCommandRunner()
@@ -101,15 +99,10 @@ def test_discovery_git_upgrade_and_dashboards_share_custom_root(tmp_path: Path) 
             stdout="deploy/helm/demo/values.yaml\ncharts/ignored/values.yaml\n",
         )
     )
-    changed = Git(tmp_path, runner=runner).changed_files()
+    changed = Git(tmp_path, runner, timeout=None).changed_files()
     assert {workspace.chart_name_from_repo_path(path) for path in changed} - {None} == {"demo"}
 
-    _, resolved, _ = resolve_chart_path(
-        tmp_path,
-        Path("demo"),
-        charts_dir=workspace.spec.charts_dir,
-    )
-    assert resolved == chart.resolve()
+    assert resolve_chart_target(workspace, "demo").path == chart.resolve()
     assert discover_dashboards(workspace=workspace) == [dashboard]
 
 
@@ -144,19 +137,14 @@ spec:
     assert result.spec_errors == ()
 
 
-def test_one_workspace_reaches_the_services_the_cli_used_to_build(tmp_path: Path) -> None:
-    """One container's workspace answers for every command that reads it.
-
-    Each of these three was once constructed at the surface from a layout of
-    its own, so the container's configuration was not what answered the
-    question. Write a nested `chartsDir` once and `chart list`, `local up`
-    and `chart cache clean` all address it.
-    """
+def test_every_command_reads_charts_dir_from_one_workspace(tmp_path: Path) -> None:
+    """Write a nested `chartsDir` once and `chart list`, `local up` and
+    `chart cache clean` all address it."""
     _write_chart(tmp_path, "demo")
     write_workspace(tmp_path, chartsDir=CUSTOM_CHARTS_DIR.as_posix())
     container = Container(Settings())
 
-    charts = catalog.list_charts(container.workspace(tmp_path))
+    charts = catalog.list_charts(container.workspace(tmp_path)).charts
     assert [entry.name for entry in charts] == ["demo"]
 
     resolved = _local_targets(container, tmp_path).resolve("deploy/helm/demo")
