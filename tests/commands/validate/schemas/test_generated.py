@@ -59,6 +59,7 @@ class Renderer:
         self.calls = []
         self.fail = set()
         self.partial = True
+        self.malformed = set()
         self.hydrate = None
 
     def __call__(self, charts, out):
@@ -74,6 +75,8 @@ class Renderer:
                         continue
                 output = out / chart.name / env
                 output.mkdir(parents=True)
+                if env in self.malformed:
+                    (output / "broken.yaml").write_text("[broken YAML")
                 for path in (chart.path / "templates").glob("*.yaml"):
                     (output / path.name).write_bytes(path.read_bytes())
         return failures
@@ -164,17 +167,34 @@ def test_helm_binary_change_invalidates_derived_cache(env):
     [(("dev", "uat"), True, True), (("uat",), True, False), (("uat",), False, False)],
     ids=["one-env-failed", "every-env-failed", "every-env-failed-without-output"],
 )
+@pytest.mark.parametrize("failure", ["render", "yaml"])
 def test_a_failed_env_contributes_no_schemas_and_its_provider_is_not_cached(
-    env, environments, partial, schemas
+    env, environments, partial, schemas, failure, caplog
 ):
     chart(env.root, "provider", crd_manifest(), environments=environments)
-    env.renderer.fail = {"uat"}
+    if failure == "render":
+        env.renderer.fail = {"uat"}
+    else:
+        env.renderer.malformed = {"uat"}
     env.renderer.partial = partial
     locations = env.prepare()
     assert schema_at(locations).is_file() if schemas else locations == ()
+    assert "provider/uat" in caplog.text
     assert not list((env.root / "cache").rglob("charts/*.json"))
     env.prepare()
     assert env.renderer.calls == ["provider", "provider"]
+
+
+def test_malformed_provider_does_not_discard_other_providers(env, caplog):
+    broken = chart(env.root, "broken", crd_manifest(nested_type="integer"))
+    (broken / "templates/broken.yaml").write_text("[broken YAML")
+    chart(env.root, "healthy", crd_manifest(nested_type="string"))
+    locations = env.prepare()
+    schema = json.loads(schema_at(locations).read_text())
+    assert schema["properties"]["spec"]["properties"]["name"]["type"] == "string"
+    assert "broken/dev" in caplog.text
+    assert env.prepare() == locations
+    assert env.renderer.calls == ["broken", "healthy", "broken"]
 
 
 def test_extra_schema_in_derived_output_is_removed(env):

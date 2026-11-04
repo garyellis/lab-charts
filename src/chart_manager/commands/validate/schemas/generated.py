@@ -20,7 +20,10 @@ from chart_manager.commands.validate.schemas.errors import (
     KubeconformSchemaConfigurationError,
     KubeconformSchemaStoreError,
 )
-from chart_manager.commands.validate.schemas.inventory import scan_rendered_directory
+from chart_manager.commands.validate.schemas.inventory import (
+    RenderedResource,
+    scan_rendered_directory,
+)
 from chart_manager.commands.validate.schemas.models import (
     GroupVersionKind,
     MaterializedSchema,
@@ -335,7 +338,23 @@ def _prepare(
         authored = {target.name: _authored_fingerprint(target.path) for target in uncached}
         with tempfile.TemporaryDirectory(prefix="chart-manager-crds-") as temporary:
             output = Path(temporary)
-            failures = render(uncached, output)
+            failures = dict(render(uncached, output))
+            for target in uncached:
+                # A chart whose renders all failed may have no output directory.
+                crds: list[RenderedResource] = []
+                for env_dir in sorted((output / target.name).glob("*")):
+                    key = (target.name, env_dir.name)
+                    if key in failures:
+                        continue
+                    try:
+                        resources = scan_rendered_directory(
+                            env_dir, scope=SchemaScope(chart=target.name, environment=env_dir.name)
+                        )
+                    except KubeconformSchemaConfigurationError as exc:
+                        failures[key] = str(exc)
+                        continue
+                    crds.extend(resources)
+                rendered[target.name] = generate_crd_schemas(crds)
             if failures:
                 _LOG.warning(
                     "CRD provider render failed; its CRDs are left out:\n%s",
@@ -343,17 +362,6 @@ def _prepare(
                         f"{chart}/{env}: {error}" for (chart, env), error in failures.items()
                     ),
                 )
-            for target in uncached:
-                # A chart whose renders all failed may have no output directory.
-                crds = [
-                    crd
-                    for env_dir in sorted((output / target.name).glob("*"))
-                    if (target.name, env_dir.name) not in failures
-                    for crd in scan_rendered_directory(
-                        env_dir, scope=SchemaScope(chart=target.name, environment=env_dir.name)
-                    )
-                ]
-                rendered[target.name] = generate_crd_schemas(crds)
         failed = {chart for chart, _ in failures}
         for target, fingerprint, _cache, schemas in prepared:
             if schemas is not None:
