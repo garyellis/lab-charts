@@ -48,7 +48,7 @@ class RichLogHandler(logging.Handler):
 
     def __init__(self, *, console: Console | None = None) -> None:
         super().__init__()
-        self.console = console or Console(file=sys.stderr)
+        self.console = console or Console(stderr=True)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
