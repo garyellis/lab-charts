@@ -132,7 +132,7 @@ def global_options(
     set_narration_quiet(quiet)
 
     if verbose:
-        setup_logging("DEBUG", fmt=settings.log_format)
+        setup_logging("DEBUG", fmt=settings.log_format, console=errors)
 
     ctx.obj = GlobalOptions(
         config=config,
@@ -221,7 +221,7 @@ def main() -> None:
     """
     try:
         settings = load_settings()
-        setup_logging(settings.log_level, fmt=settings.log_format)
+        setup_logging(settings.log_level, fmt=settings.log_format, console=errors)
         app()
     except ChartManagerError as exc:
         errors.print(f"[red]error:[/red] {escape(str(exc))}")

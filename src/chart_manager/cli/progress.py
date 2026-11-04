@@ -1,6 +1,6 @@
 """The progress sink: a live table at a terminal, one line per event elsewhere.
 
-Everything goes to `streams.narration`, so `-q` silences it. Text is escaped: it
+Everything goes to stderr, and `-q` silences progress. Text is escaped: it
 carries subprocess output, and an unmatched tag such as `[/etc/hosts]` raises
 Rich's MarkupError.
 """
@@ -44,7 +44,7 @@ def progress_view(*, live: bool) -> Iterator[Progress]:
         return
     cells: _Cells = {}
     lock = threading.Lock()
-    with Live(_table(cells), console=streams.narration, refresh_per_second=4) as view:
+    with Live(_table(cells), console=streams.errors, refresh_per_second=4, transient=True) as view:
 
         def show(event: ProgressEvent | RowUpdate) -> None:
             with lock:
