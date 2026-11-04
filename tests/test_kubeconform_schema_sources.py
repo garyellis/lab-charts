@@ -67,10 +67,11 @@ class _Response:
         return self._content.read(size)
 
 
-def test_ref_resolution_requires_a_full_lowercase_sha() -> None:
+@pytest.mark.parametrize("payload_size", [64, 2 * 1024 * 1024])
+def test_ref_resolution_requires_a_full_lowercase_sha(payload_size: int) -> None:
     client = GitHubKubeconformSchemaSource(
         timeout=1.0,
-        opener=lambda *_args, **_kwargs: _Response(b'{"sha":"' + b"a" * 40 + b'"}'),
+        opener=lambda *_args, **_kwargs: _Response((b'{"sha":"' + b"a" * 40 + b'"}').ljust(payload_size)),
         github_token=None,
     )
 

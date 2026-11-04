@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome
 
-_MAX_REF_BYTES = 1024 * 1024
+_MAX_REF_BYTES = 2 * 1024 * 1024
 
 OpenUrl = Callable[..., Any]
 
