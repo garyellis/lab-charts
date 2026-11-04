@@ -266,7 +266,6 @@ class _Checker:
                 try:
                     store = open_schema_store(self.runner, self.settings)
                     upstream = schema_lock.locations(self.workspace, store)
-                    self._update_dependencies(generated.providers(self.workspace))
                     crds = generated.prepare(
                         self.workspace, render=self._render_crds, cache_root=store.cache_root
                     )
@@ -294,17 +293,6 @@ class _Checker:
                 if result.status != "passed":
                     failures[(chart.name, env)] = result.detail
         return failures
-
-    def _update_dependencies(self, charts: Sequence[Chart]) -> None:
-        """Bring stale chart dependencies up to date, eight charts at a time."""
-
-        def update(chart: Chart) -> None:
-            spec = require_validation(chart.lifecycle, chart_name=chart.name)
-            helm = _helm(self.runner, spec, verbose=False, timeout=self.request.tool_timeout)
-            self._ensure_dependencies(helm, chart)
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(update, charts))
 
     def _ensure_dependencies(self, helm: Helm, chart: Chart) -> None:
         """Update the chart's stale dependencies once per run; its other rows wait for that."""
