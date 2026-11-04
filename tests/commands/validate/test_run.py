@@ -12,6 +12,7 @@ import pytest
 from chart_manager.commands import validate
 from chart_manager.commands.validate.models import CheckName
 from chart_manager.commands.validate.run import run
+from chart_manager.commands.validate.schemas import generated
 from chart_manager.commands.validate.schemas.errors import KubeconformSchemaStoreError
 from chart_manager.plumbing.errors import MissingToolError, SpecError
 from chart_manager.plumbing.exit_codes import Outcome
@@ -504,7 +505,7 @@ def test_a_charts_crds_become_the_first_schema_location(
     ]
 
 
-def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_chosen(
+def test_another_charts_stale_dependencies_are_updated_when_its_crds_render(
     tmp_path: Path, schema_workspace: RepositoryWorkspace
 ) -> None:
     write_validation_chart(tmp_path, "demo")
@@ -536,6 +537,53 @@ def test_another_charts_stale_dependencies_are_updated_before_crd_providers_are_
     )
 
     assert ("helm", "dependency", "update", str(app)) in runner.calls
+    assert [call[2] for call in runner.calls if "--include-crds" in call] == ["app"]
+
+
+@pytest.mark.parametrize("cached", [False, True], ids=["cold", "warm"])
+def test_an_unrelated_providers_dependency_download_does_not_abort_validation(
+    tmp_path: Path,
+    schema_workspace: RepositoryWorkspace,
+    monkeypatch: pytest.MonkeyPatch,
+    cached: bool,
+) -> None:
+    write_validation_chart(tmp_path, "demo")
+    app = write_validation_chart(tmp_path, "app")
+    (app / "Chart.yaml").write_text(APP_WITH_ONE_DEPENDENCY)
+    (app / "templates").mkdir()
+    (app / "templates" / "crd.yaml").write_text(crd_manifest())
+    binary = tmp_path / "helm"
+    binary.write_text("test-helm")
+    monkeypatch.setattr(generated.shutil, "which", lambda _: str(binary))
+    request = validate.ValidateRequest(
+        out=tmp_path / "out", charts=("demo",), checks=frozenset({"render", "schema"})
+    )
+    if cached:
+        (app / "Chart.lock").write_text(ONE_DEPENDENCY_LOCK)
+        (app / "charts").mkdir()
+        materialize_dependency(app)
+        _run(
+            request,
+            workspace=schema_workspace,
+            runner=git_runner()
+            .respond(renders(crd_manifest()))
+            .respond(("kubeconform",), stdout=kubeconform_report("statusValid")),
+        )
+        assert list((tmp_path / "schema-cache/v3/derived/charts").glob("*.json"))
+    runner = (
+        git_runner()
+        .respond(
+            ("helm", "dependency", "update", str(app)), returncode=1, stderr="registry unreachable"
+        )
+        .respond(renders(CONFIG_MAP))
+        .respond(("kubeconform",), stdout=kubeconform_report("statusValid"))
+    )
+
+    outcome = _run(request, workspace=schema_workspace, runner=runner)
+
+    assert outcome.outcome is Outcome.SUCCESS
+    updates = [call for call in runner.calls if call[1:3] == ("dependency", "update")]
+    assert updates == ([] if cached else [("helm", "dependency", "update", str(app))])
     assert not [call for call in runner.calls if "--include-crds" in call]
 
 
