@@ -1,3 +1,5 @@
+# changelog
+
 ## 0.1.0
 
 - Install the repository's `policies/` via the `files/policies` symlink, in

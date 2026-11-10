@@ -36,6 +36,7 @@ CHART_FILE = "Chart.yaml"
 _HEADING = re.compile(r"^##\s")
 _BASELINE_REF = "HEAD"
 _CHANGELOG_FILE = "changelog.md"
+_CHANGELOG_TITLE = "# changelog"
 _MAX_DATA_FILE_BYTES = 1024 * 1024
 
 
@@ -335,12 +336,17 @@ def _apply_changelog_entry(old: str, heading: str, entry: str) -> str:
     """Return the changelog with ``heading``'s section replaced by ``entry``.
 
     The section is rewritten, not skipped, because a newer update on an open branch keeps the
-    heading (same baseline, same target) but changes the updates under it.
+    heading (same baseline, same target) but changes the updates under it. A new section goes
+    after the title and before the first version section.
     """
     lines = old.splitlines(keepends=True)
     start = next((index for index, line in enumerate(lines) if line.rstrip() == heading), None)
     if start is None:
-        return entry + old.lstrip("\n") if old else entry
+        first = next(
+            (index for index, line in enumerate(lines) if _HEADING.match(line)), len(lines)
+        )
+        title = "".join(lines[:first]).rstrip("\n") or _CHANGELOG_TITLE
+        return title + "\n\n" + entry + "".join(lines[first:]).lstrip("\n")
     end = next(
         (index for index in range(start + 1, len(lines)) if _HEADING.match(lines[index])),
         len(lines),

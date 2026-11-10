@@ -67,7 +67,7 @@ def test_major_image_update_changes_only_the_quoted_wrapper_version(tmp_path: Pa
     assert (result.previous_version, result.version, result.changed) == ("1.2.3", "2.0.0", True)
     written = (chart / "Chart.yaml").read_text(encoding="utf-8")
     assert written == baseline.replace('version: "1.2.3"', 'version: "2.0.0"', 1)
-    assert _changelog(chart) == "## 2.0.0\n\n- api: 2.9.0 -> 3.0.0\n\n"
+    assert _changelog(chart) == "# changelog\n\n## 2.0.0\n\n- api: 2.9.0 -> 3.0.0\n\n"
 
 
 def test_minor_update_bumps_patch_once_on_replay(tmp_path: Path) -> None:
@@ -95,7 +95,21 @@ def test_newer_update_on_open_branch_rewrites_the_same_section(tmp_path: Path) -
 
     assert second.changed is True
     assert _changelog(chart) == (
-        "## 1.2.4\n\n- api: 2.9.0 -> 2.11.0\n\n## 1.2.3\n\n- api: 2.8.0 -> 2.9.0\n\n"
+        "# changelog\n\n## 1.2.4\n\n- api: 2.9.0 -> 2.11.0\n\n## 1.2.3\n\n- api: 2.8.0 -> 2.9.0\n\n"
+    )
+
+
+def test_new_section_goes_below_the_title(tmp_path: Path) -> None:
+    chart = _write_chart(tmp_path)
+    baseline = (chart / "Chart.yaml").read_text(encoding="utf-8")
+    (chart / "changelog.md").write_text(
+        "# changelog\n\n## 1.2.3\n\n- Add changelog.\n", encoding="utf-8"
+    )
+
+    _finalize(tmp_path, baseline, _image("api", "2.9.0", "2.10.0"))
+
+    assert _changelog(chart) == (
+        "# changelog\n\n## 1.2.4\n\n- api: 2.9.0 -> 2.10.0\n\n## 1.2.3\n\n- Add changelog.\n"
     )
 
 
@@ -112,7 +126,7 @@ def test_an_update_found_in_two_values_files_is_one_changelog_line(tmp_path: Pat
         _image("api", "2.9.0", "2.10.0", packageFile="charts/demo/values-prod.yaml"),
     )
 
-    assert _changelog(chart) == "## 1.2.4\n\n- api: 2.9.0 -> 2.10.0\n\n"
+    assert _changelog(chart) == "# changelog\n\n## 1.2.4\n\n- api: 2.9.0 -> 2.10.0\n\n"
 
 
 def test_without_update_metadata_the_chart_dependency_diff_decides_the_bump(
@@ -124,7 +138,7 @@ def test_without_update_metadata_the_chart_dependency_diff_decides_the_bump(
     result = _finalize(tmp_path, baseline)
 
     assert result.version == "2.0.0"
-    assert _changelog(chart) == "## 2.0.0\n\n- upstream: 2.4.0 -> 3.0.0\n\n"
+    assert _changelog(chart) == "# changelog\n\n## 2.0.0\n\n- upstream: 2.4.0 -> 3.0.0\n\n"
 
 
 def test_no_qualifying_change_does_not_bump(tmp_path: Path) -> None:

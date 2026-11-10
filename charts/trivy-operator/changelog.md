@@ -1,3 +1,5 @@
+# changelog
+
 ## 0.1.0
 
 - Vendor aquasecurity/trivy-operator chart 0.36.0 (Trivy Operator 0.34.0,
