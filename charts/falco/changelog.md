@@ -1,3 +1,5 @@
+# changelog
+
 ## 0.1.0
 
 - Vendor falcosecurity/falco chart 9.2.0 (Falco 0.45.0).

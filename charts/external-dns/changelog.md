@@ -1,3 +1,5 @@
+# changelog
+
 ## 0.1.2
 
 - Set `--txt-wildcard-replacement=wildcard`. Without it the TXT registry builds
