@@ -1,9 +1,9 @@
-"""EventStore protocol and backend selection (`Settings.events_backend`: cosmos | dynamodb | none).
+"""EventStore protocol and backend selection (`Settings.events_backend`: cosmos | none).
 
 Events are opt-in: unset means `none`, and nothing is written until
 EVENTS_BACKEND is exported.
 
-Both backends partition on `chart_name`, so one chart's whole history is a
+Events are partitioned on `chart_name`, so one chart's whole history is a
 single-partition read; `correlation_id` (`chart@version`) is the join key
 that narrows within it.
 """
@@ -17,22 +17,19 @@ from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.events.model import PlatformLifecycleEvent
 from chart_manager.shared.events.query import (
     EventQuery,
-    EventReadUnsupportedError,
     EventsDisabledError,
     newest_first,
 )
 
 # The cloud SDKs load only inside the backend that uses them, so a run
-# without events (and `version`) does not pay for azure or boto3.
+# without events (and `version`) does not pay for azure.
 if TYPE_CHECKING:
     from chart_manager.integrations.cosmos import CosmosContainer
-    from chart_manager.integrations.dynamodb import DynamoDBTable
     from chart_manager.settings import EventsBackend, Settings
 
-# The attribute both backends partition on, and DynamoDB's range key. Named
-# once so the stores and scripts/provision-event-store cannot drift apart.
+# The attribute events are partitioned on. Named once so the stores and
+# scripts/provision-event-store cannot drift apart.
 PARTITION_KEY = "chart_name"
-SORT_KEY = "event_id"
 
 # Where the events live, named once so `preflight_event_store` probes and
 # scripts/provision-event-store creates exactly what `get_event_store` writes to.
@@ -111,42 +108,6 @@ class CosmosEventStore:
         )
 
 
-class DynamoDBEventStore:
-    """Write lifecycle events to DynamoDB (chart_name HASH + synthesized sort key)."""
-
-    def __init__(self, table: DynamoDBTable) -> None:
-        """Bind the DynamoDB document table."""
-        self._table = table
-
-    def write(self, event: PlatformLifecycleEvent) -> None:
-        """Persist one event; requires chart_name (the partition key)."""
-        if not event.chart_name:
-            raise ValueError("chart_name is required (it is the partition key)")
-        item = event.to_dict()
-
-        # Authoritative retry-safe transitions use a stable range key and
-        # overwrite their prior attempt. Events without a key remain an
-        # append-only, time-ordered stream.
-        item[SORT_KEY] = (
-            f"idempotent#{event.idempotency_key}"
-            if event.idempotency_key is not None
-            else f"{item['timestamp']}#{item['uuid']}"
-        )
-
-        # boto3's resource serializer rejects tuples; images is a tuple
-        item["images"] = list(item["images"])
-
-        # put overwrites retry-safe transitions and appends UUID-backed
-        # events. The timestamp remains in the item for chronological reads.
-        self._table.put(item)
-
-    def query(self, query: EventQuery) -> list[dict[str, Any]]:
-        """Refuse: the read side is Cosmos-only; the write path is unaffected."""
-        raise EventReadUnsupportedError(
-            "the events read side is Cosmos-only for now; set EVENTS_BACKEND=cosmos to read events"
-        )
-
-
 def _cosmos_store() -> CosmosEventStore:
     from chart_manager.integrations import cosmos
 
@@ -157,18 +118,6 @@ def _cosmos_preflight() -> Check:
     from chart_manager.integrations import cosmos
 
     return cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE)
-
-
-def _dynamodb_store() -> DynamoDBEventStore:
-    from chart_manager.integrations import dynamodb
-
-    return DynamoDBEventStore(dynamodb.get_table(EVENTS_RESOURCE))
-
-
-def _dynamodb_preflight() -> Check:
-    from chart_manager.integrations import dynamodb
-
-    return dynamodb.preflight(EVENTS_RESOURCE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +138,6 @@ _BACKENDS: dict[EventsBackend, _Backend] = {
         ),
     ),
     "cosmos": _Backend(store=_cosmos_store, preflight=_cosmos_preflight),
-    "dynamodb": _Backend(store=_dynamodb_store, preflight=_dynamodb_preflight),
 }
 
 

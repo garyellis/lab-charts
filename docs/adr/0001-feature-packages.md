@@ -59,7 +59,7 @@ chart_manager/
 - **Integrations** are deep adapters: few methods, each returning an answer rather than raw
   output, with the runner or client a required argument and no policy decisions. A package
   uses as many as it needs. A Protocol goes in front of integrations only where two or more
-  real adapters fill it; today that is the event store (Cosmos, DynamoDB, in-memory).
+  real adapters fill it; today that is the event store (Cosmos, in-memory).
 - **`api/`** keeps Kubernetes-style `apiVersion`/`kind` resources for the CLI and a future
   controller. Behaviour (loading, resolving, cross-checks) lives in the packages, so `domain/`
   goes away.

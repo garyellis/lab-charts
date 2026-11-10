@@ -37,7 +37,7 @@ def emit_non_fatal(
         if strict:
             raise
         # The exception *type* is carried alongside its text because the text
-        # of a boto/httpx transport failure is frequently empty: "(non-fatal):
+        # of a transport failure is frequently empty: "(non-fatal):
         # " with nothing after it is indistinguishable from a bug in this
         # line. Lazy %-formatting, not an f-string, so an operator running at
         # WARNING never pays to render a message the handler drops.

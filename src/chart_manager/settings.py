@@ -22,7 +22,7 @@ DEFAULT_ROOT = Path(".")
 DEFAULT_CLUSTER_NAME = "chart-manager"
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
-EventsBackend = Literal["cosmos", "dynamodb", "none"]
+EventsBackend = Literal["cosmos", "none"]
 
 #: Where `Settings` looks for its optional YAML file.
 #:

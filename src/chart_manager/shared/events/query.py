@@ -28,7 +28,6 @@ __all__ = [
     "DEFAULT_LIMIT",
     "EventQuery",
     "EventReadError",
-    "EventReadUnsupportedError",
     "EventsDisabledError",
     "newest_first",
 ]
@@ -50,10 +49,6 @@ class EventReadError(ChartManagerError):
 
 class EventsDisabledError(EventReadError):
     """Events are disabled: there is no ledger to read."""
-
-
-class EventReadUnsupportedError(EventReadError):
-    """The configured backend has no read side (DynamoDB, for now)."""
 
 
 @dataclass(frozen=True, slots=True)
