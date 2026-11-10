@@ -7,19 +7,17 @@ key: a fresh partition per version turned "what happened to this chart?" into
 a cross-partition fan-out and scattered a chart's history across as many
 partitions as it had releases.
 
-These tests pin the key in both stores, because nothing else does: a drift
+These tests pin the key in the store, because nothing else does: a drift
 between the container's declared partition key and the attribute the writer
 populates does not fail at write time, it fails as a mis-partitioned document
-that queries silently miss. The stores are driven
-against fake document containers and tables, the shape `integrations/` hands
-them.
+that queries silently miss. The store is driven against a fake document
+container, the shape `integrations/` hands it.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
@@ -30,7 +28,6 @@ from chart_manager.shared.events.query import EventQuery
 from chart_manager.shared.events.store import (
     PARTITION_KEY,
     CosmosEventStore,
-    DynamoDBEventStore,
     NullEventStore,
     get_event_store,
     preflight_event_store,
@@ -57,17 +54,6 @@ def _event(*, chart_name: str = "loki", version: str | None = "1.2.4") -> Platfo
     )
 
 
-# ----- doubles -------------------------------------------------------------
-
-
-class _FakeTable:
-    def __init__(self) -> None:
-        self.items: list[dict[str, Any]] = []
-
-    def put(self, item: dict[str, Any]) -> None:
-        self.items.append(item)
-
-
 # ----- the partition key ---------------------------------------------------
 
 
@@ -87,41 +73,19 @@ def test_cosmos_store_writes_the_partition_attribute_and_a_string_id() -> None:
     assert item["correlation_id"] == "loki@1.2.4"
 
 
-def test_dynamodb_store_writes_the_partition_attribute_and_a_sortable_key() -> None:
-    table = _FakeTable()
-    DynamoDBEventStore(table).write(_event())
-
-    item = table.items[0]
-    assert item[PARTITION_KEY] == "loki"
-    assert item["event_id"] == f"{item['timestamp']}#{item['uuid']}"
-    # boto3's resource serializer rejects tuples.
-    assert isinstance(item["images"], list)
-
-
-def test_both_stores_use_stable_keys_for_idempotent_events() -> None:
+def test_cosmos_store_uses_a_stable_id_for_idempotent_events() -> None:
     event = replace(_event(), idempotency_key="stable-publish-key")
     container = FakeCosmosContainer()
-    table = _FakeTable()
 
     CosmosEventStore(container).write(event)
-    DynamoDBEventStore(table).write(event)
 
     assert container.items == []
     assert container.upserted[0]["id"] == "stable-publish-key"
-    assert table.items[0]["event_id"] == "idempotent#stable-publish-key"
 
 
-@pytest.mark.parametrize(
-    "store",
-    [
-        lambda: CosmosEventStore(FakeCosmosContainer()),
-        lambda: DynamoDBEventStore(_FakeTable()),
-    ],
-    ids=["cosmos", "dynamodb"],
-)
-def test_both_stores_reject_an_event_without_a_partition_key(store: Any) -> None:
+def test_cosmos_store_rejects_an_event_without_a_partition_key() -> None:
     with pytest.raises(ValueError, match="chart_name"):
-        store().write(_event(chart_name=""))
+        CosmosEventStore(FakeCosmosContainer()).write(_event(chart_name=""))
 
 
 def test_a_versionless_event_is_still_writable() -> None:
@@ -185,9 +149,8 @@ def test_a_release_query_narrows_by_correlation_id_within_the_partition() -> Non
         ({}, NullEventStore),
         ({"events_backend": "none"}, NullEventStore),
         ({"events_backend": "cosmos"}, CosmosEventStore),
-        ({"events_backend": "dynamodb"}, DynamoDBEventStore),
     ],
-    ids=["unset", "none", "cosmos", "dynamodb"],
+    ids=["unset", "none", "cosmos"],
 )
 def test_the_backend_setting_selects_the_store(
     configured: dict[str, str], store_type: type, monkeypatch: pytest.MonkeyPatch
@@ -197,7 +160,6 @@ def test_the_backend_setting_selects_the_store(
         "chart_manager.integrations.cosmos.get_container",
         lambda database, container: FakeCosmosContainer(),
     )
-    monkeypatch.setattr("chart_manager.integrations.dynamodb.get_table", lambda name: _FakeTable())
 
     assert isinstance(get_event_store(Settings(**configured)), store_type)
 
@@ -207,7 +169,6 @@ def test_the_backend_setting_selects_the_store(
     [
         ("none", CheckStatus.SKIPPED, "EVENTS_BACKEND=cosmos"),
         ("cosmos", CheckStatus.FAILED, "COSMOS_ENDPOINT"),
-        ("dynamodb", CheckStatus.FAILED, "lifecycle-events"),
     ],
 )
 def test_preflight_probes_the_configured_backend(
@@ -217,7 +178,6 @@ def test_preflight_probes_the_configured_backend(
     backend fails before any network call."""
     for variable in ("COSMOS_CONNECTION_STRING", "COSMOS_ENDPOINT"):
         monkeypatch.delenv(variable, raising=False)
-    monkeypatch.setenv("DYNAMODB_ENDPOINT", "not-a-url")
 
     (check,) = preflight_event_store(Settings(events_backend=backend))
 

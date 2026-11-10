@@ -251,7 +251,7 @@ def test_opening_a_pull_request_records_pr_open_for_the_proposed_version(
     # CI reconstructs this from github.repository and github.event.number.
     assert event.build_correlation_id == "owner/repository#7"
     assert event.pr_url == "https://example.test/pull/7"
-    # Only str values: the DynamoDB adapter hands detail to boto3, which rejects float.
+    # detail carries only str/int/bool; these are all str.
     assert event.detail == {
         "outcome": "pr_open",
         "previous_version": "0.4.2",

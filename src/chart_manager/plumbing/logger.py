@@ -20,7 +20,7 @@ from rich.text import Text
 #: Libraries that log per-request chatter at INFO, expecting consumers to
 #: filter by namespace downstream; the root handler would render all of it.
 #: Their WARNING and above still surface.
-_NOISY_DEPENDENCY_LOGGERS = ("azure", "botocore", "urllib3")
+_NOISY_DEPENDENCY_LOGGERS = ("azure", "urllib3")
 
 _LEVEL_STYLES = {
     logging.DEBUG: "dim cyan",

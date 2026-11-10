@@ -285,12 +285,10 @@ def list_events(
 ) -> None:
     """List recent lifecycle events, newest first.
 
-    Requires an events backend that can serve reads
-    (EVENTS_BACKEND=cosmos today). The refusals are typed: `none`/unset says events are disabled
-    and how to enable them; `dynamodb` says the read side is Cosmos-only.
-    Both exit through the error's own outcome in the exit-code table --
-    nothing the caller asked about failed, the environment has no readable
-    ledger.
+    Requires an events backend (EVENTS_BACKEND=cosmos). The refusal is
+    typed: `none`/unset says events are disabled and how to enable them, and
+    exits through the error's own outcome in the exit-code table -- nothing
+    the caller asked about failed, the environment has no readable ledger.
     """
     mode = output_mod.resolve(output, ctx, allowed=_LIST_OUTPUTS, console=console)
     try:

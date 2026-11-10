@@ -11,7 +11,6 @@ requires-python = ">=3.13"
 dependencies = [
   "azure-cosmos>=4.16.1",
   "azure-identity>=1.25.3",
-  "boto3>=1.43.33",
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
   "rich>=13.9",
@@ -87,12 +86,12 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ARG", "G", "LOG", 
 # exceed line length (E501). Both are local to argument declarations.
 "src/chart_manager/{cli/*,commands/*/cli}.py" = ["B006", "E501"]
 # UP042 (str+Enum -> StrEnum) is correct advice that must not be taken here.
-# `BuildPhase`/`PromotionPhase` values are already persisted in DynamoDB and
-# Cosmos. Under `str, Enum`, `str(PromotionPhase.MERGED)` is
-# "PromotionPhase.MERGED"; under `StrEnum` it is "merged". Switching would
-# change the serialized shape of rows that already exist, so the exemption is
-# deliberate and belongs with the data, not in a lint backlog. Revisit only
-# alongside a migration of the stored events.
+# `BuildPhase`/`PromotionPhase` values are already persisted in Cosmos. Under
+# `str, Enum`, `str(PromotionPhase.MERGED)` is "PromotionPhase.MERGED"; under
+# `StrEnum` it is "merged". Switching would change the serialized shape of
+# rows that already exist, so the exemption is deliberate and belongs with the
+# data, not in a lint backlog. Revisit only alongside a migration of the
+# stored events.
 "src/chart_manager/shared/events/model.py" = ["UP042"]
 # ARG on signatures that are not ours to shorten. `NullEventStore.write` is
 # the EventStore protocol's do-nothing implementation -- dropping the event
@@ -227,11 +226,6 @@ ignore_names = [
   # signature; vulture sees the unreferenced local but the descriptor
   # protocol needs it.
   "cls",
-]
-
-[dependency-groups]
-dev = [
-    "boto3-stubs[dynamodb]>=1.43.36",
 ]
 
 [[tool.mypy.overrides]]

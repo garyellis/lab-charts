@@ -45,7 +45,7 @@ def emit_pr_open(
         else None
     )
 
-    # str/int/bool only: boto3's DynamoDB serializer rejects float.
+    # detail carries only str/int/bool.
     detail: dict[str, object] = {
         "outcome": result.status,
         "previous_version": result.current_version,
