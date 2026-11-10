@@ -1,3 +1,8 @@
+## 0.1.4
+
+- registry.k8s.io/kubectl: v1.36.3 -> v1.37.2
+- cert-manager: v1.21.1 -> v1.21.3
+
 ## 0.1.2
 
 - cert-manager: v1.21.0 -> v1.21.1
