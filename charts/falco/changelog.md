@@ -1,3 +1,10 @@
+# changelog
+
+## 0.1.2
+
+- CI: raise the memory limit to 1Gi. Falco was OOM-killed at 512Mi on
+  startup on the GitHub runner image with kernel 7.0.0-azure.
+
 ## 0.1.0
 
 - Vendor falcosecurity/falco chart 9.2.0 (Falco 0.45.0).
