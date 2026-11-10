@@ -2,6 +2,11 @@
 # BTF); this pins what the helm test depends on so a base-values change
 # cannot silently break it.
 falco:
+  # GitHub runner image 20261101 (kernel 7.0.0-azure) OOM-kills Falco at the
+  # base 512Mi limit while it opens the modern BPF probe.
+  resources:
+    limits:
+      memory: 1Gi
   falco:
     # Notice threshold. The helm test's rule ("Search Private Keys or
     # Passwords") is Warning, which is above notice, so it is emitted.
