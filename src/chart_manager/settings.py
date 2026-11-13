@@ -85,9 +85,17 @@ class Settings(BaseSettings):
     command_timeout: float | None = None
     event_source: str = "chart-manager"
     #: Where lifecycle events go. `none` (the default): events are opt-in.
-    #: Read from the unprefixed `EVENTS_BACKEND`: an alias skips `env_prefix`,
-    #: and env names match case-insensitively.
-    events_backend: EventsBackend = Field(default="none", validation_alias="events_backend")
+    events_backend: EventsBackend = "none"
+    #: The Cosmos account endpoint, e.g. `https://<account>.documents.azure.com:443/`.
+    cosmos_endpoint: str | None = None
+    #: Cosmos master key, for the emulator and local development. Unset means
+    #: Entra ID, with nothing to configure. Keep it in the environment.
+    cosmos_key: SecretStr | None = None
+    cosmos_database: str = "chart-manager"
+    events_container: str = "events"
+    #: CA bundle that verifies the endpoint's certificate (the emulator's).
+    cosmos_ca_bundle: Path | None = None
+    cosmos_verify_tls: bool = True
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "text"
     #: The repository this invocation operates on.

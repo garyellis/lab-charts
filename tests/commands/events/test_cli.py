@@ -1,7 +1,7 @@
 """`chart-manager event emit build|promote`.
 
 Everything here goes through the real writer seam: the whole suite clears
-`EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test that cares about the
+`CHART_MANAGER_EVENTS_BACKEND` (`conftest.hermetic_terminal`), and each test that cares about the
 payload substitutes a recording `EventWriter` at the module seam
 `commands/events/cli.py::_make_event_writer` rather than reaching into the store.
 """
@@ -244,7 +244,7 @@ def test_dry_run_prints_the_composed_document_and_confirms_nothing(
     """The point: see the exact stored document with no backend configured.
 
     Backend resolution is rigged to fail, so the test proves --dry-run never
-    reaches it; EVENTS_BACKEND is unset, which is the shipped default.
+    reaches it; events_backend is unset, which is the shipped default.
     """
     monkeypatch.setattr(
         "chart_manager.cli._container.get_event_store",
@@ -400,7 +400,7 @@ def test_the_table_shows_the_pr_url(reader) -> None:
 
 
 def test_list_against_a_disabled_backend_says_how_to_enable_events() -> None:
-    """conftest clears EVENTS_BACKEND; `none` is the shipped default."""
+    """conftest clears CHART_MANAGER_EVENTS_BACKEND; `none` is the shipped default."""
     result = cli("event", "list")
 
     assert isinstance(result.exception, EventsDisabledError)
@@ -419,7 +419,8 @@ def test_list_json_is_the_events_newest_first_across_mixed_timezone_stamps(
     utc = dict(_EVENT_DOC, chart_name="newer", timestamp="2026-08-01T13:00:00+00:00")
     container = FakeCosmosContainer(documents=[offset, utc])  # string order: +02:00 first
 
-    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    monkeypatch.setenv("CHART_MANAGER_EVENTS_BACKEND", "cosmos")
+    monkeypatch.setenv("CHART_MANAGER_COSMOS_ENDPOINT", "https://cosmos.example.test")
     monkeypatch.setattr("chart_manager.integrations.cosmos.get_container", lambda *_: container)
 
     result = cli("event", "list", "-o", "json")

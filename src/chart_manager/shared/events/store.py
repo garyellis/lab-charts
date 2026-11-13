@@ -1,7 +1,7 @@
 """EventStore protocol and backend selection (`Settings.events_backend`: cosmos | none).
 
 Events are opt-in: unset means `none`, and nothing is written until
-EVENTS_BACKEND is exported.
+`events_backend` is set to `cosmos`.
 
 Events are partitioned on `chart_name`, so one chart's whole history is a
 single-partition read; `correlation_id` (`chart@version`) is the join key
@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from chart_manager.plumbing.errors import SpecError
+from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
 from chart_manager.shared.events.model import PlatformLifecycleEvent
 from chart_manager.shared.events.query import (
@@ -21,20 +23,18 @@ from chart_manager.shared.events.query import (
     newest_first,
 )
 
-# The cloud SDKs load only inside the backend that uses them, so a run
-# without events (and `version`) does not pay for azure.
+# The Azure SDK loads only when events go to Cosmos, so a run without events
+# (and `version`) does not pay for it.
 if TYPE_CHECKING:
-    from chart_manager.integrations.cosmos import CosmosContainer
+    from chart_manager.integrations.cosmos import CosmosConfig, CosmosContainer
     from chart_manager.settings import EventsBackend, Settings
 
-# The attribute events are partitioned on. Named once so the stores and
-# scripts/provision-event-store cannot drift apart.
+# The attribute events are partitioned on: part of the data model, so not a
+# setting. Named once so the store and scripts/provision-event-store agree.
 PARTITION_KEY = "chart_name"
 
-# Where the events live, named once so `preflight_event_store` probes and
-# scripts/provision-event-store creates exactly what `get_event_store` writes to.
-COSMOS_DATABASE = "platform"
-EVENTS_RESOURCE = "lifecycle-events"
+_ENABLE = "set `events_backend: cosmos` in config.yaml, or CHART_MANAGER_EVENTS_BACKEND=cosmos"
+_SET_ENDPOINT = "set `cosmos_endpoint:` in config.yaml, or CHART_MANAGER_COSMOS_ENDPOINT"
 
 
 class EventStore(Protocol):
@@ -63,10 +63,7 @@ class NullEventStore:
 
         Writes are dropped silently, but an empty read would be a lie.
         """
-        raise EventsDisabledError(
-            "events are disabled (EVENTS_BACKEND is unset or 'none'); "
-            "set EVENTS_BACKEND=cosmos to record and read lifecycle events"
-        )
+        raise EventsDisabledError(f"events are disabled; {_ENABLE}")
 
 class CosmosEventStore:
     """Read and write lifecycle events in a Cosmos container (chart_name partition key)."""
@@ -108,34 +105,53 @@ class CosmosEventStore:
         )
 
 
-def _cosmos_store() -> CosmosEventStore:
+def cosmos_config(settings: Settings) -> CosmosConfig:
+    """The Cosmos container `settings` name: written, probed and provisioned alike."""
+    from chart_manager.integrations.cosmos import CosmosConfig
+
+    if settings.cosmos_endpoint is None:
+        raise SpecError(f"events_backend is cosmos but cosmos_endpoint is not set; {_SET_ENDPOINT}")
+    return CosmosConfig(
+        endpoint=settings.cosmos_endpoint,
+        database=settings.cosmos_database,
+        container=settings.events_container,
+        key=settings.cosmos_key.get_secret_value() if settings.cosmos_key else None,
+        ca_bundle=settings.cosmos_ca_bundle,
+        verify_tls=settings.cosmos_verify_tls,
+    )
+
+
+def _cosmos_store(settings: Settings) -> CosmosEventStore:
     from chart_manager.integrations import cosmos
 
-    return CosmosEventStore(cosmos.get_container(COSMOS_DATABASE, EVENTS_RESOURCE))
+    return CosmosEventStore(cosmos.get_container(cosmos_config(settings)))
 
 
-def _cosmos_preflight() -> Check:
+def _cosmos_preflight(settings: Settings) -> Check:
     from chart_manager.integrations import cosmos
 
-    return cosmos.preflight(COSMOS_DATABASE, EVENTS_RESOURCE)
+    if settings.cosmos_endpoint is None:
+        return Check.failed(
+            "events-backend",
+            "cosmos_endpoint is not set",
+            remediation=_SET_ENDPOINT,
+            outcome=Outcome.ENVIRONMENT,
+        )
+    return cosmos.preflight(cosmos_config(settings))
 
 
 @dataclass(frozen=True, slots=True)
 class _Backend:
     """How one `events_backend` value builds its store and probes it."""
 
-    store: Callable[[], EventStore]
-    preflight: Callable[[], Check]
+    store: Callable[[Settings], EventStore]
+    preflight: Callable[[Settings], Check]
 
 
-# chart-manager's events-backend switch; scripts/provision-event-store keeps
-# its own to create the resources.
 _BACKENDS: dict[EventsBackend, _Backend] = {
     "none": _Backend(
-        store=NullEventStore,
-        preflight=lambda: Check.skipped(
-            "events-backend", "events disabled (set EVENTS_BACKEND=cosmos to enable)"
-        ),
+        store=lambda _: NullEventStore(),
+        preflight=lambda _: Check.skipped("events-backend", f"events disabled; {_ENABLE}"),
     ),
     "cosmos": _Backend(store=_cosmos_store, preflight=_cosmos_preflight),
 }
@@ -143,7 +159,7 @@ _BACKENDS: dict[EventsBackend, _Backend] = {
 
 def get_event_store(settings: Settings) -> EventStore:
     """Build the event store `settings.events_backend` selects (default none: opt-in)."""
-    return _BACKENDS[settings.events_backend].store()
+    return _BACKENDS[settings.events_backend].store(settings)
 
 
 def query_events(settings: Settings, query: EventQuery) -> list[dict[str, Any]]:
@@ -156,4 +172,4 @@ def query_events(settings: Settings, query: EventQuery) -> list[dict[str, Any]]:
 
 def preflight_event_store(settings: Settings) -> tuple[Check, ...]:
     """Report whether the configured events backend is usable."""
-    return (_BACKENDS[settings.events_backend].preflight(),)
+    return (_BACKENDS[settings.events_backend].preflight(settings),)

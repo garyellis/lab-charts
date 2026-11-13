@@ -108,7 +108,7 @@ DryRunOption = Annotated[
         "--dry-run",
         help=(
             "Print the fully-composed event document instead of writing it. "
-            "Touches no backend; works with EVENTS_BACKEND unset."
+            "Touches no backend; works with events disabled."
         ),
     ),
 ]
@@ -285,7 +285,7 @@ def list_events(
 ) -> None:
     """List recent lifecycle events, newest first.
 
-    Requires an events backend (EVENTS_BACKEND=cosmos). The refusal is
+    Requires an events backend (`events_backend: cosmos`). The refusal is
     typed: `none`/unset says events are disabled and how to enable them, and
     exits through the error's own outcome in the exit-code table -- nothing
     the caller asked about failed, the environment has no readable ledger.
