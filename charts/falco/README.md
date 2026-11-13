@@ -1,7 +1,7 @@
 # Falco
 
-Umbrella chart for [Falco](https://falco.org/) 0.45.0 using upstream chart
-`falcosecurity/falco` 9.2.0 from `https://falcosecurity.github.io/charts`.
+Umbrella chart for [Falco](https://falco.org/) 0.45.2 using upstream chart
+`falcosecurity/falco` 9.2.2 from `https://falcosecurity.github.io/charts`.
 Upstream values stay nested under `falco:`.
 
 Falco watches every node's syscalls and raises alerts from its default
@@ -56,17 +56,14 @@ upstream leastPrivileged set, `containerSecurityContext` also pins
 `allowPrivilegeEscalation: false` and `seccompProfile: RuntimeDefault` (the
 upstream helper omits both). The container security context is a full
 override, not a merge, so the capability set is re-declared in `values.yaml`.
-No host namespaces. Host mounts: `/proc`, `/etc` (read-only), `/sys/kernel`
-(read-only), the containerd socket directory, and `/var/log/falco`.
+No host namespaces. Host mounts: `/proc` (read-only), `/etc` (read-only),
+`/sys/kernel` (read-only), the containerd socket directory, and
+`/var/log/falco`. Upstream mounts `/proc` read-only with `modern_ebpf` since
+chart 9.2.1.
 
-Two host mounts stay wider than ideal, both dictated by upstream and left as
-is on purpose:
+One host mount stays wider than ideal, dictated by upstream and left as is on
+purpose:
 
-- **`/proc` is read-write.** Upstream only sets `/host/proc` read-only when
-  the kernel-module driver loader is disabled, which simultaneously adds
-  `/host/boot`, `/host/lib/modules` and `/host/usr` mounts meant for the
-  `kmod` driver. Trading a read-only `/proc` for three extra host mounts is a
-  net loss, so `/proc` stays read-write.
 - **The whole containerd socket directory is mounted, not the socket file.**
   Upstream mounts `dir(socket)` so that if containerd restarts and recreates
   the socket inode, Falco follows the new one; a bind-mounted file would pin

@@ -13,7 +13,7 @@ falco:
   image:
     registry: docker.io
     repository: falcosecurity/falco
-    tag: 0.45.0
+    tag: 0.45.2
 
   # CO-RE eBPF probe compiled into the Falco binary: needs kernel >= 5.8 with
   # BTF, no kernel headers, no module build and no driver-loader init

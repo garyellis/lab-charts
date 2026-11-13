@@ -32,8 +32,8 @@ q "${ds} | (.initContainers // []) | length == 0" ||
 q "
   (${ds} | .volumes | map(select(.hostPath)) | map({(.name): .hostPath.path}) | add) as \$hp |
   (${ds} | .containers[0].volumeMounts | map(select(\$hp[.name] != null and .readOnly != true)) |
-    map(\$hp[.name]) | sort) == [\"/proc\", \"/run/containerd\", \"/var/log/falco\"]" ||
-  fail "writable host paths must be /proc, the CRI socket directory and the alert directory only"
+    map(\$hp[.name]) | sort) == [\"/run/containerd\", \"/var/log/falco\"]" ||
+  fail "writable host paths must be the CRI socket directory and the alert directory only"
 q '.[] | select(.kind == "ConfigMap") | .data["falco.yaml"] | test("json_output: true") and
   test("filename: /var/log/falco/events.json")' ||
   fail "alerts are not written as JSON to /var/log/falco/events.json"
