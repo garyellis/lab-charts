@@ -35,7 +35,7 @@ from chart_manager.commands.validate import cli as validate_cli
 from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.plumbing.exit_codes import Outcome, exit_code_for
 from chart_manager.plumbing.logger import setup_logging
-from chart_manager.settings import DEFAULT_CONFIG_FILE, load_settings, set_config_file
+from chart_manager.settings import load_settings, set_config_file
 
 # --- the command tree ------------------------------------------------------
 
@@ -74,7 +74,7 @@ schemas_app = typer.Typer(
 class GlobalOptions:
     """The resolved global options for one invocation, stashed on `ctx.obj`."""
 
-    config: Path
+    config: Path | None
     quiet: bool
     verbosity: int
     no_color: bool
@@ -87,12 +87,16 @@ class GlobalOptions:
 def global_options(
     ctx: typer.Context,
     config: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--config",
-            help="YAML config file. Absent is fine; every setting has a default.",
+            help=(
+                "YAML config file. Default: ./.chart-manager/config.yaml, else "
+                "$XDG_CONFIG_HOME/chart-manager/config.yaml (~/.config). "
+                "Absent is fine; every setting has a default."
+            ),
         ),
-    ] = DEFAULT_CONFIG_FILE,
+    ] = None,
     quiet: Annotated[
         bool,
         typer.Option("--quiet", "-q", help="Suppress narration. Data and errors still print."),

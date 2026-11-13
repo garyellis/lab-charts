@@ -127,9 +127,10 @@ def fresh_cli_invocation() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep a developer's `CHART_MANAGER_ROOT` from redirecting CLI tests."""
+def hermetic_workspace_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep a developer's `CHART_MANAGER_ROOT` and user config file out of CLI tests."""
     monkeypatch.delenv("CHART_MANAGER_ROOT", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
 
 @pytest.fixture

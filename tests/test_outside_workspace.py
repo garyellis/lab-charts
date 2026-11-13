@@ -64,7 +64,7 @@ def test_version() -> None:
 #: way -- the failure mode an unloadable workspace used to cause -- shows up
 #: here as a missing name.
 _DOCTOR_CHECKS = (
-    "helm", "kubeconform", "kyverno", "kubectl", "kube-context", "kind", "docker",
+    "config", "helm", "kubeconform", "kyverno", "kubectl", "kube-context", "kind", "docker",
     "docker-daemon", "git", "git-repository", "gh", "gh-auth", "renovate",
     "renovate-config-validator", "renovate-token", "schema-policy", "schema-lock",
     "schema-store", "events-backend",

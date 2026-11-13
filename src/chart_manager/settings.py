@@ -24,30 +24,44 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["text", "json"]
 EventsBackend = Literal["cosmos", "none"]
 
-#: Where `Settings` looks for its optional YAML file.
+#: The `--config` file, if one was given.
 #:
 #: Module state rather than a constructor argument because pydantic-settings
 #: resolves its sources from the *class*, not from per-instance kwargs --
 #: there is no `Settings(config=...)` to thread through. The surface sets
 #: this once from `--config` in `main.py`'s root callback, before
 #: anything constructs Settings; nothing else writes it.
-_config_file: Path = DEFAULT_CONFIG_FILE
+_config_file: Path | None = None
+
+
+def _xdg_dir(variable: str, default: str) -> Path:
+    """`$<variable>`, else `~/<default>`; a relative or empty value is ignored, per XDG."""
+    xdg = Path(os.environ.get(variable, "")).expanduser()
+    return xdg if xdg.is_absolute() else Path.home() / default
 
 
 def _default_schema_cache_root() -> Path:
-    """`$XDG_CACHE_HOME/chart-manager/schemas`; a relative or empty value is ignored, per XDG."""
-    xdg = Path(os.environ.get("XDG_CACHE_HOME", "")).expanduser()
-    base = xdg if xdg.is_absolute() else Path.home() / ".cache"
-    return base / "chart-manager" / "schemas"
+    """`$XDG_CACHE_HOME/chart-manager/schemas`."""
+    return _xdg_dir("XDG_CACHE_HOME", ".cache") / "chart-manager" / "schemas"
 
 
-def config_file() -> Path:
-    """Return the YAML config file `Settings` will read."""
-    return _config_file
+def config_file() -> Path | None:
+    """Return the one YAML file `Settings` reads, or None when there is none.
+
+    `--config` when given; otherwise the first that exists of the working
+    directory's `.chart-manager/config.yaml` and the user's
+    `$XDG_CONFIG_HOME/chart-manager/config.yaml`. Files are never merged.
+    """
+    if _config_file is not None:
+        candidates = [_config_file]
+    else:
+        user_file = _xdg_dir("XDG_CONFIG_HOME", ".config") / "chart-manager" / "config.yaml"
+        candidates = [DEFAULT_CONFIG_FILE, user_file]
+    return next((path for path in candidates if path.is_file()), None)
 
 
-def set_config_file(path: Path) -> None:
-    """Point `Settings` at a different YAML config file.
+def set_config_file(path: Path | None) -> None:
+    """Read `path` instead of looking for a config file; None restores the lookup.
 
     Called once, from the CLI's root callback. An absent file is not an
     error: the file is optional and every field has a default.
@@ -102,8 +116,9 @@ class Settings(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         """Order the sources as `CHART_MANAGER_* env > config.yaml > default`.
 
-        Highest priority first. `init_settings` stays ahead of everything so
-        an explicit `Settings(kube_context=...)` in a test still wins.
+        Highest priority first; `config.yaml` is whichever file `config_file()`
+        finds. `init_settings` stays ahead of everything so an explicit
+        `Settings(kube_context=...)` in a test still wins.
         `dotenv_settings` is dropped: this project has no `.env` convention,
         and leaving it in would add a fourth, undocumented precedence step
         between env and the config file.
@@ -117,7 +132,7 @@ class Settings(BaseSettings):
             env_settings,
             InitSettingsSource(
                 settings_cls,
-                load_yaml_file(config_file()) if config_file().is_file() else {},
+                load_yaml_file(path) if (path := config_file()) else {},
             ),
             file_secret_settings,
         )
@@ -149,7 +164,8 @@ def load_settings() -> Settings:
         problems = "; ".join(
             f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors()
         )
-        raise SpecError(f"invalid settings ({config_file()}): {problems}") from None
+        source = config_file() or "environment"
+        raise SpecError(f"invalid settings ({source}): {problems}") from None
 
 
 __all__ = [

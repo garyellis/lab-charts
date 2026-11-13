@@ -31,7 +31,7 @@ from typer.testing import CliRunner, Result
 
 from chart_manager import main
 from chart_manager.cli import _container
-from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, set_config_file
+from chart_manager.settings import DEFAULT_CONFIG_FILE, Settings, config_file, set_config_file
 
 from .conftest import cli, write_workspace
 
@@ -46,7 +46,7 @@ def _restore_process_state() -> object:
     """
     saved = (main.console.no_color, main.narration.no_color, main.narration.quiet)
     yield None
-    set_config_file(DEFAULT_CONFIG_FILE)
+    set_config_file(None)
     main.console.no_color, main.narration.no_color, main.narration.quiet = saved
 
 
@@ -137,6 +137,36 @@ def test_config_file_beats_the_default(
 
     assert result.exit_code == 0
     assert "beta" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("present", "expected"),
+    [
+        (("--config", "cwd", "user"), "--config"),
+        (("cwd", "user"), "cwd"),
+        (("user",), "user"),
+        ((), None),
+    ],
+)
+def test_settings_read_the_first_config_file_found(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    present: tuple[str, ...],
+    expected: str | None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    files = {
+        "--config": tmp_path / "custom.yaml",
+        "cwd": DEFAULT_CONFIG_FILE,
+        "user": tmp_path / "xdg-config" / "chart-manager" / "config.yaml",  # conftest's XDG
+    }
+    for name in present:
+        files[name].parent.mkdir(parents=True, exist_ok=True)
+        files[name].write_text("log_level: DEBUG\n", encoding="utf-8")
+    if "--config" in present:
+        set_config_file(files["--config"])
+
+    assert config_file() == (files[expected] if expected else None)
 
 
 def test_env_beats_the_config_file(

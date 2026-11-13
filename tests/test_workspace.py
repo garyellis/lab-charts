@@ -194,7 +194,7 @@ def _exit_through_main(
             main.main()
     finally:
         reset_invocation()
-        settings_module.set_config_file(settings_module.DEFAULT_CONFIG_FILE)
+        settings_module.set_config_file(None)
     return excinfo.value.code, capsys.readouterr().err
 
 
