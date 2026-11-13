@@ -367,9 +367,11 @@ checkout or set `CHART_MANAGER_ROOT`. `version`, `event`, `promote`,
 says why; an invalid `workspace.yaml` exits `3`.
 
 Layout lives only in the workspace. An unknown key in
-`.chart-manager/config.yaml`, such as `charts_dir`, exits `3`. That config
-file is read relative to the working directory, not the discovered workspace,
-so from a nested directory pass `--config` explicitly.
+`.chart-manager/config.yaml`, such as `charts_dir`, exits `3`. chart-manager
+reads one config file, the first it finds: `--config`, then
+`./.chart-manager/config.yaml` (relative to the working directory, not the
+workspace), then `~/.config/chart-manager/config.yaml` (`$XDG_CONFIG_HOME`).
+`doctor` prints which one is in use.
 
 Logs go to stderr; stdout stays safe for JSON. `CHART_MANAGER_LOG_LEVEL`
 (default `INFO`) and `CHART_MANAGER_LOG_FORMAT=json` control detail and

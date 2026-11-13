@@ -44,6 +44,7 @@ def test_every_check_runs_in_report_order(healthy: FakeCommandRunner, tmp_path: 
     report = run(settings=Settings(root=tmp_path), runner=healthy, workspace=_outside)
 
     assert [check.name for check in report.checks] == [
+        "config",
         "helm",
         "kubeconform",
         "kyverno",

@@ -19,7 +19,7 @@ from chart_manager.plumbing.commands import CommandRunner
 from chart_manager.plumbing.errors import WorkspaceNotFoundError
 from chart_manager.plumbing.exit_codes import Outcome
 from chart_manager.plumbing.preflight import Check
-from chart_manager.settings import Settings
+from chart_manager.settings import Settings, config_file
 from chart_manager.shared.events.store import preflight_event_store
 from chart_manager.shared.workspace import RepositoryWorkspace
 
@@ -30,7 +30,7 @@ def run(
     runner: CommandRunner,
     workspace: Callable[[], RepositoryWorkspace],
 ) -> DoctorReport:
-    """Run every check, in report order: toolchain, cluster, repository tools, telemetry.
+    """Run every check, in report order: config, toolchain, cluster, repository tools, telemetry.
 
     `workspace` loads the repository; outside one the schema checks are skipped
     and git/gh probe `settings.root`.
@@ -44,6 +44,7 @@ def run(
     timeout = settings.command_timeout
     context = settings.kube_context
     checks: dict[str, Callable[[], Sequence[Check]]] = {
+        "config": lambda: (_config_check(),),
         "helm": Helm(runner, binary="helm", context=context, timeout=timeout).preflight,
         "kubeconform": Kubeconform(runner, timeout=timeout).preflight,
         "kyverno": Kyverno(runner, timeout=timeout).preflight,
@@ -63,6 +64,14 @@ def run(
     }
     results = (result for name, check in checks.items() for result in _run_check(name, check))
     return DoctorReport(checks=tuple(results))
+
+
+def _config_check() -> Check:
+    """Name the config file in use: the path only, since the file may hold secrets."""
+    path = config_file()
+    if path is None:
+        return Check.skipped("config", "no config file; using defaults and the environment")
+    return Check.ok("config", str(path))
 
 
 def _run_check(name: str, check: Callable[[], Sequence[Check]]) -> tuple[Check, ...]:
