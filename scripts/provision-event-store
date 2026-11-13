@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
-"""Create the configured events backend's Cosmos database and container.
+"""Create the event store's Cosmos database and container.
 
-Idempotent: anything that already exists is left as it is. The names, keys
-and clients come from chart-manager itself, so they cannot drift from what
-the event store writes to. Run with `mise run events:provision`.
+Idempotent: anything that already exists is left as it is. The endpoint,
+credentials and names come from chart-manager's own settings (config.yaml or
+CHART_MANAGER_* env), so this creates exactly what the event store writes to.
+Run with `mise run events:provision`.
 """
 
 import sys
 
+from azure.cosmos import PartitionKey
+
+from chart_manager.integrations.cosmos import get_cosmos_client
+from chart_manager.plumbing.errors import ChartManagerError
 from chart_manager.settings import load_settings
-from chart_manager.shared.events.store import (
-    COSMOS_DATABASE,
-    EVENTS_RESOURCE,
-    PARTITION_KEY,
-)
-
-
-def provision_cosmos() -> None:
-    from azure.cosmos import PartitionKey
-
-    from chart_manager.integrations.cosmos import get_cosmos_client
-
-    database = get_cosmos_client().create_database_if_not_exists(id=COSMOS_DATABASE)
-    database.create_container_if_not_exists(
-        id=EVENTS_RESOURCE, partition_key=PartitionKey(path=f"/{PARTITION_KEY}")
-    )
-    print(f"cosmos {COSMOS_DATABASE}/{EVENTS_RESOURCE} ready")
+from chart_manager.shared.events.store import PARTITION_KEY, cosmos_config
 
 
 def main() -> None:
-    backend = load_settings().events_backend
-    if backend == "cosmos":
-        provision_cosmos()
-    else:
-        sys.exit("events are disabled: set EVENTS_BACKEND=cosmos")
+    try:
+        settings = load_settings()
+        if settings.events_backend != "cosmos":
+            sys.exit("events are disabled: set `events_backend: cosmos` in config.yaml")
+        config = cosmos_config(settings)
+    except ChartManagerError as exc:
+        sys.exit(str(exc))
+    database = get_cosmos_client(config).create_database_if_not_exists(id=config.database)
+    database.create_container_if_not_exists(
+        id=config.container, partition_key=PartitionKey(path=f"/{PARTITION_KEY}")
+    )
+    print(f"cosmos {config.database}/{config.container} ready")
 
 
 if __name__ == "__main__":

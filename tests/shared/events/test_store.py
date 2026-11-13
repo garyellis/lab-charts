@@ -148,7 +148,7 @@ def test_a_release_query_narrows_by_correlation_id_within_the_partition() -> Non
     [
         ({}, NullEventStore),
         ({"events_backend": "none"}, NullEventStore),
-        ({"events_backend": "cosmos"}, CosmosEventStore),
+        ({"events_backend": "cosmos", "cosmos_endpoint": "https://c"}, CosmosEventStore),
     ],
     ids=["unset", "none", "cosmos"],
 )
@@ -157,8 +157,7 @@ def test_the_backend_setting_selects_the_store(
 ) -> None:
     """Events are opt-in: unset means `none`, a silent sink."""
     monkeypatch.setattr(
-        "chart_manager.integrations.cosmos.get_container",
-        lambda database, container: FakeCosmosContainer(),
+        "chart_manager.integrations.cosmos.get_container", lambda config: FakeCosmosContainer()
     )
 
     assert isinstance(get_event_store(Settings(**configured)), store_type)
@@ -167,19 +166,16 @@ def test_the_backend_setting_selects_the_store(
 @pytest.mark.parametrize(
     ("backend", "status", "named"),
     [
-        ("none", CheckStatus.SKIPPED, "EVENTS_BACKEND=cosmos"),
-        ("cosmos", CheckStatus.FAILED, "COSMOS_ENDPOINT"),
+        ("none", CheckStatus.SKIPPED, "events_backend: cosmos"),
+        ("cosmos", CheckStatus.FAILED, "cosmos_endpoint"),
     ],
 )
 def test_preflight_probes_the_configured_backend(
-    backend: str, status: CheckStatus, named: str, monkeypatch: pytest.MonkeyPatch
+    backend: str, status: CheckStatus, named: str
 ) -> None:
-    """`none` is a supported skip that says how to enable; an unconfigured
-    backend fails before any network call."""
-    for variable in ("COSMOS_CONNECTION_STRING", "COSMOS_ENDPOINT"):
-        monkeypatch.delenv(variable, raising=False)
-
+    """`none` is a supported skip that says how to enable; cosmos with no
+    endpoint fails before any network call and says which setting is missing."""
     (check,) = preflight_event_store(Settings(events_backend=backend))
 
     assert check.status is status
-    assert named in check.detail
+    assert named in f"{check.detail} {check.remediation}"

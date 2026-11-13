@@ -656,8 +656,8 @@ jobs:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PUBLISH_CHARTS: ${{ needs.prep.outputs.publish_charts }}
-      EVENTS_BACKEND: ${{ vars.EVENTS_BACKEND }}
-      COSMOS_ENDPOINT: ${{ vars.COSMOS_ENDPOINT }}
+      CHART_MANAGER_EVENTS_BACKEND: ${{ vars.EVENTS_BACKEND }}
+      CHART_MANAGER_COSMOS_ENDPOINT: ${{ vars.COSMOS_ENDPOINT }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}

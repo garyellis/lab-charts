@@ -83,7 +83,7 @@ def hermetic_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
         "CHART_MANAGER_OCI_CA_FILE",
         "CHART_MANAGER_SCHEMA_CACHE_ROOT",
         # Never inherit a developer's event sink and persist records in Cosmos DB.
-        "EVENTS_BACKEND",
+        "CHART_MANAGER_EVENTS_BACKEND",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COLUMNS", "200")

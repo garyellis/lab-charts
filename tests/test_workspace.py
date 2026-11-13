@@ -279,10 +279,10 @@ def test_each_token_is_read_only_from_its_own_variable(monkeypatch: pytest.Monke
 def test_the_events_backend_is_one_of_the_supported_backends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("EVENTS_BACKEND", "cosmos")
+    monkeypatch.setenv("CHART_MANAGER_EVENTS_BACKEND", "cosmos")
     assert load_settings().events_backend == "cosmos"
 
-    monkeypatch.setenv("EVENTS_BACKEND", "sqlite")
+    monkeypatch.setenv("CHART_MANAGER_EVENTS_BACKEND", "sqlite")
     with pytest.raises(SpecError, match="events_backend"):
         load_settings()
 

@@ -66,7 +66,7 @@ def test_every_failure_outcome_goes_through_the_exit_code_table(
 
 
 def test_a_skipped_check_does_not_make_the_command_fail(fake_doctor) -> None:
-    """`EVENTS_BACKEND=none` is the real case: supported, and not a problem."""
+    """`events_backend: none` is the real case: supported, and not a problem."""
     fake_doctor(_HEALTHY, Check.skipped("events-backend", "telemetry disabled"))
 
     assert cli("doctor").exit_code == 0

@@ -1,7 +1,8 @@
-"""Cosmos DB access: a cached client and document containers, env-var configured."""
+"""Cosmos DB access: a cached client and document containers, configured by the caller."""
 
 import functools
-import os
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import azure.identity
@@ -15,44 +16,43 @@ from chart_manager.plumbing.preflight import PROBE_TIMEOUT, Check, first_line
 _CLIENT_TIMEOUT = 10
 
 
-def _build_client(connection_timeout: float) -> CosmosClient:
-    """Build a CosmosClient with this module's auth precedence and one timeout.
+@dataclass(frozen=True, slots=True)
+class CosmosConfig:
+    """Where one Cosmos container is and how to reach it."""
 
-    Auth precedence: COSMOS_CONNECTION_STRING > COSMOS_KEY > DefaultAzureCredential
-    against COSMOS_ENDPOINT. COSMOS_CA_BUNDLE / COSMOS_VERIFY_TLS tune TLS
-    verification for the emulator.
+    endpoint: str
+    database: str
+    container: str
+    #: Master key (emulator, local development). None: Entra ID through
+    #: DefaultAzureCredential, which picks up `az login`, a VM's managed
+    #: identity, AKS workload identity or `AZURE_*` service-principal env vars.
+    key: str | None = field(default=None, repr=False)
+    ca_bundle: Path | None = None
+    verify_tls: bool = True
+
+
+def _build_client(config: CosmosConfig, connection_timeout: float) -> CosmosClient:
+    """Build a CosmosClient for `config` with one timeout.
 
     Split out of `get_cosmos_client` so `preflight` can build a short-timeout
-    client without restating that precedence. Two copies would be two answers
-    to "how does this process authenticate", and the preflight's answer is
-    the one an operator would then trust.
+    client that authenticates exactly as the writer does.
     """
     options: dict[str, Any] = {
         "enable_endpoint_discovery": False,
         "connection_timeout": connection_timeout,
     }
-
-    if ca_bundle := os.environ.get("COSMOS_CA_BUNDLE"):
-        options["connection_verify"] = ca_bundle
-    elif os.environ.get("COSMOS_VERIFY_TLS", "true").lower() == "false":
+    if config.ca_bundle is not None:
+        options["connection_verify"] = str(config.ca_bundle)
+    elif not config.verify_tls:
         options["connection_verify"] = False
-
-    if connection_string := os.environ.get("COSMOS_CONNECTION_STRING"):
-        return CosmosClient.from_connection_string(connection_string, **options)
-
-    endpoint = os.environ["COSMOS_ENDPOINT"]
-    # Master key (emulator/local) bypasses RBAC; otherwise DefaultAzureCredential's
-    # chain covers service-principal env vars now and workload-identity (OIDC) /
-    # managed identity later with no code change.
-    credential = os.environ.get("COSMOS_KEY") or azure.identity.DefaultAzureCredential()
-
-    return CosmosClient(endpoint, credential=credential, **options)
+    credential = config.key or azure.identity.DefaultAzureCredential()
+    return CosmosClient(config.endpoint, credential=credential, **options)
 
 
 @functools.lru_cache(maxsize=1)
-def get_cosmos_client() -> CosmosClient:
+def get_cosmos_client(config: CosmosConfig) -> CosmosClient:
     """Build (once) the CosmosClient every write goes through."""
-    return _build_client(_CLIENT_TIMEOUT)
+    return _build_client(config, _CLIENT_TIMEOUT)
 
 
 class CosmosContainer:
@@ -87,33 +87,22 @@ class CosmosContainer:
         ]
 
 
-def get_container(database: str, container: str) -> CosmosContainer:
+def get_container(config: CosmosConfig) -> CosmosContainer:
     """Return a handle on an existing container; nothing is created."""
-    db = get_cosmos_client().get_database_client(database)
-    return CosmosContainer(db.get_container_client(container))
+    db = get_cosmos_client(config).get_database_client(config.database)
+    return CosmosContainer(db.get_container_client(config.container))
 
 
-def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) -> Check:
+def preflight(config: CosmosConfig, *, timeout: float = PROBE_TIMEOUT) -> Check:
     """Report whether this process could write lifecycle events to Cosmos.
-
-    Two failures, config before network, because "COSMOS_ENDPOINT is unset"
-    is a different sentence from "the endpoint refused us" and only the
-    first is fixable without leaving the terminal.
 
     Builds its own client rather than reusing the cached one, so the probe
     is capped at `timeout` instead of the writer's ten seconds.
     """
-    if not (os.environ.get("COSMOS_CONNECTION_STRING") or os.environ.get("COSMOS_ENDPOINT")):
-        return Check.failed(
-            "events-backend",
-            "neither COSMOS_CONNECTION_STRING nor COSMOS_ENDPOINT is set",
-            remediation="export COSMOS_ENDPOINT (plus COSMOS_KEY or an Azure credential)",
-            outcome=Outcome.ENVIRONMENT,
-        )
-    target = f"cosmos {database}/{container}"
+    target = f"cosmos {config.database}/{config.container}"
     try:
-        client = _build_client(timeout)
-        client.get_database_client(database).get_container_client(container).read()
+        client = _build_client(config, timeout)
+        client.get_database_client(config.database).get_container_client(config.container).read()
     except Exception as exc:
         # Any SDK, auth, TLS or network failure is one report to the
         # operator. Narrowing this would only add branches that produce the
@@ -123,7 +112,7 @@ def preflight(database: str, container: str, *, timeout: float = PROBE_TIMEOUT) 
             "events-backend",
             f"{target} unreachable: {first_line(str(exc)) or type(exc).__name__}",
             remediation=(
-                "check COSMOS_ENDPOINT and credentials; create a missing database "
+                "check the endpoint and credentials; create a missing database "
                 "or container with `mise run events:provision`"
             ),
             outcome=Outcome.ENVIRONMENT,

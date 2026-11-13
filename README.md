@@ -48,7 +48,7 @@ the chart's `chart-lifecycle.yaml`.
 | `uv run chart-manager chart publish <name>... --repository oci://harbor.local/charts` | Package and push charts to an OCI registry in one batch. |
 | `uv run chart-manager chart upgrade charts/<name>` | Run Renovate in isolation and open an idempotent chart-upgrade PR. |
 | `uv run chart-manager promote pr\|monitor\|test` | Operate on Flux HelmRelease resources in a separate GitOps repo. |
-| `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off unless `EVENTS_BACKEND=cosmos` is exported; create its database and container once with `mise run events:provision`. `event emit --dry-run` previews a document without a backend. |
+| `uv run chart-manager event list [chart[@version]]` | List lifecycle events, newest first. Events are off until you turn them on; see [Event store](#event-store). `event emit --dry-run` previews a document without a backend. |
 | `uv run chart-manager grafana dashboard export <uid> --url http://127.0.0.1:3000 --to <path>` | Export one dashboard as canonical JSON from the Grafana at `--url` (run `kubectl -n observability port-forward svc/grafana 3000:80` first). `lint` checks committed dashboards. |
 | `mise run test` | Run the Python unit tests. |
 
@@ -376,6 +376,33 @@ workspace), then `~/.config/chart-manager/config.yaml` (`$XDG_CONFIG_HOME`).
 Logs go to stderr; stdout stays safe for JSON. `CHART_MANAGER_LOG_LEVEL`
 (default `INFO`) and `CHART_MANAGER_LOG_FORMAT=json` control detail and
 shape.
+
+## Event store
+
+Lifecycle events are off by default. To record them in Cosmos DB, add this
+to your config file:
+
+```yaml
+events_backend: cosmos
+cosmos_endpoint: https://<account>.documents.azure.com:443/
+```
+
+Every key can also be set as an environment variable, upper-cased with the
+`CHART_MANAGER_` prefix, for jobs with no config file:
+`CHART_MANAGER_EVENTS_BACKEND=cosmos`, `CHART_MANAGER_COSMOS_ENDPOINT=...`.
+`cosmos_database` (default `chart-manager`) and `events_container` (default
+`events`) rarely need changing.
+
+You don't need to configure auth. With no key set, chart-manager uses Entra
+ID through whatever is available: `az login`, a VM's managed identity, AKS
+workload identity, or `AZURE_*` service-principal variables. For the emulator
+or local development, export `CHART_MANAGER_COSMOS_KEY` and never put the key
+in a committed file. `cosmos_ca_bundle` and `cosmos_verify_tls` handle the
+emulator's certificate.
+
+Create the database and container once with `mise run events:provision`, then
+confirm with `chart-manager doctor`. A failed write only logs a warning; it
+never fails the command that emitted it.
 
 ## Troubleshooting
 
